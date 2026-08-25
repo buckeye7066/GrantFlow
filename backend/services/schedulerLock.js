@@ -53,17 +53,46 @@ export async function runWithSchedulerLock(db, {
       heartbeat
         ? async (lease) => {
             let handle = null
+            let renewalInFlight = null
+            let leaseLostError = null
+            const abortController = new AbortController()
+            const leaseContext = { ...lease, signal: abortController.signal }
             if (lease?.ownerToken) {
               const period = Math.max(MIN_HEARTBEAT_MS, Math.floor((Number(ttlMs) || DEFAULT_TTL_MS) / HEARTBEAT_DIVISOR))
               handle = setInterval(() => {
-                renewLock(db, { lockName: fullLockName, ownerToken: lease.ownerToken, ttlMs }).catch((err) =>
-                  logger?.warn?.('[scheduler-lock] heartbeat renew failed', { lockName, error: err?.message || err }),
-                )
+                // Do not overlap renewals on a slow database. A rejected call is
+                // an operational warning (the next heartbeat may recover), but
+                // a resolved `false` is the lock store's fenced proof that this
+                // owner no longer holds the lease and must never be ignored.
+                if (renewalInFlight || leaseLostError) return
+                const attempt = Promise.resolve()
+                  .then(() => renewLock(db, { lockName: fullLockName, ownerToken: lease.ownerToken, ttlMs }))
+                  .then((renewed) => {
+                    if (renewed !== false) return
+                    leaseLostError = new Error(`Scheduler lock lease lost during heartbeat: ${fullLockName}`)
+                    leaseLostError.code = 'LOCK_LEASE_LOST'
+                    leaseLostError.lockName = fullLockName
+                    abortController.abort(leaseLostError)
+                    logger?.error?.('[scheduler-lock] heartbeat lost lease', { lockName })
+                  })
+                  .catch((err) => {
+                    logger?.warn?.('[scheduler-lock] heartbeat renew failed', { lockName, error: err?.message || err })
+                  })
+                  .finally(() => {
+                    if (renewalInFlight === attempt) renewalInFlight = null
+                  })
+                renewalInFlight = attempt
               }, period)
               if (typeof handle?.unref === 'function') handle.unref()
             }
             try {
-              return await fn(lease)
+              const result = await fn(leaseContext)
+              // A tick may already be in flight when the critical section
+              // finishes. Await it so a definitive fenced `false` cannot race
+              // with a successful scheduler result.
+              if (renewalInFlight) await renewalInFlight
+              if (leaseLostError) throw leaseLostError
+              return result
             } finally {
               if (handle) clearInterval(handle)
             }

@@ -11,7 +11,7 @@ import os from 'node:os'
 // expect_stdout_matches, timeout_ms }. `manifest.allowed_processes` gates the
 // executable; an arg not in `journey.args` (already the fixed list) is never
 // synthesized. Returns a journey-result fragment.
-export async function runCliJourney({ manifest, journey }) {
+export async function runCliJourney({ manifest, journey, launchEnv = {} }) {
   const started = Date.now()
   const allowed = manifest.allowlist?.processes || manifest.allowed_processes || []
   const cmd = journey.command
@@ -43,7 +43,11 @@ export async function runCliJourney({ manifest, journey }) {
   const tmp = appDir ? null : mkdtempSync(join(os.tmpdir(), 'eva-cli-'))
   const cwd = appDir || tmp
   try {
-    const result = await runProcess(cmd, journey.args || [], { cwd, timeoutMs: journey.timeout_ms || 60000 })
+    const result = await runProcess(cmd, journey.args || [], {
+      cwd,
+      timeoutMs: journey.timeout_ms || 60000,
+      env: launchEnv,
+    })
     const exitOk = journey.expect_exit_code == null || result.code === journey.expect_exit_code
     const stdoutOk = !journey.expect_stdout_matches || new RegExp(journey.expect_stdout_matches).test(result.stdout)
     if (exitOk && stdoutOk) {
@@ -69,12 +73,16 @@ export async function runCliJourney({ manifest, journey }) {
   }
 }
 
-function runProcess(cmd, args, { cwd, timeoutMs }) {
+function runProcess(cmd, args, { cwd, timeoutMs, env }) {
   return new Promise((resolve) => {
     let stdout = ''
     let stderr = ''
     let timedOut = false
-    const child = spawn(cmd, args, { cwd, shell: false })
+    // launchEnv comes from resolveLaunchEnv's OS allowlist plus this app's
+    // manifest/owner values. Supplying it explicitly is a security boundary:
+    // default spawn inheritance would leak EVA_RUNNER_SECRET and every app's
+    // EVA_APP_ENV overrides into CLI children.
+    const child = spawn(cmd, args, { cwd, env, shell: false })
     const timer = setTimeout(() => {
       timedOut = true
       try {

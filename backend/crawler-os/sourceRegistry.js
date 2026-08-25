@@ -239,7 +239,11 @@ export const SOURCES = Object.freeze([
     // CONSEQUENCE: an sbir_gov AMOUNT adapter cannot be written or verified from
     // here — there is no reachable endpoint to read award figures from. Do not
     // add one speculatively; re-probe the two URLs above first. The crawler-os
-    // adapter continues to report an honest PARSE_ERROR.
+    // adapter classifies this exact 403 response as a typed BLOCKED external
+    // outage (`external_blocked:sbir_public_api_403_forbidden`) so it stays
+    // observable without pretending the source was healthily empty or that
+    // GrantFlow has a fetch/parse defect. Other 403/WAF/body shapes remain
+    // FETCH_ERROR.
     requires_env: [],
     refresh_frequency_days: 3,
     priority_score: 95,

@@ -17,6 +17,34 @@ import { persistRun } from './evaRunStore.js'
 
 const log = createLogger('service:eva:ingest')
 
+/**
+ * Coordinator-first rollout compatibility for the previously deployed
+ * Windows runner. Version 1 of that runner attached two diagnostic-only fields
+ * that were never part of eva-result-v1. Strip only those known legacy fields
+ * after signature verification and before strict schema validation; every
+ * other unknown property still fails closed.
+ */
+export function normalizeLegacyRunnerPayload(payload) {
+  if (!payload || typeof payload !== 'object' || !Array.isArray(payload.apps)) return payload
+  return {
+    ...payload,
+    apps: payload.apps.map((app) => {
+      if (!app || typeof app !== 'object' || Array.isArray(app)) return app
+      const normalizedApp = { ...app }
+      delete normalizedApp.git_state
+      delete normalizedApp.stale_tree
+      if (!Array.isArray(app.journeys)) return normalizedApp
+      normalizedApp.journeys = app.journeys.map((journey) => {
+        if (!journey || typeof journey !== 'object' || Array.isArray(journey)) return journey
+        const normalizedJourney = { ...journey }
+        delete normalizedJourney.stale_tree
+        return normalizedJourney
+      })
+      return normalizedApp
+    }),
+  }
+}
+
 // ---- Secret resolution (env only) -----------------------------------------
 
 function loadRunnerSecrets(env = process.env) {
@@ -147,6 +175,7 @@ export async function verifyRequest(db, { rawBody, headers = {}, env = process.e
     return { ok: false, status: 400, error: 'malformed_json' }
   }
 
+  parsed = normalizeLegacyRunnerPayload(parsed)
   const validation = validateResultPayload(parsed)
   if (!validation.ok) {
     return { ok: false, status: 422, error: 'schema_invalid', details: validation.errors.slice(0, 20) }

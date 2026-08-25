@@ -4,12 +4,12 @@
   "repo": "buckeye7066/are-we-mice-or-are-we-men",
   "local_path": "~/are-we-mice-or-are-we-men",
   "runtime_type": "web",
-  "start_command": "cd backend && npm run dev & npm run dev",
+  "start_command": "cd backend && npm start & npm run dev",
   "stop_command": "taskkill-by-port",
-  "readiness_probe": { "type": "http", "path": "/health", "port": 3211, "timeout_ms": 120000 },
+  "readiness_probe": { "type": "http", "path": "/health", "port": 3211, "timeout_ms": 120000, "warm_paths": ["/@vite/client"] },
   "base_url": "http://localhost:5273",
   "test_target": "disposable-local-instance",
-  "required_env": ["DATABASE_URL", "AUTH_JWT_SECRET", "ANTHROPIC_API_KEY", "CORS_ORIGIN", "APP_URL", "INVITE_ONLY", "ADMIN_EMAIL"],
+  "required_env": ["DATABASE_URL", "AUTH_JWT_SECRET", "CORS_ORIGIN", "APP_URL", "INVITE_ONLY", "ADMIN_EMAIL"],
   "launch_env": {
     "DATABASE_URL": "postgresql://eva:eva@127.0.0.1:5432/arewemice_eva",
     "AUTH_JWT_SECRET": "eva-local-test-secret-not-production",
@@ -20,6 +20,16 @@
     "PORT": "3211",
     "VITE_API_URL": "http://localhost:3211"
   },
+  "prerequisites": [
+    {
+      "id": "are-we-mice-postgres",
+      "type": "tcp",
+      "host": "127.0.0.1",
+      "port": 5432,
+      "name": "local Postgres for the disposable Are We Mice database",
+      "remedy": "start local Postgres on 127.0.0.1:5432 and create the arewemice_eva database declared by launch_env.DATABASE_URL"
+    }
+  ],
   "seed_command": null,
   "reset_command": null,
   "cleanup": "rm -rf .eva-tmp/are-we-mice-or-are-we-men && drop disposable test database",

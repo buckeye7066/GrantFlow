@@ -177,14 +177,23 @@ describe('crawler.coverageDegraded is recency-bounded', () => {
     const db = new Database(':memory:')
     db.exec(`CREATE TABLE crawler_source_runs (
       id INTEGER PRIMARY KEY AUTOINCREMENT, crawler_run_id TEXT, source_id TEXT,
-      queried INTEGER, failed INTEGER, created_at TEXT
+      queried INTEGER, failed INTEGER, error TEXT, created_at TEXT
     )`)
     const ins = db.prepare(
-      'INSERT INTO crawler_source_runs (crawler_run_id, source_id, queried, failed, created_at) VALUES (?, ?, ?, ?, ?)',
+      'INSERT INTO crawler_source_runs (crawler_run_id, source_id, queried, failed, error, created_at) VALUES (?, ?, ?, ?, ?, ?)',
     )
     for (const run of runs) {
       for (let i = 0; i < run.sources; i += 1) {
-        ins.run(run.id, `s${i}`, 1, i < run.failures ? 1 : 0, hoursAgo(run.agoHours))
+        const ordinaryFailure = i < run.failures
+        const externalBlock = !ordinaryFailure && i < run.failures + (run.externalBlocked || 0)
+        ins.run(
+          run.id,
+          `s${i}`,
+          1,
+          ordinaryFailure || externalBlock ? 1 : 0,
+          externalBlock ? 'external_blocked:upstream_maintenance' : ordinaryFailure ? 'fetch_error:timeout' : null,
+          hoursAgo(run.agoHours),
+        )
       }
     }
     return db
@@ -196,6 +205,34 @@ describe('crawler.coverageDegraded is recency-bounded', () => {
       const res = await check.run({ db })
       expect(res.ok).toBe(false)
       expect(res.evidence.window_hours).toBe(24)
+      expect(res.evidence.actionable_failed).toBe(25)
+      expect(res.evidence.external_blocked).toBe(0)
+    } finally { db.close() }
+  })
+
+  it('keeps external blocks queried but excludes them from the actionable-failure numerator', async () => {
+    const db = crawlerDb([{ id: 'run-blocked', sources: 30, failures: 0, externalBlocked: 30, agoHours: 1 }])
+    try {
+      const res = await check.run({ db })
+      expect(res.ok).toBe(true)
+      expect(res.evidence.queried).toBe(30)
+      expect(res.evidence.failed).toBe(0)
+      expect(res.evidence.actionable_failed).toBe(0)
+      expect(res.evidence.external_blocked).toBe(30)
+      expect(res.summary).toMatch(/0\/30 actionable source failures.*30 externally blocked/)
+    } finally { db.close() }
+  })
+
+  it('still counts ordinary failures in a mixed externally-blocked run', async () => {
+    const db = crawlerDb([{ id: 'run-mixed', sources: 30, failures: 10, externalBlocked: 15, agoHours: 1 }])
+    try {
+      const res = await check.run({ db })
+      expect(res.ok).toBe(false)
+      expect(res.evidence.queried).toBe(30)
+      expect(res.evidence.failed).toBe(10)
+      expect(res.evidence.actionable_failed).toBe(10)
+      expect(res.evidence.external_blocked).toBe(15)
+      expect(res.summary).toMatch(/10\/30 actionable source failures.*15 externally blocked/)
     } finally { db.close() }
   })
 

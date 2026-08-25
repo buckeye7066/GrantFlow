@@ -32,6 +32,7 @@ function makeDb() {
 // a hardcoded calendar date — a fixed '2026-07-2X' date silently ages out of
 // the window as real time passes, which is exactly what broke this file.
 const daysAgo = (n) => new Date(Date.now() - n * 24 * 60 * 60 * 1000).toISOString()
+const hoursAgo = (n) => new Date(Date.now() - n * 60 * 60 * 1000).toISOString()
 
 const seed = (db, { source = 'tn_state_portal', failed = 1, error = null, at = daysAgo(0), queried = 1 } = {}) =>
   db.prepare(
@@ -61,6 +62,23 @@ describe('crawler.sourcePersistentFailure', () => {
     const db = makeDb()
     for (let i = 0; i < 4; i++) seed(db, { failed: 1, at: daysAgo(i + 1) })
     seed(db, { failed: 0, at: daysAgo(0) }) // one success, most recent — inside the window
+    const res = await check.run({ db })
+    expect(res.ok).toBe(true)
+  })
+
+  it('does not backfill older failures when the latest-N streak contains an external block', async () => {
+    const db = makeDb()
+    // Five genuine older failures would form a streak only if the detector
+    // incorrectly filtered this newest row BEFORE assigning row numbers.
+    for (let i = 1; i <= 5; i++) {
+      seed(db, { failed: 1, error: 'ECONNRESET portal.example.gov', at: hoursAgo(i) })
+    }
+    seed(db, {
+      failed: 1,
+      error: '  EXTERNAL_BLOCKED:upstream_maintenance',
+      at: hoursAgo(0),
+    })
+
     const res = await check.run({ db })
     expect(res.ok).toBe(true)
   })

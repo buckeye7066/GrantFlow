@@ -72,6 +72,87 @@ describe('buildOwnerReport', () => {
     expect(html).not.toMatch(/<img src=x/)
     expect(html).toMatch(/&lt;img/)
   })
+
+  it('renders stale Amy edit evidence as unknown, never as no edits needed', () => {
+    const amy = {
+      cohort: {
+        day: '2026-08-20',
+        clean: 50,
+        evaluated: 50,
+        target: 50,
+        issues: 0,
+        run_receipts: [{ recorded_at: '2026-08-20T06:00:00.000Z' }],
+      },
+      report: {},
+    }
+    const { text, html } = buildOwnerReport(sampleRun(), {
+      now: new Date('2026-08-25T09:00:00.000Z'),
+      amy,
+    })
+    expect(text).toMatch(/Autonomous edit status is unknown/i)
+    expect(html).toMatch(/Autonomous edit status is unknown/i)
+    expect(text).not.toMatch(/No autonomous edits were needed overnight/)
+    expect(html).not.toMatch(/No autonomous edits were needed overnight/)
+  })
+
+  it('keeps a fresh cohort but suppresses edits and asks from a stale Amy report', () => {
+    const amy = {
+      cohort: {
+        day: '2026-08-25',
+        clean: 49,
+        evaluated: 50,
+        target: 50,
+        issues: 1,
+        finding_types: { stale_report_guard: 1 },
+        run_receipts: [{ run_id: 'fresh-cohort', recorded_at: '2026-08-25T08:00:00.000Z' }],
+      },
+      report: {
+        run_id: 'old-report',
+        // Still inside the 36-hour age window; the newer, different cohort
+        // receipt is what proves this report was superseded.
+        completed_at: '2026-08-24T08:00:00.000Z',
+        tuning: { from: 75, to: 76, applied: { applied: true } },
+        approval_queue: [{
+          lever: 'old-owner-ask',
+          actionability: 'owner_api',
+          requires_approval: true,
+        }],
+      },
+    }
+    const { text, html } = buildOwnerReport(sampleRun(), {
+      now: new Date('2026-08-25T09:00:00.000Z'),
+      amy,
+    })
+
+    expect(text).toMatch(/49\/50 synthetic profiles clean/)
+    expect(html).toMatch(/49\/50 synthetic profiles clean/)
+    expect(text).toMatch(/Autonomous edit status is unknown/i)
+    expect(html).toMatch(/Autonomous edit status is unknown/i)
+    expect(text).not.toMatch(/Score floor tuned|old-owner-ask/)
+    expect(html).not.toMatch(/Score floor tuned|old-owner-ask/)
+    expect(text).toMatch(/stale_report_guard ×1/)
+  })
+
+  it('renders stale web-parity evidence as unknown, never as complete coverage', () => {
+    const parity = {
+      latest: {
+        generated_at: '2026-08-20T06:00:00.000Z',
+        semantics_version: 3,
+        measurement_status: 'scored',
+        sample_qualified: true,
+        fleet_parity: 100,
+        per_profile: [{ profile_id: 'old', parity: 100, web_only_top: [] }],
+      },
+    }
+    const { text, html } = buildOwnerReport(sampleRun(), {
+      now: new Date('2026-08-25T09:00:00.000Z'),
+      parity,
+    })
+    expect(text).toMatch(/Web-only coverage is unknown/i)
+    expect(html).toMatch(/Web-only coverage is unknown/i)
+    expect(text).not.toMatch(/covered everything the web session produced/i)
+    expect(html).not.toMatch(/covered everything the web session produced/i)
+  })
 })
 
 function sampleGaps() {

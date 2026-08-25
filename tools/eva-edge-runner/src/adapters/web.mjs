@@ -151,10 +151,14 @@ export function matchesAny(message, patterns) {
 async function applyStep(page, step, baseUrl) {
   switch (step.action) {
     case 'goto':
-      // 30s default: a cold Vite dev server transforms the entry modules on
-      // the first request and routinely blows a 15s budget on a busy machine
-      // (the "intermittent goto timeout" class). Manifests can still override.
-      return page.goto(new URL(step.url || '/', baseUrl).toString(), { waitUntil: 'domcontentloaded', timeout: step.timeout || 30000 })
+      return gotoWithRetry(page, new URL(step.url || '/', baseUrl).toString(), {
+        // A cold Vite dev server transforms the entry graph on the first
+        // request. One 30-second timeout is infrastructure noise, not proof of
+        // a reproducible app defect; retry the transient class and let the
+        // journey's semantic assertion decide whether the UI actually loaded.
+        timeout: step.timeout || 30000,
+        attempts: step.attempts || 3,
+      })
     case 'fill':
       return page.fill(step.selector, step.value ?? '', { timeout: step.timeout || 10000 })
     case 'click':
@@ -166,6 +170,55 @@ async function applyStep(page, step, baseUrl) {
     default:
       return null
   }
+}
+
+export function isTransientNavigationError(err) {
+  const s = String(err?.message || err || '')
+  return /Timeout|ERR_CONNECTION_(?:RESET|REFUSED|CLOSED)|ERR_EMPTY_RESPONSE|Navigation.*interrupted/i.test(s)
+}
+
+export function isCommittedTargetUrl(current, requested) {
+  try {
+    const actual = new URL(current)
+    const target = new URL(requested)
+    const normalizePath = (value) => value.replace(/\/+$/, '') || '/'
+    return actual.origin === target.origin && normalizePath(actual.pathname) === normalizePath(target.pathname)
+  } catch {
+    return false
+  }
+}
+
+export async function gotoWithRetry(page, url, { timeout = 30000, attempts = 3, delayMs = 750 } = {}) {
+  let lastError = null
+  const total = Math.max(1, Number(attempts) || 1)
+  for (let attempt = 1; attempt <= total; attempt++) {
+    try {
+      return await page.goto(url, { waitUntil: 'domcontentloaded', timeout })
+    } catch (err) {
+      lastError = err
+      if (!isTransientNavigationError(err)) throw err
+
+      // Playwright can time out waiting for DOMContentLoaded after the usable
+      // document already committed (a slow/failed dev-only HMR resource is a
+      // common cause). If the document is interactive/complete, continue and
+      // let the explicit text/element assertions determine success.
+      try {
+        const state = await page.evaluate(() => document.readyState)
+        // about:blank and a prior SPA route are also complete documents. Only
+        // waive the retry if this specific origin/path actually committed.
+        const currentUrl = typeof page.url === 'function' ? page.url() : ''
+        if ((state === 'interactive' || state === 'complete') && isCommittedTargetUrl(currentUrl, url)) return null
+      } catch {
+        /* no committed document yet — a retry is warranted */
+      }
+
+      if (attempt < total) {
+        await page.waitForTimeout(delayMs * attempt)
+        continue
+      }
+    }
+  }
+  throw lastError
 }
 
 // The DOCUMENT itself — never a UI element a user looks at.
@@ -257,11 +310,11 @@ async function fail(journey, started, page, captureDir, ctx) {
     observed_behavior: ctx.observed,
     repro_steps: (journey.steps || []).map((s) => `${s.action}${s.selector ? ' ' + s.selector : ''}${s.url ? ' ' + s.url : ''}`).slice(0, 20),
     user_impact: ctx.impact,
-    likely_root_cause: journey.likely_root_cause || null,
-    recommended_fix: journey.recommended_fix || null,
-    candidate_files: journey.candidate_files || null,
+    ...(journey.likely_root_cause ? { likely_root_cause: journey.likely_root_cause } : {}),
+    ...(journey.recommended_fix ? { recommended_fix: journey.recommended_fix } : {}),
+    ...(journey.candidate_files ? { candidate_files: journey.candidate_files } : {}),
     diagnostic_confidence: journey.candidate_files ? 0.7 : 0.55,
-    missing_evidence: journey.candidate_files ? null : 'No source mapping yet — inspect the failing route handler and recent changes',
+    ...(journey.candidate_files ? {} : { missing_evidence: 'No source mapping yet — inspect the failing route handler and recent changes' }),
     evidence,
     duration_ms: Date.now() - started,
   }

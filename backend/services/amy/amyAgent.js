@@ -93,6 +93,16 @@ const DEFAULT_MESH = Object.freeze({
 
 const defaultLog = createLogger('services:amy:agent')
 
+/** Throw the scheduler's fenced lease-loss reason at cooperative boundaries. */
+export function throwIfAmyRunAborted(signal) {
+  if (!signal?.aborted) return
+  if (signal.reason instanceof Error) throw signal.reason
+  const error = new Error(String(signal.reason || 'Amy run aborted'))
+  error.name = 'AbortError'
+  error.code = 'AMY_RUN_ABORTED'
+  throw error
+}
+
 /**
  * The honest outcome of ONE auto-applied lever.
  *
@@ -160,7 +170,8 @@ async function discoveryStampAdvanced(db, profileId, before) {
  *   runPipeline (inject), thresholdEditor (inject {read,apply}), tuningOpts,
  *   gapLearning=true (derive the cohort + task queue from the fleet
  *   Coverage & Evidence gap scoreboard instead of uniform random),
- *   gapScanLimit=100, refreshScoreboard (inject), recordActivity (inject).
+ *   gapScanLimit=100, refreshScoreboard (inject), recordActivity (inject),
+ *   signal (scheduler lease-loss AbortSignal).
  * @returns {Promise<object>} { run_id, summary, report (handoff), combined, ... }
  */
 export async function runAmyTraining(options = {}) {
@@ -245,8 +256,10 @@ export async function runAmyTraining(options = {}) {
     // `AMY_ADVERSARIAL=0` returns the run to catalog-only.
     adversarial = String(process.env.AMY_ADVERSARIAL ?? '1').toLowerCase() !== '0',
     adversarialShare = null,
+    signal = null,
   } = options
 
+  throwIfAmyRunAborted(signal)
   const startedAtDate = clock()
   const runId = options.runId || newRunId(startedAtDate)
   const ttl = clampTtlHours(ttlHours)
@@ -290,6 +303,7 @@ export async function runAmyTraining(options = {}) {
     logger,
     fallback: { inbox: [], lessons: [] },
   })
+  throwIfAmyRunAborted(signal)
   meshInbox = Array.isArray(meshContext?.inbox) ? meshContext.inbox : []
   meshLessonsHeard = Array.isArray(meshContext?.lessons) ? meshContext.lessons : []
   searchDegraded = meshLessonsHeard.length > 0
@@ -322,10 +336,12 @@ export async function runAmyTraining(options = {}) {
         categoryWeights = weightCategoriesByGaps(fleetGaps, categories)
       }
     } catch (err) {
+      throwIfAmyRunAborted(signal)
       logger.warn('Amy fleet gap-scoreboard refresh failed (falling back to uniform cohort)', { error: err?.message })
       fleetGaps = null
     }
   }
+  throwIfAmyRunAborted(signal)
   const gapActions = deriveAmyGapActions(fleetGaps)
   if (fleetGaps) {
     const topGap = fleetGaps.gaps?.[0]
@@ -481,13 +497,16 @@ export async function runAmyTraining(options = {}) {
   const scenarioByProfile = new Map()
 
   for (const scenario of scenarios) {
+    throwIfAmyRunAborted(signal)
     let profileId = null
     try {
       const created = await createAmyProfile(db, scenario, { runId, ttlHours: ttl, now: clock() })
+      throwIfAmyRunAborted(signal)
       profileId = created.profileId
       createdProfileIds.push(profileId)
       scenarioByProfile.set(profileId, scenario)
     } catch (err) {
+      throwIfAmyRunAborted(signal)
       logger.warn('failed to create synthetic profile', { scenario_id: scenario.scenario_id, error: err?.message })
       evaluations.push(
         evaluateDiscovery(scenario, profileId, null, { error: `profile_create_failed: ${err?.message}`, runId }),
@@ -500,7 +519,8 @@ export async function runAmyTraining(options = {}) {
     const stampBefore = await readLastDiscoveryAt(db, profileId)
     try {
       // The slider-floor crawler event: at least one real discovery run per profile.
-      const result = await runDiscovery({ db, profileId, dryRun: dryRunDiscovery, floor: sliderFloor, fetcher })
+      const result = await runDiscovery({ db, profileId, dryRun: dryRunDiscovery, floor: sliderFloor, fetcher, signal })
+      throwIfAmyRunAborted(signal)
       evaluations.push(evaluateDiscovery(scenario, profileId, result, { runId }))
       // Only count it as crawled when discovery actually ran (not skipped) —
       // with a belt-and-suspenders check: if the result SAID skipped but the
@@ -515,6 +535,7 @@ export async function runAmyTraining(options = {}) {
         crawledProfileIds.push(profileId)
       }
     } catch (err) {
+      throwIfAmyRunAborted(signal)
       logger.warn('discovery threw for synthetic profile', { scenario_id: scenario.scenario_id, profile_id: profileId, error: err?.message })
       evaluations.push(evaluateDiscovery(scenario, profileId, null, { error: err?.message, runId }))
       // Same belt-and-suspenders for the THROW path (the prod failure mode:
@@ -528,6 +549,8 @@ export async function runAmyTraining(options = {}) {
       } catch { /* crawled-signal rescue is best-effort, never fatal */ }
     }
   }
+
+  throwIfAmyRunAborted(signal)
 
   const summary = summarizeEvaluations(evaluations)
   const handoff = buildAnyaHandoff({
@@ -575,10 +598,12 @@ export async function runAmyTraining(options = {}) {
     robertGapNotes = gaps.amy_levers || []
     markRobertGapsConsumed = markGapNotesConsumed
   } catch { robertGapNotes = [] }
+  throwIfAmyRunAborted(signal)
   const approvalQueue = buildApprovalQueue(evaluations, { robertGapNotes })
   // Mark consumed only AFTER the items exist, so a failure in between leaves
   // the notes open for the next run instead of losing them.
   if (markRobertGapsConsumed && robertGapNotes.length > 0) {
+    throwIfAmyRunAborted(signal)
     await markRobertGapsConsumed(db, robertGapNotes.map((n) => n.id)).catch(() => {})
   }
 
@@ -606,11 +631,13 @@ export async function runAmyTraining(options = {}) {
   if (searchDegraded) {
     effectiveArchetypeUpdate = {}
     for (const [key, entry] of Object.entries(archetypeUpdate)) {
+      throwIfAmyRunAborted(signal)
       const classes = (entry.classes || []).filter((c) => c !== 'low_results')
       if (classes.length !== (entry.classes || []).length) suppressedLowResults.push(key)
       if (classes.length > 0) effectiveArchetypeUpdate[key] = { ...entry, classes }
     }
     for (const lesson of meshLessonsHeard) {
+      throwIfAmyRunAborted(signal)
       try {
         await mesh.markConsumed(db, lesson.id, 'amy', { now: clock() })
       } catch { /* best-effort — consumption stamping never fails a run */ }
@@ -619,6 +646,7 @@ export async function runAmyTraining(options = {}) {
 
   let archetypeLearningApplied = null
   if (improve && applyLearning) {
+    throwIfAmyRunAborted(signal)
     try {
       // Per-archetype cohort sizes: an archetype may only CLEAR a prior lesson
       // when this run exercised it with real evidence (same bar as learning).
@@ -644,6 +672,7 @@ export async function runAmyTraining(options = {}) {
         })
       }
     } catch (err) {
+      throwIfAmyRunAborted(signal)
       logger.warn('Amy archetype learning persist failed', { error: err?.message })
     }
   }
@@ -652,13 +681,16 @@ export async function runAmyTraining(options = {}) {
   let tuningApplied = null
   let after = before
   if (improve && applyTuning && decision.change) {
+    throwIfAmyRunAborted(signal)
     try {
       tuningApplied = await thresholdEditor.apply(decision.to, { now: clock() })
+      throwIfAmyRunAborted(signal)
       if (tuningApplied?.applied) {
         after = decision.projected
         logger.info('Amy applied crawler floor tuning', { from: decision.from, to: decision.to, gain: decision.gain })
       }
     } catch (err) {
+      throwIfAmyRunAborted(signal)
       logger.warn('Amy floor tuning failed', { error: err?.message })
       tuningApplied = { applied: false, reason: err?.message }
     }
@@ -689,12 +721,15 @@ export async function runAmyTraining(options = {}) {
   async function recrawlQuality({ floor = operatingFloor, scoreKey = 'score' } = {}) {
     const reEvals = []
     for (const pid of sampleIds) {
+      throwIfAmyRunAborted(signal)
       const scn = scenarioByProfile.get(pid)
       if (!scn) continue
       try {
-        const r = await runDiscovery({ db, profileId: pid, dryRun: dryRunDiscovery, floor: sliderFloor, fetcher })
+        const r = await runDiscovery({ db, profileId: pid, dryRun: dryRunDiscovery, floor: sliderFloor, fetcher, signal })
+        throwIfAmyRunAborted(signal)
         reEvals.push(evaluateDiscovery(scn, pid, r, { runId }))
       } catch (err) {
+        throwIfAmyRunAborted(signal)
         reEvals.push(evaluateDiscovery(scn, pid, null, { error: err?.message, runId }))
       }
     }
@@ -714,6 +749,7 @@ export async function runAmyTraining(options = {}) {
   // after the catch has run — see the block's own note below.
   let weightAppliedRef = null
   if (improve && applyWeights && crawledProfileIds.length >= (tuningOpts.weights?.minCohort ?? 12)) {
+    throwIfAmyRunAborted(signal)
     try {
       const currentWeights = await weightEditor.read()
       const trialAt = isoFromClock(clock)
@@ -784,7 +820,7 @@ export async function runAmyTraining(options = {}) {
       // Stamp AFTER a real trial (kept or reverted). The next night's
       // decideWeightChange cools down on this key so a falsified weight nudge
       // is not re-applied forever against the same weak_match symptom.
-      if (weightTuning?.validation) {
+      if (weightTuning?.validation && !signal?.aborted) {
         await stampWeightTrialLast(db, {
           at: isoFromClock(clock),
           kept: Boolean(weightTuning.validation.kept),
@@ -793,6 +829,7 @@ export async function runAmyTraining(options = {}) {
         })
       }
     }
+    throwIfAmyRunAborted(signal)
   }
 
   // ── IMPROVE: source coverage (empirical re-crawl validation + auto-revert) ──
@@ -801,6 +838,7 @@ export async function runAmyTraining(options = {}) {
   // the reference is held outside the try.
   let coverageAppliedRef = null
   if (improve && applyCoverage && crawledProfileIds.length >= (tuningOpts.coverage?.minCohort ?? 12)) {
+    throwIfAmyRunAborted(signal)
     try {
       const liveOverrides = await coverageEditor.read()
       const cp = proposeCoverageOverrides(evaluations, { liveOverrides, opts: tuningOpts.coverage })
@@ -846,20 +884,24 @@ export async function runAmyTraining(options = {}) {
         }
       }
     }
+    throwIfAmyRunAborted(signal)
   }
 
   // ── HAND OFF: Anya (root cause) → Sam (verified safe fixes) ──────────────
   let chain = null
   if (improve) {
+    throwIfAmyRunAborted(signal)
     chain = await runPipeline({
       db,
       amyResult: { report: handoff },
       options: { anyaEnabled, anyaApply, samEnabled, samApply },
       logger,
     }).catch((err) => {
+      throwIfAmyRunAborted(signal)
       logger.warn('Amy pipeline failed', { error: err?.message })
       return { error: String(err?.message || err) }
     })
+    throwIfAmyRunAborted(signal)
   }
 
   // ── AUDIT TRAIL: mark approval-queue items an auto-applied lever addressed ──
@@ -871,6 +913,7 @@ export async function runAmyTraining(options = {}) {
   const coverageCategories = new Set((coverageTuning?.additions || []).map((a) => a.category))
   const learnedArchetypes = new Set(Object.keys(effectiveArchetypeUpdate))
   for (const item of approvalQueue) {
+    throwIfAmyRunAborted(signal)
     if (coverageKept && item.lever === 'source_keyword_coverage' && coverageCategories.has(item.category)) {
       item.auto_applied = { lever: 'source_coverage_overrides', run_id: runId, kept: true }
     } else if (weightsKept && item.lever === 'scoring_weights') {
@@ -978,6 +1021,7 @@ export async function runAmyTraining(options = {}) {
   // Runs BEFORE the report is persisted below so combined.agent_mesh.taught is
   // stored on the admin report.
   try {
+    throwIfAmyRunAborted(signal)
     const taught = []
     const notified = []
     const recipients = REQUIRED_TEACHING_AGENTS.filter((agentId) => agentId !== 'amy')
@@ -993,6 +1037,7 @@ export async function runAmyTraining(options = {}) {
       })
       taught.push({ id: lesson.id, topic: lesson.topic, claim: lesson.claim })
       for (const to of recipients) {
+        throwIfAmyRunAborted(signal)
         const message = await mesh.postMessage(db, {
           from: 'amy',
           to,
@@ -1018,6 +1063,7 @@ export async function runAmyTraining(options = {}) {
       })
       taught.push({ id: lesson.id, topic: lesson.topic, claim: lesson.claim })
       for (const to of recipients) {
+        throwIfAmyRunAborted(signal)
         const message = await mesh.postMessage(db, {
           from: 'amy',
           to,
@@ -1041,6 +1087,7 @@ export async function runAmyTraining(options = {}) {
     combined.agent_mesh.notified = notified
     combined.agent_mesh.teaching_complete = recipients.every((to) => notified.some((msg) => msg.to === to))
   } catch (err) {
+    throwIfAmyRunAborted(signal)
     combined.agent_mesh.teaching_error = err?.message || String(err)
     logger.warn('Amy agent-mesh teach failed (non-fatal)', { error: err?.message })
   }
@@ -1052,6 +1099,7 @@ export async function runAmyTraining(options = {}) {
   // summaries). If the teach step fails, cleanup must KEEP the profile so the
   // missed lesson is visible instead of silently destroyed.
   if (crawledProfileIds.length > 0) {
+    throwIfAmyRunAborted(signal)
     try {
       if (combined.agent_mesh.teaching_complete) {
         const findingTypes = [...new Set((handoff.findings || []).map((f) => f?.type).filter(Boolean))]
@@ -1081,6 +1129,7 @@ export async function runAmyTraining(options = {}) {
         })
       }
     } catch (err) {
+      throwIfAmyRunAborted(signal)
       combined.degraded = true
       combined.agent_mesh.teaching_complete = false
       combined.agent_mesh.teaching_error = err?.message || String(err)
@@ -1097,6 +1146,7 @@ export async function runAmyTraining(options = {}) {
   // persisted so the stored admin report carries the flywheel result. Never
   // fatal, but a failure is RECORDED on the report (G1: no silent failures).
   if (db && !dryRunDiscovery) {
+    throwIfAmyRunAborted(signal)
     try {
       combined.flywheel_cohort = await recordFlywheelCohort(db, {
         evaluations,
@@ -1111,6 +1161,7 @@ export async function runAmyTraining(options = {}) {
         logger.error('Amy flywheel cohort record failed', { run_id: runId, error: combined.flywheel_record_error })
       }
     } catch (err) {
+      throwIfAmyRunAborted(signal)
       combined.flywheel_cohort = null
       combined.degraded = true
       combined.flywheel_record_error = err?.message || String(err)
@@ -1136,9 +1187,11 @@ export async function runAmyTraining(options = {}) {
   // A skipped or thrown probe folds as UNKNOWN — it counts for breadth (we did
   // ask) but never as clean, so a broken night cannot read as convergence.
   if (db && !dryRunDiscovery) {
+    throwIfAmyRunAborted(signal)
     try {
       const probes = []
       for (const ev of evaluations) {
+        throwIfAmyRunAborted(signal)
         const scn = scenarioByProfile.get(ev.profile_id) || scenarioById.get(ev.scenario_id)
         const cell = scn?.probe_cell
         if (!cell) continue
@@ -1154,6 +1207,7 @@ export async function runAmyTraining(options = {}) {
       }
       probeCoverageSummary = folded.summary
     } catch (err) {
+      throwIfAmyRunAborted(signal)
       logger.warn('Amy probe-coverage fold failed (non-fatal)', { error: err?.message })
       combined.probe_coverage = { error: String(err?.message || err) }
     }
@@ -1177,7 +1231,9 @@ export async function runAmyTraining(options = {}) {
   // permanently unreachable). Only the ORDER changed, plus a count-based proof.
   //
   // ── CLEANUP: only profiles crawled at least once; never before. ──────────
+  throwIfAmyRunAborted(signal)
   const amyProfilesBefore = await countAmyProfiles(db)
+  throwIfAmyRunAborted(signal)
   let cleanup = null
   if (!keepProfiles) {
     cleanup = await cleanupAmyProfiles(db, {
@@ -1188,6 +1244,7 @@ export async function runAmyTraining(options = {}) {
       force: true,
       now: clock(),
     })
+    throwIfAmyRunAborted(signal)
   }
   combined.cleanup = cleanup
 
@@ -1205,7 +1262,9 @@ export async function runAmyTraining(options = {}) {
   if (!keepProfiles) {
     try {
       expiredSweep = await cleanupExpiredAmyProfiles(db, { now: clock() })
+      throwIfAmyRunAborted(signal)
     } catch (err) {
+      throwIfAmyRunAborted(signal)
       logger.warn('Amy expired-synthetic sweep failed (non-fatal)', { error: err?.message })
       expiredSweep = { error: String(err?.message || err), scanned: 0, deleted: 0, skipped: 0 }
     }
@@ -1224,6 +1283,7 @@ export async function runAmyTraining(options = {}) {
       created: createdProfileIds.length,
       now: clock(),
     })
+    throwIfAmyRunAborted(signal)
     if (combined.deletion_proof?.verdict === 'leaked') {
       combined.degraded = true
       logger.error('Amy synthetic profiles survived past TTL', {
@@ -1252,15 +1312,18 @@ export async function runAmyTraining(options = {}) {
   // Runs BEFORE the approval-ledger fold so the escape items age in the ledger.
   let guardEscapeAudit = null
   if (db && !dryRunDiscovery) {
+    throwIfAmyRunAborted(signal)
     try {
       guardEscapeAudit = await runPipelineGuardEscapeAudit(db, { runId, now: clock() })
       const escapeEvals = buildGuardEscapeEvaluations(guardEscapeAudit)
       if (escapeEvals.length > 0) {
         for (const item of buildApprovalQueue(escapeEvals)) {
+          throwIfAmyRunAborted(signal)
           if (itemFindingType(item) === FINDING_TYPES.PIPELINE_GUARD_ESCAPE) approvalQueue.push(item)
         }
       }
     } catch (err) {
+      throwIfAmyRunAborted(signal)
       guardEscapeAudit = { ran: false, reason: 'threw', error: err?.message || String(err) }
       logger.warn('Amy pipeline guard-escape audit failed (non-fatal)', { run_id: runId, error: err?.message })
     }
@@ -1269,6 +1332,7 @@ export async function runAmyTraining(options = {}) {
 
   // Agent Observability: the escape audit outcome is visible to Sam + Anya.
   if (guardEscapeAudit?.ran) {
+    throwIfAmyRunAborted(signal)
     const escN = guardEscapeAudit.escapes_removed || 0
     await Promise.resolve(recordActivity(db, {
       agent_name: 'amy',
@@ -1307,12 +1371,14 @@ export async function runAmyTraining(options = {}) {
   // report persist so `combined.approval_queue` carries the decoration.
   // Never fatal; a store failure still leaves the registry decoration attached.
   if (db && !dryRunDiscovery) {
+    throwIfAmyRunAborted(signal)
     try {
       const led = await recordApprovalQueue(db, {
         items: approvalQueue,
         runId,
         at: completedAtDate.toISOString(),
       })
+      throwIfAmyRunAborted(signal)
       combined.approval_queue = led.decorated
       combined.approval_ledger = {
         persisted: led.persisted,
@@ -1322,6 +1388,7 @@ export async function runAmyTraining(options = {}) {
         open: led.decorated.filter((i) => !i.auto_applied).length,
       }
     } catch (err) {
+      throwIfAmyRunAborted(signal)
       // The decoration is pure and must survive a store outage — otherwise the
       // report silently regresses to the ageless "Needs your approval" line.
       combined.approval_queue = decorateApprovalQueue(approvalQueue, null)
@@ -1354,8 +1421,10 @@ export async function runAmyTraining(options = {}) {
   // Persist combined report for the admin panel (after the flywheel cohort is
   // attached). Non-fatal, but a persistence failure is recorded + logged (G1).
   if (saveReport && db) {
+    throwIfAmyRunAborted(signal)
     try {
       const saved = await saveAmyReport(db, combined)
+      throwIfAmyRunAborted(signal)
       if (saved === false) {
         combined.degraded = true
         combined.report_persistence_error = 'saveAmyReport returned false (persist failed; see reportStore logs)'
@@ -1372,16 +1441,19 @@ export async function runAmyTraining(options = {}) {
   // crawlers are improving (read by Sam/Anya via system_kv and surfaced on the
   // admin crawl-coverage dashboard). Always written (measurement, not a lever).
   if (db) {
+    throwIfAmyRunAborted(signal)
     await appendArchetypeMetrics(db, {
       runId,
       at: completedAtDate.toISOString(),
       metrics: archetypeMetrics,
     }).catch(() => {})
+    throwIfAmyRunAborted(signal)
   }
 
   // Write artifacts (best-effort).
   const artifacts = { handoffPath: null, runLogPath: null, combinedPath: null }
   if (typeof writeArtifact === 'function') {
+    throwIfAmyRunAborted(signal)
     try {
       artifacts.handoffPath = await writeArtifact(`amy-to-anya-handoff-${runId}.json`, JSON.stringify(handoff, null, 2))
       artifacts.runLogPath = await writeArtifact(
@@ -1392,6 +1464,7 @@ export async function runAmyTraining(options = {}) {
         artifacts.combinedPath = await writeArtifact(`amy-crawler-improvement-${runId}.json`, JSON.stringify(combined, null, 2))
       }
     } catch (err) {
+      throwIfAmyRunAborted(signal)
       logger.warn('failed to write Amy artifacts', { error: err?.message })
     }
   }
@@ -1400,6 +1473,7 @@ export async function runAmyTraining(options = {}) {
   // Agent Observability Rule: the sweep outcome must be visible to Sam + Anya,
   // not just in ephemeral run logs — emit the standard amy telemetry event.
   if (expiredSweep) {
+    throwIfAmyRunAborted(signal)
     await Promise.resolve(recordActivity(db, {
       agent_name: 'amy',
       event_type: 'amy.cleanup.expired_sweep',

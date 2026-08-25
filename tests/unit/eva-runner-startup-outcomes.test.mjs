@@ -19,9 +19,11 @@ import {
   describeUnmet,
   loadAppEnvOverrides,
 } from '../../tools/eva-edge-runner/src/prereq.mjs'
-import { blockedAppResult, startupFailedAppResult } from '../../tools/eva-edge-runner/src/appOutcome.mjs'
+import { blockedAppResult, startupFailedAppResult, orchestrationFailedAppResult } from '../../tools/eva-edge-runner/src/appOutcome.mjs'
 import { createOutputRing, ensureDisposableRoot, envReferencesRoot, splitConcurrentSegments } from '../../tools/eva-edge-runner/src/launcher.mjs'
 import { expectedConsolePatterns, matchesAny } from '../../tools/eva-edge-runner/src/adapters/web.mjs'
+
+const BLOCKER_REASON_SCHEMA_CAP = 500
 
 const app = { app_id: 'demo', display_name: 'Demo', repo: 'owner/demo' }
 
@@ -32,6 +34,22 @@ test('the runner SUPPLIES a manifest launch_env — the reason PromoPilot could 
   assert.equal(env.PORT, '8090')
   assert.equal(env.PATH, '/bin', 'the inherited environment is preserved')
   assert.equal(sources.PORT, 'manifest')
+})
+
+test('runner secrets, production databases, and paid model keys never leak into child apps', () => {
+  const inherited = {
+    PATH: '/bin',
+    HOME: '/home/tester',
+    EVA_RUNNER_SECRET: 'runner-signing-secret',
+    DATABASE_URL: 'postgresql://production/do-not-touch',
+    OPENAI_API_KEY: 'paid-key',
+  }
+  const { env } = resolveLaunchEnv({ app, manifest: { app_id: 'demo' }, env: inherited })
+  assert.equal(env.PATH, '/bin')
+  assert.equal(env.HOME, '/home/tester')
+  assert.equal(env.EVA_RUNNER_SECRET, undefined)
+  assert.equal(env.DATABASE_URL, undefined)
+  assert.equal(env.OPENAI_API_KEY, undefined)
 })
 
 test('a declared secret is GENERATED per run and never a fixed literal', () => {
@@ -65,6 +83,16 @@ test('a manifest with NO prerequisites is never blocked (unchanged manifests kee
   const res = await checkPrerequisites({ manifest: { app_id: 'demo' }, resolvedEnv: {} })
   assert.deepEqual(res.unmet, [])
   assert.equal(res.checked, 0)
+})
+
+test('required_env is an executable preflight contract, not documentation', async () => {
+  const manifest = { app_id: 'demo', required_env: ['PORT', 'DATABASE_URL'] }
+  const missing = await checkPrerequisites({ manifest, resolvedEnv: { PORT: '4000' } })
+  assert.equal(missing.unmet.length, 1)
+  assert.match(missing.unmet[0].detail, /DATABASE_URL/)
+  assert.doesNotMatch(missing.unmet[0].detail, /PORT/)
+  const met = await checkPrerequisites({ manifest, resolvedEnv: { PORT: '4000', DATABASE_URL: 'postgres://local/test' } })
+  assert.deepEqual(met.unmet, [])
 })
 
 test('a missing required env is UNMET and names the variable — the SermonSmith DATABASE_URL case', async () => {
@@ -129,6 +157,21 @@ test('a BLOCKED app is app_status=blocked with a named prerequisite and a NON-fa
   assert.equal(res.journeys[0].severity, undefined)
 })
 
+test('startup outcome builders never exceed the blocker_reason upload-schema boundary', () => {
+  const blocked = blockedAppResult({
+    app,
+    manifest: { start_command: 'docker compose up' },
+    unmet: [{ name: 'Docker daemon', detail: 'x'.repeat(2_000), remedy: 'start Docker Desktop' }],
+  })
+  const failed = startupFailedAppResult({
+    app,
+    manifest: { start_command: 'npm start' },
+    launch: { outputTail: () => 'y'.repeat(2_000), exitInfos: [{ code: 1 }] },
+  })
+  assert.ok(blocked.blocker_reason.length <= BLOCKER_REASON_SCHEMA_CAP)
+  assert.ok(failed.blocker_reason.length <= BLOCKER_REASON_SCHEMA_CAP)
+})
+
 test('a STARTUP FAILURE stays critical AND quotes the process output and the probe URL that actually failed', () => {
   const res = startupFailedAppResult({
     app,
@@ -157,6 +200,16 @@ test('a startup failure with NO output admits it has no evidence rather than cla
   })
   assert.ok(res.journeys[0].diagnostic_confidence < 0.9)
   assert.ok(res.journeys[0].missing_evidence, 'a diagnosis with no output must name its missing evidence')
+})
+
+test('an unexpected runner exception has a stable schema-complete journey lifecycle', () => {
+  const res = orchestrationFailedAppResult({ app, error: new Error('adapter exploded') })
+  assert.equal(res.app_status, 'not_run', 'an orchestration exception must not inflate the tested-app count')
+  assert.equal(res.journeys[0].journey_id, 'runner-orchestration')
+  assert.equal(res.journeys[0].status, 'failed')
+  for (const field of ['severity', 'retry_classification', 'failure_class', 'expected_behavior', 'observed_behavior', 'repro_steps', 'user_impact', 'diagnostic_confidence']) {
+    assert.notEqual(res.journeys[0][field], undefined, `${field} is required by failed-journey schema`)
+  }
 })
 
 test('the output ring is bounded and returns the TAIL (where a fatal error lands)', () => {

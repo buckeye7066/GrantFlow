@@ -10,7 +10,16 @@
   "readiness_probe": { "type": "http", "path": "/api/health", "port": 8080, "timeout_ms": 120000 },
   "base_url": "http://localhost:5173",
   "test_target": "disposable-local-instance",
-  "required_env": ["DATABASE_URL", "AUTH_JWT_SECRET", "CORS_ORIGIN", "SMOKE_MODE", "DISABLE_AI", "SQLITE_DB_PATH"],
+  "required_env": ["AUTH_JWT_SECRET", "CORS_ORIGIN", "SMOKE_MODE", "DISABLE_AI", "SQLITE_DB_PATH"],
+  "launch_env": {
+    "NODE_ENV": "development",
+    "DB_PROVIDER": "sqlite",
+    "CORS_ORIGIN": "http://127.0.0.1:5173",
+    "SMOKE_MODE": "1",
+    "DISABLE_AI": "1",
+    "SQLITE_DB_PATH": ".eva-tmp/grantflow/grantflow.sqlite"
+  },
+  "launch_env_generated": { "AUTH_JWT_SECRET": "secret" },
   "seed_command": "npm run db:setup",
   "reset_command": "npm run migrate",
   "cleanup": "rm -rf .eva-tmp/grantflow && remove disposable sqlite db",

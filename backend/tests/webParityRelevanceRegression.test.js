@@ -3,12 +3,15 @@ import { describe, expect, it } from 'vitest'
 import {
   appendGapCandidates,
   classifyWebResults,
+  computeFleetParitySample,
   isBenchmarkDirectFundingHit,
   isBenchmarkRelevantHit,
   isForeignGovernmentHit,
   isGenericFundingPortalHit,
   readWebParityGapQueue,
 } from '../services/webParityBenchmark.js'
+import { summarizeCoverageGaps, summarizeWebParity } from '../services/anya/anyaDailyOwnerReport.js'
+import { getCheckById } from '../services/sam/samRegistry.js'
 
 const INDIVIDUAL_DISABILITY_CONTEXT = {
   needs: ['disability', 'medical assistance', 'transportation'],
@@ -39,6 +42,30 @@ function createDb() {
 }
 
 describe('web parity relevance regression', () => {
+  it('weights qualified fleet parity by verified denominator', () => {
+    const sample = computeFleetParitySample([
+      { parity: 100, overlap_count: 1, web_only_count: 0 },
+      { parity: 0, overlap_count: 0, web_only_count: 19 },
+    ])
+    expect(sample).toMatchObject({
+      measurement_status: 'scored',
+      verified_denominator: 20,
+      sample_qualified: true,
+      scored_profiles_parity: 50,
+      fleet_parity: 5,
+    })
+  })
+
+  it('keeps fleet parity null until a complete sample clears the denominator floor', () => {
+    expect(computeFleetParitySample([
+      { parity: 100, overlap_count: 1, web_only_count: 0 },
+    ])).toMatchObject({ sample_qualified: false, fleet_parity: null })
+    expect(computeFleetParitySample([
+      { parity: 100, overlap_count: 20, web_only_count: 0 },
+      { parity: null, overlap_count: null, web_only_count: null },
+    ])).toMatchObject({ measurement_status: 'partial', sample_qualified: false, fleet_parity: null })
+  })
+
   it('rejects foreign public-sector pages from a US profile benchmark', () => {
     const hit = {
       url: 'https://vlada.gov.cz/en/ppov/vvozp/government-board-for-persons-with-disabilities-19629/',
@@ -96,6 +123,197 @@ describe('web parity relevance regression', () => {
       expect(isBenchmarkRelevantHit(hit, INDIVIDUAL_DISABILITY_CONTEXT)).toBe(false)
       expect(isBenchmarkDirectFundingHit(hit, INDIVIDUAL_DISABILITY_CONTEXT)).toBe(false)
     }
+  })
+
+  it('filters the two non-funding web-only hits from the August 25 owner report', () => {
+    const noise = [
+      {
+        url: 'https://www.causeiq.com/organizations/the-caring-place,621571247/',
+        title: 'The Caring Place | Cleveland, TN | Cause IQ',
+        snippet: 'Organization profile, revenue, and nonprofit information.',
+      },
+      {
+        url: 'https://spcabctn.org/',
+        title: 'HOME | SPCA Bradley County',
+        snippet: 'Animal shelter services and community resources in Bradley County.',
+      },
+    ]
+    for (const hit of noise) {
+      expect(isBenchmarkDirectFundingHit(hit, INDIVIDUAL_DISABILITY_CONTEXT)).toBe(false)
+    }
+  })
+
+  it('recognizes SSA disability apply and program pages as the same covered program', () => {
+    const stored = [{
+      title: 'Social Security disability benefits (SSDI / SSI)',
+      sponsor: 'Social Security Administration',
+      source_url: 'https://www.ssa.gov/disability',
+    }]
+    const hits = [{
+      url: 'https://www.ssa.gov/applyfordisability/',
+      title: 'Apply Online for Disability Benefits | SSA',
+      snippet: 'People with disabilities can apply for Social Security disability benefits online.',
+    }]
+    const result = classifyWebResults(hits, stored, INDIVIDUAL_DISABILITY_CONTEXT)
+    expect(result.overlap).toHaveLength(1)
+    expect(result.web_only).toHaveLength(0)
+    expect(result.grantflow_only).toBe(0)
+  })
+
+  it('does not publish a 0/100 fleet claim from the six-result August 25 sample', () => {
+    const summary = summarizeWebParity({
+      runs: [],
+      latest: {
+        generated_at: new Date().toISOString(),
+        semantics_version: 2,
+        sample_qualified: false,
+        verified_denominator: 6,
+        minimum_verified_denominator: 20,
+        fleet_parity: 0,
+        per_profile: [{
+          profile_id: 'gilbert',
+          label: 'Gilbert',
+          parity: 0,
+          overlap_count: 0,
+          web_only_count: 6,
+          grantflow_only: 20,
+        }],
+      },
+    })
+    expect(summary.headline).toMatch(/6 verified result/i)
+    expect(summary.headline).toMatch(/no fleet score or regression claim/i)
+    expect(summary.headline).not.toMatch(/Fleet parity 0\/100/i)
+    expect(summary.perProfile[0]).toMatch(/observed parity 0\/100/i)
+  })
+
+  it('labels a complete-denominator partial run as partial and keeps null profile parity unscored', () => {
+    const summary = summarizeWebParity({
+      runs: [],
+      latest: {
+        generated_at: new Date().toISOString(),
+        semantics_version: 3,
+        measurement_status: 'partial',
+        sample_qualified: false,
+        verified_denominator: 25,
+        minimum_verified_denominator: 20,
+        profiles_total: 2,
+        profiles_scored: 1,
+        fleet_parity: null,
+        per_profile: [
+          { profile_id: 'measured', parity: 60, overlap_count: 15, web_only_count: 10 },
+          { profile_id: 'missing', parity: null, error: 'provider_unavailable' },
+        ],
+      },
+    })
+    expect(summary.headline).toMatch(/PARTIAL.*1\/2/i)
+    expect(summary.headline).not.toMatch(/below.*threshold|Fleet parity/i)
+    expect(summary.perProfile[1]).toMatch(/not scored.*provider_unavailable/i)
+    expect(summary.perProfile[1]).not.toMatch(/0\/100/)
+  })
+
+  it('does not raise a regression finding for a fresh underpowered sample', async () => {
+    const db = createDb()
+    db.raw.exec('CREATE TABLE system_kv (key TEXT PRIMARY KEY, value TEXT, updated_at TEXT)')
+    const generatedAt = new Date().toISOString()
+    db.raw.prepare('INSERT INTO system_kv (key, value, updated_at) VALUES (?, ?, ?)').run(
+      'web_parity_benchmark',
+      JSON.stringify({
+        generated_at: generatedAt,
+        runs: [],
+        latest: {
+          generated_at: generatedAt,
+          semantics_version: 2,
+          sample_status: 'insufficient_sample',
+          sample_qualified: false,
+          verified_denominator: 6,
+          minimum_verified_denominator: 20,
+          fleet_parity: 0,
+          per_profile: [],
+        },
+      }),
+      generatedAt,
+    )
+    const result = await getCheckById('coverage.webParityBenchmark').run({ db })
+    expect(result.ok).toBe(true)
+    expect(result.summary).toMatch(/not trend-qualified/i)
+    expect(result.summary).toMatch(/6\/20/)
+  })
+
+  it.each(['partial', 'unscored'])('fails a fresh %s run before considering sample qualification', async (measurementStatus) => {
+    const generatedAt = new Date().toISOString()
+    const scored = measurementStatus === 'partial' ? 1 : 0
+    const store = {
+      generated_at: generatedAt,
+      runs: [],
+      latest: {
+        generated_at: generatedAt,
+        semantics_version: 3,
+        measurement_status: measurementStatus,
+        sample_qualified: false,
+        verified_denominator: 25,
+        minimum_verified_denominator: 20,
+        profiles_total: 2,
+        profiles_scored: scored,
+        profiles_unscored: 2 - scored,
+        fleet_parity: null,
+        per_profile: [],
+      },
+    }
+    const db = {
+      prepare: () => ({ get: async () => ({ value: JSON.stringify(store) }) }),
+    }
+    const result = await getCheckById('coverage.webParityBenchmark').run({ db })
+    expect(result.ok).toBe(false)
+    expect(result.summary).toMatch(new RegExp(measurementStatus, 'i'))
+    expect(result.summary).not.toMatch(/not trend-qualified/i)
+  })
+
+  it('lists one owner-digest change when an idempotent scheduler emits it repeatedly', () => {
+    const duplicate = {
+      agent_name: 'amy',
+      event_type: 'coverage.refreshed',
+      status: 'succeeded',
+      title: 'Amy refreshed the fleet coverage-gap scoreboard',
+    }
+    const summary = summarizeCoverageGaps({ events: Array.from({ length: 5 }, () => ({ ...duplicate })) })
+    expect(summary.changed).toEqual(['[amy] Amy refreshed the fleet coverage-gap scoreboard'])
+  })
+
+  it('keeps same-titled telemetry for distinct entities while deduping each identity', () => {
+    const base = {
+      agent_name: 'amy',
+      event_type: 'source.repaired',
+      status: 'succeeded',
+      title: 'Source repaired',
+      entity_type: 'source',
+    }
+    const summary = summarizeCoverageGaps({ events: [
+      { ...base, entity_id: 'source-a' },
+      { ...base, entity_id: 'source-a' },
+      { ...base, entity_id: 'source-b' },
+    ] })
+    expect(summary.changed).toEqual([
+      '[amy] Source repaired [source:source-a]',
+      '[amy] Source repaired [source:source-b]',
+    ])
+  })
+
+  it('suppresses stale web-parity numbers and old web-only findings', () => {
+    const summary = summarizeWebParity({
+      latest: {
+        generated_at: '2026-08-20T08:00:00.000Z',
+        semantics_version: 3,
+        measurement_status: 'scored',
+        sample_qualified: true,
+        fleet_parity: 77,
+        per_profile: [{ profile_id: 'old', parity: 77, web_only_top: [{ title: 'Old miss' }] }],
+      },
+    }, { now: new Date('2026-08-25T09:00:00.000Z') })
+    expect(summary.stale).toBe(true)
+    expect(summary.headline).toMatch(/STALE.*suppressed/i)
+    expect(summary.headline).not.toMatch(/77/)
+    expect(summary.perProfile).toEqual([])
+    expect(summary.webOnlyTop).toEqual([])
   })
 
   it('rejects the Grants.gov homepage but keeps a specific actionable opportunity', () => {

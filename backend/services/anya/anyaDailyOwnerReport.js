@@ -29,6 +29,57 @@ import { createLogger } from '../../utils/logger.js'
 
 const log = createLogger('anyaDailyOwnerReport')
 
+// Owner-email evidence must obey the same freshness boundary as the Sam checks.
+// Otherwise a missed scheduler run turns yesterday's defects into a new-looking
+// email every morning and sends the owner back through already-completed work.
+export const OWNER_AMY_STALE_MS = 36 * 60 * 60 * 1000
+export const OWNER_WEB_PARITY_STALE_MS = 48 * 60 * 60 * 1000
+export const OWNER_EVIDENCE_FUTURE_TOLERANCE_MS = 60 * 60 * 1000
+
+function finiteNumber(value) {
+  if (value === null || value === undefined || value === '') return null
+  const number = Number(value)
+  return Number.isFinite(number) ? number : null
+}
+
+function evidenceAgeMs(value, now = new Date()) {
+  const observedMs = Date.parse(value || '')
+  const currentMs = now instanceof Date ? now.getTime() : Date.parse(now)
+  return Number.isFinite(observedMs) && Number.isFinite(currentMs)
+    ? currentMs - observedMs
+    : Number.POSITIVE_INFINITY
+}
+
+function latestAmyCohortReceipt(amy) {
+  const receipts = Array.isArray(amy?.cohort?.run_receipts) ? amy.cohort.run_receipts : []
+  return receipts.length ? receipts[receipts.length - 1] : null
+}
+
+function amyCohortEvidenceTimestamp(amy) {
+  return latestAmyCohortReceipt(amy)?.recorded_at || null
+}
+
+function amyReportEvidenceTimestamp(amy) {
+  return amy?.report?.completed_at
+    || amy?.report?.generated_at
+    || amy?.report?.created_at
+    || amy?.report?.persisted_at
+    || null
+}
+
+function evidenceIsStale(ageMs, staleMs) {
+  return !Number.isFinite(ageMs) || ageMs > staleMs || ageMs < -OWNER_EVIDENCE_FUTURE_TOLERANCE_MS
+}
+
+function staleEvidenceLine(kind, ageMs, staleMs) {
+  const age = !Number.isFinite(ageMs)
+    ? 'missing a valid observation timestamp'
+    : ageMs < 0
+      ? 'timestamp is implausibly in the future'
+      : `${Math.round(ageMs / 3600000)}h old`
+  return `${kind} evidence is STALE (${age}; expected within ${Math.round(staleMs / 3600000)}h). Old measurements and findings were suppressed.`
+}
+
 export function isAnyaDailyReportEnabled() {
   return String(process.env.ANYA_DAILY_REPORT_ENABLED ?? 'true').toLowerCase() !== 'false'
 }
@@ -215,16 +266,42 @@ function fixHint(finding, planByFindingId) {
  * for tests.
  *
  * @param {{cohort?:object|null, goal_notified_at?:string|null, report?:object|null}} amy
- * @returns {{cohortLine:string, edits:string[], couldNot:string[], goal:boolean}|null}
+ * @returns {{cohortLine:string, edits:string[], couldNot:string[], goal:boolean,stale:boolean,cohortStale:boolean,reportStale:boolean,reportSupersededByCohort:boolean}|null}
  */
-export function summarizeAmyFlywheel(amy) {
+export function summarizeAmyFlywheel(amy, { now = new Date() } = {}) {
   if (!amy || (!amy.cohort && !amy.report)) return null
-  const day = amy.cohort || null
-  const report = amy.report || {}
+  // The cohort receipt and combined Amy report are independent writes. A run
+  // records its cohort before saveAmyReport(), and report persistence is
+  // deliberately non-fatal. Never let a fresh cohort timestamp bless an older
+  // report's edits or approval queue as fresh overnight activity.
+  const cohortAgeMs = amy.cohort ? evidenceAgeMs(amyCohortEvidenceTimestamp(amy), now) : null
+  const reportAgeMs = amy.report ? evidenceAgeMs(amyReportEvidenceTimestamp(amy), now) : null
+  const cohortStale = Boolean(amy.cohort) && evidenceIsStale(cohortAgeMs, OWNER_AMY_STALE_MS)
+  const cohortReceipt = latestAmyCohortReceipt(amy)
+  const cohortRunId = cohortReceipt?.run_id || amy.cohort?.latest_run_id || null
+  const reportRunId = amy.report?.run_id || null
+  // A newer cohort receipt with a different run id proves that the non-fatal
+  // report write for that run did not replace the prior report, even when the
+  // older report still falls inside the generous 36-hour age window.
+  const reportSupersededByCohort = Boolean(
+    cohortRunId
+    && reportRunId
+    && String(cohortRunId) !== String(reportRunId)
+    && Number.isFinite(cohortAgeMs)
+    && Number.isFinite(reportAgeMs)
+    && cohortAgeMs <= reportAgeMs,
+  )
+  const reportStale = !amy.report
+    || evidenceIsStale(reportAgeMs, OWNER_AMY_STALE_MS)
+    || reportSupersededByCohort
+  const day = cohortStale ? null : (amy.cohort || null)
+  const report = reportStale ? {} : amy.report
 
-  const cohortLine = day
-    ? `${day.clean}/${day.evaluated} synthetic profiles clean (target ${day.target}, ${day.issues} with issues) on ${day.day}`
-    : 'No cohort data for today yet.'
+  const cohortLine = cohortStale
+    ? staleEvidenceLine('Amy flywheel cohort', cohortAgeMs, OWNER_AMY_STALE_MS)
+    : day
+      ? `${day.clean}/${day.evaluated} synthetic profiles clean (target ${day.target}, ${day.issues} with issues) on ${day.day}`
+      : 'No cohort data for today yet.'
   const goal = Boolean(day && day.complete && day.all_clean)
 
   const edits = []
@@ -363,7 +440,16 @@ export function summarizeAmyFlywheel(amy) {
     )
   }
 
-  return { cohortLine, edits, couldNot, goal }
+  return {
+    cohortLine,
+    edits,
+    couldNot,
+    goal,
+    stale: cohortStale,
+    cohortStale,
+    reportStale,
+    reportSupersededByCohort,
+  }
 }
 
 /**
@@ -422,8 +508,43 @@ export function summarizeCoverageGaps(gaps) {
   // the changes the agents made themselves; blocked/failed events (plus the
   // wishlist above) are what still needs a human.
   const label = (e) => `[${e?.agent_name || 'agent'}] ${maskSecrets(e?.title || e?.event_type || 'activity')}`
-  const changed = events.filter((e) => e?.status === 'succeeded').slice(0, 8).map(label)
-  const needsOwner = events.filter((e) => e?.status === 'blocked' || e?.status === 'failed').slice(0, 8).map(label)
+  // Schedulers can legitimately emit the same idempotent success more than
+  // once (the August 25 email listed one scoreboard refresh five times). An
+  // owner digest is an inventory of distinct changes, not a raw event log.
+  const eventIdentity = (event) => {
+    const agent = String(event?.agent_name || 'agent')
+    const eventType = String(event?.event_type || 'activity')
+    const status = String(event?.status || '')
+    const entityType = String(event?.entity_type || '')
+    const entityId = String(event?.entity_id || '')
+    // Entity identity wins when telemetry supplies it: two same-titled changes
+    // to different profiles/sources are distinct. Without an entity, the event
+    // type is the stable idempotency key, so repeated scheduler receipts collapse
+    // even if each database row has a different surrogate id.
+    return entityType || entityId
+      ? `${agent}|${eventType}|${status}|${entityType}|${entityId}`
+      : `${agent}|${eventType}|${status}`
+  }
+  const distinctLabels = (rows) => {
+    const distinct = []
+    const seen = new Set()
+    for (const event of rows) {
+      const identity = eventIdentity(event)
+      if (seen.has(identity)) continue
+      seen.add(identity)
+      distinct.push({ event, rendered: label(event) })
+      if (distinct.length >= 8) break
+    }
+    const counts = new Map()
+    for (const item of distinct) counts.set(item.rendered, (counts.get(item.rendered) || 0) + 1)
+    return distinct.map(({ event, rendered }) => {
+      if ((counts.get(rendered) || 0) < 2) return rendered
+      const entity = [event?.entity_type, event?.entity_id].filter(Boolean).join(':')
+      return entity ? `${rendered} [${maskSecrets(entity)}]` : rendered
+    })
+  }
+  const changed = distinctLabels(events.filter((e) => e?.status === 'succeeded'))
+  const needsOwner = distinctLabels(events.filter((e) => e?.status === 'blocked' || e?.status === 'failed'))
 
   return { headline, topGaps, wishlist, changed, needsOwner }
 }
@@ -438,11 +559,29 @@ export function summarizeCoverageGaps(gaps) {
  *        `web_parity_benchmark` store
  * @returns {{headline:string, perProfile:string[], webOnlyTop:string[]}|null}
  */
-export function summarizeWebParity(parity) {
+export function summarizeWebParity(parity, { now = new Date() } = {}) {
   const latest = parity?.latest
   if (!latest || !Array.isArray(latest.per_profile)) return null
+  const ageMs = evidenceAgeMs(latest.generated_at || parity?.generated_at, now)
+  if (!Number.isFinite(ageMs) || ageMs > OWNER_WEB_PARITY_STALE_MS || ageMs < -OWNER_EVIDENCE_FUTURE_TOLERANCE_MS) {
+    return {
+      headline: staleEvidenceLine('Web-parity benchmark', ageMs, OWNER_WEB_PARITY_STALE_MS),
+      perProfile: [],
+      webOnlyTop: [],
+      stale: true,
+    }
+  }
   const runs = Array.isArray(parity.runs) ? parity.runs : []
-  const prev = runs.length >= 2 ? runs[runs.length - 2] : null
+  const semanticsVersion = Number(latest.semantics_version)
+  const usesQualifiedSampleContract = Number.isFinite(semanticsVersion) && semanticsVersion >= 2
+  const sampleQualified = latest.sample_qualified === true || (
+    !usesQualifiedSampleContract &&
+    (latest.sample_qualified === null || latest.sample_qualified === undefined)
+  )
+  const priorRuns = runs.slice(0, -1)
+  const prev = [...priorRuns].reverse().find((run) => !usesQualifiedSampleContract || (
+    Number(run?.semantics_version) === semanticsVersion && run?.sample_qualified === true
+  )) || null
 
   const arrow = (nowVal, prevVal) => {
     if (!Number.isFinite(nowVal) || !Number.isFinite(prevVal)) return ''
@@ -452,19 +591,32 @@ export function summarizeWebParity(parity) {
     return ' → unchanged vs prior'
   }
 
-  const fleet = Number(latest.fleet_parity)
-  const headline = Number.isFinite(fleet)
-    ? `Fleet parity ${fleet}/100 vs a plain web-search session${arrow(fleet, Number(prev?.fleet_parity))}.`
-    : 'Benchmark ran but no golden profile could be scored.'
+  const fleet = finiteNumber(latest.qualified_fleet_parity ?? latest.fleet_parity)
+  const verifiedDenominator = finiteNumber(latest.verified_denominator)
+  const minimumDenominator = finiteNumber(latest.minimum_verified_denominator)
+  const measurementStatus = String(latest.measurement_status || '').toLowerCase()
+  const measurementComplete = measurementStatus !== 'partial' && measurementStatus !== 'unscored'
+  const trendQualified = measurementComplete && sampleQualified && Number.isFinite(fleet)
+  const headline = measurementStatus === 'partial'
+    ? `Benchmark produced only a PARTIAL measurement (${latest.profiles_scored ?? 'unknown'}/${latest.profiles_total ?? latest.per_profile.length} golden profile(s) scored); no fleet score or regression claim was published.`
+    : measurementStatus === 'unscored'
+      ? 'Benchmark ran but was UNSCORED; no fleet score or regression claim was published.'
+      : usesQualifiedSampleContract && !sampleQualified
+        ? `Benchmark observed ${Number.isFinite(verifiedDenominator) ? verifiedDenominator : 'an unknown number of'} verified result(s), below the ${Number.isFinite(minimumDenominator) ? minimumDenominator : 'required'}-result trend threshold; no fleet score or regression claim was published.`
+        : Number.isFinite(fleet)
+          ? `Fleet parity ${fleet}/100 vs a plain web-search session${arrow(fleet, finiteNumber(prev?.qualified_fleet_parity ?? prev?.fleet_parity))}.`
+          : 'Benchmark ran but no golden profile could be scored.'
 
   const prevByProfile = new Map(
-    (Array.isArray(prev?.per_profile) ? prev.per_profile : []).map((p) => [p.profile_id, Number(p.parity)]),
+    (Array.isArray(prev?.per_profile) ? prev.per_profile : []).map((p) => [p.profile_id, finiteNumber(p.parity)]),
   )
   const perProfile = latest.per_profile.map((p) => {
     const name = p.label || p.profile_id
-    if (!Number.isFinite(Number(p.parity))) return `${name}: not scored (${p.error || 'error'})`
+    const profileParity = finiteNumber(p.parity)
+    if (!Number.isFinite(profileParity)) return `${name}: not scored (${p.error || 'error'})`
+    const parityLabel = usesQualifiedSampleContract && !trendQualified ? 'observed parity' : 'parity'
     return (
-      `${name}: parity ${p.parity}/100${arrow(Number(p.parity), prevByProfile.get(p.profile_id))}` +
+      `${name}: ${parityLabel} ${profileParity}/100${trendQualified ? arrow(profileParity, prevByProfile.get(p.profile_id)) : ''}` +
       ` — ${p.overlap_count ?? 0} shared, ${p.web_only_count ?? 0} web-only, ${p.grantflow_only ?? 0} GrantFlow-only` +
       (p.web_outage_suspected ? ' (0 web results — provider outage suspected)' : '')
     )
@@ -581,7 +733,7 @@ export function buildOwnerReport(run = {}, { now = null, amy = null, gaps = null
     t.push('')
     t.push(`FIXED AUTOMATICALLY OVERNIGHT (no action needed): ${autoFixing.map((f) => maskSecrets(f?.title || 'fix')).slice(0, 10).join('; ')}`)
   }
-  const flywheel = summarizeAmyFlywheel(amy)
+  const flywheel = summarizeAmyFlywheel(amy, { now: now || new Date() })
   if (flywheel) {
     t.push('')
     t.push('AMY CRAWLER FLYWHEEL')
@@ -590,6 +742,8 @@ export function buildOwnerReport(run = {}, { now = null, amy = null, gaps = null
     if (flywheel.edits.length) {
       t.push('Edits Amy applied autonomously:')
       flywheel.edits.forEach((e) => t.push(`  • ${e}`))
+    } else if (flywheel.reportStale) {
+      t.push('Autonomous edit status is unknown — no fresh Amy report is available.')
     } else {
       t.push('No autonomous edits were needed overnight.')
     }
@@ -623,7 +777,7 @@ export function buildOwnerReport(run = {}, { now = null, amy = null, gaps = null
       gapSummary.needsOwner.forEach((n) => t.push(`  • ${n}`))
     }
   }
-  const paritySummary = summarizeWebParity(parity)
+  const paritySummary = summarizeWebParity(parity, { now: now || new Date() })
   if (paritySummary) {
     t.push('')
     t.push('GOOGLE-BAR BENCHMARK (GrantFlow vs a web-search session)')
@@ -639,6 +793,8 @@ export function buildOwnerReport(run = {}, { now = null, amy = null, gaps = null
       // seeding lane existed and would now be a lie in the owner's inbox.
       t.push('Top web-only finds (queued — seeded into each profile\'s next crawl, added if the gates accept):')
       paritySummary.webOnlyTop.forEach((w) => t.push(`  • ${w}`))
+    } else if (paritySummary.stale) {
+      t.push('Web-only coverage is unknown — no fresh benchmark evidence is available.')
     } else {
       t.push('No real web-only finds — GrantFlow covered everything the web session produced.')
     }
@@ -744,12 +900,14 @@ export function buildOwnerReport(run = {}, { now = null, amy = null, gaps = null
       ${needsHumanHtml}
       ${autoHtml}
       ${(() => {
-        const fw = summarizeAmyFlywheel(amy)
+        const fw = summarizeAmyFlywheel(amy, { now: now || new Date() })
         if (!fw) return ''
         const cohortColor = fw.goal ? '#16a34a' : '#334155'
         const editsHtml = fw.edits.length
           ? `<ul style="margin:6px 0 0;padding-left:18px;color:#334155;">${fw.edits.map((e) => `<li>${esc(e)}</li>`).join('')}</ul>`
-          : '<div style="color:#64748b;margin-top:4px;">No autonomous edits were needed overnight.</div>'
+          : fw.reportStale
+            ? '<div style="color:#92400e;margin-top:4px;">Autonomous edit status is unknown — no fresh Amy report is available.</div>'
+            : '<div style="color:#64748b;margin-top:4px;">No autonomous edits were needed overnight.</div>'
         const couldNotHtml = fw.couldNot.length
           ? `<div style="margin-top:8px;"><strong style="color:#b45309;">Could not auto-edit (needs you):</strong>
                <ul style="margin:6px 0 0;padding-left:18px;color:#78350f;">${fw.couldNot.map((e) => `<li>${esc(e)}</li>`).join('')}</ul></div>`
@@ -789,12 +947,14 @@ export function buildOwnerReport(run = {}, { now = null, amy = null, gaps = null
       </div>`
       })()}
       ${(() => {
-        const ps = summarizeWebParity(parity)
+        const ps = summarizeWebParity(parity, { now: now || new Date() })
         if (!ps) return ''
         const list = (items, color = '#334155') => `<ul style="margin:6px 0 0;padding-left:18px;color:${color};">${items.map((i) => `<li>${esc(i)}</li>`).join('')}</ul>`
         const webOnlyHtml = ps.webOnlyTop.length
           ? `<div style="margin-top:8px;"><strong style="color:#b45309;">Top web-only finds (queued — seeded into each profile&rsquo;s next crawl, added if the gates accept):</strong>${list(ps.webOnlyTop, '#78350f')}</div>`
-          : '<div style="margin-top:8px;color:#166534;">No real web-only finds — GrantFlow covered everything the web session produced.</div>'
+          : ps.stale
+            ? '<div style="margin-top:8px;color:#92400e;">Web-only coverage is unknown — no fresh benchmark evidence is available.</div>'
+            : '<div style="margin-top:8px;color:#166534;">No real web-only finds — GrantFlow covered everything the web session produced.</div>'
         return `
       <h3 style="margin:22px 0 8px;border-bottom:2px solid #0f172a;padding-bottom:4px;">Google-bar benchmark</h3>
       <div style="font-size:13px;">

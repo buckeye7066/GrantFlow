@@ -18,7 +18,8 @@ import { classifyThesisArchetype } from '../../crawler-os/archetypes.js'
 import { FINDING_TYPES, SEVERITY, SEARCH_KIND, CODE_TARGETS, ORIGIN_AGENT } from './amyConstants.js'
 import { isGenericTitle, isGenericOnly } from '../../config/genericTitleVocabulary.js'
 import { AMOUNT_STATUS_NONE_PUBLISHED } from '../awardAmountExtractor.js'
-import { isPointerKind } from '../../config/opportunityKindClasses.js'
+import { isNoPerAwardFigureKind, isPointerKind } from '../../config/opportunityKindClasses.js'
+import { CRAWLER_OUTCOME } from '../../crawler-os/contract.js'
 import { titleStatesTerm } from '../../config/profileDerivedFacts.js'
 import { blindSpotForGate } from './pipelineGuardEscapeAudit.js'
 
@@ -70,11 +71,77 @@ function makeFinding(type, { message, excerpt, evidence, severity }) {
   }
 }
 
+const SOURCE_FAILURE_KIND = Object.freeze({
+  FETCH: 'fetch',
+  PARSE: 'parse',
+  EXTERNAL_BLOCKED: 'external_blocked',
+})
+
+const outcomeUpper = (value) => String(value ?? '').trim().toUpperCase()
+const canonicalOutcome = (value) => outcomeUpper(value)
+const CANONICAL_SOURCE_OUTCOMES = new Set(Object.values(CRAWLER_OUTCOME).map(canonicalOutcome))
+const NON_FAILURE_SOURCE_OUTCOMES = new Set([
+  CRAWLER_OUTCOME.OK,
+  CRAWLER_OUTCOME.EMPTY,
+  CRAWLER_OUTCOME.SKIPPED,
+].map(canonicalOutcome))
+const FETCH_FAILURE_SOURCE_OUTCOMES = new Set([
+  CRAWLER_OUTCOME.ERROR,
+  CRAWLER_OUTCOME.FETCH_ERROR,
+  CRAWLER_OUTCOME.RATE_LIMITED,
+].map(canonicalOutcome))
+const EXTERNAL_BLOCKED_SOURCE_OUTCOMES = new Set([
+  CRAWLER_OUTCOME.BLOCKED,
+].map(canonicalOutcome))
+const PARSE_FAILURE_SOURCE_OUTCOMES = new Set([
+  CRAWLER_OUTCOME.PARSE_ERROR,
+].map(canonicalOutcome))
+
+/**
+ * Classify one source run using the canonical crawler outcome as truth.
+ *
+ * A reason is explanatory text, not a second outcome channel. In particular,
+ * an adapter returns BLOCKED for a recognized upstream/WAF outage; that stays
+ * observable as external_blocked without manufacturing a GrantFlow
+ * source_fetch_failed finding. Fuzzy text exists only for legacy rows whose
+ * outcome is missing or not part of CRAWLER_OUTCOME.
+ *
+ * @returns {'fetch'|'parse'|'external_blocked'|null}
+ */
+export function classifySourceFailure(source) {
+  const outcome = outcomeUpper(source?.outcome)
+  if (NON_FAILURE_SOURCE_OUTCOMES.has(outcome)) return null
+  if (EXTERNAL_BLOCKED_SOURCE_OUTCOMES.has(outcome)) return SOURCE_FAILURE_KIND.EXTERNAL_BLOCKED
+  if (FETCH_FAILURE_SOURCE_OUTCOMES.has(outcome)) return SOURCE_FAILURE_KIND.FETCH
+  if (PARSE_FAILURE_SOURCE_OUTCOMES.has(outcome)) return SOURCE_FAILURE_KIND.PARSE
+
+  // A newly added canonical outcome must be classified deliberately above; do
+  // not let incidental wording in its reason silently change its semantics.
+  if (CANONICAL_SOURCE_OUTCOMES.has(outcome)) return null
+
+  // Backward compatibility for pre-contract/malformed telemetry only. Include
+  // the unknown outcome token so legacy FAILED/FAIL rows with no reason retain
+  // their old source-fetch-failure behavior.
+  const legacySignal = `${outcome} ${String(source?.reason ?? '')}`.toLowerCase()
+  if (/(?:^|[^a-z0-9])parse(?:[_ -]?(?:error|failed|failure))?(?=$|[^a-z0-9])|invalid[_ -]?json|malformed[_ -]?(?:json|payload)|schema[_ -]?(?:error|mismatch)|unexpected[_ -]?(?:body|payload|shape)/.test(legacySignal)) {
+    return SOURCE_FAILURE_KIND.PARSE
+  }
+  if (/error|timeout|timed out|failed|\bfail\b|forbidden|refused|unreachable|429|5\d\d|dns/.test(legacySignal)) {
+    return SOURCE_FAILURE_KIND.FETCH
+  }
+  return null
+}
+
 function looksLikeFetchFailure(source) {
-  const outcome = String(source?.outcome ?? '').toUpperCase()
-  if (['ERROR', 'FETCH_ERROR', 'FAILED', 'FAIL'].includes(outcome)) return true
-  const reason = String(source?.reason ?? '').toLowerCase()
-  return /error|timeout|timed out|failed|forbidden|refused|unreachable|429|5\d\d|dns/.test(reason)
+  return classifySourceFailure(source) === SOURCE_FAILURE_KIND.FETCH
+}
+
+function looksLikeParseFailure(source) {
+  return classifySourceFailure(source) === SOURCE_FAILURE_KIND.PARSE
+}
+
+function looksLikeExternalBlock(source) {
+  return classifySourceFailure(source) === SOURCE_FAILURE_KIND.EXTERNAL_BLOCKED
 }
 
 function looksLikeUrlIssue(source) {
@@ -552,16 +619,14 @@ export function evaluateDiscovery(scenario, profileId, result, opts = {}) {
   // ONE candidate carries an amount — a single missing amount is normal (many
   // real awards are "amount varies"); a 0% amount rate on 5+ results means the
   // adapter/extractor lane feeding this profile shape drops dollars entirely.
-  // DIRECTORY locators never carry a per-award amount BY DESIGN (a pointer to
-  // program lists, not an award) — counting them made this finding fire on
-  // shape alone. BENEFIT programs are the same class one door over: their
-  // stated per-award semantic is "varies by applicant" (SSI, Pell, LIHEAP —
-  // locatorUrlKind.js), so a benefit rec with no dollar figure measures the
-  // program's design, not our extraction. Measure dollar recall against
-  // grant-shaped candidates only; recs with no kind (older run shape) stay in
-  // the denominator so real extraction gaps keep firing.
+  // Kinds that cannot publish a per-award amount BY DESIGN do not belong in the
+  // denominator. The canonical registry includes every pointer kind
+  // (directory, referral, school_portal, past_award_intel) plus BENEFIT; keeping
+  // a hand-typed subset here made referral/portal/intel rows manufacture an
+  // adapter gap that no adapter could close. Rows with no/unknown kind (older
+  // run shapes) deliberately stay measurable so real extraction gaps fire.
   const grantShaped = recommendations.filter(
-    (r) => !['DIRECTORY', 'BENEFIT'].includes(String(r.kind ?? '').toUpperCase()),
+    (r) => !isNoPerAwardFigureKind(r.kind),
   )
   const withAmount = grantShaped.filter(
     (r) => num(r.amount_max) > 0 || num(r.amount_min) > 0,
@@ -630,13 +695,24 @@ export function evaluateDiscovery(scenario, profileId, result, opts = {}) {
 
   // Source health.
   const failedSources = sources.filter(looksLikeFetchFailure)
+  const parseFailedSources = sources.filter(looksLikeParseFailure)
+  const externalBlockedSources = sources.filter(looksLikeExternalBlock)
   const urlIssueSources = sources.filter(looksLikeUrlIssue)
   if (failedSources.length > 0) {
     findings.push(
       makeFinding(FINDING_TYPES.SOURCE_FETCH_FAILED, {
         message: `${failedSources.length}/${sources.length} planned source(s) failed for ${scenario.label}.`,
         excerpt: failedSources.map((s) => `${s.source_id}:${s.outcome || s.reason || '?'}`).slice(0, 6).join('; '),
-        evidence: { ...baseEvidence, failed_sources: failedSources.map((s) => ({ id: s.source_id, outcome: s.outcome, reason: s.reason })) },
+        evidence: { ...baseEvidence, failed_sources: failedSources.map((s) => ({ id: s.source_id, outcome: s.outcome, reason: s.reason, failure_kind: SOURCE_FAILURE_KIND.FETCH })) },
+      }),
+    )
+  }
+  if (parseFailedSources.length > 0) {
+    findings.push(
+      makeFinding(FINDING_TYPES.SOURCE_PARSE_FAILED, {
+        message: `${parseFailedSources.length}/${sources.length} planned source(s) fetched but failed parsing for ${scenario.label}.`,
+        excerpt: parseFailedSources.map((s) => `${s.source_id}:${s.outcome || s.reason || '?'}`).slice(0, 6).join('; '),
+        evidence: { ...baseEvidence, parse_failed_sources: parseFailedSources.map((s) => ({ id: s.source_id, outcome: s.outcome, reason: s.reason, failure_kind: SOURCE_FAILURE_KIND.PARSE })) },
       }),
     )
   }
@@ -745,10 +821,25 @@ export function evaluateDiscovery(scenario, profileId, result, opts = {}) {
     top_direct_score: topDirectScore,
     locator_only: locatorOnly,
     sources_total: sources.length,
+    // Backward-compatible transport fields. Keep these fetch-only so existing
+    // approval-queue logic cannot relabel a parser defect as source_fetch_failed.
     sources_failed: failedSources.length,
-    // Named so buildApprovalQueue can key the ledger on the source, not a
-    // forever-open `source_health` blob. Same shape as the finding evidence.
-    failed_sources: failedSources.map((s) => ({ id: s.source_id, outcome: s.outcome, reason: s.reason })),
+    failed_sources: failedSources.map((s) => ({ id: s.source_id, outcome: s.outcome, reason: s.reason, failure_kind: SOURCE_FAILURE_KIND.FETCH })),
+    sources_fetch_failed: failedSources.length,
+    sources_parse_failed: parseFailedSources.length,
+    parse_failed_sources: parseFailedSources.map((s) => ({ id: s.source_id, outcome: s.outcome, reason: s.reason, failure_kind: SOURCE_FAILURE_KIND.PARSE })),
+    // Upstream/WAF maintenance is observable but is not a GrantFlow code defect
+    // and must not create an endlessly open adapter_source_health work item.
+    sources_external_blocked: externalBlockedSources.length,
+    external_blocked_sources: externalBlockedSources.map((s) => ({
+      id: s.source_id,
+      outcome: s.outcome,
+      reason: s.reason,
+      failure_kind: SOURCE_FAILURE_KIND.EXTERNAL_BLOCKED,
+    })),
+    // Broad aggregate for report summaries; consumers that need an actor must
+    // use the typed fields above.
+    source_failures_total: failedSources.length + parseFailedSources.length,
     candidates,
     false_positives: falsePositives.length,
     // The offending TITLES, not just the count: proposeGenericTitleAdditions()
@@ -890,7 +981,20 @@ export function buildAnyaHandoff({ runId, evaluations = [], meta = {} }) {
     by_finding_type: tally(allFindings, (f) => f.type),
     by_severity: tally(allFindings, (f) => f.severity),
     source_health: {
-      scenarios_with_source_failures: evaluations.filter((e) => num(e.sources_failed) > 0).length,
+      // New evaluations expose the typed aggregate. Historical persisted rows
+      // have only sources_failed, so retain that as a read fallback.
+      scenarios_with_source_failures: evaluations.filter((e) =>
+        num(e.source_failures_total ?? e.sources_failed) > 0,
+      ).length,
+      scenarios_with_fetch_failures: evaluations.filter((e) =>
+        num(e.sources_fetch_failed ?? e.sources_failed) > 0,
+      ).length,
+      scenarios_with_parse_failures: evaluations.filter((e) =>
+        num(e.sources_parse_failed) > 0,
+      ).length,
+      scenarios_with_external_blocks: evaluations.filter((e) =>
+        num(e.sources_external_blocked) > 0,
+      ).length,
     },
     opportunity_oracle: {
       version: 'amy-bounded-ineligibility-v1',
@@ -957,4 +1061,4 @@ export function summarizeEvaluations(evaluations = []) {
   }
 }
 
-export default { evaluateDiscovery, buildAnyaHandoff, summarizeEvaluations }
+export default { evaluateDiscovery, classifySourceFailure, buildAnyaHandoff, summarizeEvaluations }

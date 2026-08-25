@@ -65,6 +65,7 @@ export const FINDING_TYPES = Object.freeze({
   DISCOVERY_SKIPPED: 'discovery_skipped',
   CRAWLER_EXCEPTION: 'crawler_exception',
   SOURCE_FETCH_FAILED: 'source_fetch_failed',
+  SOURCE_PARSE_FAILED: 'source_parse_failed',
   ZERO_RESULT: 'zero_result',
   WEAK_MATCH: 'weak_match',
   NO_QUALIFIED_MATCHES: 'no_qualified_matches',
@@ -118,7 +119,13 @@ export const CODE_TARGETS = Object.freeze({
     file: 'backend/crawler-os/sourceRegistry.js',
     line: 1,
     severity: SEVERITY.MEDIUM,
-    hint: 'One or more planned sources failed to fetch/parse — check adapter/source health and missing API keys.',
+    hint: 'One or more planned sources failed before parsing — check transport/source health, blocking, rate limits, and missing API keys.',
+  },
+  [FINDING_TYPES.SOURCE_PARSE_FAILED]: {
+    file: 'backend/crawler-os/adapters/index.js',
+    line: 1,
+    severity: SEVERITY.MEDIUM,
+    hint: 'A source fetched successfully but its adapter could not parse the response — update the adapter schema/body parser and pin the observed response shape in a test.',
   },
   [FINDING_TYPES.ZERO_RESULT]: {
     file: 'backend/services/zeroResultLadder.js',

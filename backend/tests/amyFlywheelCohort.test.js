@@ -379,10 +379,12 @@ describe('summarizeAmyFlywheel + digest section', () => {
       day: '2026-07-06', target: 50, evaluated: 50, clean: 47, issues: 3, complete: true, all_clean: false,
       finding_types: { hyperlocal_recall_miss: 2, ineligible_match: 1 },
       runs: ['run-x'],
+      run_receipts: [{ run_id: 'run-x', recorded_at: new Date().toISOString() }],
       issue_examples: [],
     },
     goal_notified_at: null,
     report: {
+      completed_at: new Date().toISOString(),
       tuning: { from: 75, to: 76, change: true, applied: { applied: true } },
       weight_tuning: { validation: { kept: true } },
       coverage_tuning: { validation: { kept: false }, applied: { applied: true } },
@@ -474,6 +476,25 @@ describe('summarizeAmyFlywheel + digest section', () => {
     expect(fw.goal).toBe(true)
   })
 
+  it('suppresses stale Amy counts, edits, and unresolved gap classes', () => {
+    const fw = summarizeAmyFlywheel({
+      ...amy,
+      cohort: {
+        ...amy.cohort,
+        run_receipts: [{ run_id: 'run-old', recorded_at: '2026-08-20T08:00:00.000Z' }],
+      },
+      report: {
+        ...amy.report,
+        completed_at: '2026-08-20T08:00:00.000Z',
+      },
+    }, { now: new Date('2026-08-25T09:00:00.000Z') })
+    expect(fw.stale).toBe(true)
+    expect(fw.cohortLine).toMatch(/STALE.*suppressed/i)
+    expect(fw.cohortLine).not.toMatch(/47\/50|hyperlocal_recall_miss/)
+    expect(fw.edits).toEqual([])
+    expect(fw.couldNot).toEqual([])
+  })
+
   it('buildOwnerReport embeds the flywheel section in text and html', () => {
     const { text, html } = buildOwnerReport({ findings: [], health_score: 100 }, { amy })
     expect(text).toMatch(/AMY CRAWLER FLYWHEEL/)
@@ -495,10 +516,11 @@ describe('Sam check amy.flywheelCohort', () => {
     const { DIAGNOSTIC_CHECKS } = await import('../services/sam/samRegistry.js')
     const check = DIAGNOSTIC_CHECKS.find((c) => c.id === 'amy.flywheelCohort')
     expect(check).toBeTruthy()
+    const now = new Date('2026-07-06T16:00:00Z')
 
     const db = freshDb()
     // empty store → ok
-    let res = await check.run({ db })
+    let res = await check.run({ db, now })
     expect(res.ok).toBe(true)
 
     // issues → not ok, evidence carries examples
@@ -506,7 +528,7 @@ describe('Sam check amy.flywheelCohort', () => {
       evaluations: [clean(1), gappy(1, 'ineligible_match')], runId: 'r1',
       now: new Date('2026-07-06T15:00:00Z'), target: 2, send: async () => ({ ok: true }),
     })
-    res = await check.run({ db })
+    res = await check.run({ db, now })
     expect(res.ok).toBe(false)
     expect(res.summary).toMatch(/1 of 2 synthetic profiles had issues/)
     expect(res.evidence.finding_types.ineligible_match).toBe(1)
@@ -517,7 +539,7 @@ describe('Sam check amy.flywheelCohort', () => {
       evaluations: [clean(1), clean(2)], runId: 'r2',
       now: new Date('2026-07-06T15:00:00Z'), target: 2, send: async () => ({ ok: true }),
     })
-    res = await check.run({ db: db2 })
+    res = await check.run({ db: db2, now })
     expect(res.ok).toBe(true)
     expect(res.summary).toMatch(/GOAL/)
   })

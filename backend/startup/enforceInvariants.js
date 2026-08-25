@@ -71,6 +71,10 @@ import { upsertFundingOpportunity } from '../services/opportunityInserter.js'
 import { classifyLocatorKindFromRow, LOCATOR_URL_LIKE_PREFILTERS, GENERIC_OVERRIDABLE_KINDS } from '../services/sources/locatorUrlKind.js'
 import { AMOUNT_ENRICH_ENV_MAX_ATTEMPTS, AMOUNT_ENRICH_ENV_REPROBE_LIMIT } from '../config/amountEnrichEnv.js'
 import {
+  AMOUNT_ADAPTER_REGISTRY_VERSION,
+  findAmountAdapter,
+} from '../services/sources/amountAdapters.js'
+import {
   normalizePersistedMatchDecisionIntegrity,
   isBelowReviewResourceMatch,
 } from '../services/matching/matchDecisionIntegrity.js'
@@ -3852,9 +3856,132 @@ function amountEnrichHostOf(...urls) {
   return null
 }
 
+/** Marker for the one-time, versioned adapter ownership reconciliation. */
+export const AMOUNT_ADAPTER_RECONCILIATION_KV_KEY = 'amount_adapter_reconciliation_version'
+
+/**
+ * Reopen answerless rows that were permanently marked attempted before their
+ * source gained a first-class adapter. A one-shot burn is a conclusion about
+ * the strategy available at that time, not a permanent veto on future code.
+ *
+ * The registry version is advanced only after both answer stores are scanned
+ * and all matching rows are reset. This makes a partial DB/schema failure retry
+ * on the next boot instead of silently stranding the remainder. Once complete,
+ * the marker makes the operation O(1) on every later boot; future adapter
+ * additions converge globally by bumping AMOUNT_ADAPTER_REGISTRY_VERSION.
+ */
+export async function reconcileBurnedAmountAdapters(db) {
+  if (!db?.prepare) return { scanned: 0, reopened: 0, skipped: 'db' }
+  try {
+    const marker = await db.prepare('SELECT value FROM system_kv WHERE key = ?').get(AMOUNT_ADAPTER_RECONCILIATION_KV_KEY)
+    let appliedVersion = 0
+    try {
+      const parsed = marker?.value ? JSON.parse(marker.value) : null
+      appliedVersion = Number(parsed?.version ?? parsed ?? 0) || 0
+    } catch { appliedVersion = 0 }
+    if (appliedVersion >= AMOUNT_ADAPTER_REGISTRY_VERSION) {
+      return { scanned: 0, reopened: 0, version: appliedVersion, skipped: 'current' }
+    }
+
+    const catalogRows = await db.prepare(
+      `SELECT id, title, source_url, application_url, evidence_url,
+              source, source_id, record_origin
+         FROM funding_opportunities
+        WHERE amount_enrich_attempted_at IS NOT NULL
+          AND COALESCE(amount_min, 0) <= 0
+          AND COALESCE(amount_max, 0) <= 0
+          AND (amount_status IS NULL OR amount_status = 'not_listed')
+          AND amount_text IS NULL`,
+    ).all()
+    const grantRows = await db.prepare(
+      `SELECT id, title, url, application_url
+         FROM grants
+        WHERE amount_enrich_attempted_at IS NOT NULL
+          AND COALESCE(amount_min, 0) <= 0
+          AND COALESCE(amount_max, 0) <= 0
+          AND COALESCE(amount_requested, 0) <= 0
+          AND (amount_status IS NULL OR amount_status = 'not_listed')
+          AND (amount_text IS NULL OR amount_text = '')`,
+    ).all()
+
+    let reopened = 0
+    for (const row of Array.isArray(catalogRows) ? catalogRows : []) {
+      if (!findAmountAdapter(row)) continue
+      const wrote = await db.prepare(
+        `UPDATE funding_opportunities
+            SET amount_enrich_attempted_at = NULL,
+                amount_enrich_attempts = 0,
+                amount_enrich_env_attempts = 0,
+                amount_enrich_last_reason = ?
+          WHERE id = ?
+            AND amount_enrich_attempted_at IS NOT NULL
+            AND COALESCE(amount_min, 0) <= 0
+            AND COALESCE(amount_max, 0) <= 0`,
+      ).run(`adapter_registry_v${AMOUNT_ADAPTER_REGISTRY_VERSION}_reopened`, row.id)
+      reopened += changesOf(wrote)
+    }
+    for (const row of Array.isArray(grantRows) ? grantRows : []) {
+      // Adapter matchers consume the catalog URL vocabulary. Direct grants
+      // store that same source identity in `grants.url`; normalize it before
+      // deciding ownership so this registry revision cannot permanently skip
+      // grants.gov, SAM FAL, or Federal Register rows and then advance its
+      // one-shot marker.
+      if (!findAmountAdapter({ ...row, source_url: row.source_url || row.url })) continue
+      const wrote = await db.prepare(
+        `UPDATE grants
+            SET amount_enrich_attempted_at = NULL,
+                amount_enrich_attempts = 0,
+                amount_enrich_env_attempts = 0,
+                amount_enrich_last_reason = ?
+          WHERE id = ?
+            AND amount_enrich_attempted_at IS NOT NULL
+            AND COALESCE(amount_min, 0) <= 0
+            AND COALESCE(amount_max, 0) <= 0
+            AND COALESCE(amount_requested, 0) <= 0`,
+      ).run(`adapter_registry_v${AMOUNT_ADAPTER_REGISTRY_VERSION}_reopened`, row.id)
+      reopened += changesOf(wrote)
+    }
+
+    const now = new Date().toISOString()
+    const value = JSON.stringify({
+      version: AMOUNT_ADAPTER_REGISTRY_VERSION,
+      reconciled_at: now,
+      scanned: (catalogRows?.length ?? 0) + (grantRows?.length ?? 0),
+      reopened,
+    })
+    const updated = await db.prepare('UPDATE system_kv SET value = ?, updated_at = ? WHERE key = ?')
+      .run(value, now, AMOUNT_ADAPTER_RECONCILIATION_KV_KEY)
+    if (!changesOf(updated)) {
+      try {
+        await db.prepare('INSERT INTO system_kv (key, value, updated_at) VALUES (?, ?, ?)')
+          .run(AMOUNT_ADAPTER_RECONCILIATION_KV_KEY, value, now)
+      } catch {
+        // Another instance may have inserted the marker after our UPDATE.
+        await db.prepare('UPDATE system_kv SET value = ?, updated_at = ? WHERE key = ?')
+          .run(value, now, AMOUNT_ADAPTER_RECONCILIATION_KV_KEY)
+      }
+    }
+    if (reopened > 0) {
+      log.info('amount adapter registry advanced — reopened legacy burned rows', {
+        version: AMOUNT_ADAPTER_REGISTRY_VERSION,
+        reopened,
+      })
+    }
+    return {
+      scanned: (catalogRows?.length ?? 0) + (grantRows?.length ?? 0),
+      reopened,
+      version: AMOUNT_ADAPTER_REGISTRY_VERSION,
+    }
+  } catch (err) {
+    log.warn('amount adapter reconciliation deferred (non-fatal)', { error: String(err?.message || err) })
+    return { scanned: 0, reopened: 0, skipped: 'query', error: String(err?.message || err) }
+  }
+}
+
 export async function enforceAmountEnrichment(db, deps = {}) {
   return runInvariant('amount_enrichment', async () => {
     const disabled = _parseBoolEnv(process.env.ENFORCE_AMOUNT_ENRICHMENT) === false
+    if (!disabled) await reconcileBurnedAmountAdapters(db)
     const LIMIT = Math.max(1, Number.parseInt(deps.limit ?? process.env.AMOUNT_ENRICH_BOOT_LIMIT ?? '10', 10) || 10)
     const TIME_BUDGET_MS = Math.max(1000, Number.parseInt(deps.timeBudgetMs ?? process.env.AMOUNT_ENRICH_TIME_BUDGET_MS ?? '20000', 10) || 20000)
     const MAX_ATTEMPTS = Math.max(1, Number.parseInt(deps.maxAttempts ?? process.env.AMOUNT_ENRICH_MAX_ATTEMPTS ?? '3', 10) || 3)
@@ -4323,7 +4450,7 @@ export async function enforceGrantDirectAmountEnrichment(db, deps = {}) {
       // host can never starve valid never-attempted orphans out of the budget.
       // audit:allow dynamic-sql — statuses is the frozen PIPELINE_ACTIVE_STATUSES constant
       const candidateSql = (envPredicate, orderSql) =>
-        `SELECT g.id, g.url, g.application_url, COALESCE(g.amount_enrich_attempts, 0) AS attempts,
+        `SELECT g.id, g.title, g.url, g.application_url, COALESCE(g.amount_enrich_attempts, 0) AS attempts,
                 COALESCE(g.amount_enrich_env_attempts, 0) AS env_attempts
              FROM grants g
             WHERE g.status IN (${statuses})
@@ -4540,7 +4667,14 @@ export async function enforceGrantDirectAmountEnrichment(db, deps = {}) {
         // URL will read as a thin_page and stay honestly unreadable, exactly like
         // the catalog path.
         const res = await enrichOpportunityAmountFromSource(
-          { source_url: g.url ?? g.application_url ?? null },
+          {
+            source_url: g.url ?? g.application_url ?? null,
+            // Listing-page adapters (for example university scholarship
+            // indexes) select the named award from a multi-award page. Omitting
+            // the grant title makes a valid adapter look like a permanent
+            // listing_title_not_found and can burn the one-shot row.
+            title: g.title ?? null,
+          },
           deps,
         )
         // Environment failure (WAF/auth/quota) never consumes the grant's

@@ -92,6 +92,22 @@ export const PROMOTION_AMOUNT_GRACE_DAYS = Math.max(
 /** History ring size (Sam runs ~daily ⇒ about a month of trend). */
 const AMOUNT_COVERAGE_HISTORY = 30
 
+/** Daily Amy evidence older than this is an execution failure, not a current crawl defect. */
+export const FLYWHEEL_COHORT_STALE_MS = 36 * 60 * 60 * 1000
+
+/**
+ * Age of the latest isolated flywheel receipt. A day label alone is not enough
+ * provenance to call old findings current, so missing/invalid timestamps are
+ * deliberately non-finite and therefore stale at the check boundary.
+ */
+export function flywheelCohortAgeMs(day, now = new Date()) {
+  const receipts = Array.isArray(day?.run_receipts) ? day.run_receipts : []
+  const recordedAt = receipts.length ? receipts[receipts.length - 1]?.recorded_at : null
+  const observedMs = Date.parse(recordedAt || '')
+  const nowMs = now instanceof Date ? now.getTime() : Date.parse(now)
+  return Number.isFinite(observedMs) && Number.isFinite(nowMs) ? nowMs - observedMs : Number.POSITIVE_INFINITY
+}
+
 /**
  * Read/append the coverage history ring.
  *
@@ -462,7 +478,7 @@ export const DIAGNOSTIC_CHECKS = Object.freeze([
     kind: CHECK_KIND.INTERNAL,
     severityOnFailure: SEVERITY.MEDIUM,
     description: 'Reads the rolling crawler-gap learning store (updated on every live discovery call) and flags when a meaningful share of recent real crawls surfaced coverage gaps.',
-    async run({ db } = {}) {
+    async run({ db, now = new Date() } = {}) {
       if (!db) return { ok: true, skipped: true, summary: 'no db handle; gap-learning read skipped' }
       let store
       let windowSummary = null
@@ -529,7 +545,7 @@ export const DIAGNOSTIC_CHECKS = Object.freeze([
     kind: CHECK_KIND.INTERNAL,
     severityOnFailure: SEVERITY.MEDIUM,
     description: 'Reads the Amy flywheel cohort scoreboard (system_kv amy_flywheel_cohort) and flags when the most recent day\'s synthetic-profile cohort had issue profiles or fell short of the daily target.',
-    async run({ db } = {}) {
+    async run({ db, now = new Date() } = {}) {
       if (!db) return { ok: true, skipped: true, summary: 'no db handle; flywheel cohort read skipped' }
       let store
       try {
@@ -542,6 +558,24 @@ export const DIAGNOSTIC_CHECKS = Object.freeze([
       const keys = Object.keys(days).sort()
       if (keys.length === 0) return { ok: true, summary: 'No Amy flywheel cohort data yet.' }
       const latest = days[keys[keys.length - 1]]
+      const cohortAgeMs = flywheelCohortAgeMs(latest, now)
+      if (!Number.isFinite(cohortAgeMs) || cohortAgeMs > FLYWHEEL_COHORT_STALE_MS || cohortAgeMs < -60 * 60 * 1000) {
+        const age = Number.isFinite(cohortAgeMs)
+          ? `${Math.max(0, Math.round(cohortAgeMs / 3600000))}h old`
+          : 'missing a valid receipt timestamp'
+        return {
+          ok: false,
+          summary: `Amy flywheel execution is STALE (${age}; latest cohort day ${latest?.day || 'unknown'}). Old issue counts are not re-reported as current crawler defects.`,
+          evidence: {
+            latest_day: latest?.day || null,
+            latest_run_id: latest?.latest_run_id || null,
+            age_ms: Number.isFinite(cohortAgeMs) ? cohortAgeMs : null,
+            stale_after_ms: FLYWHEEL_COHORT_STALE_MS,
+          },
+          recommended_fix: 'Restore the Amy daily scheduler/run path and produce a new isolated flywheel receipt. Diagnose the scheduler lock or the current run timeout; do not re-fix the old cohort findings.',
+          confidence: 0.95,
+        }
+      }
       // "×N" not "=N" — see topClasses above (quoted-printable email corruption).
       const topTypes = Object.entries(latest.finding_types || {})
         .sort((a, b) => b[1] - a[1])
@@ -1572,8 +1606,8 @@ export const DIAGNOSTIC_CHECKS = Object.freeze([
     category: SAM_CATEGORIES.CRAWLER_RELIABILITY,
     kind: CHECK_KIND.INTERNAL,
     severityOnFailure: SEVERITY.MEDIUM,
-    description: 'Reads the nightly web-parity benchmark (system_kv web_parity_benchmark: golden-profile GrantFlow-vs-web-search parity) and flags a fleet-parity regression vs the previous run, a stale benchmark (>8 days), or a benchmark that never ran. Evidence carries per-profile parity + the top web-only finds; the fix points at the web_parity_gap_queue candidate queue.',
-    async run({ db } = {}) {
+    description: 'Reads the nightly web-parity benchmark (system_kv web_parity_benchmark: golden-profile GrantFlow-vs-web-search parity) and flags only comparable, sample-qualified fleet regressions, a stale benchmark (>48 hours), or a benchmark that never ran. Evidence carries denominator/semantics plus per-profile parity and the top web-only finds.',
+    async run({ db, now = new Date() } = {}) {
       if (!db?.prepare) return { ok: true, skipped: true, summary: 'web-parity benchmark: db unavailable' }
       let mod
       try {
@@ -1612,7 +1646,8 @@ export const DIAGNOSTIC_CHECKS = Object.freeze([
       }
       const latest = store.latest
       const generatedMs = Date.parse(latest.generated_at || store.generated_at || '') || 0
-      const ageMs = Date.now() - generatedMs
+      const nowMs = now instanceof Date ? now.getTime() : Date.parse(now)
+      const ageMs = (Number.isFinite(nowMs) ? nowMs : Date.now()) - generatedMs
       const perProfile = Array.isArray(latest.per_profile) ? latest.per_profile : []
       const topWebOnly = perProfile
         .flatMap((p) => (Array.isArray(p.web_only_top) ? p.web_only_top.map((w) => ({ ...w, profile: p.label || p.profile_id })) : []))
@@ -1620,6 +1655,13 @@ export const DIAGNOSTIC_CHECKS = Object.freeze([
       const evidence = {
         generated_at: latest.generated_at || null,
         fleet_parity: latest.fleet_parity ?? null,
+        qualified_fleet_parity: latest.qualified_fleet_parity ?? null,
+        semantics_version: latest.semantics_version ?? null,
+        measurement_status: latest.measurement_status ?? null,
+        sample_status: latest.sample_status ?? latest.measurement_status ?? null,
+        sample_qualified: latest.sample_qualified ?? null,
+        verified_denominator: latest.verified_denominator ?? null,
+        minimum_verified_denominator: latest.minimum_verified_denominator ?? mod.MIN_VERIFIED_DENOMINATOR ?? null,
         per_profile: perProfile.map((p) => ({
           profile_id: p.profile_id,
           label: p.label,
@@ -1630,13 +1672,50 @@ export const DIAGNOSTIC_CHECKS = Object.freeze([
         })),
         top_web_only: topWebOnly,
       }
-      if (!generatedMs || ageMs > mod.STALE_MS) {
+      if (!generatedMs || ageMs > mod.STALE_MS || ageMs < -60 * 60 * 1000) {
         return {
           ok: false,
-          summary: `The web-parity benchmark is STALE (${generatedMs ? Math.round(ageMs / 86400000) + 'd old' : 'no timestamp'} > 8 days) — the Google-bar ratchet is not being measured.`,
+          summary: `The web-parity benchmark is STALE (${generatedMs ? (ageMs < 0 ? 'timestamp is implausibly in the future' : Math.round(ageMs / 3600000) + 'h old') : 'no timestamp'}; expected within ${Math.round(mod.STALE_MS / 3600000)} hours) — the Google-bar ratchet is not being measured.`,
           evidence,
           recommended_fix: recommendedFix,
           confidence: 0.85,
+        }
+      }
+      const semanticsVersion = Number(latest.semantics_version)
+      const asNumber = (value) => value === null || value === undefined || value === '' ? Number.NaN : Number(value)
+      const minimumDenominator = asNumber(latest.minimum_verified_denominator ?? mod.MIN_VERIFIED_DENOMINATOR)
+      const verifiedDenominator = asNumber(latest.verified_denominator)
+      const usesQualifiedSampleContract = Number.isFinite(semanticsVersion) && semanticsVersion >= 2
+      const measurementStatus = String(latest.measurement_status || '').toLowerCase()
+      const profilesUnscored = asNumber(latest.profiles_unscored)
+      // Measurement completeness is evaluated before sample size. A partial or
+      // wholly unscored run is an execution failure, even if an inconsistent
+      // producer also wrote `sample_qualified:false`; only a fully scored but
+      // underpowered sample gets the benign "not trend-qualified" outcome.
+      if (measurementStatus === 'partial' || measurementStatus === 'unscored' || (Number.isFinite(profilesUnscored) && profilesUnscored > 0)) {
+        return {
+          ok: false,
+          summary: measurementStatus === 'unscored'
+            ? 'Web-parity benchmark is fresh but UNSCORED: no complete fleet comparison was produced.'
+            : `Web-parity benchmark is fresh but PARTIAL: ${latest.profiles_scored ?? 'unknown'}/${latest.profiles_total ?? perProfile.length} golden profile(s) scored. No subset was published as fleet parity.`,
+          evidence,
+          recommended_fix: 'Restore every golden profile to a scored comparison (inspect the per-profile error and search-provider provenance), then collect a denominator-qualified sample before evaluating trend.',
+          confidence: 0.95,
+        }
+      }
+      const sampleQualified = latest.sample_qualified === true || (
+        !usesQualifiedSampleContract &&
+        (latest.sample_qualified === null || latest.sample_qualified === undefined)
+      )
+      if (!sampleQualified || (
+        usesQualifiedSampleContract &&
+        (!Number.isFinite(verifiedDenominator) || !Number.isFinite(minimumDenominator) || verifiedDenominator < minimumDenominator)
+      )) {
+        return {
+          ok: true,
+          summary: `Web-parity benchmark fresh but not trend-qualified: ${Number.isFinite(verifiedDenominator) ? verifiedDenominator : 'unknown'}/${Number.isFinite(minimumDenominator) ? minimumDenominator : 'unknown'} verified result(s). No regression claim was made from a volatile sample.`,
+          evidence,
+          recommended_fix: 'Let the next bounded benchmark collect a qualifying sample; if the denominator remains low, inspect search-provider health and query coverage. Web-only candidates already remain queued for normal verification.',
         }
       }
       // The web side of the benchmark churns nightly (search engines rotate
@@ -1648,8 +1727,11 @@ export const DIAGNOSTIC_CHECKS = Object.freeze([
       const runs = Array.isArray(store.runs) ? store.runs : []
       const priorParities = runs
         .slice(0, -1)
+        .filter((run) => !usesQualifiedSampleContract || (
+          Number(run?.semantics_version) === semanticsVersion && run?.sample_qualified === true
+        ))
         .slice(-5)
-        .map((r) => Number(r?.fleet_parity))
+        .map((r) => asNumber(r?.qualified_fleet_parity ?? r?.fleet_parity))
         .filter((n) => Number.isFinite(n))
         .sort((a, b) => a - b)
       const median = priorParities.length
@@ -1657,7 +1739,7 @@ export const DIAGNOSTIC_CHECKS = Object.freeze([
           ? priorParities[(priorParities.length - 1) / 2]
           : (priorParities[priorParities.length / 2 - 1] + priorParities[priorParities.length / 2]) / 2)
         : null
-      const latestParity = Number(latest.fleet_parity)
+      const latestParity = asNumber(latest.qualified_fleet_parity ?? latest.fleet_parity)
       if (Number.isFinite(latestParity) && Number.isFinite(median) && median - latestParity > mod.REGRESSION_POINTS) {
         // A parity crash and a degraded search backend are usually ONE event:
         // the benchmark's stored side is fed by the same SearXNG/Brave ladder,
@@ -2740,11 +2822,11 @@ export const DIAGNOSTIC_CHECKS = Object.freeze([
   },
   {
     id: 'crawler.coverageDegraded',
-    label: 'Crawler coverage degraded (source failure rate)',
+    label: 'Crawler coverage degraded (actionable source failure rate)',
     category: SAM_CATEGORIES.CRAWLER_RELIABILITY,
     kind: CHECK_KIND.INTERNAL,
     severityOnFailure: SEVERITY.MEDIUM,
-    description: 'Makes the crawl coverage dashboard (GET /api/admin/crawl-coverage) observable to Sam: flags when a disproportionate share of recently QUERIED sources FAILED (default threshold 30%, over the newest ~50 crawl runs AND only those inside CRAWLER_COVERAGE_WINDOW_HOURS, default 24h), which signals an outage, a bad key, or a broken source adapter. RECENCY-bounded so an outage that has been repaired clears once fresh runs land, and so a crawler that has STOPPED reports "no signal" instead of replaying its last bad day forever. Reads only crawler_source_runs. Fails open: empty/missing table or too few runs → ok:true (no signal yet).',
+    description: 'Makes the crawl coverage dashboard (GET /api/admin/crawl-coverage) observable to Sam: flags when a disproportionate share of recently QUERIED sources have ACTIONABLE failures (default threshold 30%, over the newest ~50 crawl runs AND only those inside CRAWLER_COVERAGE_WINDOW_HOURS, default 24h), which signals a bad key, runtime defect, or broken source adapter. Canonical external_blocked failures stay in the queried denominator and are reported separately, but do not page the owner as a code defect. RECENCY-bounded so a repaired defect clears once fresh runs land, and so a crawler that has STOPPED reports "no signal" instead of replaying its last bad day forever. Reads only crawler_source_runs. Fails open: empty/missing table or too few runs → ok:true (no signal yet).',
     async run({ db }) {
       if (!db?.prepare) return { ok: true, summary: 'crawler coverage: db unavailable' }
       const threshold = Number.parseFloat(process.env.CRAWLER_COVERAGE_FAILURE_THRESHOLD || '0.30')
@@ -2764,7 +2846,12 @@ export const DIAGNOSTIC_CHECKS = Object.freeze([
           .prepare(
             `SELECT
                SUM(CASE WHEN queried THEN 1 ELSE 0 END) AS queried,
-               SUM(CASE WHEN failed  THEN 1 ELSE 0 END) AS failed
+               SUM(CASE WHEN failed
+                          AND LOWER(SUBSTR(TRIM(COALESCE(error,'')), 1, LENGTH('external_blocked:'))) <> 'external_blocked:'
+                        THEN 1 ELSE 0 END) AS actionable_failed,
+               SUM(CASE WHEN failed
+                          AND LOWER(SUBSTR(TRIM(COALESCE(error,'')), 1, LENGTH('external_blocked:'))) = 'external_blocked:'
+                        THEN 1 ELSE 0 END) AS external_blocked
              FROM crawler_source_runs
              WHERE crawler_run_id IN (
                SELECT crawler_run_id FROM crawler_source_runs
@@ -2780,8 +2867,18 @@ export const DIAGNOSTIC_CHECKS = Object.freeze([
         return { ok: true, summary: `crawler_source_runs not queryable yet (${err?.message || 'unknown'})` }
       }
       const queried = Number(row?.queried ?? 0)
-      const failed = Number(row?.failed ?? 0)
-      const evidence = { queried, failed, threshold, window_hours: windowHours }
+      const actionableFailed = Number(row?.actionable_failed ?? 0)
+      const externalBlocked = Number(row?.external_blocked ?? 0)
+      // Keep `failed` as a compatibility alias, but name its narrowed meaning
+      // explicitly for new consumers and expose the excluded canonical state.
+      const evidence = {
+        queried,
+        failed: actionableFailed,
+        actionable_failed: actionableFailed,
+        external_blocked: externalBlocked,
+        threshold,
+        window_hours: windowHours,
+      }
       if (queried < MIN_SAMPLE) {
         return {
           ok: true,
@@ -2789,37 +2886,37 @@ export const DIAGNOSTIC_CHECKS = Object.freeze([
           evidence,
         }
       }
-      const rate = failed / queried
+      const rate = actionableFailed / queried
       if (rate > threshold) {
         return {
           ok: false,
-          summary: `Crawler coverage DEGRADED: ${failed}/${queried} sources queried in the last ${windowHours}h failed (${Math.round(rate * 100)}% > ${Math.round(threshold * 100)}% threshold). Check source adapters / API keys / outages on the Crawl Coverage dashboard.`,
+          summary: `Crawler coverage DEGRADED: ${actionableFailed}/${queried} actionable source failures in the last ${windowHours}h (${Math.round(rate * 100)}% > ${Math.round(threshold * 100)}% threshold); ${externalBlocked} externally blocked. Check source adapters / API keys / runtime errors on the Crawl Coverage dashboard.`,
           evidence: { ...evidence, failure_rate: Number(rate.toFixed(3)) },
           recommended_fix: 'Open /CrawlCoverage (admin) to see which sources are failing and their errors; verify FUNDING_SOURCES API keys and source endpoint health.',
         }
       }
       return {
         ok: true,
-        summary: `crawler coverage healthy: ${failed}/${queried} sources queried in the last ${windowHours}h failed (${Math.round(rate * 100)}% ≤ ${Math.round(threshold * 100)}%)`,
+        summary: `crawler coverage within actionable-failure threshold: ${actionableFailed}/${queried} actionable source failures in the last ${windowHours}h (${Math.round(rate * 100)}% ≤ ${Math.round(threshold * 100)}%); ${externalBlocked} externally blocked`,
         evidence: { ...evidence, failure_rate: Number(rate.toFixed(3)) },
       }
     },
   },
   {
-    // Per-SOURCE persistent failure (2026-07-26, owner rule: repair, not just
-    // monitor). The fleet-average check above structurally cannot see ONE
-    // source dead for weeks — 1 source × 100% failure is invisible inside a
-    // 30%-of-50-runs threshold, so Amy's cohort kept reporting
+    // Per-SOURCE persistent actionable failure (2026-07-26, owner rule:
+    // repair, not just monitor). The fleet-average check above structurally
+    // cannot see ONE source dead for weeks — 1 source × 100% failure is
+    // invisible inside a 30%-of-50-runs threshold, so Amy's cohort kept reporting
     // source_fetch_failed while nothing named WHICH source or for how long.
     // This check names the exact source, its last error, and the concrete
     // repair (single-source re-crawl / registry URL fix / key) — a finding an
     // owner can act on in one step instead of a trend to watch.
     id: 'crawler.sourcePersistentFailure',
-    label: 'Crawler source persistently failing (every recent run)',
+    label: 'Crawler source persistently failing actionably (every recent run)',
     category: SAM_CATEGORIES.CRAWLER_RELIABILITY,
     kind: CHECK_KIND.INTERNAL,
     severityOnFailure: SEVERITY.MEDIUM,
-    description: 'Flags any registry source whose last N (default 5) QUERIED runs ALL failed — a dead endpoint, rotted registry URL, or expired key that the fleet-average check cannot see. Names the source and its latest error. Fails open when the table is missing or a source has too few recent runs.',
+    description: 'Flags any registry source whose last N (default 5) QUERIED runs ALL had actionable failures — a dead endpoint, rotted registry URL, or expired key that the fleet-average check cannot see. Any external_blocked row inside the latest-N window suppresses this code-defect finding without backfilling older failures. Names the source and its latest error. Fails open when the table is missing or a source has too few recent runs.',
     async run({ db }) {
       if (!db?.prepare) return { ok: true, summary: 'source persistence: db unavailable' }
       const STREAK = Math.max(2, Number.parseInt(process.env.CRAWLER_SOURCE_FAILURE_STREAK || '5', 10) || 5)
@@ -2845,7 +2942,7 @@ export const DIAGNOSTIC_CHECKS = Object.freeze([
       } catch { /* no repair store yet */ }
       const proposalIds = Object.keys(repairs.proposals)
       if (failing.length === 0 && proposalIds.length === 0) {
-        return { ok: true, summary: `No source has failed ${STREAK} consecutive queried runs.` }
+        return { ok: true, summary: `No source has had ${STREAK} consecutive actionable queried-run failures.` }
       }
       const names = failing.slice(0, 5).map((r) => {
         const state = repairs.overrides[r.source_id]
@@ -2886,7 +2983,7 @@ export const DIAGNOSTIC_CHECKS = Object.freeze([
     // NOTHING because the reality gate rejects every candidate as `bad_url` — an
     // adapter emitting a URL the gate refuses (an http:// link against the
     // no-downgrade https floor; a malformed/search URL). Every existing crawler
-    // check keys on `failed` or `api_outage`, so this class was structurally
+    // check keys on `failed` or `external_blocked`, so this class was structurally
     // invisible: `nih_guide` fed http:// links and silently returned zero for
     // every research org for as long as the feed served them. Distinct from an
     // outage (owner/env action) — this is a CODE fix in the source adapter.
@@ -2895,7 +2992,7 @@ export const DIAGNOSTIC_CHECKS = Object.freeze([
     category: SAM_CATEGORIES.CRAWLER_RELIABILITY,
     kind: CHECK_KIND.INTERNAL,
     severityOnFailure: SEVERITY.MEDIUM,
-    description: 'Flags any registry source whose last N (default 3) QUERIED runs ALL fetched OK (failed=false) but stored nothing because the reality gate rejected every parsed candidate as bad_url — the signature of an adapter emitting a URL the gate refuses (an http:// link, a malformed/search URL). Reads only crawler_source_runs; matched on bad_url alone so intentional gate exclusions (no_sponsor/geo_stub) and external outages (api_outage/fetch failures) never trip it. This is a CODE fix in the source adapter, routed as such. Fails open when the table is missing or a source has too few recent runs.',
+    description: 'Flags any registry source whose last N (default 3) QUERIED runs ALL fetched OK (failed=false) but stored nothing because the reality gate rejected every parsed candidate as bad_url — the signature of an adapter emitting a URL the gate refuses (an http:// link, a malformed/search URL). Reads only crawler_source_runs; matched on bad_url alone so intentional gate exclusions (no_sponsor/geo_stub) and external conditions (external_blocked/fetch failures) never trip it. This is a CODE fix in the source adapter, routed as such. Fails open when the table is missing or a source has too few recent runs.',
     async run({ db }) {
       if (!db?.prepare) return { ok: true, summary: 'source adapter url defect: db unavailable' }
       const STREAK = Math.max(2, Number.parseInt(process.env.CRAWLER_SOURCE_BADURL_STREAK || '3', 10) || 3)

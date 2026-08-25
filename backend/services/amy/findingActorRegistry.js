@@ -166,6 +166,12 @@ export const FINDING_ACTORS = Object.freeze({
     emitted: true,
     evidence_key: 'failed_sources',
   },
+  [FINDING_TYPES.SOURCE_PARSE_FAILED]: {
+    lever: 'adapter_source_health',
+    emitted: true,
+    evidence_key: 'parse_failed_sources',
+    note: 'The response arrived; fix the named adapter parser/schema rather than transport, retry, DNS, or API-key handling.',
+  },
   // ── The classes that had NO actor before this module ────────────────────
   [FINDING_TYPES.INSTITUTION_RECALL_MISS]: {
     // RECLASSIFIED to `query_breadth` (CODE_CHANGE) 2026-08-02, reconciling

@@ -3,8 +3,8 @@
  *
  * Background runner for Amy, the synthetic crawler-training agent.
  * ON by default (owner directive 2026-06-29); opt out with AMY_ENABLED=false.
- * When enabled it runs ONCE
- * per day and generates a target number of synthetic profiles — default 100 —
+ * When enabled it keeps a durable once-per-day freshness target and generates
+ * a target number of synthetic profiles — default 100 —
  * across all categories, runs them through Crawler-OS discovery, writes an
  * Anya handoff report, and cleans up the synthetic profiles.
  *
@@ -44,7 +44,10 @@
  *                               (default 100, capped 500)
  *   AMY_ANYA_APPLY              let Anya write code fixes (default false → analysis only)
  *   AMY_SAM_APPLY               let Sam apply+save its safe fixes (default true)
- *   AMY_INTERVAL_MS             override the 24h cadence (testing/ops)
+ *   AMY_INTERVAL_MS             override the report-freshness target (default 24h)
+ *   AMY_FRESHNESS_POLL_MS       shorten the freshness poll (default/max hourly;
+ *                               testing/ops only). The poll never launches Amy
+ *                               while the latest completed report is still fresh.
  *
  * Safety: at most one run at a time (in-memory flag + DB scheduler lock); never
  * crashes the server; never blocks startup.
@@ -63,6 +66,8 @@ import { launchAmyRun } from './amyRunner.js'
 import { readLatestAmyReport } from './amyReportStore.js'
 
 const DAY_MS = 24 * 60 * 60 * 1000
+const HOUR_MS = 60 * 60 * 1000
+export const AMY_REPORT_FUTURE_TOLERANCE_MS = HOUR_MS
 
 let _interval = null
 let _stopped = false
@@ -79,6 +84,9 @@ export function getAmyConfig() {
   // `persist` below — this comment used to say the opposite) and all tuning is
   // proven + reversible. Disable explicitly with AMY_ENABLED=false.
   const enabled = bool(process.env.AMY_ENABLED, true)
+  const intervalMs = Number(process.env.AMY_INTERVAL_MS) > 0 ? Number(process.env.AMY_INTERVAL_MS) : DAY_MS
+  const configuredPollMs = Number(process.env.AMY_FRESHNESS_POLL_MS)
+  const requestedPollMs = configuredPollMs > 0 ? configuredPollMs : HOUR_MS
   return {
     enabled,
     runOnSchedule: bool(process.env.AMY_RUN_ON_SCHEDULE, true),
@@ -98,7 +106,10 @@ export function getAmyConfig() {
     gapScanLimit: Math.max(1, Math.min(500, Number(process.env.AMY_GAP_SCAN_LIMIT) || 100)),
     anyaApply: bool(process.env.AMY_ANYA_APPLY, false),
     samApply: bool(process.env.AMY_SAM_APPLY, true),
-    intervalMs: Number(process.env.AMY_INTERVAL_MS) > 0 ? Number(process.env.AMY_INTERVAL_MS) : DAY_MS,
+    intervalMs,
+    // Poll hourly in production. A deliberately shorter due interval used by
+    // tests/ops must remain observable, so never poll slower than that target.
+    freshnessPollMs: Math.min(HOUR_MS, intervalMs, requestedPollMs),
   }
 }
 
@@ -110,7 +121,7 @@ export function getAmyConfig() {
 function kickOff({ db, logger, source = 'scheduler' }) {
   if (_stopped) return
   const cfg = getAmyConfig()
-  launchAmyRun({
+  return launchAmyRun({
     db,
     logger,
     source,
@@ -133,29 +144,58 @@ function kickOff({ db, logger, source = 'scheduler' }) {
 }
 
 /**
- * Startup catch-up: setInterval never fires at t=0 and resets on every redeploy,
- * so on a service that redeploys more than daily, Amy could run NEVER. Shortly
- * after boot, if there is no successful report within the daily window, run once.
- * Gated on "overdue" so a burst of redeploys does not trigger redundant runs.
+ * True when the latest durable completed report has reached its freshness
+ * deadline. A missing/invalid report is due. Small forward skew is tolerated,
+ * but an implausibly future timestamp is due so one bad clock/write cannot
+ * suppress Amy forever.
  */
-async function runStartupCatchUpIfOverdue({ db, logger, intervalMs }) {
-  if (_stopped) return
+export function isAmyReportDue(latest, { intervalMs = DAY_MS, nowMs = Date.now() } = {}) {
+  const lastMs = latest?.completed_at ? Date.parse(latest.completed_at) : NaN
+  if (!Number.isFinite(lastMs)) return true
+  const targetMs = Number(intervalMs) > 0 ? Number(intervalMs) : DAY_MS
+  const currentMs = Number(nowMs)
+  if (!Number.isFinite(currentMs)) return true
+  const ageMs = currentMs - lastMs
+  if (ageMs < -AMY_REPORT_FUTURE_TOLERANCE_MS) return true
+  return ageMs >= targetMs
+}
+
+/**
+ * One scheduler tick: read durable freshness first and launch only when due.
+ * A lock-held launch writes no completed report, so the report remains due and
+ * the next hourly tick retries automatically. Local state + the DB lock still
+ * guarantee that the retry cannot overlap a live Amy run.
+ */
+export async function runAmyFreshnessCheck({
+  db,
+  logger = console,
+  intervalMs = getAmyConfig().intervalMs,
+  source = 'scheduler',
+  nowMs = Date.now(),
+} = {}) {
+  if (_stopped) return { triggered: false, reason: 'scheduler_stopped' }
   try {
-    const latest = await readLatestAmyReport(db).catch(() => null)
-    const last = latest?.completed_at ? Date.parse(latest.completed_at) : NaN
-    const graceMs = 60 * 60 * 1000 // 1h grace so we don't pre-empt a fresh run
-    const overdue = !Number.isFinite(last) || (Date.now() - last) >= (intervalMs - graceMs)
-    if (overdue) {
-      logger?.info?.('amy.scheduler.startup_catchup', {
-        reason: Number.isFinite(last) ? 'overdue' : 'no_prior_run',
+    const latest = await readLatestAmyReport(db)
+    if (isAmyReportDue(latest, { intervalMs, nowMs })) {
+      const completedMs = Date.parse(latest?.completed_at || '')
+      const reason = !Number.isFinite(completedMs)
+        ? 'no_prior_run'
+        : completedMs - Number(nowMs) > AMY_REPORT_FUTURE_TOLERANCE_MS
+          ? 'future_timestamp'
+          : 'overdue'
+      logger?.info?.('amy.scheduler.freshness_due', {
+        source,
+        reason,
         last_run_at: latest?.completed_at || null,
       })
-      kickOff({ db, logger, source: 'startup' })
-    } else {
-      logger?.info?.('amy.scheduler.startup_skip', { last_run_at: latest?.completed_at || null })
+      const launch = kickOff({ db, logger, source })
+      return { triggered: true, reason, last_run_at: latest?.completed_at || null, launch }
     }
+    logger?.info?.('amy.scheduler.freshness_skip', { source, last_run_at: latest?.completed_at || null })
+    return { triggered: false, reason: 'report_fresh', last_run_at: latest?.completed_at || null }
   } catch (err) {
-    logger?.error?.('amy.scheduler.startup_catchup_error', { message: String(err?.message || err) })
+    logger?.error?.('amy.scheduler.freshness_error', { source, message: String(err?.message || err) })
+    return { triggered: false, reason: 'freshness_check_failed', error: String(err?.message || err) }
   }
 }
 
@@ -178,15 +218,25 @@ export function startAmyScheduler({ db, logger = console } = {}) {
     // Default path: only run on boot if the daily run is actually overdue, so a
     // freshly-deployed (or frequently-redeployed) service still gets its daily
     // run without anyone logged in — but redeploy bursts don't pile up runs.
-    const catchUp = setTimeout(() => runStartupCatchUpIfOverdue({ db, logger, intervalMs: cfg.intervalMs }), 90 * 1000)
+    const catchUp = setTimeout(() => {
+      void runAmyFreshnessCheck({ db, logger, intervalMs: cfg.intervalMs, source: 'startup' })
+    }, 90 * 1000)
     if (typeof catchUp.unref === 'function') catchUp.unref()
   }
   if (cfg.runOnSchedule) {
     if (_interval) clearInterval(_interval)
-    _interval = setInterval(() => kickOff({ db, logger, source: 'scheduler' }), cfg.intervalMs)
+    _interval = setInterval(() => {
+      void runAmyFreshnessCheck({ db, logger, intervalMs: cfg.intervalMs, source: 'scheduler' })
+    }, cfg.freshnessPollMs)
     if (typeof _interval.unref === 'function') _interval.unref()
   }
-  return { started: true, daily_target: cfg.dailyTarget, interval_ms: cfg.intervalMs, persist: cfg.persist }
+  return {
+    started: true,
+    daily_target: cfg.dailyTarget,
+    interval_ms: cfg.intervalMs,
+    poll_interval_ms: cfg.freshnessPollMs,
+    persist: cfg.persist,
+  }
 }
 
 export function stopAmyScheduler() {
@@ -197,4 +247,11 @@ export function stopAmyScheduler() {
   }
 }
 
-export default { startAmyScheduler, stopAmyScheduler, getAmyConfig }
+export default {
+  startAmyScheduler,
+  stopAmyScheduler,
+  getAmyConfig,
+  AMY_REPORT_FUTURE_TOLERANCE_MS,
+  isAmyReportDue,
+  runAmyFreshnessCheck,
+}

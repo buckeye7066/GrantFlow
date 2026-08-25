@@ -13,14 +13,40 @@
 // the sanitizer and the runner can never fight over these files again.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, writeFileSync, readdirSync, readFileSync, rmSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, writeFileSync, readdirSync, readFileSync, rmSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { tmpdir } from 'node:os'
 import { fileURLToPath } from 'node:url'
-import { expandLocalPath, loadRegistry, loadManifest } from '../src/config.mjs'
+import {
+  expandLocalPath,
+  loadRegistry,
+  loadManifest,
+  loadRunnerConfig,
+  formatRunnerVersion,
+  RUNNER_SEMVER,
+} from '../src/config.mjs'
 import { launchWebApp } from '../src/launcher.mjs'
 
 const QA_DIR = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..', 'qa')
+
+test('runner SemVer has one authority and matches package.json', () => {
+  const packageJson = JSON.parse(readFileSync(join(dirname(fileURLToPath(import.meta.url)), '..', 'package.json'), 'utf8'))
+  assert.equal(RUNNER_SEMVER, packageJson.version)
+})
+
+test('runner version is SemVer plus the verified build SHA and stays schema-bounded', () => {
+  const fullSha = 'ABCDEF0123456789abcdef0123456789ABCDEF01'
+  assert.equal(formatRunnerVersion(fullSha), `${RUNNER_SEMVER}+abcdef012345`)
+  const cfg = loadRunnerConfig({ EVA_RUNNER_BUILD_SHA: fullSha })
+  assert.equal(cfg.version, `${RUNNER_SEMVER}+abcdef012345`)
+  assert.ok(cfg.version.length <= 32)
+})
+
+test('an absent, abbreviated, or malformed build SHA cannot claim runner provenance', () => {
+  assert.equal(formatRunnerVersion(), RUNNER_SEMVER)
+  assert.equal(formatRunnerVersion('abc123def456'), RUNNER_SEMVER)
+  assert.equal(formatRunnerVersion('not-a-sha'), RUNNER_SEMVER)
+})
 
 test('expandLocalPath expands ~/ against the given home', () => {
   assert.equal(expandLocalPath('~/GrantFlow', 'C:\\Users\\someone'), join('C:\\Users\\someone', 'GrantFlow'))
@@ -57,6 +83,56 @@ test('loadManifest expands the bundled manifest local_path (it outranks the regi
     assert.ok(manifest, 'bundled manifest loads')
     assert.ok(!manifest.local_path.startsWith('~'), 'tilde path must be expanded')
     assert.ok(manifest.local_path.endsWith('someapp'))
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('the versioned central manifest outranks a stale per-repo copy', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'eva-man-priority-'))
+  try {
+    const repo = join(dir, 'repo')
+    const bundle = join(dir, 'bundle')
+    const qa = join(repo, 'qa')
+    mkdirSync(qa, { recursive: true })
+    mkdirSync(bundle, { recursive: true })
+    writeFileSync(join(qa, 'user-journeys.json'), JSON.stringify({ app_id: 'app', readiness_probe: { port: 1111 } }))
+    writeFileSync(join(bundle, 'app.json'), JSON.stringify({ app_id: 'app', readiness_probe: { port: 2222 } }))
+    const manifest = loadManifest(repo, 'app', { EVA_MANIFEST_DIR: bundle })
+    assert.equal(manifest.readiness_probe.port, 2222, 'one fleet-wide manifest fix must take effect immediately')
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('a malformed canonical manifest fails closed and never executes the per-repo fallback', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'eva-man-invalid-'))
+  try {
+    const repo = join(dir, 'repo')
+    const bundle = join(dir, 'bundle')
+    const qa = join(repo, 'qa')
+    mkdirSync(qa, { recursive: true })
+    mkdirSync(bundle, { recursive: true })
+    writeFileSync(join(qa, 'user-journeys.json'), JSON.stringify({ app_id: 'app', readiness_probe: { port: 1111 } }))
+    writeFileSync(join(bundle, 'app.json'), '{ malformed')
+    assert.throws(
+      () => loadManifest(repo, 'app', { EVA_MANIFEST_DIR: bundle }),
+      /canonical EVA manifest is invalid/,
+    )
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('a missing or empty portfolio registry fails closed instead of uploading a successful zero-app run', () => {
+  assert.throws(() => loadRegistry({}), /EVA_REGISTRY_PATH is required/)
+  const dir = mkdtempSync(join(tmpdir(), 'eva-reg-invalid-'))
+  try {
+    const missing = join(dir, 'missing.json')
+    assert.throws(() => loadRegistry({ EVA_REGISTRY_PATH: missing }), /does not exist/)
+    const empty = join(dir, 'empty.json')
+    writeFileSync(empty, JSON.stringify({ apps: [] }))
+    assert.throws(() => loadRegistry({ EVA_REGISTRY_PATH: empty }), /non-empty array/)
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }

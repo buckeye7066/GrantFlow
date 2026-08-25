@@ -32,6 +32,17 @@ import {
 } from './storage.js';
 
 /**
+ * Adapters may suppress a narrowly recognized non-OK response from the generic
+ * fetch-error path. End-of-data remains an honest EMPTY, while the explicit
+ * `external_blocked:` namespace records an upstream/WAF outage as BLOCKED.
+ */
+export function outcomeForBenignFetchFailure(reason) {
+  return typeof reason === 'string' && /^external_blocked:/i.test(reason.trim())
+    ? CRAWLER_OUTCOME.BLOCKED
+    : CRAWLER_OUTCOME.EMPTY;
+}
+
+/**
  * runDiscovery — execute one discovery run for a profile thesis, matching every
  * stored opportunity against one or more profile theses.
  *
@@ -211,11 +222,10 @@ export async function runDiscovery(deps, opts = {}) {
 
     let sawFetchError = false;
     let sawParseError = false;
-    // Adapter-declared benign-failure REASON (a truthy string from
-    // benignFetchFailure, e.g. 'api_outage:…'): when the whole request set is
-    // benign-skipped, the source finishes EMPTY with this reason instead of
-    // the generic 'no_candidates_stored' — the dashboards keep the outage
-    // visible without any failed/FETCH_ERROR mark nobody can act on.
+    // Adapter-declared handled-failure REASON (a truthy string from
+    // benignFetchFailure). End-of-data reasons stay EMPTY; reasons in the
+    // explicit `external_blocked:` namespace finish BLOCKED so an upstream/WAF
+    // outage cannot masquerade as a healthy no-results response.
     let benignReason = null;
     // First ACTIONABLE failure detail for this source, so a zero-found source
     // reports WHY (`fetch_failed:status:404`, `all_candidates_rejected:bad_url`)
@@ -351,7 +361,11 @@ export async function runDiscovery(deps, opts = {}) {
 
     const foundForProfile = sr.stored + sr.existing;
     const outcome = foundForProfile > 0 ? CRAWLER_OUTCOME.OK
-      : (sawParseError ? CRAWLER_OUTCOME.PARSE_ERROR : sawFetchError ? CRAWLER_OUTCOME.FETCH_ERROR : CRAWLER_OUTCOME.EMPTY);
+      : (sawParseError
+        ? CRAWLER_OUTCOME.PARSE_ERROR
+        : sawFetchError
+          ? CRAWLER_OUTCOME.FETCH_ERROR
+          : outcomeForBenignFetchFailure(benignReason));
     // Zero-found reason, most actionable first. `no_candidates_stored` now means
     // exactly what it says — the source answered cleanly and had nothing —
     // instead of doubling as "the fetch died" and "the gate rejected it".

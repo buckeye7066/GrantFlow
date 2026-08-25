@@ -10,6 +10,7 @@
   "base_url": "http://localhost:8080",
   "test_target": "disposable-local-instance",
   "required_env": ["PORT"],
+  "launch_env": { "PORT": "8080" },
   "seed_command": "none (offline PIN accounts; register fully offline; no secrets required)",
   "reset_command": "remove disposable account/state data under the data root and restart",
   "cleanup": "rm -rf .eva-tmp/family-castle-clash && remove any fixture accounts (eva-fixture) created during the run",
@@ -51,11 +52,11 @@
       "severity": "critical",
       "steps": [
         { "action": "goto", "url": "/" },
-        { "action": "waitForSelector", "selector": "body" }
+        { "action": "waitForSelector", "selector": "img[alt='Family Castle Clash']" }
       ],
-      "assert": [{ "type": "text_visible", "selector": "body", "value": "Castle Clash" }],
+      "assert": [{ "type": "text_visible", "selector": "body", "value": "Enter the family manor" }],
       "user_impact": "If the login screen does not load, no family member can play at all.",
-      "candidate_files": ["client/src/App.tsx", "client/src/screens/Login.tsx", "server/index.js"]
+      "candidate_files": ["client/src/App.jsx", "client/src/screens/Login.jsx", "server/index.js"]
     },
     {
       "id": "register-offline-account",
@@ -63,15 +64,15 @@
       "severity": "high",
       "steps": [
         { "action": "goto", "url": "/" },
-        { "action": "waitForSelector", "selector": "input" },
-        { "action": "fill", "selector": "input[placeholder^='Your name']", "value": "eva-fixture" },
-        { "action": "fill", "selector": "input[type=password]", "value": "4242" },
-        { "action": "click", "selector": "button:has-text('Create Account')" },
+        { "action": "waitForSelector", "selector": "#player-name" },
+        { "action": "fill", "selector": "#player-name", "value": "eva-fixture" },
+        { "action": "fill", "selector": "#player-pin", "value": "4242" },
+        { "action": "click", "selector": "button:has-text('Create household admin')" },
         { "action": "wait", "ms": 1500 }
       ],
-      "assert": [{ "type": "text_visible", "selector": "body", "value": "Signed in as" }],
+      "assert": [{ "type": "text_visible", "selector": "body", "value": "Welcome back, eva-fixture" }],
       "user_impact": "If offline registration fails, a new player can never create an account (registration is fully offline by design).",
-      "candidate_files": ["client/src/screens/Login.tsx", "client/src/screens/Home.tsx", "server/routes/auth.js"]
+      "candidate_files": ["client/src/screens/Login.jsx", "client/src/screens/Home.jsx", "server/auth.js"]
     }
   ]
 }

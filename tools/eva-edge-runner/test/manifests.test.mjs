@@ -15,7 +15,8 @@ import assert from 'node:assert/strict'
 import { readdirSync, readFileSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { resolveWaitState } from '../src/adapters/web.mjs'
+import { resolveWaitState, gotoWithRetry } from '../src/adapters/web.mjs'
+import { inferExecutableRequirements } from '../src/prereq.mjs'
 
 const MANIFEST_DIR = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..', 'qa', 'manifests')
 
@@ -26,14 +27,167 @@ function loadManifests() {
 }
 
 const manifests = loadManifests()
+const portfolioRegistry = JSON.parse(readFileSync(join(MANIFEST_DIR, '..', 'portfolio-registry.json'), 'utf8'))
+
+function manifestById(appId) {
+  const entry = manifests.find(({ manifest }) => manifest.app_id === appId)
+  assert.ok(entry, `missing manifest for ${appId}`)
+  return entry.manifest
+}
 
 test('there are manifests to check (a totality test over an empty set proves nothing)', () => {
   assert.ok(manifests.length >= 15, `expected the full portfolio, found ${manifests.length}`)
 })
 
+test('scheduled and coverage journey ids always resolve to a declared journey', () => {
+  for (const { file, manifest } of manifests) {
+    const ids = new Set((manifest.journeys || []).map((journey) => journey.id))
+    for (const listName of ['nightly_critical_journeys', 'weekly_full_journeys']) {
+      for (const id of manifest[listName] || []) {
+        assert.ok(ids.has(id), `${file}: ${listName} references missing journey ${id}`)
+      }
+    }
+    for (const item of manifest.coverage || []) {
+      for (const id of item.journeys || []) {
+        assert.ok(ids.has(id), `${file}: coverage for ${item.feature} references missing journey ${id}`)
+      }
+    }
+  }
+})
+
+test('registry and canonical manifests agree on repository identity for every app', () => {
+  const byId = new Map((portfolioRegistry.apps || []).map((app) => [app.app_id, app]))
+  for (const { file, manifest } of manifests) {
+    const registered = byId.get(manifest.app_id)
+    assert.ok(registered, `${file}: app is absent from portfolio registry`)
+    assert.equal(registered.repo, manifest.repo, `${file}: registry repo would misattribute tested provenance`)
+  }
+})
+
+test('offline/no-spend manifests never require a paid AI key that policy says must stay unset', () => {
+  const paidKey = /^(?:ANTHROPIC|OPENAI|GEMINI|LLM)_API_KEY$/i
+  const noSpendPolicy = /no (?:real )?(?:anthropic|openai|llm|ai).*spend|leave .*key.*unset|do not connect (?:a )?real .*key/i
+  for (const { file, manifest } of manifests) {
+    if (!(manifest.prohibited_actions || []).some((action) => noSpendPolicy.test(String(action)))) continue
+    const conflicting = (manifest.required_env || []).filter((name) => paidKey.test(String(name)))
+    assert.deepEqual(
+      conflicting,
+      [],
+      `${file}: a key deliberately prohibited for offline journeys cannot also be required at boot`,
+    )
+  }
+})
+
+test('every required_env name has a canonical value, generator, or named env prerequisite', () => {
+  for (const { file, manifest } of manifests) {
+    const supplied = new Set([
+      ...Object.keys(manifest.launch_env || manifest.env || {}),
+      ...Object.keys(manifest.launch_env_generated || {}),
+      ...(manifest.prerequisites || [])
+        .filter((p) => p?.type === 'env')
+        .flatMap((p) => (Array.isArray(p.env) ? p.env : [p.env]))
+        .filter(Boolean),
+    ])
+    const unresolved = (manifest.required_env || []).filter((name) => !supplied.has(name))
+    assert.deepEqual(
+      unresolved,
+      [],
+      `${file}: required_env must be supplied safely or carry an explicit owner-remedy prerequisite`,
+    )
+  }
+})
+
+test('every runnable manifest resolves at least one executable runtime prerequisite', () => {
+  for (const { file, manifest } of manifests) {
+    if (!manifest.start_command || manifest.start_command === 'n/a') continue
+    assert.ok(
+      inferExecutableRequirements(manifest).length > 0,
+      `${file}: start/journey commands must map to executable preflight checks`,
+    )
+  }
+})
+
+test('repaired portfolio manifests preserve their current repository contracts', () => {
+  const publisher = manifestById('app-store-publisher')
+  assert.equal(publisher.launch_env?.PORT, '4000')
+  assert.equal(publisher.launch_env?.PUBLISHER_HOST, '127.0.0.1')
+  assert.equal(publisher.base_url, 'http://127.0.0.1:4000')
+  for (const name of [
+    'DOTENV_CONFIG_PATH',
+    'PUBLISHER_VAULT_PATH',
+    'PUBLISHER_UPLOAD_DIR',
+    'PUBLISHER_LEDGER_PATH',
+    'PUBLISHER_STATE_PATH',
+    'PUBLISHER_FLAGS_PATH',
+  ]) {
+    assert.match(
+      publisher.launch_env?.[name] || '',
+      /^\.eva-tmp\/app-store-publisher\//,
+      `${name} must stay under the disposable data root`,
+    )
+  }
+
+  const castle = manifestById('family-castle-clash')
+  const castleIdentity = castle.journeys.find((journey) => journey.id === 'app-identifies-itself')
+  const castleRegister = castle.journeys.find((journey) => journey.id === 'register-offline-account')
+  assert.ok(castleIdentity.steps.some((step) => step.selector === "img[alt='Family Castle Clash']"))
+  assert.ok(castleRegister.steps.some((step) => step.selector === '#player-name'))
+  assert.ok(castleRegister.steps.some((step) => step.selector === '#player-pin'))
+  assert.ok(castleRegister.steps.some((step) => step.selector === "button:has-text('Create household admin')"))
+  assert.equal(castleRegister.assert[0]?.value, 'Welcome back, eva-fixture')
+  assert.deepEqual(castleIdentity.candidate_files, ['client/src/App.jsx', 'client/src/screens/Login.jsx', 'server/index.js'])
+  assert.deepEqual(castleRegister.candidate_files, ['client/src/screens/Login.jsx', 'client/src/screens/Home.jsx', 'server/auth.js'])
+  assert.doesNotMatch(JSON.stringify(castle.journeys), /Your name|Create Account|Signed in as/)
+
+  const math = manifestById('mind-over-math')
+  const mathBackend = String(math.start_command).split(/\s+&\s+/)[0]
+  assert.equal(mathBackend, 'cd backend && npm start', 'the monitored backend must not use node --watch')
+  assert.ok(
+    math.prerequisites?.some((p) => p.type === 'tcp' && p.host === '127.0.0.1' && Number(p.port) === 5432),
+    'Mind Over Math must block on an unavailable local Postgres instead of entering a restart loop',
+  )
+
+  const mice = manifestById('are-we-mice-or-are-we-men')
+  assert.ok(
+    mice.prerequisites?.some((p) => p.type === 'tcp' && p.host === '127.0.0.1' && Number(p.port) === 5432),
+    'Are We Mice must block before its database-initializing backend enters a startup/restart failure',
+  )
+
+  const livehealth = manifestById('livehealth')
+  assert.equal(livehealth.start_command, 'cd server && npm start & npx vite --host 127.0.0.1 --port 5273 --strictPort')
+  assert.equal(livehealth.readiness_probe?.type, 'http')
+  assert.equal(livehealth.readiness_probe?.path, '/healthz')
+  assert.equal(livehealth.readiness_probe?.port, 3210)
+  assert.equal(livehealth.readiness_probe?.timeout_ms, 60000)
+  assert.ok(livehealth.readiness_probe?.warm_paths?.includes('/@vite/client'))
+  assert.equal(livehealth.base_url, 'http://127.0.0.1:5273')
+  assert.equal(livehealth.launch_env?.VITE_API_URL, 'http://127.0.0.1:3210')
+  assert.equal(livehealth.launch_env?.CORS_ORIGIN, 'http://127.0.0.1:5273')
+
+  const factory = manifestById('factory-deck')
+  assert.equal(factory.repo, 'buckeye7066/local-ai-factory')
+  assert.deepEqual(factory.nightly_critical_journeys, ['app-identifies-itself'])
+  assert.deepEqual(factory.weekly_full_journeys, ['app-identifies-itself'])
+  assert.equal(factory.journeys.some((journey) => journey.id === 'demo-mode-visible'), false)
+  assert.equal(factory.coverage.some((item) => (item.journeys || []).includes('demo-mode-visible')), false)
+
+  const geneMap = manifestById('genemap-discovery')
+  assert.equal(geneMap.node_engine, '>=24', 'the runner must enforce GeneMap current package Node engine before launch')
+  assert.deepEqual(geneMap.journeys.find((journey) => journey.id === 'app-identifies-itself')?.candidate_files, ['apps/web/pages/Login.jsx'])
+  assert.deepEqual(geneMap.journeys.find((journey) => journey.id === 'reach-register')?.candidate_files, ['apps/web/pages/Login.jsx'])
+  assert.deepEqual(geneMap.journeys.find((journey) => journey.id === 'public-privacy-policy')?.candidate_files, ['apps/web/pages/PrivacyPolicy.jsx'])
+})
+
 for (const { file, manifest } of manifests) {
   test(`${file}: a pinned launch_env PORT and the readiness probe agree`, () => {
     const pinned = manifest.launch_env?.PORT ?? manifest.env?.PORT
+    if ((manifest.required_env || []).includes('PORT')) {
+      assert.notEqual(
+        pinned,
+        undefined,
+        'required_env.PORT must be supplied by the manifest; sanitized host env is not a portable port contract',
+      )
+    }
     if (pinned === undefined) return // not pinned: the probe is the only claim, nothing to contradict
     assert.equal(
       Number(pinned),
@@ -119,6 +273,54 @@ test('an explicitly declared wait state still wins, and a real element still nee
   assert.equal(resolveWaitState({ selector: 'body', state: 'visible' }), 'visible', 'an explicit state is honored')
   assert.equal(resolveWaitState({ selector: 'input[type=email]' }), 'visible', 'the fix lowers no bar for real elements')
   assert.equal(resolveWaitState({ selector: '#root' }), 'visible', 'an app mount point is a real element, not the document')
+})
+
+test('transient first-navigation failures are retried before becoming app findings', async () => {
+  let calls = 0
+  const page = {
+    async goto() {
+      calls += 1
+      if (calls < 3) throw new Error('page.goto: Timeout 30000ms exceeded')
+      return { ok: true }
+    },
+    async evaluate() { throw new Error('no committed document') },
+    async waitForTimeout() {},
+  }
+  const result = await gotoWithRetry(page, 'http://localhost:5173/Login', { timeout: 10, attempts: 3, delayMs: 0 })
+  assert.deepEqual(result, { ok: true })
+  assert.equal(calls, 3)
+})
+
+test('a committed usable document survives a late DOMContentLoaded timeout', async () => {
+  let calls = 0
+  const page = {
+    async goto() { calls += 1; throw new Error('page.goto: Timeout 30000ms exceeded') },
+    async evaluate() { return 'interactive' },
+    url() { return 'http://localhost:5173/' },
+    async waitForTimeout() {},
+  }
+  const result = await gotoWithRetry(page, 'http://localhost:5173/', { timeout: 10, attempts: 3, delayMs: 0 })
+  assert.equal(result, null)
+  assert.equal(calls, 1, 'semantic journey assertions, not a redundant navigation, now decide success')
+})
+
+test('about:blank or a prior route never masquerades as the requested committed document', async () => {
+  for (const current of ['about:blank', 'http://localhost:5173/previous']) {
+    let calls = 0
+    const page = {
+      async goto() {
+        calls += 1
+        if (calls === 1) throw new Error('page.goto: Timeout 30000ms exceeded')
+        return { ok: true }
+      },
+      async evaluate() { return 'complete' },
+      url() { return current },
+      async waitForTimeout() {},
+    }
+    const result = await gotoWithRetry(page, 'http://localhost:5173/target', { timeout: 10, attempts: 2, delayMs: 0 })
+    assert.deepEqual(result, { ok: true })
+    assert.equal(calls, 2, `${current} must not suppress the retry`)
+  }
 })
 
 // DOCKER-PUBLISHED PORT TOTALITY (2026-08-15). Docker Desktop publishes a

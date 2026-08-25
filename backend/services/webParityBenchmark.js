@@ -29,8 +29,11 @@
  * PERSISTENCE — system_kv `web_parity_benchmark`
  *   { generated_at, runs: [last MAX_RUN_HISTORY compact runs], latest:
  *     { generated_at, fleet_parity, per_profile } }
- * `fleet_parity` is omitted from a partial/unscored persisted snapshot; the
- * measured subset remains labeled as `scored_profiles_parity` with counts.
+ * A complete search can still be too small to support a stable trend. Each
+ * snapshot therefore carries a semantics version, verified denominator, and
+ * `sample_qualified` bit. Consumers must not claim a regression unless the
+ * current and comparison samples use the same semantics and both meet the
+ * minimum denominator.
  * so Sam's `coverage.webParityBenchmark` check can ratchet REGRESSIONS ("the
  * system only gets better": red when fleet parity drops > REGRESSION_POINTS
  * vs the previous run, is stale > STALE_MS, or never ran).
@@ -85,8 +88,25 @@ export const MAX_RESULTS_PER_QUERY = 10
 /** History ring size (nightly cadence ⇒ ~a month of trend). */
 export const MAX_RUN_HISTORY = 30
 
-/** A benchmark older than this is STALE for Sam (nightly cadence; 8 days = a week of misses). */
-export const STALE_MS = 8 * 24 * 60 * 60 * 1000
+/** A benchmark older than this is STALE for Sam (nightly cadence + one grace day). */
+export const STALE_MS = 48 * 60 * 60 * 1000
+
+/**
+ * Bump when eligibility, identity, or denominator semantics change. Historical
+ * scores from a different version are not valid regression comparators.
+ */
+// v3 makes the fleet score a true cohort ratio (total overlap / total verified
+// results) instead of giving a one-result profile the same weight as a
+// hundred-result profile. It also reserves `fleet_parity` for a complete,
+// denominator-qualified measurement; raw per-profile observations remain in
+// `per_profile`/`scored_profiles_parity` when the sample is too small.
+export const BENCHMARK_SEMANTICS_VERSION = 3
+
+/**
+ * Tiny SERP samples move by dozens of points when one result rotates. Require
+ * enough verified eligible pages before treating fleet parity as a ratchet.
+ */
+export const MIN_VERIFIED_DENOMINATOR = 20
 
 /** Fleet parity dropping more than this vs the PREVIOUS run is a regression (points on the 0–100 scale). */
 export const REGRESSION_POINTS = 10
@@ -123,6 +143,7 @@ export const AGGREGATOR_NOISE_DOMAINS = Object.freeze(new Set([
   'opengrants.io',
   'fundsforngos.org',
   'pivot.proquest.com',
+  'causeiq.com',
   'wikipedia.org',
   // Consumer-health information sites: articles about conditions, never a
   // funding source. Their homepages kept surfacing as "web-only finds"
@@ -315,6 +336,7 @@ export function isBenchmarkRelevantHit(hit, { needs = [], applicantTypes = [] } 
 
 const GENERIC_PORTAL_TITLE_RE =
   /^(?:home|search grants|browse grants|find grants|grant search|funding opportunities)(?:\s*[|–—-]\s*grants?\.gov)?$/i
+const GENERIC_HOMEPAGE_TITLE_RE = /(?:^|\s[|–—-]\s)home(?:\s[|–—-]\s|$)/i
 const GENERIC_GRANTS_GOV_PATH_RE =
   /^\/(?:$|search-grants\/?$|learn-grants(?:\/.*)?$|applicants(?:\/.*)?$|grantors(?:\/.*)?$|support(?:\/.*)?$)/i
 
@@ -324,6 +346,19 @@ export function isGenericFundingPortalHit(hit) {
   const domain = extractHostname(url)
   const title = String(hit?.title || '').trim()
   if (GENERIC_PORTAL_TITLE_RE.test(title)) return true
+  // A generic organization homepage is not itself an assistance program. This
+  // exact class ("HOME | SPCA Bradley County") was counted as a funding recall
+  // miss in the 2026-08-25 owner report even though the result named no grant,
+  // application, eligibility, or benefit. Keep an explicit actionable snippet
+  // eligible; reject only the evidence-free root homepage.
+  try {
+    const parsed = new URL(url)
+    if ((parsed.pathname === '/' || parsed.pathname === '') &&
+        GENERIC_HOMEPAGE_TITLE_RE.test(title) &&
+        !ACTIONABLE_PROGRAM_RE.test(normalizedHitText(hit))) return true
+  } catch {
+    return true
+  }
   if (domain !== 'grants.gov') return false
   try {
     return GENERIC_GRANTS_GOV_PATH_RE.test(new URL(url).pathname || '/')
@@ -349,11 +384,19 @@ export function isWebParityBenchmarkEnabled() {
 export function normalizeUrlKey(url) {
   const s = String(url || '').trim().toLowerCase()
   if (!/^https?:\/\//.test(s)) return ''
-  return s
+  const key = s
     .replace(/^https?:\/\//, '')
     .replace(/^www\./, '')
     .replace(/#.*$/, '')
     .replace(/\/+$/, '')
+  // SSA publishes the same SSDI/SSI program under a program landing page and
+  // an application landing page. Search favors `/applyfordisability`; the
+  // canonical source registry uses `/disability`. Treating them as unrelated
+  // made a program GrantFlow already carried appear web-only every night.
+  if (/^ssa\.gov\/(?:disability|applyfordisability|benefits\/disability)(?:\/.*)?$/i.test(key)) {
+    return 'ssa.gov/disability'
+  }
+  return key
 }
 
 /**
@@ -931,6 +974,43 @@ function searchProvenanceFor(results, queryIndex, thrown = false) {
   }
 }
 
+/**
+ * Fold profile-level observations into the versioned fleet sample contract.
+ * Exported so the weighting/qualification boundary can be regression-tested
+ * without a network search.
+ */
+export function computeFleetParitySample(perProfile = []) {
+  const profiles = Array.isArray(perProfile) ? perProfile : []
+  const scored = profiles.filter((profile) => Number.isFinite(profile?.parity))
+  const profilesUnscored = profiles.length - scored.length
+  const scoredProfilesParity = scored.length
+    ? Math.round((scored.reduce((sum, profile) => sum + profile.parity, 0) / scored.length) * 10) / 10
+    : null
+  const measurementStatus = profiles.length > 0 && scored.length === profiles.length
+    ? 'scored'
+    : (scored.length > 0 ? 'partial' : 'unscored')
+  const verifiedDenominator = scored.reduce(
+    (total, profile) => total + Number(profile.overlap_count || 0) + Number(profile.web_only_count || 0),
+    0,
+  )
+  const sampleQualified = measurementStatus === 'scored' && verifiedDenominator >= MIN_VERIFIED_DENOMINATOR
+  const overlapTotal = scored.reduce((total, profile) => total + Number(profile.overlap_count || 0), 0)
+  const weightedFleetParity = verifiedDenominator > 0
+    ? Math.round((overlapTotal / verifiedDenominator) * 1000) / 10
+    : null
+
+  return {
+    scored,
+    profiles_unscored: profilesUnscored,
+    scored_profiles_parity: scoredProfilesParity,
+    measurement_status: measurementStatus,
+    verified_denominator: verifiedDenominator,
+    sample_qualified: sampleQualified,
+    // A fleet number exists only when it is safe to publish as a fleet number.
+    fleet_parity: sampleQualified ? weightedFleetParity : null,
+  }
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // The benchmark run
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1124,25 +1204,35 @@ export async function runWebParityBenchmark(db, {
     }
   }
 
-  const scored = perProfile.filter((p) => Number.isFinite(p.parity))
-  const unscored = perProfile.length - scored.length
-  const scoredProfilesParity = scored.length
-    ? Math.round((scored.reduce((s, p) => s + p.parity, 0) / scored.length) * 10) / 10
-    : null
-  const measurementStatus = scored.length === perProfile.length
-    ? 'scored'
-    : (scored.length > 0 ? 'partial' : 'unscored')
-  // A fleet score represents the whole selected golden cohort. Publishing the
-  // measured subset as "fleet parity" would let an outage silently remove hard
-  // profiles and inflate the headline.
-  const fleetParity = measurementStatus === 'scored' ? scoredProfilesParity : null
+  const fleetSample = computeFleetParitySample(perProfile)
+  const scored = fleetSample.scored
+  const unscored = fleetSample.profiles_unscored
+  const scoredProfilesParity = fleetSample.scored_profiles_parity
+  const measurementStatus = fleetSample.measurement_status
+  const verifiedDenominator = fleetSample.verified_denominator
+  const sampleQualified = fleetSample.sample_qualified
+  // Weight the fleet by the evidence behind each profile. An arithmetic mean
+  // lets a one-result profile move the headline as much as a deeply measured
+  // profile and is therefore not a stable fleet statistic. `fleet_parity` is
+  // deliberately null until the complete cohort also clears the denominator
+  // floor, so no consumer can accidentally publish an underpowered number.
+  const fleetParity = fleetSample.fleet_parity
+  const sampleStatus = measurementStatus === 'scored' && !sampleQualified
+    ? 'insufficient_sample'
+    : measurementStatus
 
   const result = {
     ran: true,
     generated_at: generatedAt,
+    semantics_version: BENCHMARK_SEMANTICS_VERSION,
     fleet_parity: fleetParity,
+    qualified_fleet_parity: fleetParity,
     scored_profiles_parity: scoredProfilesParity,
     measurement_status: measurementStatus,
+    sample_status: sampleStatus,
+    sample_qualified: sampleQualified,
+    verified_denominator: verifiedDenominator,
+    minimum_verified_denominator: MIN_VERIFIED_DENOMINATOR,
     profiles_total: perProfile.length,
     profiles_scored: scored.length,
     profiles_unscored: unscored,
@@ -1156,7 +1246,12 @@ export async function runWebParityBenchmark(db, {
       const runs = Array.isArray(prior.runs) ? prior.runs : []
       const compactRun = {
         generated_at: generatedAt,
+        semantics_version: BENCHMARK_SEMANTICS_VERSION,
         measurement_status: measurementStatus,
+        sample_status: sampleStatus,
+        sample_qualified: sampleQualified,
+        verified_denominator: verifiedDenominator,
+        minimum_verified_denominator: MIN_VERIFIED_DENOMINATOR,
         profiles_total: perProfile.length,
         profiles_scored: scored.length,
         profiles_unscored: unscored,
@@ -1173,10 +1268,16 @@ export async function runWebParityBenchmark(db, {
         })),
       }
       if (Number.isFinite(fleetParity)) compactRun.fleet_parity = fleetParity
+      if (Number.isFinite(fleetParity)) compactRun.qualified_fleet_parity = fleetParity
       runs.push(compactRun)
       const latest = {
         generated_at: generatedAt,
+        semantics_version: BENCHMARK_SEMANTICS_VERSION,
         measurement_status: measurementStatus,
+        sample_status: sampleStatus,
+        sample_qualified: sampleQualified,
+        verified_denominator: verifiedDenominator,
+        minimum_verified_denominator: MIN_VERIFIED_DENOMINATOR,
         profiles_total: perProfile.length,
         profiles_scored: scored.length,
         profiles_unscored: unscored,
@@ -1184,6 +1285,7 @@ export async function runWebParityBenchmark(db, {
         per_profile: perProfile,
       }
       if (Number.isFinite(fleetParity)) latest.fleet_parity = fleetParity
+      if (Number.isFinite(fleetParity)) latest.qualified_fleet_parity = fleetParity
       const store = {
         generated_at: generatedAt,
         runs: runs.slice(-MAX_RUN_HISTORY),
@@ -1211,7 +1313,9 @@ export async function runWebParityBenchmark(db, {
     status: measurementStatus === 'scored' ? 'succeeded' : 'failed',
     severity: measurementStatus === 'unscored' ? 'high' : (measurementStatus === 'partial' ? 'medium' : 'info'),
     title: measurementStatus === 'scored'
-      ? `Google-bar benchmark: fleet parity ${fleetParity} across ${perProfile.length} golden profile(s)`
+      ? (sampleQualified
+          ? `Google-bar benchmark: qualified fleet parity ${fleetParity} across ${verifiedDenominator} verified result(s)`
+          : `Google-bar benchmark measured but below trend threshold: ${verifiedDenominator}/${MIN_VERIFIED_DENOMINATOR} verified result(s)`)
       : (measurementStatus === 'partial'
           ? `Google-bar benchmark partial: ${scored.length}/${perProfile.length} profile(s) scored (measured subset ${scoredProfilesParity}; no fleet score)`
           : `Google-bar benchmark unscored: 0/${perProfile.length} golden profile(s) produced a valid comparison`),
@@ -1221,7 +1325,13 @@ export async function runWebParityBenchmark(db, {
     entity_id: generatedAt,
     details_json: {
       fleet_parity: fleetParity,
+      qualified_fleet_parity: fleetParity,
       measurement_status: measurementStatus,
+      sample_status: sampleStatus,
+      sample_qualified: sampleQualified,
+      semantics_version: BENCHMARK_SEMANTICS_VERSION,
+      verified_denominator: verifiedDenominator,
+      minimum_verified_denominator: MIN_VERIFIED_DENOMINATOR,
       profiles_total: perProfile.length,
       profiles_scored: scored.length,
       profiles_unscored: unscored,
@@ -1242,6 +1352,9 @@ export default {
   MAX_RESULTS_PER_QUERY,
   MAX_RUN_HISTORY,
   STALE_MS,
+  BENCHMARK_SEMANTICS_VERSION,
+  MIN_VERIFIED_DENOMINATOR,
+  computeFleetParitySample,
   REGRESSION_POINTS,
   AGGREGATOR_NOISE_DOMAINS,
   isWebParityBenchmarkEnabled,

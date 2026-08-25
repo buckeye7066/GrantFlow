@@ -1,18 +1,19 @@
 {
   "app_id": "livehealth",
   "display_name": "LiveHealth",
-  "repo": "base44-health (buckeye7066/livehealth)",
+  "repo": "buckeye7066/livehealth",
   "local_path": "~/base44-health",
   "runtime_type": "web",
-  "start_command": "cd server && npm run dev & npm run dev",
+  "start_command": "cd server && npm start & npx vite --host 127.0.0.1 --port 5273 --strictPort",
   "stop_command": "taskkill-by-port",
-  "readiness_probe": { "type": "http", "path": "/api/v1/capabilities", "port": 3000, "timeout_ms": 60000 },
-  "base_url": "http://localhost:5173",
+  "readiness_probe": { "type": "http", "path": "/healthz", "port": 3210, "timeout_ms": 60000, "warm_paths": ["/@vite/client"] },
+  "base_url": "http://127.0.0.1:5273",
   "test_target": "disposable-local-instance",
-  "required_env": ["AUTH_JWT_SECRET", "ADMIN_EMAIL", "ADMIN_PASSWORD", "CORS_ORIGIN", "VITE_API_URL"],
+  "required_env": ["PORT", "AUTH_JWT_SECRET", "ADMIN_EMAIL", "ADMIN_PASSWORD", "CORS_ORIGIN", "VITE_API_URL"],
   "launch_env": {
-    "VITE_API_URL": "http://localhost:3000",
-    "CORS_ORIGIN": "http://localhost:5173",
+    "PORT": "3210",
+    "VITE_API_URL": "http://127.0.0.1:3210",
+    "CORS_ORIGIN": "http://127.0.0.1:5273",
     "ADMIN_EMAIL": "eva-admin@example.com"
   },
   "launch_env_generated": { "AUTH_JWT_SECRET": "secret", "ADMIN_PASSWORD": "secret" },
@@ -31,8 +32,8 @@
   ],
   "allowlist": {
     "hosts": ["localhost", "127.0.0.1", "::1"],
-    "ports": [5173, 3000],
-    "routes": ["/", "/api/v1/capabilities", "/api/v1/auth/*"],
+    "ports": [5273, 3210],
+    "routes": ["/", "/healthz", "/api/v1/capabilities", "/api/v1/auth/*"],
     "file_roots": [".eva-tmp/livehealth"],
     "processes": ["node", "npm"]
   },
