@@ -1,5 +1,6 @@
 import { classifyFundingResult, RESULT_BUCKETS } from '../../config/fundingResultFilters.js'
 import { canonicalOpportunityKey } from '../../crawler-os/contract.js'
+import { sameProgram, programTokens, programIdentityKey, sponsorsAgree } from '../../config/programIdentity.js'
 
 const RESOURCE_OPPORTUNITY_KINDS = new Set([
   'DIRECTORY',
@@ -95,6 +96,107 @@ export function dedupeByCanonicalIdentity(sources = []) {
   return { deduped: order.map((k) => byKey.get(k)), removed }
 }
 
+/** Does `candidate` carry more stated facts than the row currently kept? */
+function beatsKept(candidate, kept) {
+  const a = completenessOf(candidate)
+  const b = completenessOf(kept)
+  if (a !== b) return a > b
+  return Number(candidate?.match_score ?? -1) > Number(kept?.match_score ?? -1)
+}
+
+/**
+ * Collapse SUBSET duplicates the canonical key cannot see.
+ *
+ * `dedupeByCanonicalIdentity` is a Map keyed on a hash, so it can only collapse
+ * rows whose identity is EQUAL. The duplicates that actually reach the owner's
+ * screen are SUBSET pairs — "Family Support Program" vs "TN Family Support
+ * Program", "1915(c) HCBS Waivers" vs "TennCare 1915(c) HCBS Waivers" — and a
+ * set-equality key reports those as different programs. Measured on one real
+ * profile 2026-08-25: the canonical pass collapsed 0 of 10 rows and left SEVEN
+ * duplicate pairs visible.
+ *
+ * The predicate is the SHARED `sameProgram` (config/programIdentity.js), the
+ * same one Robert's pipeline audit uses — no second identity rule is invented
+ * here. Display-level only: nothing is deleted, and the most complete record
+ * survives, exactly as in the canonical pass.
+ *
+ * The token buckets are an EXACT prefilter, not a heuristic: `sameProgram`'s
+ * containment branch requires the smaller token set to be a subset of the
+ * larger, so two rows sharing NO distinctive token can never match it. Rows
+ * that match on IDENTITY KEY instead (a stored `canonical_opportunity_key`,
+ * where token sets may be empty) are caught by the key map. Every pair the
+ * predicate would call equal is therefore still compared.
+ */
+export function collapseSameProgramDuplicates(sources = []) {
+  const list = Array.isArray(sources) ? sources : []
+  const kept = []
+  const byToken = new Map()
+  const byIdentity = new Map()
+  let removed = 0
+
+  const index = (slot, source) => {
+    for (const token of programTokens(source)) {
+      if (!byToken.has(token)) byToken.set(token, new Set())
+      byToken.get(token).add(slot)
+    }
+  }
+
+  for (const source of list) {
+    const tokens = programTokens(source)
+    const candidates = new Set()
+    for (const token of tokens) {
+      for (const slot of byToken.get(token) || []) candidates.add(slot)
+    }
+    let rawKey = null
+    try {
+      rawKey = programIdentityKey(source)
+    } catch {
+      rawKey = null
+    }
+    // Only a STORED canonical key (`c:`) or real title tokens (`t:`) identify a
+    // program. The `k:`/`g:` fallbacks do not: for a row with no title, no
+    // sponsor and no url, `programIdentityKey` returns the literal `g:undefined`
+    // — so keying on it made every identity-less row look like the same program
+    // and collapsed three distinct resources into one (caught by
+    // remainingAuditCorrections). Absence of a title is SILENCE, and silence is
+    // not evidence of sameness: such a row is kept as its own entry, always.
+    const identityKey = rawKey && (rawKey.startsWith('c:') || rawKey.startsWith('t:')) ? rawKey : null
+    // A row with neither tokens nor an identifying key therefore reaches the
+    // matcher with an EMPTY candidate set and is kept as its own entry — no
+    // separate early-return is needed, and adding one would be a branch no test
+    // could ever fail on.
+    if (identityKey && byIdentity.has(identityKey)) candidates.add(byIdentity.get(identityKey))
+
+    let match = -1
+    for (const slot of candidates) {
+      // canonicalKeyIsFinal:false — on the read path every row carries a
+      // canonical key, and two DIFFERENT keys are routinely the SAME program
+      // spelled two ways ("Katie Beckett Waiver" / "Katie Beckett Program").
+      // Removing that veto means we owe corroboration, so the sponsors must
+      // also agree: it is what keeps a City of Chattanooga program from
+      // merging into a state one that shares its generic title.
+      if (sameProgram(kept[slot], source, { canonicalKeyIsFinal: false })
+        && sponsorsAgree(kept[slot], source)) { match = slot; break }
+    }
+
+    if (match < 0) {
+      const slot = kept.push(source) - 1
+      index(slot, source)
+      if (identityKey && !byIdentity.has(identityKey)) byIdentity.set(identityKey, slot)
+      continue
+    }
+
+    removed += 1
+    // The slot is the PROGRAM, not the row: index the loser's tokens too, so a
+    // later spelling that only overlaps the discarded variant still lands here.
+    index(match, source)
+    if (identityKey && !byIdentity.has(identityKey)) byIdentity.set(identityKey, match)
+    if (beatsKept(source, kept[match])) kept[match] = source
+  }
+
+  return { deduped: kept, removed }
+}
+
 /**
  * Partition a profile's surfaced results into direct funding, resources, and
  * the hidden "Not a grant" bucket (owner QA pass 2026-08-03).
@@ -117,7 +219,12 @@ export function dedupeByCanonicalIdentity(sources = []) {
  */
 export function partitionFundingSources(sources = []) {
   const list = Array.isArray(sources) ? sources : []
-  const { deduped, removed } = dedupeByCanonicalIdentity(list)
+  const canonical = dedupeByCanonicalIdentity(list)
+  // Two passes, in this order: the canonical key collapses EQUAL identities
+  // cheaply, then the pairwise predicate collapses the SUBSET spellings a
+  // hash key structurally cannot see.
+  const { deduped, removed: subsetRemoved } = collapseSameProgramDuplicates(canonical.deduped)
+  const removed = canonical.removed + subsetRemoved
 
   const notAGrant = []
   const directories = []
@@ -162,4 +269,4 @@ export function partitionFundingSources(sources = []) {
   }
 }
 
-export default { isFundingResource, partitionFundingSources, dedupeByCanonicalIdentity }
+export default { isFundingResource, partitionFundingSources, dedupeByCanonicalIdentity, collapseSameProgramDuplicates }
