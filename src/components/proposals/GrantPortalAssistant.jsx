@@ -11,6 +11,7 @@ import { Copy, Sparkles, Loader2, AlertCircle, ExternalLink, Eye, EyeOff } from 
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { useToast } from '@/components/ui/use-toast';
 import { createLogger } from '@/utils/logger';
+import { copyTextToClipboard } from '@/utils/clipboard';
 
 const ProfileField = ({ label, value, onCopy }) => {
   if (!value || (Array.isArray(value) && value.length === 0)) {
@@ -48,7 +49,8 @@ export default function GrantPortalAssistant({ open, onClose, grant, organizatio
 
   const handleCopyToClipboard = async (text) => {
     try {
-      await navigator.clipboard.writeText(text);
+      const copied = await copyTextToClipboard(text);
+      if (!copied) throw new Error('Clipboard copy unavailable');
       toast({
         title: "Copied!",
         description: "Text copied to clipboard"

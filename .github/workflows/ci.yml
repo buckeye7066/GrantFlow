@@ -80,6 +80,38 @@ jobs:
           npm --prefix tools/eva-edge-runner ci
           npm --prefix tools/eva-edge-runner test
 
+  windows-build:
+    name: Windows build compatibility
+    # The locked native dependency chain uses node-gyp 10, which recognizes
+    # Visual Studio 2022. windows-latest currently carries VS 18 and fails
+    # before the app can be tested, so pin the supported MSVC image explicitly.
+    runs-on: windows-2022
+    timeout-minutes: 25
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - name: Setup Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: 20.20.2
+          cache: npm
+
+      - name: Install locked dependencies
+        run: npm ci --include=optional
+
+      - name: Verify native project contract
+        run: npm run check:native-platforms
+
+      - name: Typecheck on Windows
+        run: npm run typecheck
+
+      - name: Production build on Windows
+        run: npm run build
+
   postgres-migrations:
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -194,10 +226,10 @@ jobs:
           node backend/scripts/verify-pg-schema.mjs
           mkdir -p "$UPLOADS_DIR"
 
-      - name: Install Playwright Chromium
-        run: node ./node_modules/playwright/cli.js install chromium --with-deps
+      - name: Install Playwright Chromium and WebKit
+        run: node ./node_modules/playwright/cli.js install chromium webkit --with-deps
 
-      - name: Blocking Playwright critical-path smoke
+      - name: Blocking Chromium, Safari/WebKit, and mobile Safari smoke
         run: npm run smoke
 
       - name: Retain Playwright diagnostics on failure

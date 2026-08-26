@@ -13,6 +13,7 @@ import {
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { useToast } from "@/components/ui/use-toast"
+import { copyTextToClipboard } from "@/utils/clipboard"
 
 /**
  * SavedLoginsCard
@@ -273,7 +274,8 @@ export default function SavedLoginsCard({ profileId }) {
 
   const copyToClipboard = async (text) => {
     try {
-      await navigator.clipboard.writeText(text)
+      const copied = await copyTextToClipboard(text)
+      if (!copied) throw new Error("Clipboard copy unavailable")
       toast({ title: "Copied to clipboard" })
     } catch (err) {
       console.error("Clipboard copy failed:", err)
@@ -767,3 +769,4 @@ export default function SavedLoginsCard({ profileId }) {
     </Card>
   )
 }
+

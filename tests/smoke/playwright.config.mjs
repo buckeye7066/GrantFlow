@@ -1,4 +1,4 @@
-import { defineConfig } from 'playwright/test'
+import { defineConfig, devices } from 'playwright/test'
 import path from 'node:path'
 
 const baseURL = process.env.SMOKE_BASE_URL || process.env.API_BASE_URL || 'http://127.0.0.1:8080'
@@ -37,6 +37,15 @@ export default defineConfig({
     {
       name: 'chromium',
       use: { browserName: 'chromium' },
+    },
+    {
+      name: 'webkit-safari',
+      use: { ...devices['Desktop Safari'] },
+    },
+    {
+      name: 'mobile-safari',
+      testMatch: /platform-compatibility\.spec\.mjs/,
+      use: { ...devices['iPhone 15'] },
     },
   ],
 })

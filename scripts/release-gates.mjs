@@ -86,6 +86,7 @@ async function main() {
   await run('node', ['scripts/guard-corruption-hotspots.mjs'], { label: 'corruption-hotspots' })
   await run(npmBin(), ['run', 'scan:secrets'], { label: 'secret-scan' })
   await run(npmBin(), ['run', 'deployment-config:check'], { label: 'deployment-config' })
+  await run(npmBin(), ['run', 'check:native-platforms'], { label: 'native-platforms' })
 
   // Gate 0a: production-deploy guard — every backend import must resolve inside the
   // Dockerfile runtime image. Catches the "Railway built fine but the container
