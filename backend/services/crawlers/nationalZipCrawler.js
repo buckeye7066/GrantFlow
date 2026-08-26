@@ -1424,6 +1424,14 @@ async function saveOpportunity(db, opp) {
     application_url: opp.application_url || opp.url || null,
     evidence_url: opp.evidence_url || opp.url || null,
     type: opp.type || 'OPPORTUNITY',
+    // Everything entering through this service has canonical geo-crawl
+    // provenance. Directory records keep their distinct origin so the reality
+    // gate evaluates them as referral resources, not direct awards.
+    record_origin:
+      opp.record_origin ||
+      (String(opp.type || '').toUpperCase() === 'DIRECTORY'
+        ? 'directory_resource'
+        : 'geo_crawl'),
     discovered_at: opp.discovered_at ? String(opp.discovered_at) : new Date().toISOString(),
     // Only forward verification proof when the caller actually verified the URL;
     // otherwise leave it for the recurring linkVerificationService.
