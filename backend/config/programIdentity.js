@@ -37,13 +37,58 @@ export const IDENTITY_STOPWORDS = new Set([
   'scholars',
 ])
 
+/**
+ * QUALIFIER TOKENS — words a VARIANT of the same program adds: a state, an
+ * institution word, a scope word. Read out of `STATE_REGISTRY` so a state name
+ * cannot be missed by a hand-typed list.
+ *
+ * Declared BEFORE `stripProgramQualifiers` because a trailing " - …" clause is
+ * only safe to strip when every word in it is one of these (or a year / stop
+ * word). A blanket dash-strip collapsed distinct same-sponsor awards that
+ * differ after the dash ("HEAP - Heating" vs "HEAP - Cooling") into one
+ * identity — display hid the loser, and Robert's audit sticky-dismissed it.
+ */
+export const QUALIFIER_TOKENS = (() => {
+  const out = new Set([
+    'state', 'statewide', 'university', 'college', 'community', 'county', 'city',
+    'regional', 'district', 'campus', 'institute', 'school', 'usa', 'us',
+    'undergraduate', 'graduate', 'general', 'annual',
+  ])
+  for (const entry of Object.values(STATE_REGISTRY || {})) {
+    for (const word of String(entry?.name ?? '').toLowerCase().split(/\s+/)) {
+      if (word.length > 1) out.add(word)
+    }
+  }
+  return out
+})()
+
+function isDashSuffixQualifierOnly(suffix) {
+  const words = String(suffix || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9 ]+/g, ' ')
+    .split(/\s+/)
+    .filter((w) => w.length > 0)
+  if (words.length === 0) return true
+  return words.every((w) => (
+    QUALIFIER_TOKENS.has(w)
+    || IDENTITY_STOPWORDS.has(w)
+    || /^20\d{2}$/.test(w)
+    || w.length <= 1
+  ))
+}
+
 /** Institution/year qualifiers that a variant appends to the same program. */
 export function stripProgramQualifiers(title) {
   return String(title || '')
     .replace(/\((?:\s*20\d{2}\s*[-–/]?\s*\d{0,4}\s*)\)/g, ' ')
     .replace(/\b20\d{2}\s*[-–/]\s*\d{2,4}\b/g, ' ')
     .replace(/\bat\s+.*$/i, ' ')
-    .replace(/\s*[-–—]\s*.*$/, ' ')
+    // Only strip " - Tennessee" / " - 2026" / " - Undergraduate" class suffixes.
+    // Do NOT strip " - Heating Assistance" / " - Rent" — those name different
+    // programs that happen to share a brand prefix and the same funder.
+    .replace(/\s*[-–—]\s*([^]*)$/, (full, suffix) => (
+      isDashSuffixQualifierOnly(suffix) ? ' ' : full
+    ))
 }
 
 /** The distinctive tokens of a program name, qualifiers stripped. */
@@ -74,34 +119,15 @@ export function programIdentityKey(row) {
 export const MIN_LONE_TOKEN_IDENTITY_LENGTH = 6
 
 /**
- * QUALIFIER TOKENS — words a VARIANT of the same program adds: a state, an
- * institution word, a scope word. Read out of `STATE_REGISTRY` so a state name
- * cannot be missed by a hand-typed list.
- *
- * The distinction this encodes: "Tennessee HOPE Scholarship" differs from "HOPE
- * Scholarship" by a PLACE; "Gates Millennium Scholars" differs from "Gates
- * Scholarship" by a PROGRAM WORD. The first pair is one program, the second is
- * two — and no length or overlap heuristic can tell them apart.
- */
-export const QUALIFIER_TOKENS = (() => {
-  const out = new Set([
-    'state', 'statewide', 'university', 'college', 'community', 'county', 'city',
-    'regional', 'district', 'campus', 'institute', 'school', 'usa', 'us',
-    'undergraduate', 'graduate', 'general', 'annual',
-  ])
-  for (const entry of Object.values(STATE_REGISTRY || {})) {
-    for (const word of String(entry?.name ?? '').toLowerCase().split(/\s+/)) {
-      if (word.length > 1) out.add(word)
-    }
-  }
-  return out
-})()
-
-/**
  * Are these two rows the SAME PROGRAM?
  *
  * NOT the same program (asserted in the tests): "Tennessee HOPE Scholarship" vs
  * "Tennessee Promise Scholarship" — neither token set contains the other.
+ *
+ * The QUALIFIER_TOKENS set encodes: "Tennessee HOPE Scholarship" differs from
+ * "HOPE Scholarship" by a PLACE; "Gates Millennium Scholars" differs from
+ * "Gates Scholarship" by a PROGRAM WORD. The first pair is one program, the
+ * second is two — and no length or overlap heuristic can tell them apart.
  */
 export function sameProgram(a, b, { canonicalKeyIsFinal = true } = {}) {
   const keyA = programIdentityKey(a)

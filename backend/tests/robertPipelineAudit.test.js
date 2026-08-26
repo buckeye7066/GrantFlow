@@ -371,6 +371,10 @@ describe('dedup collapses PROGRAM IDENTITY, not exact title strings', () => {
       // A shared SURNAME is a coincidence, not an identity — the lone-token
       // length floor is what stops this one.
       ['Gates Scholarship', 'Gates Millennium Scholars'],
+      // A shared brand prefix before " - " is not identity — Heating vs Cooling
+      // (and Rent vs Utilities) are different awards under one funder brand.
+      ['HEAP - Heating Assistance', 'HEAP - Cooling Assistance'],
+      ['Emergency Assistance - Rent', 'Emergency Assistance - Utilities'],
     ]
     for (const [a, b] of pairs) {
       expect(sameProgram({ title: a, grant_id: 'a' }, { title: b, grant_id: 'b' }), `${a} vs ${b}`).toBe(false)

@@ -130,3 +130,71 @@ describe('canonical-key finality stays ON by default', () => {
     expect(sameProgram(HCBS_BARE, HCBS_PREFIXED, { canonicalKeyIsFinal: false })).toBe(true)
   })
 })
+
+describe('a dash suffix that NAMES a different award must not collapse', () => {
+  // stripProgramQualifiers used to drop everything after the first " - ", so
+  // "HEAP - Heating Assistance" and "HEAP - Cooling Assistance" both reduced
+  // to tokens ['heap'], shared a t: identity, and the display pass (plus
+  // Robert's audit on unlinked rows) treated them as one program. Distinct
+  // awards under one brand prefix are not spelling variants.
+  const SPONSOR = 'Tennessee Department of Human Services'
+
+  const HEAP_HEAT = {
+    id: 'hh', title: 'HEAP - Heating Assistance', sponsor: SPONSOR,
+    canonical_opportunity_key: 't:human services tennessee::assistance heap heating',
+    match_decision: 'accept', match_score: 80,
+  }
+  const HEAP_COOL = {
+    id: 'hc', title: 'HEAP - Cooling Assistance', sponsor: SPONSOR,
+    canonical_opportunity_key: 't:human services tennessee::assistance cooling heap',
+    match_decision: 'accept', match_score: 80,
+  }
+  const EA_RENT = {
+    id: 'er', title: 'Emergency Assistance - Rent', sponsor: 'United Way',
+    canonical_opportunity_key: 't:united way::assistance emergency rent',
+    match_decision: 'accept', match_score: 70,
+  }
+  const EA_UTIL = {
+    id: 'eu', title: 'Emergency Assistance - Utilities', sponsor: 'United Way',
+    canonical_opportunity_key: 't:united way::assistance emergency utilities',
+    match_decision: 'accept', match_score: 70,
+  }
+
+  it('keeps HEAP heating and cooling as two programs on the display path', () => {
+    const { deduped, removed } = collapseSameProgramDuplicates([HEAP_HEAT, HEAP_COOL])
+    expect(removed).toBe(0)
+    expect(deduped).toHaveLength(2)
+  })
+
+  it('keeps Emergency Assistance rent vs utilities as two programs', () => {
+    const { deduped, removed } = collapseSameProgramDuplicates([EA_RENT, EA_UTIL])
+    expect(removed).toBe(0)
+    expect(deduped).toHaveLength(2)
+  })
+
+  it('still strips a place/year dash suffix so intended variants collapse', () => {
+    // "HOPE Scholarship - Tennessee" is the same program as "HOPE Scholarship";
+    // the suffix is ONLY qualifier tokens, which the strip is allowed to drop.
+    const bare = {
+      id: 'hope1', title: 'HOPE Scholarship', sponsor: 'Tennessee Student Assistance Corporation',
+      canonical_opportunity_key: 't:assistance corporation student tennessee::hope',
+      match_decision: 'accept', match_score: 90,
+    }
+    const dashed = {
+      id: 'hope2', title: 'HOPE Scholarship - Tennessee', sponsor: 'Tennessee Student Assistance Corporation',
+      canonical_opportunity_key: 't:assistance corporation student tennessee::hope tennessee',
+      match_decision: 'accept', match_score: 90,
+    }
+    expect(collapseSameProgramDuplicates([bare, dashed]).removed).toBe(1)
+  })
+
+  it('Robert default sameProgram does not sticky-dismiss dash-differing awards without a stored key', () => {
+    // No canonical_opportunity_key → identity falls through to t:<tokens>.
+    // The old blanket dash-strip made both keys `t:heap` and sameProgram
+    // returned true on key equality before containment ran.
+    expect(sameProgram(
+      { title: 'HEAP - Heating Assistance', grant_id: 'a' },
+      { title: 'HEAP - Cooling Assistance', grant_id: 'b' },
+    )).toBe(false)
+  })
+})
