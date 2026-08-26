@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import codecs
 import html
 import pathlib
 import re
@@ -164,6 +165,7 @@ PROJECTED_ATTRIBUTE_EXPRESSION_RX = re.compile(
     r'''\{\s*(?P<value>[^{}]*?)\s*\}''',
     re.I | re.S,
 )
+JSX_CHILD_EXPRESSION_RX = re.compile(r"(?<=>)\{(?P<value>[^{}]*?)\}", re.S)
 BOUNDED_STRING_LITERAL_RX = re.compile(
     rf'''(?P<prefix>(?:^|[=(:,\[{{;?]\s*|'''
     rf'''\b(?:return|throw|yield)\b\s+|=>\s*|(?:&&|\|\||\?\?|\+)\s*))'''
@@ -217,6 +219,14 @@ FORMAT_CONTROL_RANGES = (
     (0xE0020, 0xE007F),
 )
 
+BOM_ENCODINGS = (
+    (codecs.BOM_UTF32_LE, "utf-32"),
+    (codecs.BOM_UTF32_BE, "utf-32"),
+    (codecs.BOM_UTF8, "utf-8-sig"),
+    (codecs.BOM_UTF16_LE, "utf-16"),
+    (codecs.BOM_UTF16_BE, "utf-16"),
+)
+
 
 def codepoint_class(ranges: tuple[tuple[int, int], ...]) -> str:
     return "".join(
@@ -245,6 +255,55 @@ def normalize_text(text: str) -> str:
     if normalized.isascii():
         return normalized
     return IGNORABLE_RX.sub("", normalized)
+
+
+def looks_like_text(text: str) -> bool:
+    """Reject binary-looking decoder candidates without an extension allowlist."""
+
+    if not text:
+        return True
+    if "\0" in text:
+        return False
+    controls = sum(
+        1 for char in text
+        if ord(char) < 32 and char not in ("\t", "\r", "\n", "\f")
+    )
+    replacements = text.count("\ufffd")
+    printable = sum(char.isprintable() or char in ("\t", "\r", "\n", "\f") for char in text)
+    return (
+        controls <= max(1, len(text) // 20)
+        and replacements <= max(1, len(text) // 50)
+        and printable / len(text) >= 0.85
+    )
+
+
+def decode_text_candidates(data: bytes) -> list[str]:
+    """Return every plausible common-Unicode interpretation of one tracked blob."""
+
+    for bom, encoding in BOM_ENCODINGS:
+        if data.startswith(bom):
+            decoded = data.decode(encoding, "replace")
+            return [decoded] if looks_like_text(decoded) else []
+
+    candidates = [data.decode("utf-8", "replace")]
+    # Ordinary ASCII cannot be BOM-less UTF-16/32 without NUL bytes. For all
+    # other blobs, also scan both byte orders. Replacement decoding preserves a
+    # complete prohibited prefix even when the final UTF code unit is truncated.
+    if b"\0" in data or not data.isascii():
+        candidates.extend(
+            data.decode(encoding, "replace")
+            for encoding in ("utf-32-le", "utf-32-be", "utf-16-le", "utf-16-be")
+        )
+    return list(dict.fromkeys(candidate for candidate in candidates if looks_like_text(candidate)))
+
+
+def prohibited_blob_labels(data: bytes) -> list[str]:
+    found = {
+        label
+        for candidate in decode_text_candidates(data)
+        for label in prohibited_labels(candidate)
+    }
+    return [label for label, _ in PATTERNS if label in found]
 
 
 def literal_value(literal: str) -> str:
@@ -391,6 +450,284 @@ def template_constant_value(template: str) -> str:
     return "".join(values)
 
 
+CSS_STRING_RX = re.compile(r'''(?:"(?:\\[\s\S]|[^"\\])*"|'(?:\\[\s\S]|[^'\\])*')''')
+
+
+def strip_css_comments(value: str) -> str:
+    rendered: list[str] = []
+    quote: str | None = None
+    escaped = False
+    index = 0
+    while index < len(value):
+        char = value[index]
+        if quote is not None:
+            rendered.append(char)
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == quote:
+                quote = None
+            index += 1
+            continue
+        if char in ("'", '"'):
+            quote = char
+            rendered.append(char)
+            index += 1
+            continue
+        if value.startswith("/*", index):
+            end = value.find("*/", index + 2)
+            index = len(value) if end < 0 else end + 2
+            continue
+        rendered.append(char)
+        index += 1
+    return "".join(rendered)
+
+
+def css_content_declaration_values(value: str) -> list[str]:
+    declarations: list[str] = []
+    index = 0
+    statement_start = 0
+    parentheses = 0
+    block_kinds: list[str] = []
+    while index < len(value):
+        if value[index] in ("'", '"'):
+            quote = value[index]
+            index += 1
+            while index < len(value):
+                if value[index] == "\\":
+                    index += 2
+                    continue
+                index += 1
+                if value[index - 1] == quote:
+                    break
+            continue
+        if value[index] == "(":
+            parentheses += 1
+            index += 1
+            continue
+        if value[index] == ")" and parentheses > 0:
+            parentheses -= 1
+            index += 1
+            continue
+        if value[index] == "{" and parentheses == 0:
+            header = value[statement_start:index].lstrip()
+            block_kinds.append("at-rule" if header.startswith("@") else "style-rule")
+            statement_start = index + 1
+            index += 1
+            continue
+        if value[index] == "}" and parentheses == 0:
+            if block_kinds:
+                block_kinds.pop()
+            statement_start = index + 1
+            index += 1
+            continue
+        if value[index] == ";" and parentheses == 0:
+            statement_start = index + 1
+            index += 1
+            continue
+        if value[index:index + 7].lower() != "content":
+            index += 1
+            continue
+        before = value[index - 1] if index else ""
+        after = value[index + 7] if index + 7 < len(value) else ""
+        if (
+            not block_kinds
+            or block_kinds[-1] != "style-rule"
+            or value[statement_start:index].strip()
+            or (before and (before.isalnum() or before in "_-"))
+            or (after and (after.isalnum() or after in "_-"))
+        ):
+            index += 7
+            continue
+        cursor = index + 7
+        while cursor < len(value) and value[cursor].isspace():
+            cursor += 1
+        if cursor >= len(value) or value[cursor] != ":":
+            index += 7
+            continue
+        start = cursor + 1
+        cursor = start
+        quote = None
+        escaped = False
+        value_parentheses = 0
+        while cursor < len(value):
+            char = value[cursor]
+            if quote is not None:
+                if escaped:
+                    escaped = False
+                elif char == "\\":
+                    escaped = True
+                elif char == quote:
+                    quote = None
+                cursor += 1
+                continue
+            if char in ("'", '"'):
+                quote = char
+            elif char == "\\":
+                cursor += 2
+                continue
+            elif char == "(":
+                value_parentheses += 1
+            elif char == ")" and value_parentheses > 0:
+                value_parentheses -= 1
+            elif char in ";}" and value_parentheses == 0:
+                break
+            cursor += 1
+        declarations.append(value[start:cursor])
+        if cursor < len(value) and value[cursor] == "}" and block_kinds:
+            block_kinds.pop()
+        index = cursor + 1
+        statement_start = index
+    return declarations
+
+
+def split_css_alternative_content(value: str) -> list[str]:
+    quote = None
+    escaped = False
+    parentheses = 0
+    for index, char in enumerate(value):
+        if quote is not None:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == quote:
+                quote = None
+            continue
+        if char in ("'", '"'):
+            quote = char
+        elif char == "(":
+            parentheses += 1
+        elif char == ")" and parentheses > 0:
+            parentheses -= 1
+        elif char == "/" and parentheses == 0:
+            return [value[:index], value[index + 1:]]
+    return [value]
+
+
+def css_url_argument_ranges(value: str) -> list[tuple[int, int]]:
+    ranges: list[tuple[int, int]] = []
+    index = 0
+    while index < len(value):
+        if value[index] in ("'", '"'):
+            quote = value[index]
+            index += 1
+            while index < len(value):
+                if value[index] == "\\":
+                    index += 2
+                else:
+                    char = value[index]
+                    index += 1
+                    if char == quote:
+                        break
+            continue
+        if value[index:index + 3].lower() != "url":
+            index += 1
+            continue
+        before = value[index - 1] if index else ""
+        after = value[index + 3] if index + 3 < len(value) else ""
+        if (
+            (before and (before.isalnum() or before in "_-"))
+            or (after and (after.isalnum() or after in "_-"))
+        ):
+            index += 3
+            continue
+        cursor = index + 3
+        while cursor < len(value) and value[cursor].isspace():
+            cursor += 1
+        if cursor >= len(value) or value[cursor] != "(":
+            index += 3
+            continue
+        start = cursor + 1
+        cursor = start
+        quote = None
+        escaped = False
+        parentheses = 1
+        while cursor < len(value) and parentheses > 0:
+            char = value[cursor]
+            if quote is not None:
+                if escaped:
+                    escaped = False
+                elif char == "\\":
+                    escaped = True
+                elif char == quote:
+                    quote = None
+            elif char in ("'", '"'):
+                quote = char
+            elif char == "(":
+                parentheses += 1
+            elif char == ")":
+                parentheses -= 1
+            cursor += 1
+        ranges.append((start, cursor - 1 if parentheses == 0 else len(value)))
+        index = cursor
+    return ranges
+
+
+def decode_css_string(literal: str) -> str:
+    body = literal[1:-1]
+    decoded: list[str] = []
+    index = 0
+    while index < len(body):
+        if body[index] != "\\":
+            decoded.append(body[index])
+            index += 1
+            continue
+        if index + 1 >= len(body):
+            index += 1
+            continue
+        if body[index + 1] in ("\n", "\r", "\f"):
+            index += 2
+            if body[index - 1] == "\r" and index < len(body) and body[index] == "\n":
+                index += 1
+            continue
+        hexadecimal = re.match(r"[0-9A-Fa-f]{1,6}", body[index + 1:])
+        if hexadecimal:
+            raw = hexadecimal.group(0)
+            codepoint = int(raw, 16)
+            decoded.append(
+                chr(codepoint)
+                if 0 < codepoint <= 0x10FFFF and not 0xD800 <= codepoint <= 0xDFFF
+                else "\ufffd"
+            )
+            index += 1 + len(raw)
+            if index < len(body) and body[index].isspace():
+                if body[index] == "\r" and index + 1 < len(body) and body[index + 1] == "\n":
+                    index += 2
+                else:
+                    index += 1
+            continue
+        decoded.append(body[index + 1])
+        index += 2
+    return "".join(decoded)
+
+
+def render_css_content(value: str) -> list[str]:
+    candidates: list[str] = []
+    without_comments = strip_css_comments(value)
+    for declaration in css_content_declaration_values(without_comments):
+        for branch in split_css_alternative_content(declaration):
+            url_ranges = css_url_argument_ranges(branch)
+            chain = ""
+            previous_end: int | None = None
+            for match in CSS_STRING_RX.finditer(branch):
+                if any(start <= match.start() < end for start, end in url_ranges):
+                    previous_end = None
+                    chain = ""
+                    continue
+                rendered = decode_css_string(match.group(0))
+                candidates.append(rendered)
+                if previous_end is not None and not branch[previous_end:match.start()].strip():
+                    chain += rendered
+                else:
+                    chain = rendered
+                if chain != rendered:
+                    candidates.append(chain)
+                previous_end = match.end()
+    return candidates
+
+
 def rendered_source_projection(text: str) -> str:
     """Project common JSX and literal concatenation boundaries into visible text.
 
@@ -439,6 +776,14 @@ def rendered_source_projection(text: str) -> str:
     if "{" in projected and ("'" in projected or '"' in projected or "`" in projected):
         projected = JSX_STRING_EXPRESSION_RX.sub(
             lambda match: literal_value(match.group(1)),
+            projected,
+        )
+        projected = JSX_CHILD_EXPRESSION_RX.sub(
+            lambda match: max(
+                (literal_value(item.group(0)) for item in STRING_LITERAL_RX.finditer(match.group("value"))),
+                key=len,
+                default="",
+            ),
             projected,
         )
 
@@ -585,9 +930,7 @@ def scan_repository() -> list[tuple[str, list[str]]]:
         # A present index blob is always authoritative. The worktree fallback
         # is reserved for an intent-to-add entry that has no blob yet.
         data = blobs[oid] if oid else (root / path).read_bytes()
-        if b"\0" in data:
-            continue
-        labels = prohibited_labels(data.decode("utf-8", "ignore"))
+        labels = prohibited_blob_labels(data)
         if labels:
             violations.append((path.as_posix(), labels))
     return violations
@@ -700,6 +1043,9 @@ def run_self_test() -> None:
             "<div aria-label={ready ? 'si\\u0067n "
             + COMPLETION_SECOND + "' : 'ready'} />"
         ),
+        "conditional JSX child followed by a static sibling": (
+            "<p>{ready ? 'si\\u0067n ' : ''}{'" + COMPLETION_SECOND + "'}</p>"
+        ),
         "unicode escape in a JSX string": (
             "<p>{'si\\u0067n " + COMPLETION_SECOND + "'}</p>"
         ),
@@ -781,6 +1127,30 @@ def run_self_test() -> None:
 
     missed = [name for name, probe in positive_probes.items() if not prohibited_labels(probe)]
     false_positives = [name for name, probe in negative_probes.items() if prohibited_labels(probe)]
+    encoded_gate = "man" + "ual " + AUTHORIZATION_NOUN
+    encoded_cases = {
+        "UTF-8 BOM": codecs.BOM_UTF8 + encoded_gate.encode("utf-8"),
+        "UTF-16 LE BOM": encoded_gate.encode("utf-16"),
+        "UTF-16 BE BOM": codecs.BOM_UTF16_BE + encoded_gate.encode("utf-16-be"),
+        "UTF-16 LE": encoded_gate.encode("utf-16-le"),
+        "UTF-16 BE": encoded_gate.encode("utf-16-be"),
+        "UTF-32 LE BOM": encoded_gate.encode("utf-32"),
+        "UTF-32 BE BOM": codecs.BOM_UTF32_BE + encoded_gate.encode("utf-32-be"),
+        "UTF-32 LE": encoded_gate.encode("utf-32-le"),
+        "UTF-32 BE": encoded_gate.encode("utf-32-be"),
+        "fullwidth BOM-less UTF-16 LE": compatibility_completion.encode("utf-16-le"),
+        "fullwidth BOM-less UTF-16 BE": compatibility_completion.encode("utf-16-be"),
+        "truncated UTF-16 BE": (
+            codecs.BOM_UTF16_BE + encoded_gate.encode("utf-16-be") + b"\0"
+        ),
+    }
+    for name, payload in encoded_cases.items():
+        if not prohibited_blob_labels(payload):
+            missed.append(name)
+
+    replacement_heavy_binary = b"\xff" * 96 + b" " + encoded_gate.encode("ascii")
+    if prohibited_blob_labels(replacement_heavy_binary):
+        false_positives.append("replacement-heavy binary")
     if missed or false_positives:
         details = []
         if missed:

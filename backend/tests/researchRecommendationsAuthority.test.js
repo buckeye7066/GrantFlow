@@ -117,6 +117,18 @@ describe('research recommendation canonical authority', () => {
     expect(candidateQuery.indexOf('COALESCE(fo.is_active')).toBeLessThan(candidateQuery.indexOf('LIMIT'))
   })
 
+  it('excludes stored matches whose funding deadline is already past', async () => {
+    const db = canonicalDb([{
+      id: 'expired-research', title: 'Expired Research Award', match_decision: 'ACCEPT',
+      is_active: 1, deadline: '2000-01-01',
+    }])
+    const result = await loadCanonicalStoredOpportunities(db, {
+      profileId: 'profile-1', opportunityIds: ['expired-research'],
+    })
+    expect(result.opportunities).toEqual([])
+    expect(result.unavailableIds).toEqual(['expired-research'])
+  })
+
   it('builds research attributes only from the authorized stored profile and sections', async () => {
     const db = {
       prepare(sql) {

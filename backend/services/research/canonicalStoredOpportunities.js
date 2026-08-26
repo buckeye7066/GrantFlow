@@ -86,7 +86,10 @@ export async function loadCanonicalStoredOpportunities(db, { profileId, opportun
   const activeRows = (rows || []).filter((row) => {
     const active = row?.is_active === undefined || row?.is_active === null || Number(row.is_active) !== 0
     const hidden = row?.is_hidden !== undefined && row?.is_hidden !== null && Number(row.is_hidden) !== 0
-    return active && !hidden
+    const deadline = String(row?.deadline || '').slice(0, 10)
+    const today = new Date().toISOString().slice(0, 10)
+    const current = !deadline || !/^\d{4}-\d{2}-\d{2}$/.test(deadline) || deadline >= today
+    return active && !hidden && current
   })
   const byId = new Map(activeRows.map((row) => [String(row.id), row]))
   const ordered = opportunityIds === null

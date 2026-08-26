@@ -161,7 +161,10 @@ function parseBudgetLines(row) {
     const details = entry && typeof entry === 'object' && !Array.isArray(entry) ? entry : {}
     const quantity = money(details.quantity ?? row?.quantity ?? 1, 'budget quantity')
     const unitCost = money(details.unit_cost ?? row?.unit_cost ?? 0, 'budget unit cost')
-    const total = money(details.total ?? row?.total ?? row?.total_amount ?? quantity * unitCost, 'budget total')
+    const total = money(
+      details.total ?? (sourceWasArray ? quantity * unitCost : row?.total ?? row?.total_amount ?? quantity * unitCost),
+      'budget total',
+    )
     if (total < 0) throw new AccountingValidationError('budget total cannot be negative')
     return {
       // Legacy arrays represent distinct budget lines inside one budget row.
@@ -185,7 +188,9 @@ function normalizeExpense(row, currency) {
   return {
     id: requiredText(row?.id, 'expense id'),
     grant_id: requiredText(row?.grant_id, 'expense grant_id'),
-    date: safeDate(row?.date),
+    date: (() => {
+      try { return safeDate(row?.date) } catch { return '' }
+    })(),
     description: String(row?.description ?? '').trim() || 'Grant expense',
     category: String(row?.category ?? 'Uncategorized').trim() || 'Uncategorized',
     vendor: String(row?.vendor ?? row?.payee ?? '').trim(),

@@ -12,6 +12,13 @@ const routeLogger = createLogger('route:expenses')
 
 const router = express.Router();
 
+function validExpenseDate(value) {
+  const date = String(value || '').trim()
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return null
+  const parsed = new Date(`${date}T00:00:00Z`)
+  return !Number.isNaN(parsed.getTime()) && parsed.toISOString().slice(0, 10) === date ? date : null
+}
+
 async function ensureExpenseAccess(req, res, expenseId) {
   const user = requireAuthenticatedUser(req, res)
   if (!user) return null
@@ -89,7 +96,7 @@ router.post('/', async (req, res) => {
     if (!user) return;
 
     const id = crypto.randomUUID();
-    const { grant_id, organization_id, description, amount, category, date } = req.body;
+    const { grant_id, organization_id, description, vendor, amount, category, date } = req.body;
 
     if (grant_id) {
       const grant = await ensureGrantAccess(req, res, String(grant_id))
@@ -104,12 +111,14 @@ router.post('/', async (req, res) => {
     if (!Number.isFinite(parsedAmount) || parsedAmount < 0) {
       return res.status(400).json({ error: 'amount must be a non-negative number' });
     }
+    const expenseDate = validExpenseDate(date)
+    if (!expenseDate) return res.status(400).json({ error: 'date must be a valid ISO calendar date' })
 
     await req.db
       .prepare(
-        'INSERT INTO expenses (id, grant_id, organization_id, description, amount, category, date) VALUES (?, ?, ?, ?, ?, ?, ?)',
+        'INSERT INTO expenses (id, grant_id, organization_id, description, vendor, amount, category, date) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
       )
-      .run(id, grant_id, organization_id, description, parsedAmount, category, date);
+      .run(id, grant_id, organization_id, description, String(vendor || '').trim() || null, parsedAmount, category, expenseDate);
     res.status(201).json(await req.db.prepare('SELECT * FROM expenses WHERE id = ?').get(id));
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -121,14 +130,16 @@ router.put('/:id', async (req, res) => {
     const existing = await ensureExpenseAccess(req, res, req.params.id)
     if (!existing) return
 
-    const { description, amount, category, date, approved } = req.body;
+    const { description, vendor, amount, category, date, approved } = req.body;
     const parsedAmount = parseFloat(amount);
     if (!Number.isFinite(parsedAmount) || parsedAmount < 0) {
       return res.status(400).json({ error: 'amount must be a non-negative number' });
     }
+    const expenseDate = validExpenseDate(date)
+    if (!expenseDate) return res.status(400).json({ error: 'date must be a valid ISO calendar date' })
     await req.db
-      .prepare('UPDATE expenses SET description = ?, amount = ?, category = ?, date = ?, approved = ? WHERE id = ?')
-      .run(description, parsedAmount, category, date, Boolean(approved), req.params.id);
+      .prepare('UPDATE expenses SET description = ?, vendor = ?, amount = ?, category = ?, date = ?, approved = ? WHERE id = ?')
+      .run(description, String(vendor ?? existing.vendor ?? '').trim() || null, parsedAmount, category, expenseDate, Boolean(approved), req.params.id);
     res.json(await req.db.prepare('SELECT * FROM expenses WHERE id = ?').get(req.params.id));
   } catch (error) {
     res.status(500).json({ error: error.message });

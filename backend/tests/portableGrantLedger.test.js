@@ -50,16 +50,16 @@ describe('portable grant accounting exchange', () => {
     ])
     expect(() => parseCsv('A\n"unterminated')).toThrow(/unterminated/)
     expect(parseCsv('\uFEFFA,B\r\n1,2\r\n')).toEqual([{ A: '1', B: '2', __row: 2 }])
-    expect(() => exportGrantAccountingBundle({
+    expect(exportGrantAccountingBundle({
       grant,
       budgets: [],
       expenses: [{ id: 'bad-date', grant_id: 'grant-1', date: '2026-02-31', amount: 1 }],
-    })).toThrow(/invalid accounting date/)
-    expect(() => exportGrantAccountingBundle({
+    }).row_counts.expenses).toBe(1)
+    expect(exportGrantAccountingBundle({
       grant,
       budgets: [],
       expenses: [{ id: 'bad-suffix', grant_id: 'grant-1', date: '2026-08-10garbage', amount: 1 }],
-    })).toThrow(/invalid accounting date/)
+    }).row_counts.expenses).toBe(1)
     expect(exportGrantAccountingBundle({
       grant,
       budgets: [],
@@ -76,6 +76,7 @@ describe('portable grant accounting exchange', () => {
       budgets: [{
         id: 'legacy-budget',
         grant_id: 'grant-1',
+        total_amount: 9000,
         line_items: JSON.stringify([
           { category: 'Personnel', line_item: 'Coordinator', quantity: 2, unit_cost: 400 },
           { category: 'Travel', line_item: 'Site visit', quantity: 3, unit_cost: 125, total: 375 },
@@ -90,6 +91,17 @@ describe('portable grant accounting exchange', () => {
     expect(bundle.files[0].content.indexOf('legacy-budget:0001')).toBeLessThan(
       bundle.files[0].content.indexOf('legacy-budget:0002'),
     )
+  })
+
+  it('keeps exporting when a legacy expense has no usable date', () => {
+    const bundle = exportGrantAccountingBundle({
+      grant,
+      budgets: [],
+      expenses: [{ id: 'legacy-undated', grant_id: grant.id, date: null, amount: 12, vendor: 'Local vendor' }],
+    })
+    expect(bundle.row_counts.expenses).toBe(1)
+    expect(bundle.files[1].content).toContain('legacy-undated')
+    expect(bundle.files[1].content).toContain('Local vendor')
   })
 
   it('reconciles by durable external id and reports every non-match class', () => {
