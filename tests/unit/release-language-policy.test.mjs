@@ -1,4 +1,12 @@
 import assert from 'node:assert/strict'
+import {
+  copyFileSync,
+  mkdirSync,
+  mkdtempSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs'
+import os from 'node:os'
 import path from 'node:path'
 import { spawnSync } from 'node:child_process'
 import test from 'node:test'
@@ -22,4 +30,34 @@ test('delivery-language probes cover wrapping, rendered JSX boundaries, and lite
 test('the complete tracked tree satisfies the delivery-language policy', () => {
   const result = runPolicy()
   assert.equal(result.status, 0, result.stderr || result.stdout)
+})
+
+test('the scanner reads the tracked index before an unstaged worktree replacement', (t) => {
+  const fixture = mkdtempSync(path.join(os.tmpdir(), 'grantflow-language-policy-'))
+  t.after(() => rmSync(fixture, { recursive: true, force: true }))
+  const fixtureEnv = { ...process.env }
+  delete fixtureEnv.GIT_INDEX_FILE
+
+  mkdirSync(path.join(fixture, 'scripts'), { recursive: true })
+  copyFileSync(scanner, path.join(fixture, 'scripts/check-release-language.py'))
+
+  const noun = ['appro', 'val'].join('')
+  const stagedText = ['man', 'ual ', noun].join('')
+  const fixturePath = path.join(fixture, 'tracked.txt')
+  writeFileSync(fixturePath, stagedText)
+
+  for (const args of [['init', '-q'], ['add', 'scripts/check-release-language.py', 'tracked.txt']]) {
+    const git = spawnSync('git', args, { cwd: fixture, encoding: 'utf8', env: fixtureEnv })
+    assert.equal(git.status, 0, git.stderr || git.stdout)
+  }
+
+  writeFileSync(fixturePath, 'ordinary deployment evidence')
+  const result = spawnSync('python3', ['scripts/check-release-language.py'], {
+    cwd: fixture,
+    encoding: 'utf8',
+    env: fixtureEnv,
+  })
+
+  assert.equal(result.status, 1, result.stderr || result.stdout)
+  assert.match(result.stdout, /tracked\.txt/)
 })

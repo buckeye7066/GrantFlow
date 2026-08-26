@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import html
 import pathlib
 import re
 import subprocess
@@ -171,13 +172,21 @@ def rendered_source_projection(text: str) -> str:
     not execute code or interpolate variables.
     """
 
-    projected = normalize_text(text)
+    # Decode character references before projecting markup. Browsers render
+    # both named references (for example a non-breaking space) and numeric
+    # references as characters, so scanning their source spelling alone would
+    # miss wording assembled at that boundary. Normalize again afterwards so
+    # decoded format controls cannot create a second invisible separator path.
+    projected = normalize_text(html.unescape(normalize_text(text)))
     projected = HTML_COMMENT_RX.sub("", projected)
     projected = JSX_COMMENT_RX.sub("", projected)
     projected = JSX_STRING_EXPRESSION_RX.sub(lambda match: literal_value(match.group(1)), projected)
 
     def join_literals(match: re.Match[str]) -> str:
-        return " ".join(literal_value(item.group(0)) for item in STRING_LITERAL_RX.finditer(match.group(0)))
+        # Literal-only JavaScript concatenation has no implicit separator.
+        # Preserve that exact rendered value so chains may split words as well
+        # as whitespace, including chains of three or more literals.
+        return "".join(literal_value(item.group(0)) for item in STRING_LITERAL_RX.finditer(match.group(0)))
 
     projected = STRING_CHAIN_RX.sub(join_literals, projected)
     projected = JSX_TAG_RX.sub("", projected)
@@ -205,11 +214,16 @@ def tracked_text_files() -> list[pathlib.Path]:
 
 def read_tracked_bytes(path: pathlib.Path) -> bytes:
     try:
+        # The index is the exact tracked revision being checked. Read it first
+        # so an unstaged worktree edit cannot hide a staged prohibited phrase,
+        # and so sparse worktrees remain equivalent to complete CI checkouts.
+        return subprocess.check_output(
+            ["git", "show", f":{path.as_posix()}"], stderr=subprocess.DEVNULL
+        )
+    except subprocess.CalledProcessError:
+        # This only applies to unusual intent-to-add/index states where
+        # `git ls-files` reports a path before an index blob exists.
         return path.read_bytes()
-    except FileNotFoundError:
-        # Sparse worktrees still have the tracked blob in the index. Reading it
-        # keeps local checks equivalent to the complete CI checkout.
-        return subprocess.check_output(["git", "show", f":{path.as_posix()}"])
 
 
 def scan_repository() -> list[tuple[str, list[str]]]:
@@ -254,6 +268,24 @@ def run_self_test() -> None:
         "literal concatenation": (
             "const status = '" + COMPLETION_FIRST + "' + '" + COMPLETION_SECOND + "'"
         ),
+        "three literal token chain": (
+            "const status = 'si' + 'gn' + '" + COMPLETION_SECOND + "'"
+        ),
+        "four literal person gate": (
+            "const status = 'man' + 'ual' + ' ' + '" + AUTHORIZATION_NOUN + "'"
+        ),
+        "named character reference": (
+            "<p>{'" + COMPLETION_FIRST + "'}&nbsp;{'" + COMPLETION_SECOND + "'}</p>"
+        ),
+        "decimal character reference": (
+            "owner " + COMPLETION_FIRST + "&#32;" + COMPLETION_SECOND
+        ),
+        "hex character reference": (
+            "owner " + COMPLETION_FIRST + "&#x2d;" + COMPLETION_SECOND
+        ),
+        "encoded invisible control": (
+            "owner " + COMPLETION_FIRST + "&#8203;" + COMPLETION_SECOND
+        ),
     }
     negative_probes = {
         "cryptographic signature": "The commit is cryptographically signed.",
@@ -263,6 +295,10 @@ def run_self_test() -> None:
         "transaction consent": "Ask the user to confirm payment before purchase.",
         "personal attestation": "The applicant must personally attest to these facts.",
         "regulated review": "Document IRB authorization for human-subjects research.",
+        "larger lexical prefix": "The assignment offers deterministic work distribution.",
+        "larger lexical suffix": "A sign officer witnesses the applicant signature.",
+        "identifier boundary": "const presign_officer = verify_signature();",
+        "authorization identifier suffix": "const manual_approvalQueueSize = 0;",
     }
 
     missed = [name for name, probe in positive_probes.items() if not prohibited_labels(probe)]
