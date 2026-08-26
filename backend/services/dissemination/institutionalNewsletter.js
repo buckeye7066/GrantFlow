@@ -119,8 +119,9 @@ function normalizeOpportunity(opportunity) {
   const title = text(opportunity?.title)
   const url = httpsUrl(opportunity?.application_url ?? opportunity?.apply_url ?? opportunity?.source_url ?? opportunity?.url)
   if (!id || !title || !url) return null
-  const deadline = text(opportunity?.deadline)
-  const deadlineMatch = deadline.match(/^(\d{4})-(\d{2})-(\d{2})$/)
+  const deadlineInput = text(opportunity?.deadline)
+  const deadlineMatch = deadlineInput.match(/^(\d{4})-(\d{2})-(\d{2})(?:$|T)/)
+  const deadline = deadlineMatch ? `${deadlineMatch[1]}-${deadlineMatch[2]}-${deadlineMatch[3]}` : ''
   const parsedDeadline = deadlineMatch ? new Date(`${deadline}T00:00:00Z`) : null
   const validDeadline = Boolean(
     deadlineMatch
@@ -237,7 +238,8 @@ export function buildInstitutionalNewsletterBundle({
   const { eligible, suppressed } = normalizeRecipients(recipients)
   const eligibleById = new Map(eligible.map((recipient) => [recipient.profile_id, recipient]))
   const normalizedOpportunities = (Array.isArray(opportunities) ? opportunities : [])
-    .map(normalizeOpportunity).filter(Boolean)
+    .map(normalizeOpportunity)
+    .filter((opportunity) => opportunity && (!opportunity.deadline || opportunity.deadline >= date))
   const seenGroups = new Set()
   const recipientRows = []
   const editions = []

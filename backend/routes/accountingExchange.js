@@ -1,6 +1,7 @@
 import express from 'express'
 import { ensureGrantAccess, requireAuthenticatedUserMiddleware } from '../utils/accessControl.js'
 import {
+  AccountingValidationError,
   exportGrantAccountingBundle,
   reconcileAccountingImport,
 } from '../services/accounting/portableGrantLedger.js'
@@ -37,7 +38,7 @@ router.get('/:grantId/export', async (req, res, next) => {
       currency: req.query.currency,
     }))
   } catch (error) {
-    if (!error.status) error.status = 400
+    if (error instanceof AccountingValidationError) error.status = 400
     return next(error)
   }
 })
@@ -57,7 +58,7 @@ router.post('/:grantId/reconcile', async (req, res, next) => {
       expenses: rows.expenses,
     }))
   } catch (error) {
-    if (!error.status) error.status = 400
+    if (error instanceof AccountingValidationError) error.status = 400
     return next(error)
   }
 })

@@ -4,22 +4,29 @@ export const ACCOUNTING_PROVIDERS = Object.freeze(['generic', 'quickbooks', 'xer
 const MAX_IMPORT_ROWS = 10_000
 const SAFE_CURRENCY = /^[A-Z]{3}$/
 
+export class AccountingValidationError extends Error {
+  constructor(message) {
+    super(message)
+    this.name = 'AccountingValidationError'
+  }
+}
+
 function requiredText(value, label) {
   const text = String(value ?? '').trim()
-  if (!text) throw new Error(`${label} is required`)
+  if (!text) throw new AccountingValidationError(`${label} is required`)
   return text
 }
 
 function safeCurrency(value) {
   const currency = String(value || 'USD').trim().toUpperCase()
-  if (!SAFE_CURRENCY.test(currency)) throw new Error('currency must be a three-letter ISO code')
+  if (!SAFE_CURRENCY.test(currency)) throw new AccountingValidationError('currency must be a three-letter ISO code')
   return currency
 }
 
 function safeDate(value) {
   const text = String(value ?? '').trim()
   const match = text.match(/^(\d{4})-(\d{2})-(\d{2})/)
-  if (!match) throw new Error(`invalid accounting date: ${text || '(empty)'}`)
+  if (!match) throw new AccountingValidationError(`invalid accounting date: ${text || '(empty)'}`)
   const date = `${match[1]}-${match[2]}-${match[3]}`
   const parsed = new Date(`${date}T00:00:00Z`)
   if (
@@ -27,7 +34,7 @@ function safeDate(value) {
     || parsed.getUTCFullYear() !== Number(match[1])
     || parsed.getUTCMonth() + 1 !== Number(match[2])
     || parsed.getUTCDate() !== Number(match[3])
-  ) throw new Error(`invalid accounting date: ${text}`)
+  ) throw new AccountingValidationError(`invalid accounting date: ${text}`)
   return date
 }
 
@@ -36,11 +43,11 @@ function money(value, label = 'amount') {
     const trimmed = value.trim()
     const negative = /^\(.*\)$/.test(trimmed)
     const parsed = Number(trimmed.replace(/[,$()\s]/g, ''))
-    if (!Number.isFinite(parsed)) throw new Error(`${label} must be a finite number`)
+    if (!Number.isFinite(parsed)) throw new AccountingValidationError(`${label} must be a finite number`)
     return Math.round((negative ? -parsed : parsed) * 100) / 100
   }
   const parsed = Number(value)
-  if (!Number.isFinite(parsed)) throw new Error(`${label} must be a finite number`)
+  if (!Number.isFinite(parsed)) throw new AccountingValidationError(`${label} must be a finite number`)
   return Math.round(parsed * 100) / 100
 }
 
@@ -95,13 +102,13 @@ export function parseCsv(csv, { maxRows = MAX_IMPORT_ROWS } = {}) {
       row.push(cell.replace(/\r$/, ''))
       cell = ''
       if (row.some((value) => value !== '')) rows.push(row)
-      if (rows.length > maxRows + 1) throw new Error(`accounting import exceeds ${maxRows} rows`)
+      if (rows.length > maxRows + 1) throw new AccountingValidationError(`accounting import exceeds ${maxRows} rows`)
       row = []
     } else {
       cell += char
     }
   }
-  if (quoted) throw new Error('accounting CSV contains an unterminated quoted field')
+  if (quoted) throw new AccountingValidationError('accounting CSV contains an unterminated quoted field')
   if (cell || row.length > 0) {
     row.push(cell.replace(/\r$/, ''))
     if (row.some((value) => value !== '')) rows.push(row)
@@ -109,7 +116,7 @@ export function parseCsv(csv, { maxRows = MAX_IMPORT_ROWS } = {}) {
   if (rows.length === 0) return []
 
   const headers = rows[0].map((value, index) => String(value).replace(index === 0 ? /^\uFEFF/ : /$^/, '').trim())
-  if (new Set(headers).size !== headers.length) throw new Error('accounting CSV contains duplicate headers')
+  if (new Set(headers).size !== headers.length) throw new AccountingValidationError('accounting CSV contains duplicate headers')
   return rows.slice(1).map((values, rowIndex) => {
     const result = {}
     headers.forEach((header, index) => { result[header] = values[index] ?? '' })
@@ -121,36 +128,48 @@ export function parseCsv(csv, { maxRows = MAX_IMPORT_ROWS } = {}) {
 function normalizeProvider(provider) {
   const value = String(provider || 'generic').trim().toLowerCase()
   if (!ACCOUNTING_PROVIDERS.includes(value)) {
-    throw new Error(`provider must be one of: ${ACCOUNTING_PROVIDERS.join(', ')}`)
+    throw new AccountingValidationError(`provider must be one of: ${ACCOUNTING_PROVIDERS.join(', ')}`)
   }
   return value
 }
 
-function parseBudgetLine(row) {
-  let details = {}
+function parseBudgetLines(row) {
+  let detailsList = [{}]
+  let sourceWasArray = false
   try {
     const parsed = JSON.parse(String(row?.line_items || '{}'))
-    details = Array.isArray(parsed) ? parsed[0] || {} : parsed || {}
+    sourceWasArray = Array.isArray(parsed)
+    detailsList = sourceWasArray
+      ? (parsed.length > 0 ? parsed : [{}])
+      : [parsed && typeof parsed === 'object' ? parsed : {}]
   } catch { /* retain scalar budget fields */ }
-  const quantity = money(details.quantity ?? row?.quantity ?? 1, 'budget quantity')
-  const unitCost = money(details.unit_cost ?? row?.unit_cost ?? 0, 'budget unit cost')
-  const total = money(details.total ?? row?.total ?? row?.total_amount ?? quantity * unitCost, 'budget total')
-  if (total < 0) throw new Error('budget total cannot be negative')
-  return {
-    id: requiredText(row?.id, 'budget id'),
-    grant_id: requiredText(row?.grant_id, 'budget grant_id'),
-    category: String(details.category ?? row?.category ?? 'Uncategorized').trim() || 'Uncategorized',
-    line_item: String(details.line_item ?? row?.line_item ?? row?.name ?? '').trim() || 'Budget line',
-    quantity,
-    unit_cost: unitCost,
-    total,
-    justification: String(details.justification ?? row?.justification ?? '').trim(),
-  }
+  const baseId = requiredText(row?.id, 'budget id')
+  const grantId = requiredText(row?.grant_id, 'budget grant_id')
+  return detailsList.map((entry, index) => {
+    const details = entry && typeof entry === 'object' && !Array.isArray(entry) ? entry : {}
+    const quantity = money(details.quantity ?? row?.quantity ?? 1, 'budget quantity')
+    const unitCost = money(details.unit_cost ?? row?.unit_cost ?? 0, 'budget unit cost')
+    const total = money(details.total ?? row?.total ?? row?.total_amount ?? quantity * unitCost, 'budget total')
+    if (total < 0) throw new AccountingValidationError('budget total cannot be negative')
+    return {
+      // Legacy arrays represent distinct budget lines inside one budget row.
+      // A padded, source-order suffix makes every exported line durable and
+      // keeps lexical ordering identical to the original array ordering.
+      id: sourceWasArray ? `${baseId}:${String(index + 1).padStart(4, '0')}` : baseId,
+      grant_id: grantId,
+      category: String(details.category ?? row?.category ?? 'Uncategorized').trim() || 'Uncategorized',
+      line_item: String(details.line_item ?? row?.line_item ?? row?.name ?? '').trim() || 'Budget line',
+      quantity,
+      unit_cost: unitCost,
+      total,
+      justification: String(details.justification ?? row?.justification ?? '').trim(),
+    }
+  })
 }
 
 function normalizeExpense(row, currency) {
   const amount = money(row?.amount, 'expense amount')
-  if (amount < 0) throw new Error('expense amount cannot be negative')
+  if (amount < 0) throw new AccountingValidationError('expense amount cannot be negative')
   return {
     id: requiredText(row?.id, 'expense id'),
     grant_id: requiredText(row?.grant_id, 'expense grant_id'),
@@ -224,7 +243,7 @@ export function exportGrantAccountingBundle({ grant, budgets = [], expenses = []
   const grantId = requiredText(grant?.id, 'grant id')
   const safeGrantId = fileSafe(grantId)
   const grantName = String(grant?.title ?? grant?.name ?? grantId).trim() || grantId
-  const budgetRows = budgets.map(parseBudgetLine).filter((row) => row.grant_id === grantId)
+  const budgetRows = budgets.flatMap(parseBudgetLines).filter((row) => row.grant_id === grantId)
     .sort((left, right) => left.id.localeCompare(right.id))
   const expenseRows = expenses.map((row) => normalizeExpense(row, resolvedCurrency))
     .filter((row) => row.grant_id === grantId)

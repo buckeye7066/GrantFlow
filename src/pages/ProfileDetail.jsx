@@ -68,6 +68,7 @@ import HamiltonIdentityVaultCard from "@/components/hamilton/HamiltonIdentityVau
 import HamiltonWorkPanel from "@/components/hamilton/HamiltonWorkPanel.jsx"
 import ProfileFundingSourcesCard from "@/components/funding/ProfileFundingSourcesCard.jsx"
 import OrgMembersCard from "@/components/profiles/OrgMembersCard.jsx"
+import ResearchFundingRecommendations from "@/components/profiles/ResearchFundingRecommendations.jsx"
 import PortalAccessScheduleCard from "@/components/profiles/PortalAccessScheduleCard.jsx"
 import CommittedCollegeWorkspace from "@/components/profiles/CommittedCollegeWorkspace.jsx"
 import SchoolPortalLinkPanel from "@/components/profiles/SchoolPortalLinkPanel.jsx"
@@ -345,6 +346,13 @@ function ProfileWorkspaceNav({
       title: "Proposals & files",
       detail: "Drafts and source files.",
       tooltip: "Open proposals and the profile's working files.",
+    },
+    {
+      value: "research-fit",
+      icon: Radar,
+      title: "Research fit",
+      detail: "CV and publication matching.",
+      tooltip: "Rank this profile's stored funding matches using CV, methods, career stage, and publication evidence.",
     },
     {
       value: "billing",
@@ -1697,6 +1705,10 @@ export default function ProfileDetail() {
                 canDeleteDocuments={canDeleteDocuments}
               />
             </div>
+          </TabsContent>
+
+          <TabsContent value="research-fit" className="mt-6">
+            <ResearchFundingRecommendations profileId={profileId} />
           </TabsContent>
 
           <TabsContent value="documents" className="mt-6">

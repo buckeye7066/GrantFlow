@@ -28,6 +28,7 @@ import AdminLaptopInbox from '@/components/admin/AdminLaptopInbox.jsx'
 import AdminBroadcast from '@/components/admin/AdminBroadcast.jsx'
 import AdminMaintenanceWindow from '@/components/admin/AdminMaintenanceWindow.jsx'
 import AdminPortalAssist from '@/components/admin/AdminPortalAssist.jsx'
+import AdminInstitutionalDissemination from '@/components/admin/AdminInstitutionalDissemination.jsx'
 // Use lazyWithRetry (not raw React.lazy) so a stale-deploy chunk failure when
 // switching to the Billing/Automation tabs auto-recovers with one reload
 // instead of tripping the RouteErrorBoundary.
@@ -148,6 +149,10 @@ export default function Admin() {
               <Megaphone className="w-4 h-4 mr-2" />
               Broadcast
             </TabsTrigger>
+            <TabsTrigger value="dissemination">
+              <Mail className="w-4 h-4 mr-2" />
+              Newsletters
+            </TabsTrigger>
             <TabsTrigger value="billing">
               <DollarSign className="w-4 h-4 mr-2" />
               Billing
@@ -256,6 +261,10 @@ export default function Admin() {
 
           <TabsContent value="broadcast" className="mt-6">
             <AdminBroadcast />
+          </TabsContent>
+
+          <TabsContent value="dissemination" className="mt-6">
+            <AdminInstitutionalDissemination />
           </TabsContent>
 
           <TabsContent value="billing" className="mt-6">

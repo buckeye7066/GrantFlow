@@ -129,38 +129,233 @@ PATTERNS = (
     ),
 )
 
-STRING_LITERAL = r'''(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|`(?:\\.|[^`\\$]|\$(?!\{))*`)'''
+STRING_LITERAL = r'''(?:"(?:\\.|[^"\\])*+"|'(?:\\.|[^'\\])*+'|`(?:\\.|[^`\\$]|\$(?!\{))*+`)'''
 STRING_LITERAL_RX = re.compile(STRING_LITERAL, re.S)
-STRING_CHAIN_RX = re.compile(rf"{STRING_LITERAL}(?:\s*\+\s*{STRING_LITERAL})+", re.S)
+ESCAPED_STRING_LITERAL_RX = re.compile(
+    r'''(?:"(?:[^"\\]|\\.)*\\.(?:[^"\\]|\\.)*"|'''
+    r'''(?:'[^'\\]*(?:\\.[^'\\]*)*\\.(?:[^'\\]|\\.)*'))''',
+    re.S,
+)
+PLAIN_STRING_LITERAL = r'''(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*')'''
+TEMPLATE_SUBSTITUTION_RX = re.compile(rf"\$\{{\s*({PLAIN_STRING_LITERAL})\s*\}}", re.S)
+TEMPLATE_CONSTANT_RX = re.compile(
+    rf"\x60(?:\\.|[^\x60\\$]|\$(?!\{{)|\$\{{\s*{PLAIN_STRING_LITERAL}\s*\}})*\x60",
+    re.S,
+)
+JS_BLOCK_COMMENT = r"/\*(?:[^*]|\*(?!/))*\*/"
+JS_COMMENT_GAP = (
+    rf"(?:\s++|{JS_BLOCK_COMMENT}|"
+    r"//[^\r\n\u2028\u2029]*(?:\r\n|\r|\n|\u2028|\u2029))*+"
+)
+STRING_CHAIN_RX = re.compile(
+    rf"{STRING_LITERAL}(?:{JS_COMMENT_GAP}\+{JS_COMMENT_GAP}{STRING_LITERAL})+",
+    re.S,
+)
+STRING_CHAIN_OPERATOR_RX = re.compile(rf"{JS_COMMENT_GAP}\+{JS_COMMENT_GAP}", re.S)
 JSX_STRING_EXPRESSION_RX = re.compile(rf"\{{\s*({STRING_LITERAL})\s*\}}", re.S)
 JSX_COMMENT_RX = re.compile(r"\{\s*/\*.*?\*/\s*\}", re.S)
 JSX_TAG_RX = re.compile(r"</?[A-Za-z][^<>]*?>", re.S)
 HTML_COMMENT_RX = re.compile(r"<!--.*?-->", re.S)
+NON_RENDERED_BLOCK_RX = re.compile(
+    r"<(script|style|template)\b[^>]*>.*?</\1\s*>",
+    re.I | re.S,
+)
+
+DEFAULT_IGNORABLE_RANGES = (
+    (0x034F, 0x034F),
+    (0x115F, 0x1160),
+    (0x17B4, 0x17B5),
+    (0x180B, 0x180F),
+    (0x2065, 0x2065),
+    (0x3164, 0x3164),
+    (0xFE00, 0xFE0F),
+    (0xFFA0, 0xFFA0),
+    (0xFFF0, 0xFFF8),
+    (0xE0000, 0xE0FFF),
+)
+
+# Unicode general-category Cf ranges in the Python runtime used by CI. Keep
+# this explicit list in addition to Default_Ignorable_Code_Point coverage:
+# format controls and variation selectors are different Unicode properties.
+FORMAT_CONTROL_RANGES = (
+    (0x00AD, 0x00AD),
+    (0x0600, 0x0605),
+    (0x061C, 0x061C),
+    (0x06DD, 0x06DD),
+    (0x070F, 0x070F),
+    (0x0890, 0x0891),
+    (0x08E2, 0x08E2),
+    (0x180E, 0x180E),
+    (0x200B, 0x200F),
+    (0x202A, 0x202E),
+    (0x2060, 0x2064),
+    (0x2066, 0x206F),
+    (0xFEFF, 0xFEFF),
+    (0xFFF9, 0xFFFB),
+    (0x110BD, 0x110BD),
+    (0x110CD, 0x110CD),
+    (0x13430, 0x1343F),
+    (0x1BCA0, 0x1BCA3),
+    (0x1D173, 0x1D17A),
+    (0xE0001, 0xE0001),
+    (0xE0020, 0xE007F),
+)
+
+
+def codepoint_class(ranges: tuple[tuple[int, int], ...]) -> str:
+    return "".join(
+        chr(start) if start == end else chr(start) + "-" + chr(end)
+        for start, end in ranges
+    )
+
+
+IGNORABLE_RX = re.compile(
+    "[" + codepoint_class(FORMAT_CONTROL_RANGES + DEFAULT_IGNORABLE_RANGES) + "]"
+)
+
+
+def is_default_ignorable(char: str) -> bool:
+    codepoint = ord(char)
+    return any(start <= codepoint <= end for start, end in DEFAULT_IGNORABLE_RANGES)
 
 
 def normalize_text(text: str) -> str:
     """Normalize compatibility forms and remove invisible format controls."""
 
     normalized = unicodedata.normalize("NFKC", text)
-    return "".join(char for char in normalized if unicodedata.category(char) != "Cf")
+    # The overwhelming majority of a source revision is ASCII. Avoid a Python
+    # callback for every character when no format or variation code point can
+    # possibly be present; `isascii` performs this check in native code.
+    if normalized.isascii():
+        return normalized
+    return IGNORABLE_RX.sub("", normalized)
 
 
 def literal_value(literal: str) -> str:
     """Return visible content for a plain JS string literal without evaluating it."""
 
     body = literal[1:-1]
-    replacements = {
-        r"\n": "\n",
-        r"\r": "\n",
-        r"\t": "\t",
-        r"\'": "'",
-        r'\"': '"',
-        r"\`": "`",
-        r"\\": "\\",
+    decoded: list[str] = []
+    index = 0
+    simple_escapes = {
+        "n": "\n",
+        "r": "\n",
+        "t": "\t",
+        "'": "'",
+        '"': '"',
+        chr(96): chr(96),
+        "\\": "\\",
     }
-    for escaped, value in replacements.items():
-        body = body.replace(escaped, value)
-    return body
+
+    def decoded_codepoint(value: str) -> str | None:
+        try:
+            codepoint = int(value, 16)
+        except ValueError:
+            return None
+        if codepoint > 0x10FFFF or 0xD800 <= codepoint <= 0xDFFF:
+            return None
+        return chr(codepoint)
+
+    while index < len(body):
+        if body[index] != "\\" or index + 1 >= len(body):
+            decoded.append(body[index])
+            index += 1
+            continue
+
+        escape = body[index + 1]
+        if escape in simple_escapes:
+            decoded.append(simple_escapes[escape])
+            index += 2
+            continue
+        if escape in ("\n", "\r", "\u2028", "\u2029"):
+            index += 2
+            if escape == "\r" and index < len(body) and body[index] == "\n":
+                index += 1
+            continue
+        if escape == "x" and re.fullmatch(r"[0-9A-Fa-f]{2}", body[index + 2:index + 4]):
+            decoded.append(decoded_codepoint(body[index + 2:index + 4]) or body[index:index + 4])
+            index += 4
+            continue
+        if escape == "u":
+            braced = re.match(r"\{([0-9A-Fa-f]{1,6})\}", body[index + 2:])
+            if braced:
+                raw = body[index:index + 2 + braced.end()]
+                decoded.append(decoded_codepoint(braced.group(1)) or raw)
+                index += 2 + braced.end()
+                continue
+            digits = body[index + 2:index + 6]
+            if re.fullmatch(r"[0-9A-Fa-f]{4}", digits):
+                decoded.append(decoded_codepoint(digits) or body[index:index + 6])
+                index += 6
+                continue
+
+        # JavaScript's non-escape character form (for example \g in a
+        # non-strict string) renders the escaped character without the slash.
+        # Numeric and malformed hex/Unicode forms stay intact rather than
+        # guessing at invalid syntax. An even slash pair was already consumed
+        # by simple_escapes above, so it cannot unlock a following identity.
+        if escape not in "0123456789xu":
+            decoded.append(escape)
+            index += 2
+            continue
+
+        # Keep an unknown or malformed escape intact. This avoids inventing
+        # visible text for syntax that the projection does not understand.
+        decoded.append(body[index:index + 2])
+        index += 2
+    return "".join(decoded)
+
+
+def strip_source_comments(text: str) -> str:
+    """Remove real source comments while preserving delimiters in literals."""
+
+    if "<!--" not in text and "{/*" not in text:
+        return text
+
+    literals: list[str] = []
+
+    def protect(match: re.Match[str]) -> str:
+        literals.append(match.group(0))
+        # Repository blobs containing NUL are excluded before text scanning,
+        # so NUL-delimited placeholders cannot collide with source content.
+        return f"\0{len(literals) - 1}\0"
+
+    # Protect only syntactically bounded rendered expressions/chains plus a
+    # standalone literal whose own value is comment-shaped. Protecting every
+    # quote pair would mistake apostrophes in JSX prose or Markdown for a JS
+    # string and could preserve a real source comment between them.
+    protected = TEMPLATE_CONSTANT_RX.sub(protect, text)
+    protected = STRING_CHAIN_RX.sub(protect, protected)
+    protected = JSX_STRING_EXPRESSION_RX.sub(protect, protected)
+
+    def protect_comment_shaped_literal(match: re.Match[str]) -> str:
+        body = match.group(0)[1:-1].strip()
+        if (
+            (body.startswith("<!--") and body.endswith("-->"))
+            or (body.startswith("{/*") and body.endswith("*/}"))
+        ):
+            return protect(match)
+        return match.group(0)
+
+    protected = STRING_LITERAL_RX.sub(protect_comment_shaped_literal, protected)
+    protected = HTML_COMMENT_RX.sub("", protected)
+    protected = JSX_COMMENT_RX.sub("", protected)
+    return re.sub(r"\0(\d+)\0", lambda match: literals[int(match.group(1))], protected)
+
+
+def template_constant_value(template: str) -> str:
+    """Render a template whose substitutions are themselves plain literals."""
+
+    body = template[1:-1]
+    values: list[str] = []
+    cursor = 0
+    marker = chr(96)
+    for match in TEMPLATE_SUBSTITUTION_RX.finditer(body):
+        values.append(literal_value(marker + body[cursor:match.start()] + marker))
+        values.append(literal_value(match.group(1)))
+        cursor = match.end()
+    values.append(literal_value(marker + body[cursor:] + marker))
+    return "".join(values)
 
 
 def rendered_source_projection(text: str) -> str:
@@ -177,23 +372,66 @@ def rendered_source_projection(text: str) -> str:
     # references as characters, so scanning their source spelling alone would
     # miss wording assembled at that boundary. Normalize again afterwards so
     # decoded format controls cannot create a second invisible separator path.
-    projected = normalize_text(text)
+    # `prohibited_labels` passes normalized text. Keep projection transforms
+    # conditional so large lockfiles and generated source do not pay for every
+    # grammar pass when the relevant token is absent.
+    projected = text
+    lower_projected = projected.lower() if "<" in projected else ""
+    if any(tag in lower_projected for tag in ("<script", "<style", "<template")):
+        projected = NON_RENDERED_BLOCK_RX.sub("", projected)
     # Strip only comments that are comments in the source grammar. Encoded
     # delimiters render as ordinary visible text in a browser; decoding first
     # and then deleting them would incorrectly hide that visible content.
-    projected = HTML_COMMENT_RX.sub("", projected)
-    projected = JSX_COMMENT_RX.sub("", projected)
-    projected = normalize_text(html.unescape(projected))
-    projected = JSX_STRING_EXPRESSION_RX.sub(lambda match: literal_value(match.group(1)), projected)
+    projected = strip_source_comments(projected)
+    if "&" in projected:
+        decoded_entities = html.unescape(projected)
+        projected = normalize_text(decoded_entities) if decoded_entities != projected else projected
+    if "`" in projected and "${" in projected:
+        projected = TEMPLATE_CONSTANT_RX.sub(
+            lambda match: template_constant_value(match.group(0)),
+            projected,
+        )
+    if "{" in projected and ("'" in projected or '"' in projected or "`" in projected):
+        projected = JSX_STRING_EXPRESSION_RX.sub(
+            lambda match: literal_value(match.group(1)),
+            projected,
+        )
 
     def join_literals(match: re.Match[str]) -> str:
         # Literal-only JavaScript concatenation has no implicit separator.
         # Preserve that exact rendered value so chains may split words as well
         # as whitespace, including chains of three or more literals.
-        return "".join(literal_value(item.group(0)) for item in STRING_LITERAL_RX.finditer(match.group(0)))
+        chain = match.group(0)
+        values: list[str] = []
+        first = STRING_LITERAL_RX.match(chain)
+        if not first:
+            return chain
+        values.append(literal_value(first.group(0)))
+        cursor = first.end()
+        while cursor < len(chain):
+            operator = STRING_CHAIN_OPERATOR_RX.match(chain, cursor)
+            if not operator:
+                return chain
+            item = STRING_LITERAL_RX.match(chain, operator.end())
+            if not item:
+                return chain
+            values.append(literal_value(item.group(0)))
+            cursor = item.end()
+        return "".join(values)
 
-    projected = STRING_CHAIN_RX.sub(join_literals, projected)
-    projected = JSX_TAG_RX.sub("", projected)
+    if "+" in projected and ("'" in projected or '"' in projected or "`" in projected):
+        projected = STRING_CHAIN_RX.sub(join_literals, projected)
+    # Decode escape-bearing literals even when they are not wrapped in JSX or
+    # part of a concatenation. This includes identity and line-continuation
+    # escapes, but the literal parser deliberately preserves malformed numeric
+    # or Unicode syntax and paired backslashes.
+    if "\\" in projected and ("'" in projected or '"' in projected):
+        projected = ESCAPED_STRING_LITERAL_RX.sub(
+            lambda match: literal_value(match.group(0)),
+            projected,
+        )
+    if "<" in projected and ">" in projected:
+        projected = JSX_TAG_RX.sub("", projected)
     return projected
 
 
@@ -203,7 +441,8 @@ def prohibited_labels(text: str) -> list[str]:
     return [
         label
         for label, pattern in PATTERNS
-        if pattern.search(normalized) or pattern.search(rendered)
+        if pattern.search(normalized)
+        or (rendered != normalized and pattern.search(rendered))
     ]
 
 
@@ -295,6 +534,12 @@ def scan_repository() -> list[tuple[str, list[str]]]:
 
 
 def run_self_test() -> None:
+    backslash = chr(92)
+    template_tick = chr(96)
+    compatibility_completion = "".join(
+        "\u3000" if char == " " else chr(ord(char) + 0xFEE0)
+        for char in COMPLETION_FIRST + " " + COMPLETION_SECOND
+    )
     positive_probes = {
         "line break": "owner " + COMPLETION_FIRST + "\n" + COMPLETION_SECOND + " required",
         "underscore": "owner " + COMPLETION_FIRST + "ed_" + COMPLETION_SECOND + " required",
@@ -340,6 +585,55 @@ def run_self_test() -> None:
         "encoded comment delimiters are visible": (
             "<p>&lt;!-- si&#103;n " + COMPLETION_SECOND + " --&gt;</p>"
         ),
+        "comment delimiters inside a JSX string are visible": (
+            "<p>{\"<!-- si&#103;n " + COMPLETION_SECOND + " -->\"}</p>"
+        ),
+        "unicode escape in a JSX string": (
+            "<p>{'si\\u0067n " + COMPLETION_SECOND + "'}</p>"
+        ),
+        "hex escape in a JSX string": (
+            "<p>{'si\\x67n " + COMPLETION_SECOND + "'}</p>"
+        ),
+        "compatibility normalization": "owner " + compatibility_completion,
+        "combining grapheme joiner": "owner si\u034fgn " + COMPLETION_SECOND,
+        "variation selector": "owner si\ufe0fgn " + COMPLETION_SECOND,
+        "supplemental variation selector": "owner si\U000e0100gn " + COMPLETION_SECOND,
+        "padded braced unicode escape": (
+            "<p>{'si" + backslash + "u{000067}n " + COMPLETION_SECOND + "'}</p>"
+        ),
+        "LF continuation": (
+            "<p>{'si" + backslash + "\n" + "gn " + COMPLETION_SECOND + "'}</p>"
+        ),
+        "CR continuation": (
+            "<p>{'si" + backslash + "\r" + "gn " + COMPLETION_SECOND + "'}</p>"
+        ),
+        "CRLF continuation": (
+            "<p>{'si" + backslash + "\r\n" + "gn " + COMPLETION_SECOND + "'}</p>"
+        ),
+        "line separator continuation": (
+            "<p>{'si" + backslash + "\u2028" + "gn " + COMPLETION_SECOND + "'}</p>"
+        ),
+        "paragraph separator continuation": (
+            "<p>{'si" + backslash + "\u2029" + "gn " + COMPLETION_SECOND + "'}</p>"
+        ),
+        "identity escape": (
+            "<p>{'si" + backslash + "gn " + COMPLETION_SECOND + "'}</p>"
+        ),
+        "standalone identity escape": (
+            "const label = 'si" + backslash + "gn " + COMPLETION_SECOND + "'"
+        ),
+        "constant template substitution": (
+            "const label = " + template_tick + "si${'gn'} "
+            + COMPLETION_SECOND + template_tick
+        ),
+        "block comment between literal fragments": (
+            "const label = 'si' + /* harmless note */ 'gn ' + '"
+            + COMPLETION_SECOND + "'"
+        ),
+        "line comment between literal fragments": (
+            "const label = 'si' + // harmless note\n'gn ' + '"
+            + COMPLETION_SECOND + "'"
+        ),
     }
     negative_probes = {
         "cryptographic signature": "The commit is cryptographically signed.",
@@ -353,6 +647,20 @@ def run_self_test() -> None:
         "larger lexical suffix": "A sign officer witnesses the applicant signature.",
         "identifier boundary": "const presign_officer = verify_signature();",
         "authorization identifier suffix": "const manual_approvalQueueSize = 0;",
+        "even slash identity negative": (
+            "const label = 'si" + backslash + backslash + "gn "
+            + COMPLETION_SECOND + "'"
+        ),
+        "non-rendered script body": (
+            "<script>const label = 'si' + 'gn ' + '" + COMPLETION_SECOND + "'</script>"
+        ),
+        "non-rendered style body": (
+            "<style>.label::after { content: 'si' + 'gn ' + '"
+            + COMPLETION_SECOND + "'; }</style>"
+        ),
+        "non-rendered template body": (
+            "<template><span>si&#103;n " + COMPLETION_SECOND + "</span></template>"
+        ),
     }
 
     missed = [name for name, probe in positive_probes.items() if not prohibited_labels(probe)]

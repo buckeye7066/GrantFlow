@@ -14,6 +14,7 @@ import { sumBy, groupBy } from "@/utils/aggregate";
 import { format } from "date-fns";
 import AddBudgetItemForm from "../components/budgets/AddBudgetItemForm";
 import AddExpenseForm from "../components/budgets/AddExpenseForm";
+import AccountingExchangePanel from "../components/budgets/AccountingExchangePanel";
 
 const BUDGET_CATEGORIES = ["personnel", "fringe", "travel", "equipment", "supplies", "contractual", "construction", "other_direct", "indirect"];
 
@@ -109,6 +110,7 @@ export default function BudgetDetail({ grantId }) {
           <TabsList className="mb-4">
             <TabsTrigger value="budget">Budget</TabsTrigger>
             <TabsTrigger value="expenses">Expenses</TabsTrigger>
+            <TabsTrigger value="accounting">Accounting exchange</TabsTrigger>
           </TabsList>
 
           <TabsContent value="budget">
@@ -250,6 +252,10 @@ export default function BudgetDetail({ grantId }) {
                 )}
               </CardContent>
             </Card>
+          </TabsContent>
+
+          <TabsContent value="accounting">
+            <AccountingExchangePanel grantId={grantId} />
           </TabsContent>
         </Tabs>
       </div>

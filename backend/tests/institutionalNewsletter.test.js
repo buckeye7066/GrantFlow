@@ -77,6 +77,14 @@ const baseInput = {
       title: 'Unrelated Arts Award',
       application_url: 'https://funding.example.org/unrelated-1',
     },
+    {
+      id: 'expired-1',
+      title: 'Expired Oncology Award',
+      application_url: 'https://funding.example.org/expired-1',
+      deadline: '2026-08-24T23:59:59Z',
+      topics: ['oncology'],
+      score: 100,
+    },
   ],
 }
 
@@ -120,6 +128,7 @@ describe('institutional newsletter bundle', () => {
     expect(html).not.toContain('<script>')
     expect(html).not.toContain('javascript:')
     expect(html).not.toContain('Unrelated Arts Award')
+    expect(html).not.toContain('Expired Oncology Award')
   })
 
   it('rejects ambiguous group identities and invalid edition dates', () => {

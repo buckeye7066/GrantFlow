@@ -98,4 +98,27 @@ describe('tailored card complete submission decision', () => {
     expect(result.allow_auto_submit).toBe(false)
     expect(result.reason).toBe('gate_error')
   })
+
+  it.each([
+    ['submitted', 'task_already_submitted'],
+    ['failed', 'task_failed'],
+    ['cancelled', 'task_cancelled'],
+    ['canceled', 'task_cancelled'],
+  ])('short-circuits the terminal %s task state', async (status, reason) => {
+    const deps = dependencies()
+    const result = await decide(deps, {
+      task: { id: 'task-1', allow_auto_submit: true, status },
+    })
+
+    expect(result).toMatchObject({
+      allow_auto_submit: false,
+      reason,
+      terminal_task: true,
+      task_status: status === 'canceled' ? 'cancelled' : status,
+      portal_execution_available: false,
+    })
+    expect(deps.resolveSubmissionDecision).not.toHaveBeenCalled()
+    expect(deps.reviewedPortalSubmissionExecutionAvailable).not.toHaveBeenCalled()
+    expect(deps.evaluateAutoSubmitGate).not.toHaveBeenCalled()
+  })
 })

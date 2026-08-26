@@ -6,14 +6,32 @@
  */
 
 import { isAutomationEnabled } from '../../../shared/automationPreferences.js'
-import { isAutoSubmitGloballyEnabled } from '../hamiltonApplicationAgent.js'
-import { resolveSubmissionDecision } from './hamiltonAuthorizationStore.js'
-import { isFullAutomationEnabled } from './hamiltonFullAutomationMode.js'
-import { evaluateAutoSubmitGate } from './tailoredNarrative.js'
+
+const TERMINAL_TASK_STATUSES = new Set(['submitted', 'failed', 'cancelled', 'canceled'])
+
+async function defaultAuthorizationDecision(db, options) {
+  const { resolveSubmissionDecision } = await import('./hamiltonAuthorizationStore.js')
+  return resolveSubmissionDecision(db, options)
+}
+
+async function defaultFullAutomationCheck(db, profileId) {
+  const { isFullAutomationEnabled } = await import('./hamiltonFullAutomationMode.js')
+  return isFullAutomationEnabled(db, profileId)
+}
+
+async function defaultTailoredGateCheck(db, options) {
+  const { evaluateAutoSubmitGate } = await import('./tailoredNarrative.js')
+  return evaluateAutoSubmitGate(db, options)
+}
 
 async function defaultPortalExecutionCheck(url, options) {
   const { reviewedPortalSubmissionExecutionAvailable } = await import('./hamiltonAutomationOrchestrator.js')
   return reviewedPortalSubmissionExecutionAvailable(url, options)
+}
+
+async function defaultGlobalAutoSubmitCheck() {
+  const { isAutoSubmitGloballyEnabled } = await import('../hamiltonApplicationAgent.js')
+  return isAutoSubmitGloballyEnabled()
 }
 
 /**
@@ -32,13 +50,33 @@ export async function resolveTailoredSubmissionDecision(db, {
   _deps = null,
 } = {}) {
   const deps = {
-    resolveSubmissionDecision,
-    isAutoSubmitGloballyEnabled,
-    isFullAutomationEnabled,
+    resolveSubmissionDecision: defaultAuthorizationDecision,
+    isAutoSubmitGloballyEnabled: defaultGlobalAutoSubmitCheck,
+    isFullAutomationEnabled: defaultFullAutomationCheck,
     isAutomationEnabled,
-    evaluateAutoSubmitGate,
+    evaluateAutoSubmitGate: defaultTailoredGateCheck,
     reviewedPortalSubmissionExecutionAvailable: defaultPortalExecutionCheck,
     ...(_deps || {}),
+  }
+
+  const taskStatus = String(task?.status || '').trim().toLowerCase()
+  if (TERMINAL_TASK_STATUSES.has(taskStatus)) {
+    const canonicalStatus = taskStatus === 'canceled' ? 'cancelled' : taskStatus
+    return {
+      allow_auto_submit: false,
+      requested: Boolean(task?.allow_auto_submit === true || task?.allow_auto_submit === 1),
+      authorized: false,
+      require_human_review: false,
+      reason: canonicalStatus === 'submitted' ? 'task_already_submitted' : `task_${canonicalStatus}`,
+      authorization_id: null,
+      task_status: canonicalStatus,
+      terminal_task: true,
+      full_automation_enabled: false,
+      global_auto_submit_enabled: false,
+      portal_execution_available: false,
+      portal_url: portalUrl || null,
+      tailored_gate: null,
+    }
   }
 
   let decision = await deps.resolveSubmissionDecision(db, {
@@ -55,7 +93,12 @@ export async function resolveTailoredSubmissionDecision(db, {
     fullAutomationEnabled = false
   }
 
-  const globalAutoSubmitEnabled = Boolean(deps.isAutoSubmitGloballyEnabled())
+  let globalAutoSubmitEnabled = false
+  try {
+    globalAutoSubmitEnabled = Boolean(await deps.isAutoSubmitGloballyEnabled())
+  } catch {
+    globalAutoSubmitEnabled = false
+  }
   let portalExecutionAvailable = false
   try {
     portalExecutionAvailable = Boolean(await deps.reviewedPortalSubmissionExecutionAvailable(

@@ -167,6 +167,9 @@ export default function TailoredApplicationPanel({ profileId, grantId, grantTitl
       portal_url_not_browser_executable: 'Hamilton cannot submit through this portal URL automatically. This draft stays ready for you to use in the funder portal.',
       profile_auto_submit_disabled: 'Auto-submit is off for this profile. This draft stays ready for you to use in the funder portal.',
       automation_off: 'Auto-submit is off for this profile. This draft stays ready for you to use in the funder portal.',
+      task_already_submitted: 'This application task has already been submitted. GrantFlow will not submit it again.',
+      task_failed: 'This application task stopped after an error. Start a new task after correcting the problem; GrantFlow will not resubmit this task.',
+      task_cancelled: 'This application task was cancelled. GrantFlow will not submit it.',
       gate_error: 'Hamilton could not verify submission readiness, so no automatic submission will occur. This draft stays ready for you to use in the funder portal.',
       profile_preferences_unavailable: 'Hamilton could not verify the profile automation setting, so no automatic submission will occur. This draft stays ready for you to use in the funder portal.',
     }[submissionReason]

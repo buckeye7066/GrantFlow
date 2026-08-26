@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
+  AccountingValidationError,
   exportGrantAccountingBundle,
   parseCsv,
   reconcileAccountingImport,
@@ -54,6 +55,31 @@ describe('portable grant accounting exchange', () => {
       budgets: [],
       expenses: [{ id: 'bad-date', grant_id: 'grant-1', date: '2026-02-31', amount: 1 }],
     })).toThrow(/invalid accounting date/)
+    expect(() => exportGrantAccountingBundle({ grant, provider: 'unsupported' }))
+      .toThrow(AccountingValidationError)
+  })
+
+  it('exports every legacy line_items array entry with a stable derived identifier', () => {
+    const bundle = exportGrantAccountingBundle({
+      grant,
+      expenses: [],
+      budgets: [{
+        id: 'legacy-budget',
+        grant_id: 'grant-1',
+        line_items: JSON.stringify([
+          { category: 'Personnel', line_item: 'Coordinator', quantity: 2, unit_cost: 400 },
+          { category: 'Travel', line_item: 'Site visit', quantity: 3, unit_cost: 125, total: 375 },
+        ]),
+      }],
+    })
+
+    expect(bundle.row_counts.budgets).toBe(2)
+    expect(bundle.totals.budget).toBe(1175)
+    expect(bundle.files[0].content).toContain('legacy-budget:0001')
+    expect(bundle.files[0].content).toContain('legacy-budget:0002')
+    expect(bundle.files[0].content.indexOf('legacy-budget:0001')).toBeLessThan(
+      bundle.files[0].content.indexOf('legacy-budget:0002'),
+    )
   })
 
   it('reconciles by durable external id and reports every non-match class', () => {
