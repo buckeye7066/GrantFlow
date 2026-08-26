@@ -1448,6 +1448,13 @@ async function saveOpportunity(db, opp) {
 
   const inserted = result?.inserted === true
   const finalId = result?.id ?? null
+  if (!inserted && result?.reason) {
+    log.warn('[GeoCrawl] opportunity rejected by canonical insert gate', {
+      source: payload.source,
+      source_id: payload.source_id,
+      reason: result.reason,
+    })
+  }
 
   // Tag geo columns ONLY on a fresh insert (don't overwrite geo fields for
   // globally deduped opportunities), and apply grants.gov national hygiene.
