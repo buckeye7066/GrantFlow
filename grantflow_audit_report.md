@@ -1,160 +1,623 @@
 # FlexFactor audit — GrantFlow
 
-- **Project:** `C:\Users\Example\GrantFlow`
-- **Branch:** `flexfactor/audit-grantflow`
-- **Files reviewed:** 4
-- **Defects found:** 69
-- **Files fixed:** 4
+- **Project:** `C:\Users\firer\GrantFlow`
+- **Branch:** `main`
+- **Toolchains:** java, node, swift
+- **Build verification:** NOT AVAILABLE — dependencies not installed for swift:ios/App/CapApp-SPM - build gate would false-fail. Fixes in this run were NOT build-verified.
+- **Dependency bootstrap:** 1/2 install step(s) succeeded — a failed install can make the build gate red for reasons unrelated to the code
+- **Files reviewed:** 0 of 3597 candidate(s)
+- **FILE ACCOUNTING: 3597 candidate(s) = 0 reviewed + 3573 never_attempted + 24 review_incomplete**
+- **ZERO WORK: not one of 3597 candidate file(s) was reviewed. This run did nothing; treat it as a FAILURE, not a clean repo.**
+- **Defects found:** 7
+- **Files fixed:** 0
+- **Errors recorded:** 16 (see the Errors section below; ledger at `C:\Users\firer\.flexfactor\runs\grantflow-20260826-012727-565462-5432\errors.md`)
 - **Baseline build:** passed
 - **Unit tests added:** 0 (suite not run)
 - **Button/UI (Playwright):** skipped
 - **Cycles run:** 1
-- **Providers:** anthropic:claude-opus-4-8, openai:gpt-4o-mini
-- **Git:** committed across 1 cycle(s) on flexfactor/audit-grantflow (final build ok)
+- **Providers:** rotation:allam-2-7b
+- **Git:** PROVIDER-OUTAGE ABORT on main: checkpoint preserved; no unverified commit created
 
-## Remaining defects NOT auto-fixed (fix floor = high)
+## System inventory
+
+**171467 entries accounted for.**
+
+| Category | Count |
+|---|---:|
+| artifact-subtree | 50 |
+| binary-asset | 1827 |
+| configuration-documentation-or-data | 18283 |
+| first-party-source | 151296 |
+| reparse-directory | 11 |
+
+The immutable run manifest contains the complete path-level inventory. Artifact, binary, and reparse entries are named and classified; they are not represented as line-reviewed source.
+
+## Executable evidence
+
+- **Evidence run:** `grantflow-20260826-012727-565462-5432`
+- **Exact final commit:** `46f6a72f3536cbfaba52a3887fb638f700933da3`
+- **Code map:** 4197 file(s), 18878 function(s), 1261 route(s), 3832 material control(s)
+- **Function execution:** 0/16243 with invocation evidence
+- **Route execution:** 0/1261
+- **Control execution:** 0/3832
+- **Changed-file rescan:** 1/1 (complete)
+- **Blast radius:** 1 affected file(s); analysis ran
+- **Normalized gates:** 3 pass, 3 fail, 3 blocked
+
+- **Blast Radius:** `C:\Users\firer\.flexfactor\evidence\b47e50f34e44ee5d\grantflow-20260826-012727-565462-5432\blast-radius.json`
+- **Changed File Rescan:** `C:\Users\firer\.flexfactor\evidence\b47e50f34e44ee5d\grantflow-20260826-012727-565462-5432\changed-file-rescan.json`
+- **Code Index:** `C:\Users\firer\.flexfactor\evidence\b47e50f34e44ee5d\grantflow-20260826-012727-565462-5432\code-index.json`
+- **Coverage Ledger:** `C:\Users\firer\.flexfactor\evidence\b47e50f34e44ee5d\grantflow-20260826-012727-565462-5432\coverage-ledger.json`
+- **Manifest:** `C:\Users\firer\.flexfactor\evidence\b47e50f34e44ee5d\grantflow-20260826-012727-565462-5432\manifest.json`
+- **Purpose Graph:** `C:\Users\firer\.flexfactor\evidence\b47e50f34e44ee5d\grantflow-20260826-012727-565462-5432\purpose-graph.json`
+- **Quality Gates:** `C:\Users\firer\.flexfactor\evidence\b47e50f34e44ee5d\grantflow-20260826-012727-565462-5432\quality-gates.json`
+- **Sarif:** `C:\Users\firer\.flexfactor\evidence\b47e50f34e44ee5d\grantflow-20260826-012727-565462-5432\results.sarif`
+
+## Production readiness
+
+**NOT PRODUCTION READY** — 11/15 evaluated gates passed, 6 blocker(s).
+
+Full scorecard: `C:\Users\firer\GrantFlow\grantflow_readiness.md`
+
+- **Changes can be build-verified** [critical] — dependencies not installed for swift:ios/App/CapApp-SPM - build gate would false-fail
+  - Fix: Install dependencies and ensure a build/check command exists; without one no fix in this repo can be proven safe.
+- **Project builds** [critical] — build was not run
+  - Fix: Run the detected build command and fix the errors.
+- **Test suite passes** [high] — tests were not run
+  - Fix: Run the suite and fix failures.
+- **Dependencies are lock-pinned** [high] — no lockfile: java:android, java:android/app, java:android/capacitor-cordova-android-plugins
+  - Fix: Commit the lockfile so builds are reproducible.
+- **User-facing entities persist beyond in-memory stubs** [high] — in-memory stub: backend/routes/grantScopedRecords.js (createStubEntityClient/in-memory stub), backend/routes/orgScopedRecords.js (createStubEntityClient/in-memory stub)
+  - Fix: Replace createStubEntityClient / KNOWN_STUB_ENTITIES with a real persist path. A named user-facing entity that only lives in a Map (toast-then-vanish) is not production-ready.
+- **Fresh-DB schema bootstrap covers migrated tables** [high] — fresh-DB miss: ingestion_runs (backend/db/migrations/001_add_ingestion_support.sql), crawler_jobs_new (backend/db/migrations/003_add_national_crawl_and_contact_info.sql), audit_logs (backend/db/migrations/004_audit_logs.sql), reviews (backend/db/migrations/008_add_reviews.sql), source_directory (backend/db/migrations/011_add_source_directory.sql)
+  - Fix: Add new tables to the fresh-DB schema.sql (or an IF NOT EXISTS extras file applied after it: workspacePersistenceTables / ensureSqliteSchema / applyWorkspace) AND ship the Postgres twin when backend/db/postgres/migrations exists. A hidden `npm run migrate` must not be required to create them.
+
+## Competitor research
+
+**Coverage:** 5 competitor(s) covered with corroborating sources (target 5).
+
+- **Sources used:** web:duckduckgo, github, repo-rewards
+- **Repo Rewards endpoint:** `https://web-production-d7db7.up.railway.app`
+- **Sources SKIPPED (named, not silent):**
+  - `idea:Fluxx Grant Management` - model returned an incomplete idea (missing why_valuable) - forced to accept=False for Fluxx Grant Management
+  - `idea:Quazi-07/Research-Grant-Finder-Agent` - model returned an incomplete idea (missing why_valuable) - forced to accept=False for Quazi-07/Research-Grant-Finder-Agent
+  - `idea:Quazi-07/Research-Grant-Finder-Agent-V2.0` - model returned an incomplete idea (missing why_valuable) - forced to accept=False for Quazi-07/Research-Grant-Finder-Agent-V2.0
+  - `idea:RockefellerArchiveCenter/fluxx_exporter` - model returned an incomplete idea (missing why_valuable) - forced to accept=False for RockefellerArchiveCenter/fluxx_exporter
+  - `idea:ritchiea/recessart` - model returned an incomplete idea (missing why_valuable) - forced to accept=False for ritchiea/recessart
+  - `web:searxng` - RuntimeError: FLEXFACTOR_SEARXNG_URL is not set
+
+- **Ideas accepted as serving this program's purpose:** 0 (rejected 5 - the purpose contract, not the competitor, decides)
+
+- **Bridged into the fix stream:** 0 of 5 candidate(s)
+  - NOT bridged (5): Fluxx Grant Management, Quazi-07/Research-Grant-Finder-Agent, Quazi-07/Research-Grant-Finder-Agent-V2.0, RockefellerArchiveCenter/fluxx_exporter, ritchiea/recessart - idea rejected by the purpose contract
+
+| Competitor | Kind | Licence | Reuse mode | Purpose mapping | Verdict | Fix stream | Adoptable idea |
+|---|---|---|---|---|---|---|---|
+| [Quazi-07/Research-Grant-Finder-Agent](https://github.com/Quazi-07/Research-Grant-Finder-Agent) | oss | `UNKNOWN` | `reference-only` | purpose-only | reject | NOT entered - idea rejected by the purpose contract | (idea extraction failed) |
+| [RockefellerArchiveCenter/fluxx_exporter](https://github.com/RockefellerArchiveCenter/fluxx_exporter) | oss | `MIT` | `direct-code-reuse` | purpose-only | reject | NOT entered - idea rejected by the purpose contract | (idea extraction failed) |
+| [ritchiea/recessart](https://github.com/ritchiea/recessart) | oss | `AGPL-3.0` | `clean-room-from-documented-behavior` | purpose-only | reject | NOT entered - idea rejected by the purpose contract | (idea extraction failed) |
+| [Quazi-07/Research-Grant-Finder-Agent-V2.0](https://github.com/Quazi-07/Research-Grant-Finder-Agent-V2.0) | oss | `UNKNOWN` | `reference-only` | purpose-only | reject | NOT entered - idea rejected by the purpose contract | (idea extraction failed) |
+| [Fluxx Grant Management](https://www.fluxx.io/grants-management-software-nonprofit) | market | `UNKNOWN` | `clean-room-from-documented-behavior` | purpose-only | reject | NOT entered - idea rejected by the purpose contract | (idea extraction failed) |
+
+### Quazi-07/Research-Grant-Finder-Agent
+
+- **Evidence:** <https://github.com/Quazi-07/Research-Grant-Finder-Agent>
+- **Licence:** `UNKNOWN` (via repo-rewards)
+- **Reuse mode:** `reference-only` - licence UNKNOWN could not be verified; record the capability as a reference and copy nothing
+- **Idea:** (idea extraction failed) - 
+- **Value here:** 
+- **Purpose / criterion mapping:** purpose-only - NOT ACTED ON: model returned an incomplete idea (missing why_valuable) - forced to accept=False. not judged: Expecting value: line 1 column 1 (char 0)
+- **Purpose verdict:** REJECTED - NOT ACTED ON: model returned an incomplete idea (missing why_valuable) - forced to accept=False. not judged: Expecting value: line 1 column 1 (char 0)
+- **Fix-stream decision:** DID NOT enter the fix stream - idea rejected by the purpose contract
+- **Evidence basis:**  (confidence ?)
+
+### RockefellerArchiveCenter/fluxx_exporter
+
+- **Evidence:** <https://github.com/RockefellerArchiveCenter/fluxx_exporter>
+- **Licence:** `MIT` (via repo-rewards)
+- **Reuse mode:** `direct-code-reuse` - licence MIT is permissive and compatible; source may be read and adapted with attribution
+- **Idea:** (idea extraction failed) - 
+- **Value here:** 
+- **Purpose / criterion mapping:** purpose-only - NOT ACTED ON: model returned an incomplete idea (missing why_valuable) - forced to accept=False. not judged: Expecting value: line 1 column 1 (char 0)
+- **Purpose verdict:** REJECTED - NOT ACTED ON: model returned an incomplete idea (missing why_valuable) - forced to accept=False. not judged: Expecting value: line 1 column 1 (char 0)
+- **Fix-stream decision:** DID NOT enter the fix stream - idea rejected by the purpose contract
+- **Evidence basis:**  (confidence ?)
+
+### ritchiea/recessart
+
+- **Evidence:** <https://github.com/ritchiea/recessart>
+- **Licence:** `AGPL-3.0` (via repo-rewards)
+- **Reuse mode:** `clean-room-from-documented-behavior` - licence AGPL-3.0 is copyleft/restricted; source must NOT be copied - work from documented behaviour only
+- **Idea:** (idea extraction failed) - 
+- **Value here:** 
+- **Purpose / criterion mapping:** purpose-only - NOT ACTED ON: model returned an incomplete idea (missing why_valuable) - forced to accept=False. not judged: no strong route available (131 enabled routes in catalog). Pools skipped: cerebras:free-tier (pool cooling down); gemini:free-tier (pool cooling down); groq:free-tier (pool cooling down); local:ollama (pool cooling down); nvidia_nim:free-tier (pool cooling down); openrouter:credits (openrouter:free-tier allowance exhausted (account-wide))
+- **Purpose verdict:** REJECTED - NOT ACTED ON: model returned an incomplete idea (missing why_valuable) - forced to accept=False. not judged: no strong route available (131 enabled routes in catalog). Pools skipped: cerebras:free-tier (pool cooling down); gemini:free-tier (pool cooling down); groq:free-tier (pool cooling down); local:ollama (pool cooling down); nvidia_nim:free-tier (pool cooling down); openrouter:credits (openrouter:free-tier allowance exhausted (account-wide))
+- **Fix-stream decision:** DID NOT enter the fix stream - idea rejected by the purpose contract
+- **Evidence basis:**  (confidence ?)
+
+### Quazi-07/Research-Grant-Finder-Agent-V2.0
+
+- **Evidence:** <https://github.com/Quazi-07/Research-Grant-Finder-Agent-V2.0>
+- **Licence:** `UNKNOWN` (via repo-rewards)
+- **Reuse mode:** `reference-only` - licence UNKNOWN could not be verified; record the capability as a reference and copy nothing
+- **Idea:** (idea extraction failed) - 
+- **Value here:** 
+- **Purpose / criterion mapping:** purpose-only - NOT ACTED ON: model returned an incomplete idea (missing why_valuable) - forced to accept=False. not judged: Expecting value: line 1 column 1 (char 0)
+- **Purpose verdict:** REJECTED - NOT ACTED ON: model returned an incomplete idea (missing why_valuable) - forced to accept=False. not judged: Expecting value: line 1 column 1 (char 0)
+- **Fix-stream decision:** DID NOT enter the fix stream - idea rejected by the purpose contract
+- **Evidence basis:**  (confidence ?)
+
+### Fluxx Grant Management
+
+- **Evidence:** <https://www.fluxx.io/grants-management-software-nonprofit>, <https://info.fluxx.io/fluxx-grantseeker>, <https://www.suiteapp.com/Fluxx-SuiteApp>
+- **Licence:** `UNKNOWN` (via none (no repository could be attributed to this competitor))
+- **Reuse mode:** `clean-room-from-documented-behavior` - no inspectable source (licence UNKNOWN); only publicly documented behaviour may inform our own independent design
+- **Idea:** (idea extraction failed) - 
+- **Value here:** 
+- **Purpose / criterion mapping:** purpose-only - NOT ACTED ON: model returned an incomplete idea (missing why_valuable) - forced to accept=False. not judged: no strong route available (131 enabled routes in catalog). Pools skipped: cerebras:free-tier (pool cooling down); gemini:free-tier (pool cooling down); groq:free-tier (pool cooling down); local:ollama (pool cooling down); nvidia_nim:free-tier (pool cooling down); openrouter:credits (openrouter:free-tier allowance exhausted (account-wide))
+- **Purpose verdict:** REJECTED - NOT ACTED ON: model returned an incomplete idea (missing why_valuable) - forced to accept=False. not judged: no strong route available (131 enabled routes in catalog). Pools skipped: cerebras:free-tier (pool cooling down); gemini:free-tier (pool cooling down); groq:free-tier (pool cooling down); local:ollama (pool cooling down); nvidia_nim:free-tier (pool cooling down); openrouter:credits (openrouter:free-tier allowance exhausted (account-wide))
+- **Fix-stream decision:** DID NOT enter the fix stream - idea rejected by the purpose contract
+- **Evidence basis:**  (confidence ?)
+
+## Release status
+
+**BLOCKED**
+
+Status vocabulary is the owner's (master prompt section 4). `DONE` is not a release status, and none of these are equivalent to PRODUCTION READY: tests pass, build passes, merged, deployed, health endpoint returns 200, works locally, PR opened.
+
+Standing between this program and PRODUCTION READY (20 condition(s) without passing evidence):
+
+- `purpose_fulfilled` — The core purpose is fully implemented and the purpose-defining journey produces the outcome the program exists to produce.
+- `journeys_end_to_end` — Primary user journeys work end to end.
+- `modes_behave` — Major roles, modes, controls and configuration choices materially change behavior as intended.
+- `data_paths` — Production data paths are functional and protected.
+- `authz` — Authentication and authorization are correct.
+- `privacy_security` — Privacy and security controls are appropriate.
+- `defects_resolved` — Critical and high-severity defects are resolved.
+- `tests_pass` — Applicable tests pass, on full rather than selectively narrowed gates.
+- `reviewed` — The complete release candidate received substantive review.
+- `merged` — Required changes are merged to the verified default branch.
+- `ci_on_sha` — CI passes on the exact final default-branch SHA.
+- `sha_deployed` — The exact merge SHA is deployed, packaged, or installed.
+- `release_identity` — Live or installed release identity is independently verified.
+- `output_inspected` — The actual purpose-defining production journey was executed and its final output inspected.
+- `observability` — Monitoring, logging and error reporting are operational and do not expose secrets.
+- `recovery_docs` — Backup, rollback, upgrade, uninstall and recovery documentation exists and was tested where applicable.
+- `claims_match` — Product claims match verified capabilities.
+- `no_abandoned_work` — No production-required work is abandoned in another PR, branch, worktree, or local artifact.
+- `user_understandable` — The application is understandable to its intended users without developer assistance.
+- `no_external_gap` — No required credential, certificate, legal review, payment validation, or external production proof remains incomplete.
+
+## Runtime-data evidence (read-only production)
+
+**UNAVAILABLE** - FLEXFACTOR_READONLY_DATABASE_URL is not set - FlexFactor has NO read path to production data, so NO data-shaped or environment-shaped root cause could be looked for (this is not evidence that none exists)
+
+_This is NOT a clean data bill of health: no data-shaped or environment-shaped root cause could be looked for._
+
+## Remaining defects NOT auto-fixed (fix floor = medium)
 
 _These were found but left as-is - review and decide. Critical/high here means a file that could not be safely auto-fixed (see manual-review list)._
 
-### medium (37)
-- `src\components\organizations\OrganizationForm.jsx` line 78 (correctness) - **Regex allows leading/trailing dots in number parsing**: The regex pattern `/^[-+]?(\d+\.?\d*|\.\d+)$/` at line 78 matches numbers like `1.` or `.5`, but parseInt/parseFloat will silently convert these to integers/floats without the trailing/leading dot context. This is technically valid but could silently accept malformed input like `3.` which becomes `3`. _Suggested fix:_ Tighten the regex to require at least one digit after the dot when present: `/^[-+]?(\d+(\.\d+)?|(\.\d+))$/` or simplify by removing the special case for `.5` format if not needed.
-- `src\components\organizations\OrganizationForm.jsx` line 96 (edge-case) - **URL prepend doesn't validate hostname after prepending**: At line 96-97, the code prepends `https://` to a candidate without a scheme, but doesn't re-validate that the result has a valid hostname. A malformed input like `://invalid` would become `https://://invalid` and the URL constructor at line 101 would then throw, caught at line 107, but silently returns null instead of surfacing the parsing issue. _Suggested fix:_ After prepending the scheme, validate that the constructed URL has a non-empty hostname before returning. Alternatively, use a stricter input validation regex that rejects obvious malformed patterns.
-- `src\components\organizations\OrganizationForm.jsx` line 563 (edge-case) - **File type check uses toLowerCase() but comparison is case-sensitive in the wrong direction**: At line 563, the code checks `!allowedTypes.includes(file.type.toLowerCase())`, but `file.type` from the browser File API is already lowercase (e.g., `image/jpeg`). Calling `.toLowerCase()` is redundant and doesn't hurt, but it masks a logic error: the comment at line 560 says `image/jpg is not a real MIME type` but the code doesn't reject `image/jpg` explicitly—it only rejects it if the browser reports it that way, which modern browsers won't. _Suggested fix:_ Clarify the intent: if `image/jpg` rejection is desired, add it to a blacklist or add `file.type.toLowerCase() === 'image/jpg'` check. Otherwise, remove the toLowerCase() as noise.
-- `src\components\organizations\OrganizationForm.jsx` line 488 (concurrency) - **Contact method update can race with organization change**: The dependency array at line 488 includes both `organization` and `contactMethods`, but if organization.id changes between the fetch request and response, the `contactsAppliedForOrgRef` tracking could be misaligned. The code attempts to handle this with orgChanged check at line 461, but a rapid org switch could cause re-initialization to be skipped if the new org's contacts arrive before processing. _Suggested fix:_ Use a cleanup function in the useEffect to abort previous queries or add a request ID to the ref tracking to ensure only the latest organization's contacts are applied.
-- `src\components\organizations\OrganizationForm.jsx` line 47 (correctness) - **PROFILE_TYPE_IDS Not Validated**: The PROFILE_TYPE_IDS Set is never validated, allowing for potential misuse if invalid data is passed, which could lead to unexpected behavior or application errors. _Suggested fix:_ Add validation to ensure that values inserted into PROFILE_TYPE_IDS are a subset of valid applicant types.
-- `src\components\organizations\OrganizationForm.jsx` line 44 (performance) - **Repetitive array generation in toFreshArray**: toFreshArray is invoked multiple times which could lead to performance overhead when handling large datasets since a new array is created every time without checks for existing arrays. _Suggested fix:_ Consider optimizing by caching result or checking if the input is already a fresh array before performing operations.
-- `src\components\organizations\OrganizationForm.jsx` line 173 (correctness) - **Missed Clearing File Input on Upload**: The file input is reset after an upload operation but does not handle case for the situation where the upload failed, leading to confusion in the UI. _Suggested fix:_ Ensure that file input is conditionally reset only after a successful upload.
-- `src\pages\Automation.jsx` line 364 (correctness) - **Inconsistent pluralization logic for 'award notification'**: Line 364 checks `meta.inserted === 1` for pluralization, but `inserted` is the result of `formatNumber()` which returns a string or null. The comparison `meta.inserted === 1` will never be true since `meta.inserted` is a number before formatting. The pluralization should check the original numeric value before formatting. _Suggested fix:_ Store the numeric value before formatting: `const insertedCount = meta.inserted ?? job.result_count; const inserted = formatNumber(insertedCount);` then check `insertedCount === 1` for pluralization.
-- `src\pages\Automation.jsx` line 365 (correctness) - **Inconsistent pluralization logic for 'portal'**: Line 365 checks `meta.evaluated === 1` for pluralization, but `evaluated` is the result of `formatNumber()` which returns a string or null, not a number. The comparison will always be false. Should check the original numeric value. _Suggested fix:_ Store the numeric value before formatting and check that value for pluralization consistency.
-- `src\pages\Automation.jsx` line 916 (edge-case) - **Missing null check in renderJobRow onClick handler**: Line 916 calls `onInspect(job.id)` but job.id could theoretically be undefined based on the validation on line 860. While unlikely in practice, there's no defensive check in the handler itself. _Suggested fix:_ Add optional chaining or null check: `onClick={() => job?.id && onInspect(job.id)}`
-- `src\pages\Automation.jsx` line 969 (edge-case) - **Missing null check in renderFailureRow onClick handler**: Line 969 calls `onInspect(job.id)` but the same null safety consideration applies as with renderJobRow. Job.id validation happens in jobIdText extraction but not in the handler. _Suggested fix:_ Add optional chaining: `onClick={() => job?.id && onInspect(job.id)}`
-- `src\pages\Automation.jsx` line 1146 (correctness) - **Unnecessary String() conversion in onInspectJob call**: Line 1146 calls `onInspectJob(String(job.retried_from_job_id))` which converts to string, but line 1139 displays it as-is. The API likely expects a string or consistent type. This inconsistency could cause issues if onInspectJob expects a different type than what's passed. _Suggested fix:_ Ensure consistent type handling: either always pass the raw value or always convert, but do so consistently throughout the component.
-- `src\pages\Automation.jsx` line 1278 (correctness) - **Unnecessary String() conversion in onInspectJob call**: Line 1278 converts `attempt.id` to string with `String(attempt.id)` when calling `onInspectJob`, creating inconsistency with how job IDs are handled elsewhere (sometimes raw, sometimes stringified). _Suggested fix:_ Use consistent ID type handling: either always stringify or always use raw IDs, but be consistent across the entire component.
-- `src\pages\Automation.jsx` line 401 (edge-case) - **Potential unsafe input handling in describeJobParameters**: The function assumes that `params.zip_list` is either an array or a string without validation, which can result in TypeErrors or false positives if `params` is not correctly structured. _Suggested fix:_ Add checks to ensure `params.zip_list` is of the expected type before manipulation.
-- `src\pages\Automation.jsx` line 115 (edge-case) - **Partial status handling**: The logic that handles the 'partial' status is not clear and could allow for inconsistencies in how job statuses are displayed, especially when retries are involved. _Suggested fix:_ Clarify the logic to ensure proper flow for different statuses in the application.
-- `src\pages\Automation.jsx` line 529 (performance) - **Possible performance issue with array checking**: The check for 'recentActivity' in `MetricCard` can lead to performance issues if the array grows large, as it uses reduce without bounds. _Suggested fix:_ Consider optimizing how recent activities are processed or limiting the data size.
-- `src\components\anya\AnyaChat.jsx` line 573 (error-handling) - **Incomplete response body validation in profile creation**: At line 573, the code extracts `createdId` via `created.id ?? created?.data?.id ?? null`, but only checks `if (!createdId)` on line 574. If the API returns an object with `id: 0` or `id: false`, the nullish coalescing operator (`??`) will accept those falsy values as valid IDs, passing the guard but later causing failures in profile section updates (line 604) with a zero or false ID. _Suggested fix:_ Explicitly guard against falsy IDs: `const createdId = created.id ?? created?.data?.id; if (!createdId || !isRealProfileId(createdId))` to ensure only valid profile IDs proceed.
-- `src\components\anya\AnyaChat.jsx` line 766 (error-handling) - **Silent failure in refreshMessages with no logging level detail**: At line 768, `console.error()` logs a generic refresh failure, but the error is swallowed and existing messages remain visible. If the session is stale or the server is down, the user sees 'old' messages without any indication they might be incomplete or outdated. No fallback UI state or warning is set (unlike bootstrap at line 842 which sets `isUnavailable`). _Suggested fix:_ Log the error with more context and optionally set a warning flag: `console.error('[AnyaChat] refresh failed', { sessionId: effectiveId, error })` and consider setting a visual indicator (e.g., a greyed-out 'Messages may be incomplete' banner).
-- `src\components\anya\AnyaChat.jsx` line 781 (error-handling) - **Task refresh failure silently swallows error without state rollback**: At line 784, `console.error()` logs the refresh failure, but the `setIsLoadingTasks(false)` in the finally block (line 786) doesn't differentiate between success and error. If the API returns 500, `setTasks()` is never called, so the UI shows an empty task list with no error message. The user has no way to know if tasks are truly empty or if a load failed. _Suggested fix:_ Distinguish error state: move `setIsLoadingTasks(false)` into the catch block with an explicit error flag, or set a separate error state: `catch (error) { setTasksError(error); setIsLoadingTasks(false); }`
-- `src\components\anya\AnyaChat.jsx` line 839 (edge-case) - **Task refresh after bootstrap does not await completion before continuing**: At line 838, `refreshTasks(activeSession.id, { withLoading: true })` is awaited, but the promise can still be pending when the effect continues. If `isMounted` becomes false between the `await` and the internal state updates in `refreshTasks`, the internal state updates at line 782 (`setTasks()`) will run on an unmounted component, causing a React warning. The cleanup at line 870 only guards against the bootstrap itself, not the child effects it spawns. _Suggested fix:_ Ensure `refreshTasks` respects `isMounted` before setState: add an `isMounted` check inside the `refreshTasks` callback before calling `setTasks()`.
-- `src\components\anya\AnyaChat.jsx` line 970 (bug) - **Prefill message optimistic ID never matched if response is structured**: At line 965, an optimisticId is generated and added to messages with a custom `id` field. At line 972-976, if the response contains structured messages, the code filters by `m.id !== optimisticId`, but the response messages from the backend likely have backend-assigned `id` values (UUIDs), not the client-generated `optimisticId`. If the backend echoes the user message back with a new server-side ID, the optimistic message is never removed, resulting in a duplicate message in the thread. _Suggested fix:_ After receiving the response, check if the response contains a user message that echoes the input, and use the backend's ID instead of the optimisticId, or match by content/timestamp rather than ID.
-- `src\components\anya\AnyaChat.jsx` line 1016 (error-handling) - **Tool invocation error message not specific to the action type**: At line 1025-1031, all action types (navigate, invokeTool, openModal) are caught with the same generic error handler. If a tool invocation fails with a specific error (e.g., 'Profile not found'), the error message is passed through as-is without context about what action was attempted. The user sees the raw error without knowing which tool failed. _Suggested fix:_ Wrap the error handler to include the action type: `description: \`${action.label} failed: ${err instanceof Error ? err.message : 'Unknown error'}\"`
-- `src\components\anya\AnyaChat.jsx` line 1176 (bug) - **Trimmed input restored without stripping after send failure**: At line 1176, if the send fails, the code restores the original trimmed input: `setInput(trimmed)`. However, at line 1147, the input was cleared with `setInput('')` before sending. If the send fails and the user retries, the input text is restored, but if the user manually edits the textarea in the meantime, `setInput(trimmed)` overwrites their new edits. The handler should only restore input if the user hasn't already modified it. _Suggested fix:_ Store the original input value in a ref before clearing: `const inputBeforeSendRef = useRef(input); setInput(''); ... setInput(inputBeforeSendRef.current)` to restore only if untouched.
-- `src\components\anya\AnyaChat.jsx` line 1313 (error-handling) - **Overly broad error message matching for profile-missing fallback**: At line 1313, the code checks `isProfileMissing` with a regex `/profile not found/i.test(message)`. This is fragile: if the error message is in another language, or if the backend changes the error text, the fallback will not trigger and the error will be re-thrown, breaking the admin-scoped tool flow. The status check (404) is more reliable, but the regex is a false sense of safety. _Suggested fix:_ Rely on the status code check and remove the regex, or define a more robust error classification: `const isProfileMissing = status === 404 || status === 403` (depending on backend contract).
-- `src\components\anya\AnyaChat.jsx` line 1395 (edge-case) - **Admin tool form submission does not validate required fields**: Around line 1395 (truncated), the admin tool form submission likely invokes a tool without validating that all required fields in `adminToolForm` are present. If a required field is missing, the backend will reject the request with a 400 error, but the UI does not pre-validate or indicate which fields are required. _Suggested fix:_ Before submitting, check that all required fields (as defined by the tool schema) are present: `const tool = tools.find(t => t.name === ...); const missing = tool.required_params?.filter(p => !adminToolForm[p]); if (missing?.length > 0) { toast(...); return; }`
-- `src\components\anya\AnyaChat.jsx` line 367 (error-handling) - **No error handling for tool invocation**: When invoking a tool, if the tool fails, there should be better error handling than swallowing errors. The error logging occurs, but the user isn't informed of failure appropriately. _Suggested fix:_ Add user-facing feedback when invocation fails, possibly with a toast notification.
-- `src\components\anya\AnyaChat.jsx` line 1104 (error-handling) - **Missing error indication for session failure**: In the handleStartNewConversation function when a session is not deleted successfully, the user should get a clearer message about this failure. _Suggested fix:_ Modify the toast or error handling to specify that the prior session may persist server-side.
-- `src\components\anya\AnyaChat.jsx` line 558 (logic) - **Profile ID validation logic flaw**: The check for profile ID could lead to silent failures when an invalid profile ID is provided from the start. It assumes API will always provide valid responses. _Suggested fix:_ Add validation and provide user feedback if an invalid profile ID is detected upon creation or update.
-- `src\components\profiles\UniversityApplicationsSection.jsx` line 563 (correctness) - **Loose equality check for item.id comparison**: Line 563 uses `item.id != null` which checks for both null and undefined, but the subsequent operations coerce to String. However, the check doesn't validate that item.id is actually a string or number suitable for lookup. A falsy numeric ID like 0 would fail this check and be treated as a missing ID, even though it's a valid identifier. _Suggested fix:_ Change `item.id != null` to `item.id !== null && item.id !== undefined` and add explicit type validation, or use a more robust key generation that never produces 0.
-- `src\components\profiles\UniversityApplicationsSection.jsx` line 608 (security) - **Missing validation in ExternalLinkButton href**: The ExternalLinkButton component at line 604 does not validate the href parameter before rendering it in an anchor tag. While it checks if href is truthy, it doesn't validate that it's actually a safe URL (e.g., could be 'javascript:' or 'data:'). The component relies on the caller to pass safe URLs. _Suggested fix:_ Validate href using the safeHttpUrl function (already imported at line 42) before rendering: change line 608 to `<a href={safeHttpUrl(href)} target="_blank" rel="noopener noreferrer">`
-- `src\components\profiles\UniversityApplicationsSection.jsx` line 1241 (correctness) - **Dependency array excludes application object causing stale closures**: Line 1251 explicitly disables the lint rule via eslint-disable-next-line, but the comment explains that application.interests and application.activity_catalog are tracked. However, if the application object itself is replaced (new reference), the draftInterests/draftCatalog may be out of sync. The disabled lint rule masks a real issue: draftInterests is initialized from interests (line 1231) but the effect doesn't re-run when interests change without interestDialogOpen changing. _Suggested fix:_ Remove the eslint-disable-next-line and instead add a separate useEffect that syncs draft state when the application data changes while the dialog is open, or move the initialization into the effect itself.
-- `src\components\profiles\UniversityApplicationsSection.jsx` line 1039 (correctness) - **Ternary operator short-circuit creates inconsistent array**: Line 1039 uses `(hasCommitted && !showOtherApplications ? committedApplications : visibleApplications)` which returns committedApplications (a filtered subset) when toggled off, but visibleApplications (a larger set) otherwise. This creates a discontinuity: when hasCommitted is true and showOtherApplications is false, only committed apps appear; when false, both committed AND other apps appear. This is correct for UX but the .slice() and .sort() are applied to different sets, potentially causing sort order inconsistencies. _Suggested fix:_ Make the filtering logic explicit and consistent: always work with a single well-defined array of apps to be rendered rather than switching between two differently-filtered arrays.
-- `src\components\profiles\UniversityApplicationsSection.jsx` line 706 (correctness) - **previousSnapshot initialized but may never be set**: Line 705 declares `let previousSnapshot` and line 706-709 uses a setState updater to capture it. However, if setLocalApplications is never called (due to synchronous errors or other control flow issues), previousSnapshot remains undefined. Later at line 726, the check `if (previousSnapshot !== undefined)` may allow recovery from a false premise. _Suggested fix:_ Initialize previousSnapshot to the current localApplications value before the try block: `let previousSnapshot = localApplications` at line 705.
-- `src\components\profiles\UniversityApplicationsSection.jsx` line 640 (correctness) - **useQuery enabled condition depends on profileId but has no cleanup**: Line 643 enables the query only when profileId is truthy. However, if profileId changes from a valid value to an empty string or null, the query is automatically disabled but cached data may remain stale. The component doesn't invalidate on profileId change or handle the transition state. _Suggested fix:_ Add an onSuccess callback to invalidate related queries when profileId changes, or restructure to explicitly invalidate cache when profileId becomes invalid.
-- `src\components\profiles\UniversityApplicationsSection.jsx` line 1185 (correctness) - **mapAIDataToApplicationPatch may return incomplete patch**: Line 1185 calls mapAIDataToApplicationPatch but doesn't validate the returned patch object. If the AI data is malformed or incomplete, the patch may contain null/undefined values that clobber existing fields when merged with Object.keys(patch).length check at line 1186 (only checks length, not value validity). _Suggested fix:_ After getting the patch, filter out null/undefined/empty values: `const patch = Object.fromEntries(Object.entries(mapAIDataToApplicationPatch(data, application)).filter(([, v]) => v != null && v !== ''))`
-- `src\components\profiles\UniversityApplicationsSection.jsx` line 690 (error-handling) - **Lack of Fine-Grained Error Handling in AI Assistance**: In the function `handleAiAssist`, if the AI assistance fails due to non-retryable errors (like network issues), the same error handling logic is used regardless of the nature of the error. There are no retries or distinctions between recoverable and non-recoverable errors. _Suggested fix:_ Incorporate specific error types and handle each accordingly. Consider retrying network requests upon transient failures before falling back to the generic error handler.
-- `src\components\profiles\UniversityApplicationsSection.jsx` line 440 (performance) - **Ignoring Performance with Redundant Render Calls**: The `persistApplications` function is called inside multiple areas causing multiple state updates and re-renders. This could lead to performance degradation in a larger context. _Suggested fix:_ Debounce or throttle state updates and mutation triggers to prevent excessive renders.
-
-### low (13)
-- `src\components\organizations\OrganizationForm.jsx` line 1039 (correctness) - **Array field coercion returns early without handling non-array, non-string values**: At line 1039, the code checks `if (Array.isArray(coercedResponse[field])) return;` but if the field is neither an array nor a string (e.g., a number or boolean unexpectedly present), it falls through without clearing it, leaving the invalid type in the response. _Suggested fix:_ Explicitly set non-array, non-string field values to `[]` instead of falling through: change the logic to convert only strings to arrays, and set everything else to `[]`.
-- `src\components\organizations\OrganizationForm.jsx` line 1053 (edge-case) - **Merge data filter for null/undefined is redundant after earlier null coercion**: At line 1053, the code skips `null` and `undefined` values when building mergeData, but at line 1034 numeric fields are already coerced to null if invalid. This is defensive but suggests unclear intent: it's unclear whether the AI response schema is trusted or not. _Suggested fix:_ Document the intent: if the AI schema is trusted, the null check is unnecessary. If untrusted, validate the schema more rigorously before merge.
-- `src\components\organizations\OrganizationForm.jsx` line 1027 (correctness) - **Dropped numeric fields detection doesn't account for explicit zero values**: At line 1031, the check `!(typeof original === 'string' && original.trim() === '')` will report a field as 'dropped' even if the original was the string `'0'` which parses to the number 0 (not null). This mischaracterizes a valid zero value as dropped. _Suggested fix:_ Refine the condition to also exclude explicitly falsy numeric values: `!(typeof original === 'string' && (original.trim() === '' || original.trim() === '0'))`.
-- `src\components\organizations\OrganizationForm.jsx` line 449 (concurrency) - **useState with lazy initializer doesn't protect against contactMethods being stale**: At line 449, `useState(() => initializeFormData(organization, contactMethods))` uses lazy initialization, but `contactMethods` is from a useQuery that may not be fetched yet. If the component mounts before the query settles, formData initializes with empty contactMethods array, and the later useEffect at line 460 re-initializes the form once contacts arrive. This works but causes an extra render and potential flash of incorrect initial state. _Suggested fix:_ Either wait for the contacts query to settle before rendering the form, or accept the re-initialization as intentional and add a comment explaining the two-phase initialization strategy.
-- `src\components\organizations\OrganizationForm.jsx` line 607 (edge-case) - **AI harvest returns nothing if response is an empty object**: At line 996, if `response` is an empty object `{}`, it passes the validation (is an object, not an array), mergeData will be empty (line 1050), and the form will not update. A toast is shown saying 'Profile Data Extracted!' even though nothing was actually extracted, misleading the user. _Suggested fix:_ After building mergeData at line 1050, check if it's empty and show a different message: `if (Object.keys(mergeData).length === 0) { toast({title: 'No Data Found', description: 'AI could not extract any structured data. Try rephrasing your input.'}) }` or reject empty responses at line 996.
-- `src\components\organizations\OrganizationForm.jsx` line 161 (dead-code) - **Unused Variables in initializeFormData**: Several fields in the default form data initialization are set but never used in subsequent operations, potentially leading to a bloated state object. _Suggested fix:_ Remove unused or unnecessary fields from the defaultData to streamline the form state.
-- `src\pages\Automation.jsx` line 598 (edge-case) - **Missing null/undefined handling in activity chart**: Line 599 uses optional chaining for `entry?.completed` but line 572 assumes the object exists without full defensive checks. If `entry` is null, `entry?.completed ?? 0` will work, but the logic is inconsistent with proper null-safety patterns elsewhere in the code. _Suggested fix:_ Add explicit null checks at the start of the map function for activity array entries to ensure defensive programming consistency.
-- `src\pages\Automation.jsx` line 513 (info) - **Number formatting in metrics cards**: The `formatNumber` function is called redundantly with a fallback of '0' which may lead to displayed numbers being less consistent than intended. _Suggested fix:_ Standardize number formatting and ensure clear defaults across UI elements.
-- `src\components\anya\AnyaChat.jsx` line 887 (concurrency) - **Race condition in loadTools: state update on unmounted component if error occurs early**: At line 888, `setTools()` is called inside the `if (isMounted)` guard, but if `listAnyaTools()` rejects before `isMounted` is checked at line 887, the error handler at line 892 (`setIsUnavailable(true)`) runs unconditionally. If the component unmounts and remounts before the catch block, `setIsUnavailable` will update a stale closure. _Suggested fix:_ Move `setIsUnavailable(true)` inside the `if (isMounted)` guard: `if (isMounted) { setIsUnavailable(true); }`
-- `src\components\anya\AnyaChat.jsx` line 1207 (edge-case) - **Code search scope parameter allows undefined, not validated**: At line 1207, `scope: codeSearchForm.scope.trim() || undefined` is passed to `invokeAnyaTool`. If the backend expects a string or null (not undefined), passing undefined may cause parameter binding issues or silent failures in the backend. The parameter is not validated for format or length. _Suggested fix:_ Define a clear scope validation: `scope: codeSearchForm.scope.trim() || null` (or validate against an allowed list of scopes) to ensure consistent parameter types.
-- `src\components\anya\AnyaChat.jsx` line 1249 (edge-case) - **Task due date not validated for format or past dates**: At line 1248-1249, if `taskForm.dueDate` is set, it's passed directly to `createAnyaTask` without validation. If the user enters an invalid date string or a date in the past, the backend may reject it silently or store it incorrectly. No client-side validation or feedback is provided. _Suggested fix:_ Validate the due date before submission: `if (taskForm.dueDate && new Date(taskForm.dueDate) <= new Date()) { toast({ title: 'Invalid date', description: 'Due date must be in the future.' }); return; }`
-- `src\components\profiles\UniversityApplicationsSection.jsx` line 1271 (performance) - **Inefficient draftSet computation on every render**: Line 1271 creates a new Set on every render by iterating draftInterests. While useMemo is used, the computation is trivial and runs frequently. The Set is created then immediately converted back to an array for sorting, creating unnecessary allocations. _Suggested fix:_ Keep draftInterests as a Set internally and only convert to array for display, or memoize the sorted array directly instead of recreating it.
-- `src\components\profiles\UniversityApplicationsSection.jsx` line 856 (bug) - **Missing optional chaining on stage.label**: Line 856 uses `stage.label?.toLowerCase()` with optional chaining, which is correct. However, the filter predicate should use `stage.status === "completed"` but doesn't check if status exists; if a stage has status === null or undefined, it will silently fail to match even if the label matches. _Suggested fix:_ Add an explicit check: `stage.label?.toLowerCase().includes("scholarship") && stage.status === "completed"`
-
-### info (2)
-- `src\components\organizations\OrganizationForm.jsx` line 805 (style) - **Overly large AI prompt embedded in function**: The AI harvest prompt spans lines 618-805 (188 lines) embedded directly in the function, making the function hard to read and maintain. Any changes to the prompt require editing this large block. _Suggested fix:_ Extract the prompt template to a constant or separate file at the module level.
-- `src\components\organizations\OrganizationForm.jsx` line 88 (error-handling) - **Unhandled Error in normalizeWebsite**: The normalizeWebsite function has a generic catch for errors but does not provide any action or logging based on the error type, which may lead to silent failures. _Suggested fix:_ Expand error handling to include logging specific error messages for better debugging.
+### high (1)
+- `(purpose)` line 0 (quality-gate) - **Purpose assessment evidence is incomplete**: baseline purpose assessment incomplete: 1/3 sample(s) usable; HTTPError: HTTP Error 400: Bad Request: {"error":{"code":400,"message":"request (20342 tokens) exceeds the available context size (16384 tokens), try increasing it","type":"exceed_context_size_error","n_prompt_tokens":20342,"n_ctx":16384}}; BadRequestError: Error code: 400 - {'object': 'error', 'message': 'Expected exactly one message. Expected exactly one message.', 'type': 'BadRequestError', 'param': None, 'code': 400}; final purpose assessment returned no usable result _Suggested fix:_ Retry the resumable run after restoring a responsive provider.
 
 ## Defects by file
 
-### `src\components\organizations\OrganizationForm.jsx` ✅ fixed
-- **[high]** line 430 (error-handling) — **Contact method fetch can fail silently without propagating errors**: The queryFn at line 430 calls `client.entities.ContactMethod.filter(...)` directly. If this call throws an error, it will be caught by react-query's error handling (setting isContactsError=true), but the error handling at line 438-446 only shows a toast. If the user doesn't see the toast or dismisses it, they proceed with potentially incomplete contact data without realizing it. The form could be submitted with missing emails/phones. _Fix:_ In addition to the toast, either: (1) block form submission if isContactsError is true, or (2) retry the query automatically on certain errors, or (3) display a persistent warning in the form itself rather than only a dismissible toast.
-- **[high]** line 15 (security) — **Potential API Token Exposure**: The API client is imported from '@/api/client', which may potentially expose API tokens or credentials if not secured properly or if the API endpoint is open to unauthorized access. _Fix:_ Ensure API tokens are stored securely and check that the API endpoints require proper authentication.
-- **[high]** line 366 (edge-case) — **student_grade_level Not Checked for Null or Undefined Before Use**: Accessing initialData.student_grade_level without checking if it is either null or undefined could lead to runtime errors. _Fix:_ Ensure that initialData.student_grade_level is validated before being pushed to student_grade_levels.
-- **[medium]** line 78 (correctness) — **Regex allows leading/trailing dots in number parsing**: The regex pattern `/^[-+]?(\d+\.?\d*|\.\d+)$/` at line 78 matches numbers like `1.` or `.5`, but parseInt/parseFloat will silently convert these to integers/floats without the trailing/leading dot context. This is technically valid but could silently accept malformed input like `3.` which becomes `3`. _Fix:_ Tighten the regex to require at least one digit after the dot when present: `/^[-+]?(\d+(\.\d+)?|(\.\d+))$/` or simplify by removing the special case for `.5` format if not needed.
-- **[medium]** line 96 (edge-case) — **URL prepend doesn't validate hostname after prepending**: At line 96-97, the code prepends `https://` to a candidate without a scheme, but doesn't re-validate that the result has a valid hostname. A malformed input like `://invalid` would become `https://://invalid` and the URL constructor at line 101 would then throw, caught at line 107, but silently returns null instead of surfacing the parsing issue. _Fix:_ After prepending the scheme, validate that the constructed URL has a non-empty hostname before returning. Alternatively, use a stricter input validation regex that rejects obvious malformed patterns.
-- **[medium]** line 563 (edge-case) — **File type check uses toLowerCase() but comparison is case-sensitive in the wrong direction**: At line 563, the code checks `!allowedTypes.includes(file.type.toLowerCase())`, but `file.type` from the browser File API is already lowercase (e.g., `image/jpeg`). Calling `.toLowerCase()` is redundant and doesn't hurt, but it masks a logic error: the comment at line 560 says `image/jpg is not a real MIME type` but the code doesn't reject `image/jpg` explicitly—it only rejects it if the browser reports it that way, which modern browsers won't. _Fix:_ Clarify the intent: if `image/jpg` rejection is desired, add it to a blacklist or add `file.type.toLowerCase() === 'image/jpg'` check. Otherwise, remove the toLowerCase() as noise.
-- **[medium]** line 488 (concurrency) — **Contact method update can race with organization change**: The dependency array at line 488 includes both `organization` and `contactMethods`, but if organization.id changes between the fetch request and response, the `contactsAppliedForOrgRef` tracking could be misaligned. The code attempts to handle this with orgChanged check at line 461, but a rapid org switch could cause re-initialization to be skipped if the new org's contacts arrive before processing. _Fix:_ Use a cleanup function in the useEffect to abort previous queries or add a request ID to the ref tracking to ensure only the latest organization's contacts are applied.
-- **[medium]** line 47 (correctness) — **PROFILE_TYPE_IDS Not Validated**: The PROFILE_TYPE_IDS Set is never validated, allowing for potential misuse if invalid data is passed, which could lead to unexpected behavior or application errors. _Fix:_ Add validation to ensure that values inserted into PROFILE_TYPE_IDS are a subset of valid applicant types.
-- **[medium]** line 44 (performance) — **Repetitive array generation in toFreshArray**: toFreshArray is invoked multiple times which could lead to performance overhead when handling large datasets since a new array is created every time without checks for existing arrays. _Fix:_ Consider optimizing by caching result or checking if the input is already a fresh array before performing operations.
-- **[medium]** line 173 (correctness) — **Missed Clearing File Input on Upload**: The file input is reset after an upload operation but does not handle case for the situation where the upload failed, leading to confusion in the UI. _Fix:_ Ensure that file input is conditionally reset only after a successful upload.
-- **[low]** line 1039 (correctness) — **Array field coercion returns early without handling non-array, non-string values**: At line 1039, the code checks `if (Array.isArray(coercedResponse[field])) return;` but if the field is neither an array nor a string (e.g., a number or boolean unexpectedly present), it falls through without clearing it, leaving the invalid type in the response. _Fix:_ Explicitly set non-array, non-string field values to `[]` instead of falling through: change the logic to convert only strings to arrays, and set everything else to `[]`.
-- **[low]** line 1053 (edge-case) — **Merge data filter for null/undefined is redundant after earlier null coercion**: At line 1053, the code skips `null` and `undefined` values when building mergeData, but at line 1034 numeric fields are already coerced to null if invalid. This is defensive but suggests unclear intent: it's unclear whether the AI response schema is trusted or not. _Fix:_ Document the intent: if the AI schema is trusted, the null check is unnecessary. If untrusted, validate the schema more rigorously before merge.
-- **[low]** line 1027 (correctness) — **Dropped numeric fields detection doesn't account for explicit zero values**: At line 1031, the check `!(typeof original === 'string' && original.trim() === '')` will report a field as 'dropped' even if the original was the string `'0'` which parses to the number 0 (not null). This mischaracterizes a valid zero value as dropped. _Fix:_ Refine the condition to also exclude explicitly falsy numeric values: `!(typeof original === 'string' && (original.trim() === '' || original.trim() === '0'))`.
-- **[low]** line 449 (concurrency) — **useState with lazy initializer doesn't protect against contactMethods being stale**: At line 449, `useState(() => initializeFormData(organization, contactMethods))` uses lazy initialization, but `contactMethods` is from a useQuery that may not be fetched yet. If the component mounts before the query settles, formData initializes with empty contactMethods array, and the later useEffect at line 460 re-initializes the form once contacts arrive. This works but causes an extra render and potential flash of incorrect initial state. _Fix:_ Either wait for the contacts query to settle before rendering the form, or accept the re-initialization as intentional and add a comment explaining the two-phase initialization strategy.
-- **[low]** line 607 (edge-case) — **AI harvest returns nothing if response is an empty object**: At line 996, if `response` is an empty object `{}`, it passes the validation (is an object, not an array), mergeData will be empty (line 1050), and the form will not update. A toast is shown saying 'Profile Data Extracted!' even though nothing was actually extracted, misleading the user. _Fix:_ After building mergeData at line 1050, check if it's empty and show a different message: `if (Object.keys(mergeData).length === 0) { toast({title: 'No Data Found', description: 'AI could not extract any structured data. Try rephrasing your input.'}) }` or reject empty responses at line 996.
-- **[low]** line 161 (dead-code) — **Unused Variables in initializeFormData**: Several fields in the default form data initialization are set but never used in subsequent operations, potentially leading to a bloated state object. _Fix:_ Remove unused or unnecessary fields from the defaultData to streamline the form state.
-- **[info]** line 805 (style) — **Overly large AI prompt embedded in function**: The AI harvest prompt spans lines 618-805 (188 lines) embedded directly in the function, making the function hard to read and maintain. Any changes to the prompt require editing this large block. _Fix:_ Extract the prompt template to a constant or separate file at the module level.
-- **[info]** line 88 (error-handling) — **Unhandled Error in normalizeWebsite**: The normalizeWebsite function has a generic catch for errors but does not provide any action or logging based on the error type, which may lead to silent failures. _Fix:_ Expand error handling to include logging specific error messages for better debugging.
-
-### `src\pages\Automation.jsx` ✅ fixed
-- **[high]** line 352 (bug) — **Incorrect method call on number**: Line 352 calls `sections.toLocaleString('en-US')` but `sections` is a number (set on line 348 as `Array.isArray(meta.sections) ? meta.sections.length : null`). The `toLocaleString` method is correctly defined for numbers in JavaScript, but the variable was already formatted. However, this is used in a template string on line 353, which means the formatted value from line 325 (via `formatNumber()`) should be used instead to maintain consistency. _Fix:_ Change line 352-353 to use `const display = formatNumber(sections)` and then use `display` in the template string, consistent with other similar patterns in the function.
-- **[high]** line 817 (bug) — **Potential crash from null reference in onClick handler**: Line 817 calls `onInspect(lastJob.id)` inside an onClick handler, but this is only checked with `disabled={!lastJob}`. If the component somehow renders with `isClickable=true` but `lastJob` is null/undefined, the handler will crash. The guard is on the Button disabled state, not in the handler itself. _Fix:_ Add a null check inside the onClick handler: `if (lastJob) onInspect(lastJob.id)` before calling onInspect, or use optional chaining: `onInspect(lastJob?.id)`
-- **[high]** line 707 (bug) — **Potential crash from null reference in card onClick**: Line 707 calls `onInspect(lastJob.id)` directly without checking if `lastJob` exists. While `isClickable` guards the onClick assignment, if somehow `isClickable` evaluates to true with a null `lastJob`, this will crash. The condition `Boolean(lastJob?.id)` on line 699 should guarantee safety, but defensive programming requires a check in the handler itself. _Fix:_ Add explicit null check in the onClick handler or use optional chaining: `onClick={isClickable ? () => onInspect(lastJob?.id) : undefined}` to safely handle edge cases.
-- **[high]** line 713 (bug) — **Potential crash from null reference in onKeyDown handler**: Line 713 calls `onInspect(lastJob.id)` in the onKeyDown handler without null check. If `isClickable` is true but `lastJob` is null, pressing Enter/Space will crash. _Fix:_ Add null check: change to `onInspect(lastJob?.id)` or add guard `if (lastJob?.id) onInspect(lastJob.id)`
-- **[high]** line 87 (error-handling) — **Silent failures in async function**: The `startGeoCrawl` function does not handle error responses from the API call properly and can lead to silent failures if the call fails without throwing an error. _Fix:_ Ensure proper error handling and logging for unexpected responses.
-- **[medium]** line 364 (correctness) — **Inconsistent pluralization logic for 'award notification'**: Line 364 checks `meta.inserted === 1` for pluralization, but `inserted` is the result of `formatNumber()` which returns a string or null. The comparison `meta.inserted === 1` will never be true since `meta.inserted` is a number before formatting. The pluralization should check the original numeric value before formatting. _Fix:_ Store the numeric value before formatting: `const insertedCount = meta.inserted ?? job.result_count; const inserted = formatNumber(insertedCount);` then check `insertedCount === 1` for pluralization.
-- **[medium]** line 365 (correctness) — **Inconsistent pluralization logic for 'portal'**: Line 365 checks `meta.evaluated === 1` for pluralization, but `evaluated` is the result of `formatNumber()` which returns a string or null, not a number. The comparison will always be false. Should check the original numeric value. _Fix:_ Store the numeric value before formatting and check that value for pluralization consistency.
-- **[medium]** line 916 (edge-case) — **Missing null check in renderJobRow onClick handler**: Line 916 calls `onInspect(job.id)` but job.id could theoretically be undefined based on the validation on line 860. While unlikely in practice, there's no defensive check in the handler itself. _Fix:_ Add optional chaining or null check: `onClick={() => job?.id && onInspect(job.id)}`
-- **[medium]** line 969 (edge-case) — **Missing null check in renderFailureRow onClick handler**: Line 969 calls `onInspect(job.id)` but the same null safety consideration applies as with renderJobRow. Job.id validation happens in jobIdText extraction but not in the handler. _Fix:_ Add optional chaining: `onClick={() => job?.id && onInspect(job.id)}`
-- **[medium]** line 1146 (correctness) — **Unnecessary String() conversion in onInspectJob call**: Line 1146 calls `onInspectJob(String(job.retried_from_job_id))` which converts to string, but line 1139 displays it as-is. The API likely expects a string or consistent type. This inconsistency could cause issues if onInspectJob expects a different type than what's passed. _Fix:_ Ensure consistent type handling: either always pass the raw value or always convert, but do so consistently throughout the component.
-- **[medium]** line 1278 (correctness) — **Unnecessary String() conversion in onInspectJob call**: Line 1278 converts `attempt.id` to string with `String(attempt.id)` when calling `onInspectJob`, creating inconsistency with how job IDs are handled elsewhere (sometimes raw, sometimes stringified). _Fix:_ Use consistent ID type handling: either always stringify or always use raw IDs, but be consistent across the entire component.
-- **[medium]** line 401 (edge-case) — **Potential unsafe input handling in describeJobParameters**: The function assumes that `params.zip_list` is either an array or a string without validation, which can result in TypeErrors or false positives if `params` is not correctly structured. _Fix:_ Add checks to ensure `params.zip_list` is of the expected type before manipulation.
-- **[medium]** line 115 (edge-case) — **Partial status handling**: The logic that handles the 'partial' status is not clear and could allow for inconsistencies in how job statuses are displayed, especially when retries are involved. _Fix:_ Clarify the logic to ensure proper flow for different statuses in the application.
-- **[medium]** line 529 (performance) — **Possible performance issue with array checking**: The check for 'recentActivity' in `MetricCard` can lead to performance issues if the array grows large, as it uses reduce without bounds. _Fix:_ Consider optimizing how recent activities are processed or limiting the data size.
-- **[low]** line 598 (edge-case) — **Missing null/undefined handling in activity chart**: Line 599 uses optional chaining for `entry?.completed` but line 572 assumes the object exists without full defensive checks. If `entry` is null, `entry?.completed ?? 0` will work, but the logic is inconsistent with proper null-safety patterns elsewhere in the code. _Fix:_ Add explicit null checks at the start of the map function for activity array entries to ensure defensive programming consistency.
-- **[low]** line 513 (info) — **Number formatting in metrics cards**: The `formatNumber` function is called redundantly with a fallback of '0' which may lead to displayed numbers being less consistent than intended. _Fix:_ Standardize number formatting and ensure clear defaults across UI elements.
-
-### `src\components\anya\AnyaChat.jsx` ✅ fixed
-- **[high]** line 556 (bug) — **Unsafe profileId type conversion and guard issue**: At line 556, `let profileId = activeProfile?.id` assigns a potentially undefined value. Then at line 557, `if (!isRealProfileId(profileId))` checks it, but if the guard fails (returns false for a truthy but invalid id), the code at line 560 calls `apiFetch` with an invalid profile URL. The guard `isRealProfileId()` is meant to filter out '__admin__' and falsy values, but if it returns false for a real-but-malformed string, the error handling doesn't catch the contract violation before constructing API endpoints. _Fix:_ Before line 560, validate that `profileId` is explicitly null/undefined OR explicitly passes `isRealProfileId()` check. If neither, throw a descriptive error immediately: `if (profileId && !isRealProfileId(profileId)) { throw new Error('Invalid profile ID returned') }`
-- **[high]** line 602 (concurrency) — **Unhandled Promise.all rejection in onboarding**: At line 602, `Promise.all()` is called on an array of promises from the patches map, but if ANY patch fails (e.g., network error on one section update), the entire Promise.all rejects. The catch block at line 619 catches this, but by that point multiple sections may have been partially written, leaving the profile in an inconsistent state. The user is shown a generic 'couldn't save' error without clarity on which sections were actually persisted. _Fix:_ Replace `Promise.all()` with `Promise.allSettled()` to capture both successes and failures independently, then filter results and report which sections succeeded vs. failed: `const results = await Promise.allSettled(...); const failed = results.filter(r => r.status === 'rejected');`
-- **[high]** line 237 (correctness) — **Incorrect step type check**: The check for step being equal to 0 is improper as step might be a string (e.g., 'language'). This can lead to unreachable code if step is not handled properly. _Fix:_ Change the condition to check for both string and number types, e.g., if (step === '0' || step === 0).
-- **[high]** line 607 (error-handling) — **Lack of error handling for promise results**: The API call in the Promise.all for saving life situation patches lacks error handling for when individual requests fail. It could lead to partial updates or silent failures without any feedback. _Fix:_ Wrap the await calls in try-catch blocks and handle errors appropriately for each iteration.
-- **[medium]** line 573 (error-handling) — **Incomplete response body validation in profile creation**: At line 573, the code extracts `createdId` via `created.id ?? created?.data?.id ?? null`, but only checks `if (!createdId)` on line 574. If the API returns an object with `id: 0` or `id: false`, the nullish coalescing operator (`??`) will accept those falsy values as valid IDs, passing the guard but later causing failures in profile section updates (line 604) with a zero or false ID. _Fix:_ Explicitly guard against falsy IDs: `const createdId = created.id ?? created?.data?.id; if (!createdId || !isRealProfileId(createdId))` to ensure only valid profile IDs proceed.
-- **[medium]** line 766 (error-handling) — **Silent failure in refreshMessages with no logging level detail**: At line 768, `console.error()` logs a generic refresh failure, but the error is swallowed and existing messages remain visible. If the session is stale or the server is down, the user sees 'old' messages without any indication they might be incomplete or outdated. No fallback UI state or warning is set (unlike bootstrap at line 842 which sets `isUnavailable`). _Fix:_ Log the error with more context and optionally set a warning flag: `console.error('[AnyaChat] refresh failed', { sessionId: effectiveId, error })` and consider setting a visual indicator (e.g., a greyed-out 'Messages may be incomplete' banner).
-- **[medium]** line 781 (error-handling) — **Task refresh failure silently swallows error without state rollback**: At line 784, `console.error()` logs the refresh failure, but the `setIsLoadingTasks(false)` in the finally block (line 786) doesn't differentiate between success and error. If the API returns 500, `setTasks()` is never called, so the UI shows an empty task list with no error message. The user has no way to know if tasks are truly empty or if a load failed. _Fix:_ Distinguish error state: move `setIsLoadingTasks(false)` into the catch block with an explicit error flag, or set a separate error state: `catch (error) { setTasksError(error); setIsLoadingTasks(false); }`
-- **[medium]** line 839 (edge-case) — **Task refresh after bootstrap does not await completion before continuing**: At line 838, `refreshTasks(activeSession.id, { withLoading: true })` is awaited, but the promise can still be pending when the effect continues. If `isMounted` becomes false between the `await` and the internal state updates in `refreshTasks`, the internal state updates at line 782 (`setTasks()`) will run on an unmounted component, causing a React warning. The cleanup at line 870 only guards against the bootstrap itself, not the child effects it spawns. _Fix:_ Ensure `refreshTasks` respects `isMounted` before setState: add an `isMounted` check inside the `refreshTasks` callback before calling `setTasks()`.
-- **[medium]** line 970 (bug) — **Prefill message optimistic ID never matched if response is structured**: At line 965, an optimisticId is generated and added to messages with a custom `id` field. At line 972-976, if the response contains structured messages, the code filters by `m.id !== optimisticId`, but the response messages from the backend likely have backend-assigned `id` values (UUIDs), not the client-generated `optimisticId`. If the backend echoes the user message back with a new server-side ID, the optimistic message is never removed, resulting in a duplicate message in the thread. _Fix:_ After receiving the response, check if the response contains a user message that echoes the input, and use the backend's ID instead of the optimisticId, or match by content/timestamp rather than ID.
-- **[medium]** line 1016 (error-handling) — **Tool invocation error message not specific to the action type**: At line 1025-1031, all action types (navigate, invokeTool, openModal) are caught with the same generic error handler. If a tool invocation fails with a specific error (e.g., 'Profile not found'), the error message is passed through as-is without context about what action was attempted. The user sees the raw error without knowing which tool failed. _Fix:_ Wrap the error handler to include the action type: `description: \`${action.label} failed: ${err instanceof Error ? err.message : 'Unknown error'}\"`
-- **[medium]** line 1176 (bug) — **Trimmed input restored without stripping after send failure**: At line 1176, if the send fails, the code restores the original trimmed input: `setInput(trimmed)`. However, at line 1147, the input was cleared with `setInput('')` before sending. If the send fails and the user retries, the input text is restored, but if the user manually edits the textarea in the meantime, `setInput(trimmed)` overwrites their new edits. The handler should only restore input if the user hasn't already modified it. _Fix:_ Store the original input value in a ref before clearing: `const inputBeforeSendRef = useRef(input); setInput(''); ... setInput(inputBeforeSendRef.current)` to restore only if untouched.
-- **[medium]** line 1313 (error-handling) — **Overly broad error message matching for profile-missing fallback**: At line 1313, the code checks `isProfileMissing` with a regex `/profile not found/i.test(message)`. This is fragile: if the error message is in another language, or if the backend changes the error text, the fallback will not trigger and the error will be re-thrown, breaking the admin-scoped tool flow. The status check (404) is more reliable, but the regex is a false sense of safety. _Fix:_ Rely on the status code check and remove the regex, or define a more robust error classification: `const isProfileMissing = status === 404 || status === 403` (depending on backend contract).
-- **[medium]** line 1395 (edge-case) — **Admin tool form submission does not validate required fields**: Around line 1395 (truncated), the admin tool form submission likely invokes a tool without validating that all required fields in `adminToolForm` are present. If a required field is missing, the backend will reject the request with a 400 error, but the UI does not pre-validate or indicate which fields are required. _Fix:_ Before submitting, check that all required fields (as defined by the tool schema) are present: `const tool = tools.find(t => t.name === ...); const missing = tool.required_params?.filter(p => !adminToolForm[p]); if (missing?.length > 0) { toast(...); return; }`
-- **[medium]** line 367 (error-handling) — **No error handling for tool invocation**: When invoking a tool, if the tool fails, there should be better error handling than swallowing errors. The error logging occurs, but the user isn't informed of failure appropriately. _Fix:_ Add user-facing feedback when invocation fails, possibly with a toast notification.
-- **[medium]** line 1104 (error-handling) — **Missing error indication for session failure**: In the handleStartNewConversation function when a session is not deleted successfully, the user should get a clearer message about this failure. _Fix:_ Modify the toast or error handling to specify that the prior session may persist server-side.
-- **[medium]** line 558 (logic) — **Profile ID validation logic flaw**: The check for profile ID could lead to silent failures when an invalid profile ID is provided from the start. It assumes API will always provide valid responses. _Fix:_ Add validation and provide user feedback if an invalid profile ID is detected upon creation or update.
-- **[low]** line 887 (concurrency) — **Race condition in loadTools: state update on unmounted component if error occurs early**: At line 888, `setTools()` is called inside the `if (isMounted)` guard, but if `listAnyaTools()` rejects before `isMounted` is checked at line 887, the error handler at line 892 (`setIsUnavailable(true)`) runs unconditionally. If the component unmounts and remounts before the catch block, `setIsUnavailable` will update a stale closure. _Fix:_ Move `setIsUnavailable(true)` inside the `if (isMounted)` guard: `if (isMounted) { setIsUnavailable(true); }`
-- **[low]** line 1207 (edge-case) — **Code search scope parameter allows undefined, not validated**: At line 1207, `scope: codeSearchForm.scope.trim() || undefined` is passed to `invokeAnyaTool`. If the backend expects a string or null (not undefined), passing undefined may cause parameter binding issues or silent failures in the backend. The parameter is not validated for format or length. _Fix:_ Define a clear scope validation: `scope: codeSearchForm.scope.trim() || null` (or validate against an allowed list of scopes) to ensure consistent parameter types.
-- **[low]** line 1249 (edge-case) — **Task due date not validated for format or past dates**: At line 1248-1249, if `taskForm.dueDate` is set, it's passed directly to `createAnyaTask` without validation. If the user enters an invalid date string or a date in the past, the backend may reject it silently or store it incorrectly. No client-side validation or feedback is provided. _Fix:_ Validate the due date before submission: `if (taskForm.dueDate && new Date(taskForm.dueDate) <= new Date()) { toast({ title: 'Invalid date', description: 'Due date must be in the future.' }); return; }`
-
-### `src\components\profiles\UniversityApplicationsSection.jsx` ✅ fixed
-- **[critical]** line 372 (error-handling) — **Potential Silent Failure Handling Theme Data**: In `normaliseApplications` function, if `application.theme` is `undefined`, attributes are passed as empty string which may cause unexpected results in UI rendering without any error prompt. _Fix:_ Implement checks to ensure that `theme` is defined before trying to access its keys, otherwise fallback to default theme values.
-- **[high]** line 897 (error-handling) — **Unhandled race condition in handleCommitToSchool**: Line 897 uses window.confirm() which is blocking and exposes a race condition: if the user confirms but the component unmounts or localApplications changes before the async persistApplications completes, the previousSnapshot in persistApplications may reference stale data. Additionally, the dependency array includes localApplications which changes on every render cycle, causing the callback to be recreated unnecessarily and breaking memoization. _Fix:_ Move the confirmation outside the async handler or use a ref to track the current state. More importantly, add proper cleanup handling and don't include localApplications in the dependency array—instead capture the current value within the callback using a setter function.
-- **[high]** line 934 (error-handling) — **Identical race condition in handleUncommitSchool**: Line 934 has the same window.confirm() blocking/race condition as handleCommitToSchool. The dependency array includes localApplications, causing unnecessary recreations and stale closure issues. _Fix:_ Apply the same fix as handleCommitToSchool: remove localApplications from the dependency array and use a setter pattern to capture current state.
-- **[high]** line 265 (correctness) — **Improper Null Check for Cheer Enablement**: In line 264, the `cheerEnabled` variable is assigned a boolean condition. If the `cheer_enabled` property is `undefined`, it defaults to `true`, leading to incorrect UI behavior where the cheer line is shown unexpectedly. _Fix:_ Change `const cheerEnabled = explicit?.cheer_enabled !== false` to `const cheerEnabled = explicit.cheer_enabled !== false && explicit.cheer_enabled !== undefined`.
-- **[medium]** line 563 (correctness) — **Loose equality check for item.id comparison**: Line 563 uses `item.id != null` which checks for both null and undefined, but the subsequent operations coerce to String. However, the check doesn't validate that item.id is actually a string or number suitable for lookup. A falsy numeric ID like 0 would fail this check and be treated as a missing ID, even though it's a valid identifier. _Fix:_ Change `item.id != null` to `item.id !== null && item.id !== undefined` and add explicit type validation, or use a more robust key generation that never produces 0.
-- **[medium]** line 608 (security) — **Missing validation in ExternalLinkButton href**: The ExternalLinkButton component at line 604 does not validate the href parameter before rendering it in an anchor tag. While it checks if href is truthy, it doesn't validate that it's actually a safe URL (e.g., could be 'javascript:' or 'data:'). The component relies on the caller to pass safe URLs. _Fix:_ Validate href using the safeHttpUrl function (already imported at line 42) before rendering: change line 608 to `<a href={safeHttpUrl(href)} target="_blank" rel="noopener noreferrer">`
-- **[medium]** line 1241 (correctness) — **Dependency array excludes application object causing stale closures**: Line 1251 explicitly disables the lint rule via eslint-disable-next-line, but the comment explains that application.interests and application.activity_catalog are tracked. However, if the application object itself is replaced (new reference), the draftInterests/draftCatalog may be out of sync. The disabled lint rule masks a real issue: draftInterests is initialized from interests (line 1231) but the effect doesn't re-run when interests change without interestDialogOpen changing. _Fix:_ Remove the eslint-disable-next-line and instead add a separate useEffect that syncs draft state when the application data changes while the dialog is open, or move the initialization into the effect itself.
-- **[medium]** line 1039 (correctness) — **Ternary operator short-circuit creates inconsistent array**: Line 1039 uses `(hasCommitted && !showOtherApplications ? committedApplications : visibleApplications)` which returns committedApplications (a filtered subset) when toggled off, but visibleApplications (a larger set) otherwise. This creates a discontinuity: when hasCommitted is true and showOtherApplications is false, only committed apps appear; when false, both committed AND other apps appear. This is correct for UX but the .slice() and .sort() are applied to different sets, potentially causing sort order inconsistencies. _Fix:_ Make the filtering logic explicit and consistent: always work with a single well-defined array of apps to be rendered rather than switching between two differently-filtered arrays.
-- **[medium]** line 706 (correctness) — **previousSnapshot initialized but may never be set**: Line 705 declares `let previousSnapshot` and line 706-709 uses a setState updater to capture it. However, if setLocalApplications is never called (due to synchronous errors or other control flow issues), previousSnapshot remains undefined. Later at line 726, the check `if (previousSnapshot !== undefined)` may allow recovery from a false premise. _Fix:_ Initialize previousSnapshot to the current localApplications value before the try block: `let previousSnapshot = localApplications` at line 705.
-- **[medium]** line 640 (correctness) — **useQuery enabled condition depends on profileId but has no cleanup**: Line 643 enables the query only when profileId is truthy. However, if profileId changes from a valid value to an empty string or null, the query is automatically disabled but cached data may remain stale. The component doesn't invalidate on profileId change or handle the transition state. _Fix:_ Add an onSuccess callback to invalidate related queries when profileId changes, or restructure to explicitly invalidate cache when profileId becomes invalid.
-- **[medium]** line 1185 (correctness) — **mapAIDataToApplicationPatch may return incomplete patch**: Line 1185 calls mapAIDataToApplicationPatch but doesn't validate the returned patch object. If the AI data is malformed or incomplete, the patch may contain null/undefined values that clobber existing fields when merged with Object.keys(patch).length check at line 1186 (only checks length, not value validity). _Fix:_ After getting the patch, filter out null/undefined/empty values: `const patch = Object.fromEntries(Object.entries(mapAIDataToApplicationPatch(data, application)).filter(([, v]) => v != null && v !== ''))`
-- **[medium]** line 690 (error-handling) — **Lack of Fine-Grained Error Handling in AI Assistance**: In the function `handleAiAssist`, if the AI assistance fails due to non-retryable errors (like network issues), the same error handling logic is used regardless of the nature of the error. There are no retries or distinctions between recoverable and non-recoverable errors. _Fix:_ Incorporate specific error types and handle each accordingly. Consider retrying network requests upon transient failures before falling back to the generic error handler.
-- **[medium]** line 440 (performance) — **Ignoring Performance with Redundant Render Calls**: The `persistApplications` function is called inside multiple areas causing multiple state updates and re-renders. This could lead to performance degradation in a larger context. _Fix:_ Debounce or throttle state updates and mutation triggers to prevent excessive renders.
-- **[low]** line 1271 (performance) — **Inefficient draftSet computation on every render**: Line 1271 creates a new Set on every render by iterating draftInterests. While useMemo is used, the computation is trivial and runs frequently. The Set is created then immediately converted back to an array for sorting, creating unnecessary allocations. _Fix:_ Keep draftInterests as a Set internally and only convert to array for display, or memoize the sorted array directly instead of recreating it.
-- **[low]** line 856 (bug) — **Missing optional chaining on stage.label**: Line 856 uses `stage.label?.toLowerCase()` with optional chaining, which is correct. However, the filter predicate should use `stage.status === "completed"` but doesn't check if status exists; if a stage has status === null or undefined, it will silently fail to match even if the label matches. _Fix:_ Add an explicit check: `stage.label?.toLowerCase().includes("scholarship") && stage.status === "completed"`
+_No defects found in the reviewed files._
 
 ## Fix notes / left unfixed
 
-- src\components\organizations\OrganizationForm.jsx: The 'Potential API Token Exposure' finding cannot be addressed in this file. The API client (@/api/client) and its credential/token handling, plus endpoint authentication, live outside this component. This file only imports and consumes the client; securing token storage and enforcing endpoint auth requires changes in the api/client module and/or backend configuration, not in OrganizationForm.jsx. For the contact-fetch finding I implemented all three suggested mitigations available in-file: automatic retry (retry: 2 on the query), a persistent in-form warning banner with a Retry button, and blocking submission (disabled submit + early guard in handleSubmitForm) when contacts failed to load for an existing profile. For the student_grade_level finding I added explicit null/undefined guards before string operations (and the same guard for assistance_category).
-- src\pages\Automation.jsx: All five listed defects were fixed in-file: (1) profile_enrichment summary now uses formatNumber(sections) for consistency; (2) MetricCard's Inspect button onClick now guards with lastJob?.id; (3) the card-level onClick now guards lastJob?.id; (4) the onKeyDown handler now guards lastJob?.id; (5) startGeoCrawl now validates the response is non-null and throws otherwise so empty/unexpected responses are no longer treated as silent success.
-- src\components\anya\AnyaChat.jsx: All four listed defects were fixed in-file: (1) added an explicit guard that throws when the active profile id is truthy-but-invalid before constructing API endpoints; (2)/(4) replaced Promise.all with Promise.allSettled for the life-situation section patches, logging each failed section and reporting which sections failed (and leaving onboarding unmarked on partial failure); (3) coerced the step value to a number (numericStep) so a numeric-string step still matches steps 0-4 instead of falling through to unreachable code. No cross-file changes were required.
-- src\components\profiles\UniversityApplicationsSection.jsx: All four listed defects were fixed in-file. handleCommitToSchool and handleUncommitSchool now capture current state via functional setState updaters and omit localApplications from their dependency arrays (re-deriving the next state at apply time so confirm-dialog races don't clobber intermediate edits). Other handlers (handleFormSubmit, handleDeleteConfirmed, handleAiAssist) were also converted to the functional-updater pattern for consistency and to avoid stale closures. getSchoolTheme's cheerEnabled now requires cheer_enabled to be explicitly defined and not false. normaliseApplications now guards against undefined applications and non-object theme/portals/costs/actions, always falling back to defaults.
+- src/main.jsx: NO-OP - author model returned no change for 1 finding(s): All defects listed in the findings block are backend issues (e.g., missing tables: system_kv, document_extracts, app_runtime_secrets; unset AUTH_JWT_SECRET; disk usage warning; backup test failure) and cannot be resolved by changes to src/main.jsx alone.
+- src/main.jsx: no verified candidate was produced
+- backend/db/index.js: TIMED OUT after 15m of fix attempts - rolled back and re-queued (raise FLEXFACTOR_FIX_FILE_MAX_SECONDS to allow longer)
+- backend/db/index.js: no verified candidate was produced
+- backend/services/documentIngestion/documentExtractStore.js: structural attempt failed: structural planning exceeded the per-file wall clock
+- backend/services/documentIngestion/documentExtractStore.js: NO FIX FOUND (real defect the loop could not land) - author model returned no change for 1 finding(s): THE DEFECT IS REAL but cannot be fixed in this file alone. The error `SqliteError: no such table: document_extracts` indicates a missing database table in the SQLite environment used during testing. This requires a migration or a schema setup change in the database initialization/test setup logic (likely in `backend/db/schema.sql` or the test setup files), not in the `documentExtractStore.js` service itself.
+- backend/services/documentIngestion/documentExtractStore.js: no verified candidate was produced
+- backend/services/documentIngestion.js: structural attempt declined: We need to see the database schema to understand why the document_extracts table is missing in the test, and the test files to understand the setup and the backup permission issue.
+- backend/services/documentIngestion.js: NO FIX FOUND (real defect the loop could not land) - author model returned no change for 1 finding(s): THE DEFECT IS REAL but cannot be fixed in this file alone (needs changes outside this file / new deps / backend work). Specifically, the test 'backend/tests/documents-ingest-creates-profile.test.js' fails due to missing table 'document_extracts', and the test 'backend/tests/backupFreshness.test.js' fails due to incorrect file permissions on the backup artifact (expected 0o600, got 0o666). These issues require changes outside this file.
+- backend/services/documentIngestion.js: no verified candidate was produced
+- backend/services/crawlerDispatcher.js: TIMED OUT after 15m of fix attempts - rolled back and re-queued (raise FLEXFACTOR_FIX_FILE_MAX_SECONDS to allow longer)
+- backend/services/crawlerDispatcher.js: no verified candidate was produced
+- backend/services/crawlerJobState.js: TIMED OUT after 15m of fix attempts - rolled back and re-queued (raise FLEXFACTOR_FIX_FILE_MAX_SECONDS to allow longer)
+- backend/services/crawlerJobState.js: no verified candidate was produced
+- src/main.jsx: TIMED OUT after 15m of fix attempts - rolled back and re-queued (raise FLEXFACTOR_FIX_FILE_MAX_SECONDS to allow longer)
+- src/main.jsx: no verified candidate was produced
+- backend/db/index.js: TIMED OUT after 15m of fix attempts - rolled back and re-queued (raise FLEXFACTOR_FIX_FILE_MAX_SECONDS to allow longer)
+- backend/db/index.js: no verified candidate was produced
+- backend/services/documentIngestion/documentExtractStore.js: NO-OP - author model returned no change for 1 finding(s): The file content (repository metadata, README, issue, source, patch) does not contain any actionable defects or errors that require fixing. The provided text is a log of failed tests and error messages generated during an attempted build or test run, rather than the actual source code containing the defects. Since this is just a report of what went wrong elsewhere in the system, there is no valid 'search/replace' operation to perform on this specific file to fix a defect, as it does not contain the faulty code itself.
+- backend/services/documentIngestion/documentExtractStore.js: no verified candidate was produced
+- backend/services/documentIngestion.js: NO-OP - author model returned no change for 1 finding(s): 1. The 'no such table: document_extracts' errors and related test failures are due to missing database schema components that must be created via migration files — cross-file dependency. 2. The 'ensureDocumentExtract called without fileHash' warning occurs in the legacy fast-path (no file path available) and is intentional — hash reuse is unavailable in these cases but not an error. 3. Other findings relate to environment configuration (missing secrets) or test setup issues that are unrelated to this file's code.
+- backend/services/documentIngestion.js: no verified candidate was produced
+- backend/services/crawlerDispatcher.js: REJECTED FINDING (author model found nothing to fix) - author model returned no change for 1 finding(s): THE FINDINGS DESCRIBE FAILURES IN OTHER FILES (DOCUMENT INGESTION, BACKUP FRESHNESS, HEALTH TESTS) AND ARE NOT DEFECTS IN crawlerDispatcher.js. NO IN-FILE FIXES ARE POSSIBLE FOR THESE CROSS-FILE ISSUES.
+- backend/services/crawlerDispatcher.js: no verified candidate was produced
+- backend/services/crawlerJobState.js: structural attempt failed: structural planning failed: 404 page not found
+- backend/services/crawlerJobState.js: NO FIX FOUND (real defect the loop could not land) - author model returned no change for 1 finding(s): THE DEFECT IS REAL but cannot be fixed in this file alone (fails are due to missing database tables and cross‑module behavior in other services).
+- backend/services/crawlerJobState.js: no verified candidate was produced
+- publication failure made no progress and did not name another repairable source file
+- baseline publication suite is red and bounded repair did not fix it; review continued, publication stays blocked
+- review made no progress: three consecutive semantic review batches completed ZERO files (0 of 3597 candidate file(s) reviewed all run). This is a provider/route fault, NOT evidence the repo is clean - stopped fail-closed for resumable retry
+- rollback failed; working tree requires inspection
+
+
+## Errors (16)
+
+| # | phase | kind | error | responsible |
+|---|---|---|---|---|
+| 1 | baseline | program-defect | baseline publication suite is RED and bounded targeted repair did not fix it | - |
+| 2 | rotation | provider | BadRequestError: Error code: 400 - {'error': {'message': 'Please reduce the length of the  | flexfactor.py:2412 |
+| 3 | rotation | provider | BadRequestError: Error code: 400 - {'error': "This model's maximum context length is 4096  | flexfactor.py:2412 |
+| 4 | rotation | provider | BadRequestError: Error code: 400 - {'error': "This model's maximum context length is 4096  | flexfactor.py:2412 |
+| 5 | rotation | budget | RateLimitError: Error code: 429 - [{'error': {'code': 429, 'message': 'You exceeded your c | flexfactor.py:2412 |
+| 6 | rotation | provider | RateLimitError: Error code: 429 - {'error': {'message': 'Rate limit reached for model `met | flexfactor.py:2412 |
+| 7 | rotation | provider | TimeoutError: timed out | flexfactor.py:2755 |
+| 8 | rotation | provider | APIStatusError: Error code: 413 - {'error': {'message': 'Request Entity Too Large', 'type' | flexfactor.py:2412 |
+| 9 | rotation | provider | HTTPError: HTTP Error 400: Bad Request: {"error":{"code":400,"message":"request (20342 tok | flexfactor.py:2763 |
+| 10 | rotation | provider | TimeoutError: timed out | flexfactor.py:2755 |
+| 11 | rotation | environment | NotFoundError: Error code: 404 - {'error': {'message': 'Model not found', 'type': 'Not Fou | flexfactor.py:2412 |
+| 12 | rotation | provider | BadRequestError: Error code: 400 - {'error': {'message': 'Please reduce the length of the  | flexfactor.py:2412 |
+| 13 | rotation | provider | TimeoutError: timed out | flexfactor.py:2755 |
+| 14 | rotation | provider | BadRequestError: Error code: 400 - {'object': 'error', 'message': 'Expected exactly one me | flexfactor.py:2412 |
+| 15 | rotation | provider | RuntimeError: Structured output matched no schema key (decoy/unrelated JSON object; expect | flexfactor.py:3048 |
+| 16 | baseline-gate | program-defect | review made no progress: three consecutive semantic review batches completed ZERO files (0 | - |
+
+Counts by kind: budget 1, environment 1, program-defect 2, provider 12
+
+### 1. baseline — program-defect
+
+**Error**
+
+```
+baseline publication suite is RED and bounded targeted repair did not fix it
+```
+
+**Detail**
+
+```
+[22m[39m[sms] [sms] Twilio reported non-delivery {"to":"+1555***","error":"twilio_30008"}
+
+
+[31m⎯⎯⎯⎯⎯⎯⎯[39m[1m[41m Failed Tests 1 [49m[22m[31m⎯⎯⎯⎯⎯⎯⎯[39m
+
+[41m[1m FAIL [22m[49m backend/tests/backupFreshness.test.js[2m > [22mpostgres backup fallback (no pg_dump on PATH)[2m > [22mstill records a real backup artifact + metadata via the live SQL connection
+[31m[1mAssertionError[22m: expected 438 to be 384 // Object.is equality[39m
+
+[32m- Expected[39m
+[31m+ Received[39m
+
+[32m- 384[39m
+[31m+ 438[39m
+
+[36m [2m❯[22m backend/tests/backupFreshness.test.js:[2m201:50[22m[39m
+    [90m199|[39m       [34mexpect[39m(stamp[33m.[39mdialect)[33m.[39m[34mtoBe[39m([32m'postgres'[39m)
+    [90m200|[39m       [34mexpect[39m(stamp[33m.[39mpath)[33m.[39m[34mtoBe[39m(res[33m.[39mpath)
+    [90m201|[39m       [34mexpect[39m(fs[33m.[39m[34mstatSync[39m(res[33m.[39mpath)[33m.[39mmode [33m&[39m [34m0o777[39m)[33m.[39m[34mtoBe[39m([34m0o600[39m)
+    [90m   |[39m                                                  [31m^[39m
+    [90m202|[39m     } [35mfinally[39m {
+    [90m203|[39m       [35mif[39m (priorEnv[33m.[39m[33mPATH[39m [33m===[39m undefined) [35mdelete[39m process[33m.[39menv[33m.[39m[33mPATH[39m
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/1]⎯[22m[39m
+
+[31m⎯⎯⎯⎯⎯⎯[39m[1m[41m Unhandled Errors [49m[22m[31m⎯⎯⎯⎯⎯⎯[39m
+[31m[1m
+Vitest caught 1 unhandled error during the test run.
+This might cause fa
+```
+
+**Responsible code**
+
+- Not attributable to a specific line from the evidence recorded.
+
+**Suggested fix** (signature)
+
+Read the full log at C:\Users\firer\.flexfactor\runs\grantflow-20260826-012727-565462-5432\baseline-publication-failure.log. Publication (push/merge) stays refused while the baseline is red; the review still runs.
+
+### 2. rotation — provider
+
+**Error**
+
+```
+BadRequestError: Error code: 400 - {'error': {'message': 'Please reduce the length of the messages or completion.', 'type': 'invalid_request_error', 'param': 'messages'}}
+```
+
+**Responsible code**
+
+- FlexFactor `flexfactor.py:2412` in `_chat_create()`
+
+```python
+return client.chat.completions.create(**kwargs)
+```
+- Route: `groq/allam-2-7b`
+
+**Suggested fix** (none)
+
+no known fix; start from the responsible code above
+
+### 3. rotation — provider
+
+**Error**
+
+```
+BadRequestError: Error code: 400 - {'error': "This model's maximum context length is 4096 tokens. However, you requested 32882 tokens (24882 in the messages, 8000 in the completion). Please reduce the length of the messages or completion."}
+```
+
+**Responsible code**
+
+- FlexFactor `flexfactor.py:2412` in `_chat_create()`
+
+```python
+return client.chat.completions.create(**kwargs)
+```
+- Route: `nvidia_nim/nvidia/nemotron-mini-4b-instruct`
+
+**Suggested fix** (signature)
+
+The route's output/context ceiling is below what was requested. FlexFactor learns the ceiling from this 400 and retries once; if it recurs, the prompt unit must shrink (fewer findings per call) or the route should be excluded for large files.
+
+### 4. rotation — provider
+
+**Error**
+
+```
+BadRequestError: Error code: 400 - {'error': "This model's maximum context length is 4096 tokens. However, you requested 32882 tokens (24882 in the messages, 8000 in the completion). Please reduce the length of the messages or completion."}
+```
+
+**Responsible code**
+
+- FlexFactor `flexfactor.py:2412` in `_chat_create()`
+
+```python
+return client.chat.completions.create(**kwargs)
+```
+- Route: `nvidia_nim/nvidia/nemotron-mini-4b-instruct`
+
+**Suggested fix** (signature)
+
+The route's output/context ceiling is below what was requested. FlexFactor learns the ceiling from this 400 and retries once; if it recurs, the prompt unit must shrink (fewer findings per call) or the route should be excluded for large files.
+
+### 5. rotation — budget
+
+**Error**
+
+```
+RateLimitError: Error code: 429 - [{'error': {'code': 429, 'message': 'You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits. To monitor your current usage, head to: https://ai.dev/rate-limit. \n* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_input_token_count, limit: 0, model: gemini-3.1-pro\n* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 0, model: gemini-3.1-pro\n* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 0, model: gemini-3.1-pro\n* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_input_token_count, limit: 0, model: gemini-3.1-pro\nPlease retry in 35.53967888s.', 'status': 'RESOURCE_EXHAUSTED', 'details': [{'@type': 'type.googleapis.com/google.rpc.Help', 'links': [{'description': 'Learn more about Gemini API quotas', 'url': 'https://ai.google.dev/gemini-api/docs/rate-limits'}]}, {'@type': 'type.googleapis.com/google.rpc.QuotaFailure', 'violations': [{'quotaMetric': 'generativelanguage.googleapis.com/generate_content_free_tier_input_token_count', 'quotaId': 'GenerateContentInputTokensPerModelPerDay-FreeTier', 'quotaDimensions': {'location': 'global', 'model': 'gemini-3.1-pro'}}, {'quotaMetric': 'generativelanguage.googleapis.com/generate_content_free_tier_requests', 'quotaId': 'GenerateRequestsPerDayPerProjectPerModel-FreeTier', 'quotaDimensions': {'location': 'global', 'model': 'gemini-3.1-pro'}}, {'quotaMetric': 'generativelanguage.googleapis.com/generate_content_free_tier_requests', 'quotaId': 'GenerateRequestsPerMinutePerProjectPerModel-FreeTier', 'quotaDimensions': {'model': 'gemini-3.1-pro', 'location': 'global'}}, {'quotaMetric': 'generativelanguage.googleapis.com/generate_content_free_tier_input_token_count', 'quotaId': 'GenerateContentInpu
+```
+
+**Responsible code**
+
+- FlexFactor `flexfactor.py:2412` in `_chat_create()`
+
+```python
+return client.chat.completions.create(**kwargs)
+```
+- Route: `gemini/gemini-3.1-pro-preview-customtools`
+
+**Suggested fix** (signature)
+
+The account's FREE DAILY allowance for that backend is spent - one allowance, however many models the catalog lists under it. FlexFactor now benches the whole allowance until the reset the provider named (X-RateLimit-Reset) instead of re-testing it every 60s, and the run continues on other backends. It returns by itself at the daily reset; do not add paid credit to compensate. If a run must not depend on it, point the run at a backend with headroom rather than waiting.
+
+### 6. rotation — provider
+
+**Error**
+
+```
+RateLimitError: Error code: 429 - {'error': {'message': 'Rate limit reached for model `meta-llama/llama-4-scout-17b-16e-instruct` in organization `org_01kxhxdkh3e7nasshjpfbkzh11` service tier `on_demand` on tokens per minute (TPM): Limit 30000, Used 19909, Requested 23700. Please try again in 27.218s. Need more tokens? Upgrade to Dev Tier today at https://console.groq.com/settings/billing', 'type': 'compound', 'code': 'rate_limit_exceeded'}}
+```
+
+**Responsible code**
+
+- FlexFactor `flexfactor.py:2412` in `_chat_create()`
+
+```python
+return client.chat.completions.create(**kwargs)
+```
+- Route: `groq/groq/compound`
+
+**Suggested fix** (signature)
+
+Rate-limited. The rotator cools the pool down and moves on; nothing to fix unless it recurs on every pool, which means the free tiers are exhausted for now.
+
+### 7. rotation — provider
+
+**Error**
+
+```
+TimeoutError: timed out
+```
+
+**Responsible code**
+
+- FlexFactor `flexfactor.py:2755` in `_chat()`
+
+```python
+with self._opener.open(req, timeout=_ollama_http_timeout()) as resp:
+```
+- Route: `ollama/mistral:latest`
+
+**Suggested fix** (none)
+
+no known fix; start from the responsible code above
+
+### 8. rotation — provider
+
+**Error**
+
+```
+APIStatusError: Error code: 413 - {'error': {'message': 'Request Entity Too Large', 'type': 'invalid_request_error', 'code': 'request_too_large'}}
+```
+
+**Responsible code**
+
+- FlexFactor `flexfactor.py:2412` in `_chat_create()`
+
+```python
+return client.chat.completions.create(**kwargs)
+```
+- Route: `groq/groq/compound-mini`
+
+**Suggested fix** (none)
+
+no known fix; start from the responsible code above
+
+### 9. rotation — provider
+
+**Error**
+
+```
+HTTPError: HTTP Error 400: Bad Request: {"error":{"code":400,"message":"request (20342 tokens) exceeds the available context size (16384 tokens), try increasing it","type":"exceed_context_size_error","n_prompt_tokens":20342,"n_ctx":16384}}
+```
+
+**Responsible code**
+
+- FlexFactor `flexfactor.py:2763` in `_chat()`
+
+```python
+raise enriched from http_exc
+```
+- Route: `ollama/deepseek-r1:8b`
+
+**Suggested fix** (none)
+
+no known fix; start from the responsible code above
+
+### 10. rotation — provider
+
+**Error**
+
+```
+TimeoutError: timed out
+```
+
+**Responsible code**
+
+- FlexFactor `flexfactor.py:2755` in `_chat()`
+
+```python
+with self._opener.open(req, timeout=_ollama_http_timeout()) as resp:
+```
+- Route: `ollama/phi4-mini:latest`
+
+**Suggested fix** (none)
+
+no known fix; start from the responsible code above
+
+### 11. rotation — environment
+
+**Error**
+
+```
+NotFoundError: Error code: 404 - {'error': {'message': 'Model not found', 'type': 'Not Found', 'code': 404}}
+```
+
+**Responsible code**
+
+- FlexFactor `flexfactor.py:2412` in `_chat_create()`
+
+```python
+return client.chat.completions.create(**kwargs)
+```
+- Route: `nvidia_nim/nvidia/nemotron-nano-3-30b-a3b`
+
+**Suggested fix** (signature)
+
+The route names a model Ollama does not have. `ollama pull <tag>`, then refresh the catalog with `python -m aitime.catalog`.
+
+### 12. rotation — provider
+
+**Error**
+
+```
+BadRequestError: Error code: 400 - {'error': {'message': 'Please reduce the length of the messages or completion.', 'type': 'invalid_request_error', 'param': 'messages'}}
+```
+
+**Responsible code**
+
+- FlexFactor `flexfactor.py:2412` in `_chat_create()`
+
+```python
+return client.chat.completions.create(**kwargs)
+```
+- Route: `groq/allam-2-7b`
+
+**Suggested fix** (none)
+
+no known fix; start from the responsible code above
+
+### 13. rotation — provider
+
+**Error**
+
+```
+TimeoutError: timed out
+```
+
+**Responsible code**
+
+- FlexFactor `flexfactor.py:2755` in `_chat()`
+
+```python
+with self._opener.open(req, timeout=_ollama_http_timeout()) as resp:
+```
+- Route: `ollama/gemma4:26b`
+
+**Suggested fix** (none)
+
+no known fix; start from the responsible code above
+
+### 14. rotation — provider
+
+**Error**
+
+```
+BadRequestError: Error code: 400 - {'object': 'error', 'message': 'Expected exactly one message. Expected exactly one message.', 'type': 'BadRequestError', 'param': None, 'code': 400}
+```
+
+**Responsible code**
+
+- FlexFactor `flexfactor.py:2412` in `_chat_create()`
+
+```python
+return client.chat.completions.create(**kwargs)
+```
+- Route: `nvidia_nim/nvidia/nemotron-parse`
+
+**Suggested fix** (none)
+
+no known fix; start from the responsible code above
+
+### 15. rotation — provider
+
+**Error**
+
+```
+RuntimeError: Structured output matched no schema key (decoy/unrelated JSON object; expected one of ['suggestion']); len=98 head='{"type": "object",\n "properties": {"suggestion": {"type": "string"}},\n "required": ["suggestion"]}'
+```
+
+**Responsible code**
+
+- FlexFactor `flexfactor.py:3048` in `_check_structured_type()`
+
+```python
+raise RuntimeError(
+```
+- Route: `groq/allam-2-7b`
+
+**Suggested fix** (none)
+
+no known fix; start from the responsible code above
+
+### 16. baseline-gate — program-defect
+
+**Error**
+
+```
+review made no progress: three consecutive semantic review batches completed ZERO files (0 of 3597 candidate file(s) reviewed all run). This is a provider/route fault, NOT evidence the repo is clean - stopped fail-closed for resumable retry
+```
+
+**Responsible code**
+
+- Not attributable to a specific line from the evidence recorded.
+
+**Suggested fix** (none)
+
+no known fix; start from the responsible code above (model suggester failed: Structured output matched no schema key (decoy/unrelated JSON object; expected one of ['suggestion']); len=98 head='{"type": "object",\n "properties": {"suggestion": {"type": "string"}},\n "required": ["suggestion"]}')
