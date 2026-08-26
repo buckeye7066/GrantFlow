@@ -62,7 +62,7 @@
  */
 
 import { canonicalOpportunityKey } from '../../crawler-os/contract.js'
-import { STATE_REGISTRY } from '../shared/data/stateRegistry.js'
+import { programIdentityKey, sameProgram, programTokens } from "../../config/programIdentity.js"
 import { isPointerKind } from '../../config/opportunityKindClasses.js'
 import { classifyLocatorKindFromRow } from '../sources/locatorUrlKind.js'
 import {
@@ -767,125 +767,15 @@ export async function markGapNotesConsumed(db, ids, { now = new Date() } = {}) {
  * The FUNDER is deliberately NOT part of the key: the owner's own examples pair
  * the same program with two different funder spellings.
  */
-const IDENTITY_STOPWORDS = new Set([
-  'the', 'a', 'an', 'of', 'for', 'and', 'at', 'in', 'to', 'on',
-  'program', 'programs', 'grant', 'grants', 'scholarship', 'scholarships',
-  'fund', 'funds', 'award', 'awards', 'federal', 'national', 'initiative',
-  // "Scholars" is a suffix half the scholarship world uses ("Coca-Cola
-  // Scholars" / "Coca-Cola Scholars Program"); it names no program on its own.
-  'scholars',
-])
-
-/** Institution/year qualifiers that a variant appends to the same program. */
-function stripProgramQualifiers(title) {
-  return String(title || '')
-    .replace(/\((?:\s*20\d{2}\s*[-–/]?\s*\d{0,4}\s*)\)/g, ' ')
-    .replace(/\b20\d{2}\s*[-–/]\s*\d{2,4}\b/g, ' ')
-    .replace(/\bat\s+.*$/i, ' ')
-    .replace(/\s*[-–—]\s*.*$/, ' ')
-}
-
-/** The distinctive tokens of a program name, qualifiers stripped. */
-export function programTokens(row) {
-  return [...new Set(
-    stripProgramQualifiers(row?.title)
-      .toLowerCase()
-      .replace(/[^a-z0-9 ]+/g, ' ')
-      .split(/\s+/)
-      .filter((t) => t.length > 1 && !IDENTITY_STOPWORDS.has(t)),
-  )].sort()
-}
-
-export function programIdentityKey(row) {
-  const canonical = row?.canonical_opportunity_key
-  if (typeof canonical === 'string' && canonical.trim()) return `c:${canonical.trim().toLowerCase()}`
-  const tokens = programTokens(row)
-  if (tokens.length > 0) return `t:${tokens.join('-')}`
-  const derived = canonicalOpportunityKey({
-    external_id: row?.external_id ?? null,
-    title: row?.title ?? null,
-    sponsor: row?.sponsor ?? null,
-    url: row?.application_url || row?.source_url || null,
-  })
-  return derived ? `k:${derived}` : `g:${row?.grant_id}`
-}
-
-/**
- * Minimum length of a LONE distinctive token before it may claim identity with
- * a longer name. Without it, "Gates Scholarship" (`gates`) would collapse into
- * "Gates Millennium Scholars" — different programs that share a surname. With
- * it, "QuestBridge" (11 chars) still collapses into "QuestBridge National
- * College Match", which the owner listed as one program.
- */
-export const MIN_LONE_TOKEN_IDENTITY_LENGTH = 6
-
-/**
- * QUALIFIER TOKENS — words a VARIANT of the same program adds: a state, an
- * institution word, a scope word. Read out of `STATE_REGISTRY` so a state name
- * cannot be missed by a hand-typed list.
- *
- * The distinction this encodes: "Tennessee HOPE Scholarship" differs from "HOPE
- * Scholarship" by a PLACE; "Gates Millennium Scholars" differs from "Gates
- * Scholarship" by a PROGRAM WORD. The first pair is one program, the second is
- * two — and no length or overlap heuristic can tell them apart.
- */
-const QUALIFIER_TOKENS = (() => {
-  const out = new Set([
-    'state', 'statewide', 'university', 'college', 'community', 'county', 'city',
-    'regional', 'district', 'campus', 'institute', 'school', 'usa', 'us',
-    'undergraduate', 'graduate', 'general', 'annual',
-  ])
-  for (const entry of Object.values(STATE_REGISTRY || {})) {
-    for (const word of String(entry?.name ?? '').toLowerCase().split(/\s+/)) {
-      if (word.length > 1) out.add(word)
-    }
-  }
-  return out
-})()
-
-/**
- * Are these two pipeline rows the SAME PROGRAM?
- *
- * A hash key alone cannot answer this, because the owner's own duplicate list
- * is made of SUBSET pairs, not equal ones: "Pell Grant" ⊂ "Federal Pell Grant",
- * "QuestBridge" ⊂ "QuestBridge National College Match", "HOPE Scholarship" ⊂
- * "Tennessee HOPE Scholarship (2026-27)", "Federal Work-Study" ⊂ "Federal
- * Work-Study at Middle Tennessee State University (2026-27)". A set-equality
- * key reports the first two of those as different programs — measured, and it
- * is why the dedup is a pairwise predicate rather than a Map key.
- *
- * The FUNDER is deliberately not consulted: the owner's examples pair one
- * program with two funder spellings ("Federal Student Aid" vs "U.S. Department
- * of Education").
- *
- * NOT the same program (asserted in the tests): "Tennessee HOPE Scholarship" vs
- * "Tennessee Promise Scholarship" — neither token set contains the other.
- */
-export function sameProgram(a, b) {
-  const keyA = programIdentityKey(a)
-  const keyB = programIdentityKey(b)
-  if (keyA === keyB) return true
-  // A canonical key is an EXPLICIT identity claim; disagreement there is final.
-  if (keyA.startsWith('c:') && keyB.startsWith('c:')) return false
-
-  const ta = programTokens(a)
-  const tb = programTokens(b)
-  if (ta.length === 0 || tb.length === 0) return false
-  const [small, large] = ta.length <= tb.length ? [ta, tb] : [tb, ta]
-  const largeSet = new Set(large)
-  if (!small.every((t) => largeSet.has(t))) return false
-  // Containment alone is not identity when the shared core is ONE short word.
-  // Two independent escapes, and a pair needs only one:
-  //   (a) the lone token is long enough to be a program NAME ("questbridge"),
-  //   (b) every extra word in the longer title is a QUALIFIER — a place, an
-  //       institution, a scope — so the longer title is the same program with
-  //       its jurisdiction spelled out ("Tennessee HOPE Scholarship").
-  if (small.length === 1 && small[0].length < MIN_LONE_TOKEN_IDENTITY_LENGTH) {
-    const extras = large.filter((t) => !small.includes(t))
-    if (!extras.every((t) => QUALIFIER_TOKENS.has(t))) return false
-  }
-  return true
-}
+// Program identity moved to backend/config/programIdentity.js (2026-08-25) so the
+// OWNER-FACING read path can consult the SAME predicate. Re-exported here so
+// every existing importer of this module keeps working and the two cannot drift.
+export {
+  programTokens,
+  programIdentityKey,
+  sameProgram,
+  MIN_LONE_TOKEN_IDENTITY_LENGTH,
+} from "../../config/programIdentity.js"
 
 /**
  * Which duplicate survives. All candidates here have already passed all four
