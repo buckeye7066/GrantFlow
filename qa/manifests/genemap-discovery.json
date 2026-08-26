@@ -13,7 +13,7 @@
   "required_env": ["CORS_ORIGINS", "SKIP_LLM_KEY_CHECK", "ADMIN_EMAILS"],
   "launch_env": {
     "NODE_ENV": "development",
-    "CORS_ORIGINS": "http://127.0.0.1:5173",
+    "CORS_ORIGINS": "http://localhost:5173,http://127.0.0.1:5173",
     "SKIP_LLM_KEY_CHECK": "1",
     "DISABLE_MODEL_PUBLICATION": "1",
     "ADMIN_EMAILS": "eva-admin@example.com"

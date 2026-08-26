@@ -14,7 +14,9 @@
   "launch_env": {
     "NODE_ENV": "development",
     "DB_PROVIDER": "sqlite",
-    "CORS_ORIGIN": "http://127.0.0.1:5173",
+    "PORT": "8080",
+    "VITE_APP_BASE": "/",
+    "CORS_ORIGIN": "http://localhost:5173",
     "SMOKE_MODE": "1",
     "DISABLE_AI": "1",
     "SQLITE_DB_PATH": ".eva-tmp/grantflow/grantflow.sqlite"
