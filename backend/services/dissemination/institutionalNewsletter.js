@@ -2,7 +2,8 @@ import { createHash } from 'node:crypto'
 
 const EMAIL_RX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
 const PLACEHOLDER_DOMAIN_RX = /\.(?:invalid|test)$|@(?:example\.(?:com|org|net)|localhost)$/i
-const WORD_RX = /[a-z][a-z0-9-]*/g
+const WORD_RX = /[A-Za-z][A-Za-z0-9-]*/g
+const R_LANGUAGE_RX = /\bR\b(?!\s*&\s*[Dd]\b)/
 const SHORT_RESEARCH_TERMS = new Set(['ai', 'ml', 'r'])
 const STOP_WORDS = new Set(['and', 'for', 'from', 'grant', 'grants', 'funding', 'the', 'with'])
 const MAX_GROUPS = 500
@@ -57,8 +58,20 @@ function httpsUrl(value) {
 }
 
 function tokens(...values) {
-  return new Set(values.flatMap((value) => text(value).toLowerCase().match(WORD_RX) || [])
-    .filter((value) => (value.length >= 3 || SHORT_RESEARCH_TERMS.has(value)) && !STOP_WORDS.has(value)))
+  const result = new Set()
+  for (const value of values) {
+    const source = text(value)
+    if (R_LANGUAGE_RX.test(source)) result.add('r')
+    for (const match of source.matchAll(WORD_RX)) {
+      const rawToken = match[0]
+      const token = rawToken.toLowerCase()
+      if (token === 'r') continue
+      if ((token.length >= 3 || SHORT_RESEARCH_TERMS.has(token)) && !STOP_WORDS.has(token)) {
+        result.add(token)
+      }
+    }
+  }
+  return result
 }
 
 function overlap(left, right) {

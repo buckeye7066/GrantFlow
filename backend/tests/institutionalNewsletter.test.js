@@ -150,6 +150,37 @@ describe('institutional newsletter bundle', () => {
     expect(bundle.editions[0].opportunity_ids).toEqual([`short-${topic.toLowerCase()}-award`])
   })
 
+  it('does not treat R in R&D as the R programming language', () => {
+    const bundle = buildInstitutionalNewsletterBundle({
+      ...baseInput,
+      groups: [{
+        id: 'r-language',
+        name: 'R Faculty',
+        topic_terms: ['R'],
+        recipient_profile_ids: ['profile-1'],
+      }],
+      opportunities: [{
+        id: 'research-development',
+        title: 'Biomedical R&D Award',
+        application_url: 'https://funding.example.org/research-development',
+      }, {
+        id: 'spaced-research-development',
+        title: 'Biomedical R & D Award',
+        application_url: 'https://funding.example.org/spaced-research-development',
+      }, {
+        id: 'r-hyphen-award',
+        title: 'R-based Statistical Methods Award',
+        application_url: 'https://funding.example.org/r-hyphen',
+      }, {
+        id: 'r-language-award',
+        title: 'R Programming Methods Award',
+        application_url: 'https://funding.example.org/r-language',
+      }],
+    })
+
+    expect(bundle.editions[0].opportunity_ids).toEqual(['r-hyphen-award', 'r-language-award'])
+  })
+
   it('rejects ambiguous group identities and invalid edition dates', () => {
     expect(() => buildInstitutionalNewsletterBundle({
       ...baseInput,

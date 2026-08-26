@@ -12,7 +12,6 @@ import sys
 import unicodedata
 
 
-THIS_FILE = pathlib.PurePosixPath("scripts/check-release-language.py")
 ROLE = "review" + "er"
 AUTHORIZATION_NOUN = "appro" + "val"
 AUTHORIZATION_VERB = "appro" + "ve"
@@ -33,7 +32,7 @@ PATTERNS = (
         ),
     ),
     (
-        "mandatory external review",
+        "required outside-party review",
         re.compile(r"\bmandatory\s+(?:independent|external)\s+review\b", re.I),
     ),
     (
@@ -160,10 +159,16 @@ RENDERED_ATTRIBUTE_RX = re.compile(
     rf'''(?P<value>{STRING_LITERAL}|\{{\s*{STRING_LITERAL}\s*\}})''',
     re.I | re.S,
 )
+PROJECTED_ATTRIBUTE_EXPRESSION_RX = re.compile(
+    r'''\b(?:aria-[a-z0-9_-]+|alt|title|placeholder)\s*=\s*'''
+    r'''\{\s*(?P<value>[^{}]*?)\s*\}''',
+    re.I | re.S,
+)
 BOUNDED_STRING_LITERAL_RX = re.compile(
-    rf'''(?P<prefix>(?:^|[=(:,\[{{;]\s*))'''
+    rf'''(?P<prefix>(?:^|[=(:,\[{{;?]\s*|'''
+    rf'''\b(?:return|throw|yield)\b\s+|=>\s*|(?:&&|\|\||\?\?|\+)\s*))'''
     rf'''(?P<literal>{STRING_LITERAL})'''
-    rf'''(?=\s*(?:[,;)\]}}/>]|$))''',
+    rf'''(?=\s*(?:(?:&&|\|\||\?\?|\+)|[:,;)\]}}/>.]|$))''',
     re.M | re.S,
 )
 HTML_COMMENT_RX = re.compile(r"<!--.*?-->", re.S)
@@ -349,10 +354,11 @@ def strip_source_comments(text: str) -> str:
         literals.append(literal)
         return f"\0{len(literals) - 1}\0"
 
-    # A delimiter may be only one visible segment inside an assigned string,
-    # object value, argument, array item, or JSX attribute. Protect those
-    # grammar-bounded literals before removing real source comments. The
-    # boundaries deliberately avoid treating prose apostrophes as JS strings.
+    # A delimiter may be only one visible segment inside an assigned, returned,
+    # arrow, or conditional string; an object value, argument, array item; or a
+    # JSX attribute. Protect those grammar-bounded literals before removing real
+    # source comments. The boundaries deliberately avoid treating prose
+    # apostrophes as JS strings.
     protected = BOUNDED_STRING_LITERAL_RX.sub(protect_bounded_partial_literal, protected)
 
     def protect_comment_shaped_literal(match: re.Match[str]) -> str:
@@ -469,6 +475,21 @@ def rendered_source_projection(text: str) -> str:
             lambda match: literal_value(match.group(0)),
             projected,
         )
+
+    def collect_projected_attribute_expression(match: re.Match[str]) -> str:
+        value = match.group("value").strip()
+        if value:
+            rendered_attributes.append(value)
+        return match.group(0)
+
+    # Constant templates and literal chains inside JSX attributes retain the
+    # outer expression braces after the general projections above. Capture
+    # their now-visible value before removing the containing tag.
+    if "=" in projected and "{" in projected:
+        projected = PROJECTED_ATTRIBUTE_EXPRESSION_RX.sub(
+            collect_projected_attribute_expression,
+            projected,
+        )
     if "<" in projected and ">" in projected:
         projected = JSX_TAG_RX.sub("", projected)
     if rendered_attributes:
@@ -561,8 +582,6 @@ def scan_repository() -> list[tuple[str, list[str]]]:
     entries = tracked_index_entries(root)
     blobs = read_index_blobs(root, [oid for _, oid in entries if oid])
     for path, oid in entries:
-        if pathlib.PurePosixPath(path.as_posix()) == THIS_FILE:
-            continue
         # A present index blob is always authoritative. The worktree fallback
         # is reserved for an intent-to-add entry that has no blob yet.
         data = blobs[oid] if oid else (root / path).read_bytes()
@@ -633,11 +652,53 @@ def run_self_test() -> None:
             "const label = \"prefix <!-- si&#103;n " + COMPLETION_SECOND
             + " --> suffix\"; return <p>{label}</p>"
         ),
+        "comment delimiters inside a returned string are visible": (
+            "function label() { return \"prefix <!-- si\\u0067n "
+            + COMPLETION_SECOND + " --> suffix\"; }"
+        ),
+        "comment delimiters inside an arrow string are visible": (
+            "const label = () => \"prefix <!-- si\\u0067n "
+            + COMPLETION_SECOND + " --> suffix\";"
+        ),
+        "comment delimiters inside a conditional string are visible": (
+            "const label = ready ? \"prefix <!-- si\\u0067n "
+            + COMPLETION_SECOND + " --> suffix\" : 'ready';"
+        ),
+        "comment delimiters inside a logical string are visible": (
+            "const label = ready && \"prefix <!-- si\\u0067n "
+            + COMPLETION_SECOND + " --> suffix\";"
+        ),
+        "comment delimiters before a dynamic suffix are visible": (
+            "const label = \"prefix <!-- si\\u0067n "
+            + COMPLETION_SECOND + " --> suffix\" + detail;"
+        ),
         "entity-split accessibility attribute": (
             "<div aria-label=\"si&#103;n " + COMPLETION_SECOND + "\" />"
         ),
         "entity-split rendered JSX attribute expression": (
             "<div title={'si&#103;n " + COMPLETION_SECOND + "'} />"
+        ),
+        "literal chain in accessibility attribute": (
+            "<div aria-label={'si' + 'gn ' + '" + COMPLETION_SECOND + "'} />"
+        ),
+        "constant template in accessibility attribute": (
+            "<div aria-label={" + template_tick + "si${'gn'} "
+            + COMPLETION_SECOND + template_tick + "} />"
+        ),
+        "comment-separated chain in rendered attribute": (
+            "<div title={'si' + /* harmless note */ 'gn ' + '"
+            + COMPLETION_SECOND + "'} />"
+        ),
+        "escaped chain in rendered attribute": (
+            "<div aria-label={'si\\u0067n ' + '" + COMPLETION_SECOND + "'} />"
+        ),
+        "conditional chain in rendered attribute": (
+            "<div aria-label={ready ? 'si' + 'gn ' + '"
+            + COMPLETION_SECOND + "' : 'ready'} />"
+        ),
+        "conditional escaped literal in rendered attribute": (
+            "<div aria-label={ready ? 'si\\u0067n "
+            + COMPLETION_SECOND + "' : 'ready'} />"
         ),
         "unicode escape in a JSX string": (
             "<p>{'si\\u0067n " + COMPLETION_SECOND + "'}</p>"
