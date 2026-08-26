@@ -10,48 +10,48 @@
 - **ZERO WORK: not one of 3597 candidate file(s) was reviewed. This run did nothing; treat it as a FAILURE, not a clean repo.**
 - **Defects found:** 7
 - **Files fixed:** 0
-- **Errors recorded:** 16 (see the Errors section below; ledger at `C:\Users\firer\.flexfactor\runs\grantflow-20260826-012727-565462-5432\errors.md`)
+- **Errors recorded:** 17 (see the Errors section below; ledger at `C:\Users\firer\.flexfactor\runs\grantflow-20260826-064954-499246-31220\errors.md`)
 - **Baseline build:** passed
 - **Unit tests added:** 0 (suite not run)
 - **Button/UI (Playwright):** skipped
 - **Cycles run:** 1
-- **Providers:** rotation:allam-2-7b
+- **Providers:** rotation:nvidia/nemotron-parse
 - **Git:** PROVIDER-OUTAGE ABORT on main: checkpoint preserved; no unverified commit created
 
 ## System inventory
 
-**171467 entries accounted for.**
+**171490 entries accounted for.**
 
 | Category | Count |
 |---|---:|
 | artifact-subtree | 50 |
-| binary-asset | 1827 |
-| configuration-documentation-or-data | 18283 |
-| first-party-source | 151296 |
+| binary-asset | 1830 |
+| configuration-documentation-or-data | 18294 |
+| first-party-source | 151305 |
 | reparse-directory | 11 |
 
 The immutable run manifest contains the complete path-level inventory. Artifact, binary, and reparse entries are named and classified; they are not represented as line-reviewed source.
 
 ## Executable evidence
 
-- **Evidence run:** `grantflow-20260826-012727-565462-5432`
-- **Exact final commit:** `46f6a72f3536cbfaba52a3887fb638f700933da3`
-- **Code map:** 4197 file(s), 18878 function(s), 1261 route(s), 3832 material control(s)
+- **Evidence run:** `grantflow-20260826-064954-499246-31220`
+- **Exact final commit:** `48fa2b1e2fb73e1f3e342cfe79afd247cbf45f63`
+- **Code map:** 4198 file(s), 18878 function(s), 1261 route(s), 3832 material control(s)
 - **Function execution:** 0/16243 with invocation evidence
 - **Route execution:** 0/1261
 - **Control execution:** 0/3832
-- **Changed-file rescan:** 1/1 (complete)
-- **Blast radius:** 1 affected file(s); analysis ran
+- **Changed-file rescan:** 0/0 (complete)
+- **Blast radius:** 0 affected file(s); analysis ran
 - **Normalized gates:** 3 pass, 3 fail, 3 blocked
 
-- **Blast Radius:** `C:\Users\firer\.flexfactor\evidence\b47e50f34e44ee5d\grantflow-20260826-012727-565462-5432\blast-radius.json`
-- **Changed File Rescan:** `C:\Users\firer\.flexfactor\evidence\b47e50f34e44ee5d\grantflow-20260826-012727-565462-5432\changed-file-rescan.json`
-- **Code Index:** `C:\Users\firer\.flexfactor\evidence\b47e50f34e44ee5d\grantflow-20260826-012727-565462-5432\code-index.json`
-- **Coverage Ledger:** `C:\Users\firer\.flexfactor\evidence\b47e50f34e44ee5d\grantflow-20260826-012727-565462-5432\coverage-ledger.json`
-- **Manifest:** `C:\Users\firer\.flexfactor\evidence\b47e50f34e44ee5d\grantflow-20260826-012727-565462-5432\manifest.json`
-- **Purpose Graph:** `C:\Users\firer\.flexfactor\evidence\b47e50f34e44ee5d\grantflow-20260826-012727-565462-5432\purpose-graph.json`
-- **Quality Gates:** `C:\Users\firer\.flexfactor\evidence\b47e50f34e44ee5d\grantflow-20260826-012727-565462-5432\quality-gates.json`
-- **Sarif:** `C:\Users\firer\.flexfactor\evidence\b47e50f34e44ee5d\grantflow-20260826-012727-565462-5432\results.sarif`
+- **Blast Radius:** `C:\Users\firer\.flexfactor\evidence\b47e50f34e44ee5d\grantflow-20260826-064954-499246-31220\blast-radius.json`
+- **Changed File Rescan:** `C:\Users\firer\.flexfactor\evidence\b47e50f34e44ee5d\grantflow-20260826-064954-499246-31220\changed-file-rescan.json`
+- **Code Index:** `C:\Users\firer\.flexfactor\evidence\b47e50f34e44ee5d\grantflow-20260826-064954-499246-31220\code-index.json`
+- **Coverage Ledger:** `C:\Users\firer\.flexfactor\evidence\b47e50f34e44ee5d\grantflow-20260826-064954-499246-31220\coverage-ledger.json`
+- **Manifest:** `C:\Users\firer\.flexfactor\evidence\b47e50f34e44ee5d\grantflow-20260826-064954-499246-31220\manifest.json`
+- **Purpose Graph:** `C:\Users\firer\.flexfactor\evidence\b47e50f34e44ee5d\grantflow-20260826-064954-499246-31220\purpose-graph.json`
+- **Quality Gates:** `C:\Users\firer\.flexfactor\evidence\b47e50f34e44ee5d\grantflow-20260826-064954-499246-31220\quality-gates.json`
+- **Sarif:** `C:\Users\firer\.flexfactor\evidence\b47e50f34e44ee5d\grantflow-20260826-064954-499246-31220\results.sarif`
 
 ## Production readiness
 
@@ -79,85 +79,82 @@ Full scorecard: `C:\Users\firer\GrantFlow\grantflow_readiness.md`
 - **Sources used:** web:duckduckgo, github, repo-rewards
 - **Repo Rewards endpoint:** `https://web-production-d7db7.up.railway.app`
 - **Sources SKIPPED (named, not silent):**
-  - `idea:Fluxx Grant Management` - model returned an incomplete idea (missing why_valuable) - forced to accept=False for Fluxx Grant Management
-  - `idea:Quazi-07/Research-Grant-Finder-Agent` - model returned an incomplete idea (missing why_valuable) - forced to accept=False for Quazi-07/Research-Grant-Finder-Agent
-  - `idea:Quazi-07/Research-Grant-Finder-Agent-V2.0` - model returned an incomplete idea (missing why_valuable) - forced to accept=False for Quazi-07/Research-Grant-Finder-Agent-V2.0
-  - `idea:RockefellerArchiveCenter/fluxx_exporter` - model returned an incomplete idea (missing why_valuable) - forced to accept=False for RockefellerArchiveCenter/fluxx_exporter
-  - `idea:ritchiea/recessart` - model returned an incomplete idea (missing why_valuable) - forced to accept=False for ritchiea/recessart
+  - `idea:OpenGrantStack/GrantReady-hub-SaaS` - model returned an incomplete idea (missing why_valuable) - forced to accept=False for OpenGrantStack/GrantReady-hub-SaaS
   - `web:searxng` - RuntimeError: FLEXFACTOR_SEARXNG_URL is not set
 
-- **Ideas accepted as serving this program's purpose:** 0 (rejected 5 - the purpose contract, not the competitor, decides)
+- **Ideas accepted as serving this program's purpose:** 3 (rejected 2 - the purpose contract, not the competitor, decides)
 
 - **Bridged into the fix stream:** 0 of 5 candidate(s)
-  - NOT bridged (5): Fluxx Grant Management, Quazi-07/Research-Grant-Finder-Agent, Quazi-07/Research-Grant-Finder-Agent-V2.0, RockefellerArchiveCenter/fluxx_exporter, ritchiea/recessart - idea rejected by the purpose contract
+  - NOT bridged (3): Fluxx, GrantHub, RockefellerArchiveCenter/fluxx_exporter - accepted idea did not map to a valid acceptance criterion
+  - NOT bridged (2): OpenGrantStack/GrantReady-hub-SaaS, ritchiea/recessart - idea rejected by the purpose contract
 
 | Competitor | Kind | Licence | Reuse mode | Purpose mapping | Verdict | Fix stream | Adoptable idea |
 |---|---|---|---|---|---|---|---|
-| [Quazi-07/Research-Grant-Finder-Agent](https://github.com/Quazi-07/Research-Grant-Finder-Agent) | oss | `UNKNOWN` | `reference-only` | purpose-only | reject | NOT entered - idea rejected by the purpose contract | (idea extraction failed) |
-| [RockefellerArchiveCenter/fluxx_exporter](https://github.com/RockefellerArchiveCenter/fluxx_exporter) | oss | `MIT` | `direct-code-reuse` | purpose-only | reject | NOT entered - idea rejected by the purpose contract | (idea extraction failed) |
-| [ritchiea/recessart](https://github.com/ritchiea/recessart) | oss | `AGPL-3.0` | `clean-room-from-documented-behavior` | purpose-only | reject | NOT entered - idea rejected by the purpose contract | (idea extraction failed) |
-| [Quazi-07/Research-Grant-Finder-Agent-V2.0](https://github.com/Quazi-07/Research-Grant-Finder-Agent-V2.0) | oss | `UNKNOWN` | `reference-only` | purpose-only | reject | NOT entered - idea rejected by the purpose contract | (idea extraction failed) |
-| [Fluxx Grant Management](https://www.fluxx.io/grants-management-software-nonprofit) | market | `UNKNOWN` | `clean-room-from-documented-behavior` | purpose-only | reject | NOT entered - idea rejected by the purpose contract | (idea extraction failed) |
-
-### Quazi-07/Research-Grant-Finder-Agent
-
-- **Evidence:** <https://github.com/Quazi-07/Research-Grant-Finder-Agent>
-- **Licence:** `UNKNOWN` (via repo-rewards)
-- **Reuse mode:** `reference-only` - licence UNKNOWN could not be verified; record the capability as a reference and copy nothing
-- **Idea:** (idea extraction failed) - 
-- **Value here:** 
-- **Purpose / criterion mapping:** purpose-only - NOT ACTED ON: model returned an incomplete idea (missing why_valuable) - forced to accept=False. not judged: Expecting value: line 1 column 1 (char 0)
-- **Purpose verdict:** REJECTED - NOT ACTED ON: model returned an incomplete idea (missing why_valuable) - forced to accept=False. not judged: Expecting value: line 1 column 1 (char 0)
-- **Fix-stream decision:** DID NOT enter the fix stream - idea rejected by the purpose contract
-- **Evidence basis:**  (confidence ?)
+| [RockefellerArchiveCenter/fluxx_exporter](https://github.com/RockefellerArchiveCenter/fluxx_exporter) | oss | `MIT` | `direct-code-reuse` | acceptance #criterion_10 | ACCEPT | NOT entered - accepted idea did not map to a valid acceptance criterion | Structured export of grant profiles with provenance and direct-vs-directory classification |
+| [ritchiea/recessart](https://github.com/ritchiea/recessart) | oss | `AGPL-3.0` | `clean-room-from-documented-behavior` | acceptance #The idea lacks concrete technical definition to verify if it serves the specific acceptance criteria (e.g., breaking link lifecycle, duplicate handling). It is too abstract to be actionable. | reject | NOT entered - idea rejected by the purpose contract | Fluxx Grant Management Domain Integration |
+| [OpenGrantStack/GrantReady-hub-SaaS](https://github.com/OpenGrantStack/GrantReady-hub-SaaS) | oss | `Apache-2.0` | `direct-code-reuse` | purpose-only | reject | NOT entered - idea rejected by the purpose contract | (idea extraction failed) |
+| [Fluxx](https://github.com/BinaryMuse/fluxxor) | market | `UNKNOWN` | `clean-room-from-documented-behavior` | acceptance #Acceptance criterion 10: real output comparison against manual search (billing integration as part of outcome proof) | ACCEPT | NOT entered - accepted idea did not map to a valid acceptance criterion | Budget & invoicing module |
+| [GrantHub](https://github.com/dulaz41/GrantHub) | market | `UNKNOWN` | `clean-room-from-documented-behavior` | acceptance #1. authoritative matching/scoring contract | ACCEPT | NOT entered - accepted idea did not map to a valid acceptance criterion | Simple public grant-catalog search via duckduck-sourced crawler |
 
 ### RockefellerArchiveCenter/fluxx_exporter
 
 - **Evidence:** <https://github.com/RockefellerArchiveCenter/fluxx_exporter>
 - **Licence:** `MIT` (via repo-rewards)
 - **Reuse mode:** `direct-code-reuse` - licence MIT is permissive and compatible; source may be read and adapted with attribution
-- **Idea:** (idea extraction failed) - 
-- **Value here:** 
-- **Purpose / criterion mapping:** purpose-only - NOT ACTED ON: model returned an incomplete idea (missing why_valuable) - forced to accept=False. not judged: Expecting value: line 1 column 1 (char 0)
-- **Purpose verdict:** REJECTED - NOT ACTED ON: model returned an incomplete idea (missing why_valuable) - forced to accept=False. not judged: Expecting value: line 1 column 1 (char 0)
-- **Fix-stream decision:** DID NOT enter the fix stream - idea rejected by the purpose contract
-- **Evidence basis:**  (confidence ?)
+- **Idea:** Structured export of grant profiles with provenance and direct-vs-directory classification - Provides a dedicated export endpoint that outputs each grant record as a structured JSON or CSV line including source URL, eligibility flags, direct-opportunity vs directory classification, and provenance chain — all machine-readable and auditable.
+- **Value here:** Would give GrantFlow a single reliable artifact to satisfy acceptance criterion 10 (real output comparison against manual search) and criterion 9 (exact frontend/backend SHA), while also supporting provenance preservation and duplicate handling (criteria 2 and 4).
+- **Purpose / criterion mapping:** acceptance #criterion_10 - Advances the program's authored purpose by enabling provenance-preserving output comparison, duplicate detection, and authoritative matching — all core to the purpose contract.
+- **Purpose verdict:** ACCEPTED - Advances the program's authored purpose by enabling provenance-preserving output comparison, duplicate detection, and authoritative matching — all core to the purpose contract.
+- **Fix-stream decision:** DID NOT enter the fix stream - accepted idea did not map to a valid acceptance criterion
+- **Evidence basis:** The competitor repository is explicitly described as 'Select and export grant information from the Fluxx grants management system' and is MIT-licensed, permitting adaptation. No source code was read, but the repo name and description confirm the capability. (confidence medium)
 
 ### ritchiea/recessart
 
 - **Evidence:** <https://github.com/ritchiea/recessart>
 - **Licence:** `AGPL-3.0` (via repo-rewards)
 - **Reuse mode:** `clean-room-from-documented-behavior` - licence AGPL-3.0 is copyleft/restricted; source must NOT be copied - work from documented behaviour only
+- **Idea:** Fluxx Grant Management Domain Integration - The competitor 'recessart' is described as implementing 'Fluxx Grant Management for Recess Art', suggesting it utilizes or mirrors the domain logic of a specific, established grant management system named Fluxx.
+- **Value here:** If Fluxx has superior logic for handling complex grant application lifecycles or portal integrations, adopting its patterns could help GrantFlow fulfill its purpose of 'authentic' handling and 'provenance'.
+- **Purpose / criterion mapping:** acceptance #The idea lacks concrete technical definition to verify if it serves the specific acceptance criteria (e.g., breaking link lifecycle, duplicate handling). It is too abstract to be actionable. - The audited program's purpose requires 'one authoritative matching/scoring contract', 'current-source validation', and 'authentic portal handling'. Adopting a vague 'Fluxx pattern' provides no concrete mechanism to repair the 'red required publication suite' or close the gap with the stated purpose. Without specific evidence of *how* Fluxx differs or solves a defect in GrantFlow, this is not a value-adding adoption but an undefined reference. It fails the strict test of advancing the current state toward the authored purpose.
+- **Purpose verdict:** REJECTED - The audited program's purpose requires 'one authoritative matching/scoring contract', 'current-source validation', and 'authentic portal handling'. Adopting a vague 'Fluxx pattern' provides no concrete mechanism to repair the 'red required publication suite' or close the gap with the stated purpose. Without specific evidence of *how* Fluxx differs or solves a defect in GrantFlow, this is not a value-adding adoption but an undefined reference. It fails the strict test of advancing the current state toward the authored purpose.
+- **Fix-stream decision:** DID NOT enter the fix stream - idea rejected by the purpose contract
+- **Evidence basis:** The competitor evidence is extremely sparse: 'Fluxx Grant Management for Recess Art'. It does not describe any technical capability, architectural pattern, or unique feature. It only names a domain concept ('Fluxx'). There is no evidence that the competitor has solved a problem GrantFlow hasn't, nor any evidence of *what* those solutions are. The idea 'use Fluxx patterns' is abstract and undefined. (confidence low)
+
+### OpenGrantStack/GrantReady-hub-SaaS
+
+- **Evidence:** <https://github.com/OpenGrantStack/GrantReady-hub-SaaS>
+- **Licence:** `Apache-2.0` (via repo-rewards)
+- **Reuse mode:** `direct-code-reuse` - licence Apache-2.0 is permissive and compatible; source may be read and adapted with attribution
 - **Idea:** (idea extraction failed) - 
 - **Value here:** 
-- **Purpose / criterion mapping:** purpose-only - NOT ACTED ON: model returned an incomplete idea (missing why_valuable) - forced to accept=False. not judged: no strong route available (131 enabled routes in catalog). Pools skipped: cerebras:free-tier (pool cooling down); gemini:free-tier (pool cooling down); groq:free-tier (pool cooling down); local:ollama (pool cooling down); nvidia_nim:free-tier (pool cooling down); openrouter:credits (openrouter:free-tier allowance exhausted (account-wide))
-- **Purpose verdict:** REJECTED - NOT ACTED ON: model returned an incomplete idea (missing why_valuable) - forced to accept=False. not judged: no strong route available (131 enabled routes in catalog). Pools skipped: cerebras:free-tier (pool cooling down); gemini:free-tier (pool cooling down); groq:free-tier (pool cooling down); local:ollama (pool cooling down); nvidia_nim:free-tier (pool cooling down); openrouter:credits (openrouter:free-tier allowance exhausted (account-wide))
+- **Purpose / criterion mapping:** purpose-only - NOT ACTED ON: model returned an incomplete idea (missing why_valuable) - forced to accept=False. not judged: every strong pool failed this call; last error was NotFoundError: Error code: 404 - {'status': 404, 'title': 'Not Found', 'detail': "Function '5beba52c-65a9-4f46-8cd9-656689a1b205': Not found for account 'hvux_0rjHS6OiBfWXcZvKgoOaUBy_3UsQqq6I6IAz7I'"}
+- **Purpose verdict:** REJECTED - NOT ACTED ON: model returned an incomplete idea (missing why_valuable) - forced to accept=False. not judged: every strong pool failed this call; last error was NotFoundError: Error code: 404 - {'status': 404, 'title': 'Not Found', 'detail': "Function '5beba52c-65a9-4f46-8cd9-656689a1b205': Not found for account 'hvux_0rjHS6OiBfWXcZvKgoOaUBy_3UsQqq6I6IAz7I'"}
 - **Fix-stream decision:** DID NOT enter the fix stream - idea rejected by the purpose contract
 - **Evidence basis:**  (confidence ?)
 
-### Quazi-07/Research-Grant-Finder-Agent-V2.0
+### Fluxx
 
-- **Evidence:** <https://github.com/Quazi-07/Research-Grant-Finder-Agent-V2.0>
-- **Licence:** `UNKNOWN` (via repo-rewards)
-- **Reuse mode:** `reference-only` - licence UNKNOWN could not be verified; record the capability as a reference and copy nothing
-- **Idea:** (idea extraction failed) - 
-- **Value here:** 
-- **Purpose / criterion mapping:** purpose-only - NOT ACTED ON: model returned an incomplete idea (missing why_valuable) - forced to accept=False. not judged: Expecting value: line 1 column 1 (char 0)
-- **Purpose verdict:** REJECTED - NOT ACTED ON: model returned an incomplete idea (missing why_valuable) - forced to accept=False. not judged: Expecting value: line 1 column 1 (char 0)
-- **Fix-stream decision:** DID NOT enter the fix stream - idea rejected by the purpose contract
-- **Evidence basis:**  (confidence ?)
-
-### Fluxx Grant Management
-
-- **Evidence:** <https://www.fluxx.io/grants-management-software-nonprofit>, <https://info.fluxx.io/fluxx-grantseeker>, <https://www.suiteapp.com/Fluxx-SuiteApp>
+- **Evidence:** <https://github.com/BinaryMuse/fluxxor>, <https://github.com/thedumbtechguy/Fluxxan>
 - **Licence:** `UNKNOWN` (via none (no repository could be attributed to this competitor))
 - **Reuse mode:** `clean-room-from-documented-behavior` - no inspectable source (licence UNKNOWN); only publicly documented behaviour may inform our own independent design
-- **Idea:** (idea extraction failed) - 
-- **Value here:** 
-- **Purpose / criterion mapping:** purpose-only - NOT ACTED ON: model returned an incomplete idea (missing why_valuable) - forced to accept=False. not judged: no strong route available (131 enabled routes in catalog). Pools skipped: cerebras:free-tier (pool cooling down); gemini:free-tier (pool cooling down); groq:free-tier (pool cooling down); local:ollama (pool cooling down); nvidia_nim:free-tier (pool cooling down); openrouter:credits (openrouter:free-tier allowance exhausted (account-wide))
-- **Purpose verdict:** REJECTED - NOT ACTED ON: model returned an incomplete idea (missing why_valuable) - forced to accept=False. not judged: no strong route available (131 enabled routes in catalog). Pools skipped: cerebras:free-tier (pool cooling down); gemini:free-tier (pool cooling down); groq:free-tier (pool cooling down); local:ollama (pool cooling down); nvidia_nim:free-tier (pool cooling down); openrouter:credits (openrouter:free-tier allowance exhausted (account-wide))
-- **Fix-stream decision:** DID NOT enter the fix stream - idea rejected by the purpose contract
-- **Evidence basis:**  (confidence ?)
+- **Idea:** Budget & invoicing module - Provides a dedicated billing and invoicing workflow for agencies that provide grant services to clients, including invoice generation, time tracking, and payment processing integrated with the grant pipeline.
+- **Value here:** Integrates billing directly into the grant workflow, reducing manual admin overhead and improving revenue capture for service-oriented grant operations.
+- **Purpose / criterion mapping:** acceptance #Acceptance criterion 10: real output comparison against manual search (billing integration as part of outcome proof) - The audited program's stated purpose includes 'Billing & invoicing – optional module for agencies that provide grant services to clients.' Adopting this idea directly advances that specific purpose clause.
+- **Purpose verdict:** ACCEPTED - The audited program's stated purpose includes 'Billing & invoicing – optional module for agencies that provide grant services to clients.' Adopting this idea directly advances that specific purpose clause.
+- **Fix-stream decision:** DID NOT enter the fix stream - accepted idea did not map to a valid acceptance criterion
+- **Evidence basis:** Competitor's README lists 'Billing & invoicing – optional module for agencies that provide grant services to clients. (confidence medium)
+
+### GrantHub
+
+- **Evidence:** <https://github.com/dulaz41/GrantHub>, <https://github.com/KZhambyl/granthub-ai>, <https://github.com/ingferraguti/GrantHub>
+- **Licence:** `UNKNOWN` (via none (no repository could be attributed to this competitor))
+- **Reuse mode:** `clean-room-from-documented-behavior` - no inspectable source (licence UNKNOWN); only publicly documented behaviour may inform our own independent design
+- **Idea:** Simple public grant-catalog search via duckduck-sourced crawler - Provides an unauthenticated, keyword- based landing page that lists grant opportunities found by a lightweight crawler with minimal compliance overhead, surfacing basic fields (title, source, deadline, fit summary) without requiring a user account.
+- **Value here:** Enables immediate public visibility of opportunities, drives top‑of‑funnel traffic, and validates demand before investing in authenticated pipelines – something GrantFlow's current state lacks a simple public listing for.
+- **Purpose / criterion mapping:** acceptance #1. authoritative matching/scoring contract - Advances the purpose of finding real current profile‑specific official sources and proving outcomes without overstating qualification; a public catalog is a low‑overhead way to surface opportunities that align with GrantFlow's mission.
+- **Purpose verdict:** ACCEPTED - Advances the purpose of finding real current profile‑specific official sources and proving outcomes without overstating qualification; a public catalog is a low‑overhead way to surface opportunities that align with GrantFlow's mission.
+- **Fix-stream decision:** DID NOT enter the fix stream - accepted idea did not map to a valid acceptance criterion
+- **Evidence basis:** The GrantHub repo is not inspectable (licence UNKNOWN); only documented behaviour from the DuckDuckGo search result and the granthub‑ai fork is available, which describes a public catalog listing. (confidence medium)
 
 ## Release status
 
@@ -199,7 +196,7 @@ _This is NOT a clean data bill of health: no data-shaped or environment-shaped r
 _These were found but left as-is - review and decide. Critical/high here means a file that could not be safely auto-fixed (see manual-review list)._
 
 ### high (1)
-- `(purpose)` line 0 (quality-gate) - **Purpose assessment evidence is incomplete**: baseline purpose assessment incomplete: 1/3 sample(s) usable; HTTPError: HTTP Error 400: Bad Request: {"error":{"code":400,"message":"request (20342 tokens) exceeds the available context size (16384 tokens), try increasing it","type":"exceed_context_size_error","n_prompt_tokens":20342,"n_ctx":16384}}; BadRequestError: Error code: 400 - {'object': 'error', 'message': 'Expected exactly one message. Expected exactly one message.', 'type': 'BadRequestError', 'param': None, 'code': 400}; final purpose assessment returned no usable result _Suggested fix:_ Retry the resumable run after restoring a responsive provider.
+- `(purpose)` line 0 (quality-gate) - **Purpose assessment evidence is incomplete**: baseline purpose assessment incomplete: 2/3 sample(s) usable; HTTPError: HTTP Error 400: Bad Request: {"error":{"code":400,"message":"request (20331 tokens) exceeds the available context size (16384 tokens), try increasing it","type":"exceed_context_size_error","n_prompt_tokens":20331,"n_ctx":16384}}; final purpose assessment returned no usable result _Suggested fix:_ Retry the resumable run after restoring a responsive provider.
 
 ## Defects by file
 
@@ -207,63 +204,114 @@ _No defects found in the reviewed files._
 
 ## Fix notes / left unfixed
 
-- src/main.jsx: NO-OP - author model returned no change for 1 finding(s): All defects listed in the findings block are backend issues (e.g., missing tables: system_kv, document_extracts, app_runtime_secrets; unset AUTH_JWT_SECRET; disk usage warning; backup test failure) and cannot be resolved by changes to src/main.jsx alone.
-- src/main.jsx: no verified candidate was produced
-- backend/db/index.js: TIMED OUT after 15m of fix attempts - rolled back and re-queued (raise FLEXFACTOR_FIX_FILE_MAX_SECONDS to allow longer)
-- backend/db/index.js: no verified candidate was produced
-- backend/services/documentIngestion/documentExtractStore.js: structural attempt failed: structural planning exceeded the per-file wall clock
-- backend/services/documentIngestion/documentExtractStore.js: NO FIX FOUND (real defect the loop could not land) - author model returned no change for 1 finding(s): THE DEFECT IS REAL but cannot be fixed in this file alone. The error `SqliteError: no such table: document_extracts` indicates a missing database table in the SQLite environment used during testing. This requires a migration or a schema setup change in the database initialization/test setup logic (likely in `backend/db/schema.sql` or the test setup files), not in the `documentExtractStore.js` service itself.
-- backend/services/documentIngestion/documentExtractStore.js: no verified candidate was produced
-- backend/services/documentIngestion.js: structural attempt declined: We need to see the database schema to understand why the document_extracts table is missing in the test, and the test files to understand the setup and the backup permission issue.
-- backend/services/documentIngestion.js: NO FIX FOUND (real defect the loop could not land) - author model returned no change for 1 finding(s): THE DEFECT IS REAL but cannot be fixed in this file alone (needs changes outside this file / new deps / backend work). Specifically, the test 'backend/tests/documents-ingest-creates-profile.test.js' fails due to missing table 'document_extracts', and the test 'backend/tests/backupFreshness.test.js' fails due to incorrect file permissions on the backup artifact (expected 0o600, got 0o666). These issues require changes outside this file.
-- backend/services/documentIngestion.js: no verified candidate was produced
-- backend/services/crawlerDispatcher.js: TIMED OUT after 15m of fix attempts - rolled back and re-queued (raise FLEXFACTOR_FIX_FILE_MAX_SECONDS to allow longer)
-- backend/services/crawlerDispatcher.js: no verified candidate was produced
-- backend/services/crawlerJobState.js: TIMED OUT after 15m of fix attempts - rolled back and re-queued (raise FLEXFACTOR_FIX_FILE_MAX_SECONDS to allow longer)
-- backend/services/crawlerJobState.js: no verified candidate was produced
 - src/main.jsx: TIMED OUT after 15m of fix attempts - rolled back and re-queued (raise FLEXFACTOR_FIX_FILE_MAX_SECONDS to allow longer)
 - src/main.jsx: no verified candidate was produced
-- backend/db/index.js: TIMED OUT after 15m of fix attempts - rolled back and re-queued (raise FLEXFACTOR_FIX_FILE_MAX_SECONDS to allow longer)
-- backend/db/index.js: no verified candidate was produced
-- backend/services/documentIngestion/documentExtractStore.js: NO-OP - author model returned no change for 1 finding(s): The file content (repository metadata, README, issue, source, patch) does not contain any actionable defects or errors that require fixing. The provided text is a log of failed tests and error messages generated during an attempted build or test run, rather than the actual source code containing the defects. Since this is just a report of what went wrong elsewhere in the system, there is no valid 'search/replace' operation to perform on this specific file to fix a defect, as it does not contain the faulty code itself.
-- backend/services/documentIngestion/documentExtractStore.js: no verified candidate was produced
-- backend/services/documentIngestion.js: NO-OP - author model returned no change for 1 finding(s): 1. The 'no such table: document_extracts' errors and related test failures are due to missing database schema components that must be created via migration files — cross-file dependency. 2. The 'ensureDocumentExtract called without fileHash' warning occurs in the legacy fast-path (no file path available) and is intentional — hash reuse is unavailable in these cases but not an error. 3. Other findings relate to environment configuration (missing secrets) or test setup issues that are unrelated to this file's code.
-- backend/services/documentIngestion.js: no verified candidate was produced
-- backend/services/crawlerDispatcher.js: REJECTED FINDING (author model found nothing to fix) - author model returned no change for 1 finding(s): THE FINDINGS DESCRIBE FAILURES IN OTHER FILES (DOCUMENT INGESTION, BACKUP FRESHNESS, HEALTH TESTS) AND ARE NOT DEFECTS IN crawlerDispatcher.js. NO IN-FILE FIXES ARE POSSIBLE FOR THESE CROSS-FILE ISSUES.
-- backend/services/crawlerDispatcher.js: no verified candidate was produced
-- backend/services/crawlerJobState.js: structural attempt failed: structural planning failed: 404 page not found
-- backend/services/crawlerJobState.js: NO FIX FOUND (real defect the loop could not land) - author model returned no change for 1 finding(s): THE DEFECT IS REAL but cannot be fixed in this file alone (fails are due to missing database tables and cross‑module behavior in other services).
-- backend/services/crawlerJobState.js: no verified candidate was produced
+- tests/unit/admin-integrity-repair.test.mjs: Defect is real but requires changes outside this file (backend server logic, environment, infrastructure). The test infrastructure failure (server did not become ready) is caused by missing email configuration and server startup issues, not by code bugs in this test file.
+- tests/unit/public-source-profile-privacy.test.mjs: TIMED OUT after 15m of fix attempts - rolled back and re-queued (raise FLEXFACTOR_FIX_FILE_MAX_SECONDS to allow longer)
+- tests/unit/public-source-profile-privacy.test.mjs: no verified candidate was produced
+- src/main.jsx: no verified candidate was produced
+- tests/unit/public-source-profile-privacy.test.mjs: no verified candidate was produced
+- src/main.jsx: no verified candidate was produced
 - publication failure made no progress and did not name another repairable source file
 - baseline publication suite is red and bounded repair did not fix it; review continued, publication stays blocked
 - review made no progress: three consecutive semantic review batches completed ZERO files (0 of 3597 candidate file(s) reviewed all run). This is a provider/route fault, NOT evidence the repo is clean - stopped fail-closed for resumable retry
 - rollback failed; working tree requires inspection
 
 
-## Errors (16)
+## Errors (17)
 
 | # | phase | kind | error | responsible |
 |---|---|---|---|---|
-| 1 | baseline | program-defect | baseline publication suite is RED and bounded targeted repair did not fix it | - |
-| 2 | rotation | provider | BadRequestError: Error code: 400 - {'error': {'message': 'Please reduce the length of the  | flexfactor.py:2412 |
-| 3 | rotation | provider | BadRequestError: Error code: 400 - {'error': "This model's maximum context length is 4096  | flexfactor.py:2412 |
-| 4 | rotation | provider | BadRequestError: Error code: 400 - {'error': "This model's maximum context length is 4096  | flexfactor.py:2412 |
-| 5 | rotation | budget | RateLimitError: Error code: 429 - [{'error': {'code': 429, 'message': 'You exceeded your c | flexfactor.py:2412 |
-| 6 | rotation | provider | RateLimitError: Error code: 429 - {'error': {'message': 'Rate limit reached for model `met | flexfactor.py:2412 |
-| 7 | rotation | provider | TimeoutError: timed out | flexfactor.py:2755 |
-| 8 | rotation | provider | APIStatusError: Error code: 413 - {'error': {'message': 'Request Entity Too Large', 'type' | flexfactor.py:2412 |
-| 9 | rotation | provider | HTTPError: HTTP Error 400: Bad Request: {"error":{"code":400,"message":"request (20342 tok | flexfactor.py:2763 |
-| 10 | rotation | provider | TimeoutError: timed out | flexfactor.py:2755 |
-| 11 | rotation | environment | NotFoundError: Error code: 404 - {'error': {'message': 'Model not found', 'type': 'Not Fou | flexfactor.py:2412 |
-| 12 | rotation | provider | BadRequestError: Error code: 400 - {'error': {'message': 'Please reduce the length of the  | flexfactor.py:2412 |
-| 13 | rotation | provider | TimeoutError: timed out | flexfactor.py:2755 |
-| 14 | rotation | provider | BadRequestError: Error code: 400 - {'object': 'error', 'message': 'Expected exactly one me | flexfactor.py:2412 |
-| 15 | rotation | provider | RuntimeError: Structured output matched no schema key (decoy/unrelated JSON object; expect | flexfactor.py:3048 |
-| 16 | baseline-gate | program-defect | review made no progress: three consecutive semantic review batches completed ZERO files (0 | - |
+| 1 | rotation | program-defect | EgressBlockedError: flexfactor_egress_blocked: payload contains ['cloud_token', 'password_ | flexfactor.py:1294 |
+| 2 | fix | budget | no strong route available (120 enabled routes in catalog). Pools skipped: cerebras:free-ti | src/main.jsx |
+| 3 | fix | budget | no strong route available (120 enabled routes in catalog). Pools skipped: cerebras:free-ti | tests/unit/public-source-profile-privacy.test.mjs |
+| 4 | fix | budget | no strong route available (120 enabled routes in catalog). Pools skipped: cerebras:free-ti | src/main.jsx |
+| 5 | baseline | program-defect | baseline publication suite is RED and bounded targeted repair did not fix it | - |
+| 6 | rotation | provider | NotFoundError: Error code: 404 - {'status': 404, 'title': 'Not Found', 'detail': "Function | flexfactor.py:2412 |
+| 7 | rotation | provider | RateLimitError: Error code: 429 - {'error': {'message': 'Rate limit reached for model `met | flexfactor.py:2412 |
+| 8 | rotation | provider | NotFoundError: Error code: 404 - {'status': 404, 'title': 'Not Found', 'detail': "Function | flexfactor.py:2412 |
+| 9 | rotation | provider | TimeoutError: timed out | flexfactor.py:2755 |
+| 10 | rotation | provider | NotFoundError: Error code: 404 - {'status': 404, 'title': 'Not Found', 'detail': "Function | flexfactor.py:2412 |
+| 11 | rotation | budget | RateLimitError: Error code: 429 - [{'error': {'code': 429, 'message': 'You exceeded your c | flexfactor.py:2412 |
+| 12 | rotation | provider | RateLimitError: Error code: 429 - {'error': {'message': 'Rate limit reached for model `met | flexfactor.py:2412 |
+| 13 | rotation | provider | HTTPError: HTTP Error 400: Bad Request: {"error":{"code":400,"message":"request (20331 tok | flexfactor.py:2763 |
+| 14 | rotation | provider | TimeoutError: timed out | flexfactor.py:2755 |
+| 15 | rotation | provider | TimeoutError: timed out | flexfactor.py:2755 |
+| 16 | rotation | provider | BadRequestError: Error code: 400 - {'object': 'error', 'message': 'Expected exactly one me | flexfactor.py:2412 |
+| 17 | baseline-gate | program-defect | review made no progress: three consecutive semantic review batches completed ZERO files (0 | - |
 
-Counts by kind: budget 1, environment 1, program-defect 2, provider 12
+Counts by kind: budget 4, program-defect 3, provider 10
 
-### 1. baseline — program-defect
+### 1. rotation — program-defect
+
+**Error**
+
+```
+EgressBlockedError: flexfactor_egress_blocked: payload contains ['cloud_token', 'password_assignment'] (near line(s) [434, 435]); refusing to send to a cloud model. Re-run with --redact to mask and send, --allow-sensitive to send anyway, or allow categories via FLEXFACTOR_ALLOW_EGRESS / ~/.flexfactor/policy.json {"allow_egress": [...]}.
+```
+
+**Responsible code**
+
+- FlexFactor `flexfactor.py:1294` in `_egress_gate()`
+
+```python
+raise EgressBlockedError(
+```
+- Route: `cerebras/gemma-4-31b`
+
+**Suggested fix** (signature)
+
+The egress gate found a secret/PII pattern in repo-derived text and refused to send it to a cloud model. Remove the secret from the repo (or use --redact / FLEXFACTOR_ALLOW_EGRESS for a known-safe fixture).
+
+### 2. fix — budget
+
+**Error**
+
+```
+no strong route available (120 enabled routes in catalog). Pools skipped: cerebras:free-tier (pool cooling down); gemini:free-tier (pool cooling down); groq:free-tier (pool cooling down); local:ollama (pool cooling down); nvidia_nim:free-tier (pool cooling down); openrouter:credits (openrouter:free-tier allowance exhausted (account-wide))
+```
+
+**Responsible code**
+
+- Program file: `src/main.jsx`
+
+**Suggested fix** (signature)
+
+The pool's allowance is spent. The rotator benches it until reset; check AI Time for the reset time. Do not add paid keys to compensate.
+
+### 3. fix — budget
+
+**Error**
+
+```
+no strong route available (120 enabled routes in catalog). Pools skipped: cerebras:free-tier (pool cooling down); gemini:free-tier (pool cooling down); groq:free-tier (pool cooling down); local:ollama (pool cooling down); nvidia_nim:free-tier (pool cooling down); openrouter:credits (openrouter:free-tier allowance exhausted (account-wide))
+```
+
+**Responsible code**
+
+- Program file: `tests/unit/public-source-profile-privacy.test.mjs`
+
+**Suggested fix** (signature)
+
+The pool's allowance is spent. The rotator benches it until reset; check AI Time for the reset time. Do not add paid keys to compensate.
+
+### 4. fix — budget
+
+**Error**
+
+```
+no strong route available (120 enabled routes in catalog). Pools skipped: cerebras:free-tier (pool cooling down); gemini:free-tier (pool cooling down); groq:free-tier (pool cooling down); local:ollama (pool cooling down); nvidia_nim:free-tier (pool cooling down); openrouter:credits (openrouter:free-tier allowance exhausted (account-wide))
+```
+
+**Responsible code**
+
+- Program file: `src/main.jsx`
+
+**Suggested fix** (signature)
+
+The pool's allowance is spent. The rotator benches it until reset; check AI Time for the reset time. Do not add paid keys to compensate.
+
+### 5. baseline — program-defect
 
 **Error**
 
@@ -274,34 +322,39 @@ baseline publication suite is RED and bounded targeted repair did not fix it
 **Detail**
 
 ```
-[22m[39m[sms] [sms] Twilio reported non-delivery {"to":"+1555***","error":"twilio_30008"}
+✔ never prospects the operator's own organizations (dedupe by name/EIN) (1.7714ms)
+✔ enrichment runs with bounded concurrency (parallel, not serial) (14.349ms)
+✔ runYanaDiscovery surfaces prospect funnel in the summary (11.8309ms)
+✔ YANA_TARGET_AREAS focuses OSM anchors + ProPublica states (owner geographic focus) (3.1457ms)
+✔ caller-pinned per-source geography WINS over target areas (1.2058ms)
+ℹ tests 3089
+ℹ suites 129
+ℹ pass 3088
+ℹ fail 1
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 347959.9687
 
+✖ failing tests:
 
-[31m⎯⎯⎯⎯⎯⎯⎯[39m[1m[41m Failed Tests 1 [49m[22m[31m⎯⎯⎯⎯⎯⎯⎯[39m
-
-[41m[1m FAIL [22m[49m backend/tests/backupFreshness.test.js[2m > [22mpostgres backup fallback (no pg_dump on PATH)[2m > [22mstill records a real backup artifact + metadata via the live SQL connection
-[31m[1mAssertionError[22m: expected 438 to be 384 // Object.is equality[39m
-
-[32m- Expected[39m
-[31m+ Received[39m
-
-[32m- 384[39m
-[31m+ 438[39m
-
-[36m [2m❯[22m backend/tests/backupFreshness.test.js:[2m201:50[22m[39m
-    [90m199|[39m       [34mexpect[39m(stamp[33m.[39mdialect)[33m.[39m[34mtoBe[39m([32m'postgres'[39m)
-    [90m200|[39m       [34mexpect[39m(stamp[33m.[39mpath)[33m.[39m[34mtoBe[39m(res[33m.[39mpath)
-    [90m201|[39m       [34mexpect[39m(fs[33m.[39m[34mstatSync[39m(res[33m.[39mpath)[33m.[39mmode [33m&[39m [34m0o777[39m)[33m.[39m[34mtoBe[39m([34m0o600[39m)
-    [90m   |[39m                                                  [31m^[39m
-    [90m202|[39m     } [35mfinally[39m {
-    [90m203|[39m       [35mif[39m (priorEnv[33m.[39m[33mPATH[39m [33m===[39m undefined) [35mdelete[39m process[33m.[39menv[33m.[39m[33mPATH[39m
-
-[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/1]⎯[22m[39m
-
-[31m⎯⎯⎯⎯⎯⎯[39m[1m[41m Unhandled Errors [49m[22m[31m⎯⎯⎯⎯⎯⎯[39m
-[31m[1m
-Vitest caught 1 unhandled error during the test run.
-This might cause fa
+test at tests\unit\public-source-profile-privacy.test.mjs:199:1
+✖ public source tree contains no known real-profile identifier or full-name marker (7239.5917ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly deep-equal:
+  + actual - expected
+  
+  + [
+  +   'grantflow_audit_report.md:3: private Windows account or mailbox alias',
+  +   'grantflow_run_manifest_20260826T053800755390.json:24265: private Windows account or mailbox alias'
+  + ]
+  - []
+  
+      at TestContext.<anonymous> (file:///C:/Users/firer/GrantFlow/tests/unit/public-source-profile-privacy.test.mjs:218:10)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: [ 'grantflow_audit_report.md:3: private Windows account or mailbox alias', 'grantflow_run_manifest_20260826T053800755390.json:24265: private Windows account or mai
 ```
 
 **Responsible code**
@@ -310,98 +363,35 @@ This might cause fa
 
 **Suggested fix** (signature)
 
-Read the full log at C:\Users\firer\.flexfactor\runs\grantflow-20260826-012727-565462-5432\baseline-publication-failure.log. Publication (push/merge) stays refused while the baseline is red; the review still runs.
-
-### 2. rotation — provider
-
-**Error**
-
-```
-BadRequestError: Error code: 400 - {'error': {'message': 'Please reduce the length of the messages or completion.', 'type': 'invalid_request_error', 'param': 'messages'}}
-```
-
-**Responsible code**
-
-- FlexFactor `flexfactor.py:2412` in `_chat_create()`
-
-```python
-return client.chat.completions.create(**kwargs)
-```
-- Route: `groq/allam-2-7b`
-
-**Suggested fix** (none)
-
-no known fix; start from the responsible code above
-
-### 3. rotation — provider
-
-**Error**
-
-```
-BadRequestError: Error code: 400 - {'error': "This model's maximum context length is 4096 tokens. However, you requested 32882 tokens (24882 in the messages, 8000 in the completion). Please reduce the length of the messages or completion."}
-```
-
-**Responsible code**
-
-- FlexFactor `flexfactor.py:2412` in `_chat_create()`
-
-```python
-return client.chat.completions.create(**kwargs)
-```
-- Route: `nvidia_nim/nvidia/nemotron-mini-4b-instruct`
-
-**Suggested fix** (signature)
-
-The route's output/context ceiling is below what was requested. FlexFactor learns the ceiling from this 400 and retries once; if it recurs, the prompt unit must shrink (fewer findings per call) or the route should be excluded for large files.
-
-### 4. rotation — provider
-
-**Error**
-
-```
-BadRequestError: Error code: 400 - {'error': "This model's maximum context length is 4096 tokens. However, you requested 32882 tokens (24882 in the messages, 8000 in the completion). Please reduce the length of the messages or completion."}
-```
-
-**Responsible code**
-
-- FlexFactor `flexfactor.py:2412` in `_chat_create()`
-
-```python
-return client.chat.completions.create(**kwargs)
-```
-- Route: `nvidia_nim/nvidia/nemotron-mini-4b-instruct`
-
-**Suggested fix** (signature)
-
-The route's output/context ceiling is below what was requested. FlexFactor learns the ceiling from this 400 and retries once; if it recurs, the prompt unit must shrink (fewer findings per call) or the route should be excluded for large files.
-
-### 5. rotation — budget
-
-**Error**
-
-```
-RateLimitError: Error code: 429 - [{'error': {'code': 429, 'message': 'You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits. To monitor your current usage, head to: https://ai.dev/rate-limit. \n* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_input_token_count, limit: 0, model: gemini-3.1-pro\n* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 0, model: gemini-3.1-pro\n* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 0, model: gemini-3.1-pro\n* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_input_token_count, limit: 0, model: gemini-3.1-pro\nPlease retry in 35.53967888s.', 'status': 'RESOURCE_EXHAUSTED', 'details': [{'@type': 'type.googleapis.com/google.rpc.Help', 'links': [{'description': 'Learn more about Gemini API quotas', 'url': 'https://ai.google.dev/gemini-api/docs/rate-limits'}]}, {'@type': 'type.googleapis.com/google.rpc.QuotaFailure', 'violations': [{'quotaMetric': 'generativelanguage.googleapis.com/generate_content_free_tier_input_token_count', 'quotaId': 'GenerateContentInputTokensPerModelPerDay-FreeTier', 'quotaDimensions': {'location': 'global', 'model': 'gemini-3.1-pro'}}, {'quotaMetric': 'generativelanguage.googleapis.com/generate_content_free_tier_requests', 'quotaId': 'GenerateRequestsPerDayPerProjectPerModel-FreeTier', 'quotaDimensions': {'location': 'global', 'model': 'gemini-3.1-pro'}}, {'quotaMetric': 'generativelanguage.googleapis.com/generate_content_free_tier_requests', 'quotaId': 'GenerateRequestsPerMinutePerProjectPerModel-FreeTier', 'quotaDimensions': {'model': 'gemini-3.1-pro', 'location': 'global'}}, {'quotaMetric': 'generativelanguage.googleapis.com/generate_content_free_tier_input_token_count', 'quotaId': 'GenerateContentInpu
-```
-
-**Responsible code**
-
-- FlexFactor `flexfactor.py:2412` in `_chat_create()`
-
-```python
-return client.chat.completions.create(**kwargs)
-```
-- Route: `gemini/gemini-3.1-pro-preview-customtools`
-
-**Suggested fix** (signature)
-
-The account's FREE DAILY allowance for that backend is spent - one allowance, however many models the catalog lists under it. FlexFactor now benches the whole allowance until the reset the provider named (X-RateLimit-Reset) instead of re-testing it every 60s, and the run continues on other backends. It returns by itself at the daily reset; do not add paid credit to compensate. If a run must not depend on it, point the run at a backend with headroom rather than waiting.
+Read the full log at C:\Users\firer\.flexfactor\runs\grantflow-20260826-064954-499246-31220\baseline-publication-failure.log. Publication (push/merge) stays refused while the baseline is red; the review still runs.
 
 ### 6. rotation — provider
 
 **Error**
 
 ```
-RateLimitError: Error code: 429 - {'error': {'message': 'Rate limit reached for model `meta-llama/llama-4-scout-17b-16e-instruct` in organization `org_01kxhxdkh3e7nasshjpfbkzh11` service tier `on_demand` on tokens per minute (TPM): Limit 30000, Used 19909, Requested 23700. Please try again in 27.218s. Need more tokens? Upgrade to Dev Tier today at https://console.groq.com/settings/billing', 'type': 'compound', 'code': 'rate_limit_exceeded'}}
+NotFoundError: Error code: 404 - {'status': 404, 'title': 'Not Found', 'detail': "Function 'e2d298c5-204e-4213-b921-9f492cc9011b': Not found for account 'hvux_0rjHS6OiBfWXcZvKgoOaUBy_3UsQqq6I6IAz7I'"}
+```
+
+**Responsible code**
+
+- FlexFactor `flexfactor.py:2412` in `_chat_create()`
+
+```python
+return client.chat.completions.create(**kwargs)
+```
+- Route: `nvidia_nim/google/codegemma-1.1-7b`
+
+**Suggested fix** (none)
+
+no known fix; start from the responsible code above
+
+### 7. rotation — provider
+
+**Error**
+
+```
+RateLimitError: Error code: 429 - {'error': {'message': 'Rate limit reached for model `meta-llama/llama-4-scout-17b-16e-instruct` in organization `org_01kxhxdkh3e7nasshjpfbkzh11` service tier `on_demand` on tokens per minute (TPM): Limit 30000, Used 19814, Requested 23681. Please try again in 26.99s. Need more tokens? Upgrade to Dev Tier today at https://console.groq.com/settings/billing', 'type': 'compound', 'code': 'rate_limit_exceeded'}}
 ```
 
 **Responsible code**
@@ -417,33 +407,12 @@ return client.chat.completions.create(**kwargs)
 
 Rate-limited. The rotator cools the pool down and moves on; nothing to fix unless it recurs on every pool, which means the free tiers are exhausted for now.
 
-### 7. rotation — provider
-
-**Error**
-
-```
-TimeoutError: timed out
-```
-
-**Responsible code**
-
-- FlexFactor `flexfactor.py:2755` in `_chat()`
-
-```python
-with self._opener.open(req, timeout=_ollama_http_timeout()) as resp:
-```
-- Route: `ollama/mistral:latest`
-
-**Suggested fix** (none)
-
-no known fix; start from the responsible code above
-
 ### 8. rotation — provider
 
 **Error**
 
 ```
-APIStatusError: Error code: 413 - {'error': {'message': 'Request Entity Too Large', 'type': 'invalid_request_error', 'code': 'request_too_large'}}
+NotFoundError: Error code: 404 - {'status': 404, 'title': 'Not Found', 'detail': "Function '7dfc10a8-3cc4-448e-97c1-2213308dc222': Not found for account 'hvux_0rjHS6OiBfWXcZvKgoOaUBy_3UsQqq6I6IAz7I'"}
 ```
 
 **Responsible code**
@@ -453,97 +422,13 @@ APIStatusError: Error code: 413 - {'error': {'message': 'Request Entity Too Larg
 ```python
 return client.chat.completions.create(**kwargs)
 ```
-- Route: `groq/groq/compound-mini`
+- Route: `nvidia_nim/google/codegemma-7b`
 
 **Suggested fix** (none)
 
 no known fix; start from the responsible code above
 
 ### 9. rotation — provider
-
-**Error**
-
-```
-HTTPError: HTTP Error 400: Bad Request: {"error":{"code":400,"message":"request (20342 tokens) exceeds the available context size (16384 tokens), try increasing it","type":"exceed_context_size_error","n_prompt_tokens":20342,"n_ctx":16384}}
-```
-
-**Responsible code**
-
-- FlexFactor `flexfactor.py:2763` in `_chat()`
-
-```python
-raise enriched from http_exc
-```
-- Route: `ollama/deepseek-r1:8b`
-
-**Suggested fix** (none)
-
-no known fix; start from the responsible code above
-
-### 10. rotation — provider
-
-**Error**
-
-```
-TimeoutError: timed out
-```
-
-**Responsible code**
-
-- FlexFactor `flexfactor.py:2755` in `_chat()`
-
-```python
-with self._opener.open(req, timeout=_ollama_http_timeout()) as resp:
-```
-- Route: `ollama/phi4-mini:latest`
-
-**Suggested fix** (none)
-
-no known fix; start from the responsible code above
-
-### 11. rotation — environment
-
-**Error**
-
-```
-NotFoundError: Error code: 404 - {'error': {'message': 'Model not found', 'type': 'Not Found', 'code': 404}}
-```
-
-**Responsible code**
-
-- FlexFactor `flexfactor.py:2412` in `_chat_create()`
-
-```python
-return client.chat.completions.create(**kwargs)
-```
-- Route: `nvidia_nim/nvidia/nemotron-nano-3-30b-a3b`
-
-**Suggested fix** (signature)
-
-The route names a model Ollama does not have. `ollama pull <tag>`, then refresh the catalog with `python -m aitime.catalog`.
-
-### 12. rotation — provider
-
-**Error**
-
-```
-BadRequestError: Error code: 400 - {'error': {'message': 'Please reduce the length of the messages or completion.', 'type': 'invalid_request_error', 'param': 'messages'}}
-```
-
-**Responsible code**
-
-- FlexFactor `flexfactor.py:2412` in `_chat_create()`
-
-```python
-return client.chat.completions.create(**kwargs)
-```
-- Route: `groq/allam-2-7b`
-
-**Suggested fix** (none)
-
-no known fix; start from the responsible code above
-
-### 13. rotation — provider
 
 **Error**
 
@@ -564,7 +449,133 @@ with self._opener.open(req, timeout=_ollama_http_timeout()) as resp:
 
 no known fix; start from the responsible code above
 
+### 10. rotation — provider
+
+**Error**
+
+```
+NotFoundError: Error code: 404 - {'status': 404, 'title': 'Not Found', 'detail': "Function 'c322f327-55a3-4af3-a91f-c757e2b8b135': Not found for account 'hvux_0rjHS6OiBfWXcZvKgoOaUBy_3UsQqq6I6IAz7I'"}
+```
+
+**Responsible code**
+
+- FlexFactor `flexfactor.py:2412` in `_chat_create()`
+
+```python
+return client.chat.completions.create(**kwargs)
+```
+- Route: `nvidia_nim/google/gemma-3-4b-it`
+
+**Suggested fix** (none)
+
+no known fix; start from the responsible code above
+
+### 11. rotation — budget
+
+**Error**
+
+```
+RateLimitError: Error code: 429 - [{'error': {'code': 429, 'message': 'You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits. To monitor your current usage, head to: https://ai.dev/rate-limit. \n* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 0, model: gemini-3.1-pro\n* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 0, model: gemini-3.1-pro\n* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_input_token_count, limit: 0, model: gemini-3.1-pro\n* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_input_token_count, limit: 0, model: gemini-3.1-pro\nPlease retry in 34.885842103s.', 'status': 'RESOURCE_EXHAUSTED', 'details': [{'@type': 'type.googleapis.com/google.rpc.Help', 'links': [{'description': 'Learn more about Gemini API quotas', 'url': 'https://ai.google.dev/gemini-api/docs/rate-limits'}]}, {'@type': 'type.googleapis.com/google.rpc.QuotaFailure', 'violations': [{'quotaMetric': 'generativelanguage.googleapis.com/generate_content_free_tier_requests', 'quotaId': 'GenerateRequestsPerDayPerProjectPerModel-FreeTier', 'quotaDimensions': {'model': 'gemini-3.1-pro', 'location': 'global'}}, {'quotaMetric': 'generativelanguage.googleapis.com/generate_content_free_tier_requests', 'quotaId': 'GenerateRequestsPerMinutePerProjectPerModel-FreeTier', 'quotaDimensions': {'model': 'gemini-3.1-pro', 'location': 'global'}}, {'quotaMetric': 'generativelanguage.googleapis.com/generate_content_free_tier_input_token_count', 'quotaId': 'GenerateContentInputTokensPerModelPerMinute-FreeTier', 'quotaDimensions': {'location': 'global', 'model': 'gemini-3.1-pro'}}, {'quotaMetric': 'generativelanguage.googleapis.com/generate_content_free_tier_input_token_count', 'quotaId': 'GenerateContent
+```
+
+**Responsible code**
+
+- FlexFactor `flexfactor.py:2412` in `_chat_create()`
+
+```python
+return client.chat.completions.create(**kwargs)
+```
+- Route: `gemini/gemini-3.1-pro-preview`
+
+**Suggested fix** (signature)
+
+The account's FREE DAILY allowance for that backend is spent - one allowance, however many models the catalog lists under it. FlexFactor now benches the whole allowance until the reset the provider named (X-RateLimit-Reset) instead of re-testing it every 60s, and the run continues on other backends. It returns by itself at the daily reset; do not add paid credit to compensate. If a run must not depend on it, point the run at a backend with headroom rather than waiting.
+
+### 12. rotation — provider
+
+**Error**
+
+```
+RateLimitError: Error code: 429 - {'error': {'message': 'Rate limit reached for model `meta-llama/llama-4-scout-17b-16e-instruct` in organization `org_01kxhxdkh3e7nasshjpfbkzh11` service tier `on_demand` on tokens per minute (TPM): Limit 30000, Used 19860, Requested 23681. Please try again in 27.082s. Need more tokens? Upgrade to Dev Tier today at https://console.groq.com/settings/billing', 'type': 'compound', 'code': 'rate_limit_exceeded'}}
+```
+
+**Responsible code**
+
+- FlexFactor `flexfactor.py:2412` in `_chat_create()`
+
+```python
+return client.chat.completions.create(**kwargs)
+```
+- Route: `groq/groq/compound`
+
+**Suggested fix** (signature)
+
+Rate-limited. The rotator cools the pool down and moves on; nothing to fix unless it recurs on every pool, which means the free tiers are exhausted for now.
+
+### 13. rotation — provider
+
+**Error**
+
+```
+HTTPError: HTTP Error 400: Bad Request: {"error":{"code":400,"message":"request (20331 tokens) exceeds the available context size (16384 tokens), try increasing it","type":"exceed_context_size_error","n_prompt_tokens":20331,"n_ctx":16384}}
+```
+
+**Responsible code**
+
+- FlexFactor `flexfactor.py:2763` in `_chat()`
+
+```python
+raise enriched from http_exc
+```
+- Route: `ollama/deepseek-r1:8b`
+
+**Suggested fix** (none)
+
+no known fix; start from the responsible code above
+
 ### 14. rotation — provider
+
+**Error**
+
+```
+TimeoutError: timed out
+```
+
+**Responsible code**
+
+- FlexFactor `flexfactor.py:2755` in `_chat()`
+
+```python
+with self._opener.open(req, timeout=_ollama_http_timeout()) as resp:
+```
+- Route: `ollama/gemma4:e4b`
+
+**Suggested fix** (none)
+
+no known fix; start from the responsible code above
+
+### 15. rotation — provider
+
+**Error**
+
+```
+TimeoutError: timed out
+```
+
+**Responsible code**
+
+- FlexFactor `flexfactor.py:2755` in `_chat()`
+
+```python
+with self._opener.open(req, timeout=_ollama_http_timeout()) as resp:
+```
+- Route: `ollama/phi4-mini:latest`
+
+**Suggested fix** (none)
+
+no known fix; start from the responsible code above
+
+### 16. rotation — provider
 
 **Error**
 
@@ -585,28 +596,7 @@ return client.chat.completions.create(**kwargs)
 
 no known fix; start from the responsible code above
 
-### 15. rotation — provider
-
-**Error**
-
-```
-RuntimeError: Structured output matched no schema key (decoy/unrelated JSON object; expected one of ['suggestion']); len=98 head='{"type": "object",\n "properties": {"suggestion": {"type": "string"}},\n "required": ["suggestion"]}'
-```
-
-**Responsible code**
-
-- FlexFactor `flexfactor.py:3048` in `_check_structured_type()`
-
-```python
-raise RuntimeError(
-```
-- Route: `groq/allam-2-7b`
-
-**Suggested fix** (none)
-
-no known fix; start from the responsible code above
-
-### 16. baseline-gate — program-defect
+### 17. baseline-gate — program-defect
 
 **Error**
 
@@ -620,4 +610,4 @@ review made no progress: three consecutive semantic review batches completed ZER
 
 **Suggested fix** (none)
 
-no known fix; start from the responsible code above (model suggester failed: Structured output matched no schema key (decoy/unrelated JSON object; expected one of ['suggestion']); len=98 head='{"type": "object",\n "properties": {"suggestion": {"type": "string"}},\n "required": ["suggestion"]}')
+no known fix; start from the responsible code above (model suggester failed: Error code: 400 - {'object': 'error', 'message': 'Expected exactly one message. Expected exactly one message.', 'type': 'BadRequestError', 'param': None, 'code': 400})
