@@ -1316,7 +1316,7 @@ async function runActionPacketPathway(db, {
 }) {
   // FAFSA-linked sources get a REAL readiness check against the profile's
   // education record instead of the generic "confirm your FAFSA is on file"
-  // sign-off below.
+  // confirmation step below.
   if (classification.fafsa_link) {
     return await runFafsaLinkPathway(db, {
       task, profile, opportunity, grant, classification, userId,
@@ -1889,7 +1889,7 @@ async function runAutopilotPathway(db, {
   // This is the ONE place the autopilot consults before it is permitted to
   // submit — owner rule 2026-08-03 ("auto submit should mean auto submit"):
   // the gate withholds ONLY for genuine incompleteness (missing required
-  // questions) or the auto-submit toggle being off; human approval is no
+  // questions) or the auto-submit toggle being off; operator action is no
   // longer a precondition. When it blocks, we force allowAutoSubmit=false
   // (Hamilton still fills + saves a draft) and record the reason.
   let autoSubmitGate = null
@@ -2159,7 +2159,7 @@ async function runAutopilotPathway(db, {
 
   // When the auto-submit gate approved this card, prefer the APPROVED/EDITED
   // tailored text as the portal's essay/goals answers — so what Hamilton
-  // submits is exactly what the applicant signed off on, not a fresh
+  // submits is exactly what the applicant confirmed, not a fresh
   // unreviewed re-draft. Best-effort; falls back to the drafted/profile essays.
   if (autoSubmitGate?.submit && autoSubmitGate.enforced && grant?.id) {
     try {

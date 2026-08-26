@@ -55,6 +55,16 @@ describe('portable grant accounting exchange', () => {
       budgets: [],
       expenses: [{ id: 'bad-date', grant_id: 'grant-1', date: '2026-02-31', amount: 1 }],
     })).toThrow(/invalid accounting date/)
+    expect(() => exportGrantAccountingBundle({
+      grant,
+      budgets: [],
+      expenses: [{ id: 'bad-suffix', grant_id: 'grant-1', date: '2026-08-10garbage', amount: 1 }],
+    })).toThrow(/invalid accounting date/)
+    expect(exportGrantAccountingBundle({
+      grant,
+      budgets: [],
+      expenses: [{ id: 'timestamp', grant_id: 'grant-1', date: '2026-08-10T23:59:58.123Z', amount: 1 }],
+    }).files[1].content).toContain('2026-08-10')
     expect(() => exportGrantAccountingBundle({ grant, provider: 'unsupported' }))
       .toThrow(AccountingValidationError)
   })

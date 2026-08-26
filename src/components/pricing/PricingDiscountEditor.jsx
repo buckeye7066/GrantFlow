@@ -7,7 +7,7 @@ import { CheckCircle2, Trash2, Plus } from 'lucide-react'
 import { formatMoney } from './pricingFormatters'
 
 /**
- * Discount approve/edit/add panel. Stateless except for the manual-add form;
+ * Discount apply/edit/add panel. Stateless except for the manual-add form;
  * everything else is driven through props so the parent quote view stays the
  * source of truth.
  */
@@ -42,9 +42,9 @@ export function PricingDiscountEditor({ discounts = [], onApprove, onRemove, onA
                   <div className="flex items-center gap-2">
                     <span className="font-medium">{d.label || d.discount_key}</span>
                     {d.approved ? (
-                      <Badge variant="default">Approved</Badge>
+                      <Badge variant="default">Applied</Badge>
                     ) : (
-                      <Badge variant="outline">Pending approval</Badge>
+                      <Badge variant="outline">Proposed</Badge>
                     )}
                   </div>
                   <div className="text-xs text-muted-foreground">{d.reason || ''}</div>
@@ -54,7 +54,7 @@ export function PricingDiscountEditor({ discounts = [], onApprove, onRemove, onA
                   {!d.approved && onApprove ? (
                     <Button variant="outline" size="sm" onClick={() => onApprove(d.id)}>
                       <CheckCircle2 className="mr-1 h-4 w-4" />
-                      Approve
+                      Apply
                     </Button>
                   ) : null}
                   {onRemove ? (

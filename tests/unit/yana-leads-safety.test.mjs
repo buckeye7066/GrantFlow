@@ -64,7 +64,7 @@ test('Yana lead pipeline is DISABLED by default', () => {
   assert.equal(cfg.mode, 'observe', 'default mode is observe')
   assert.equal(cfg.allowLiveWeb, false, 'live web is off by default')
   assert.equal(cfg.autoSendOutreach, false, 'auto-send is off by default')
-  assert.equal(cfg.requireApprovalToSend, true, 'approval gate is on by default')
+  assert.equal(cfg.requireApprovalToSend, true, 'explicit send consent is required by default')
 })
 
 test('canonical YANA_LEADS_ENABLED enables the agent (parity with LARRY_ENABLED)', () => {

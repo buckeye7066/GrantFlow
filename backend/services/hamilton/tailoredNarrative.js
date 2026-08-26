@@ -340,7 +340,7 @@ export async function reconcileTailoredApplication(db, { profileId, grantId, pro
  *
  * OWNER RULE (2026-08-03): "auto submit should mean auto submit. No more, no
  * less." Selecting auto-submit IS the review decision — Hamilton must not
- * park a completed application behind a second human-approval step. The gate
+ * park a completed application behind a second person-mediated decision. The gate
  * therefore withholds ONLY for facts that make the submission itself wrong:
  *
  *   - 'missing_info': the tailored application has open required questions

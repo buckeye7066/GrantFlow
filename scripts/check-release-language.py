@@ -155,6 +155,17 @@ STRING_CHAIN_OPERATOR_RX = re.compile(rf"{JS_COMMENT_GAP}\+{JS_COMMENT_GAP}", re
 JSX_STRING_EXPRESSION_RX = re.compile(rf"\{{\s*({STRING_LITERAL})\s*\}}", re.S)
 JSX_COMMENT_RX = re.compile(r"\{\s*/\*.*?\*/\s*\}", re.S)
 JSX_TAG_RX = re.compile(r"</?[A-Za-z][^<>]*?>", re.S)
+RENDERED_ATTRIBUTE_RX = re.compile(
+    rf'''\b(?:aria-[a-z0-9_-]+|alt|title|placeholder)\s*=\s*'''
+    rf'''(?P<value>{STRING_LITERAL}|\{{\s*{STRING_LITERAL}\s*\}})''',
+    re.I | re.S,
+)
+BOUNDED_STRING_LITERAL_RX = re.compile(
+    rf'''(?P<prefix>(?:^|[=(:,\[{{;]\s*))'''
+    rf'''(?P<literal>{STRING_LITERAL})'''
+    rf'''(?=\s*(?:[,;)\]}}/>]|$))''',
+    re.M | re.S,
+)
 HTML_COMMENT_RX = re.compile(r"<!--.*?-->", re.S)
 NON_RENDERED_BLOCK_RX = re.compile(
     r"<(script|style|template)\b[^>]*>.*?</\1\s*>",
@@ -328,6 +339,22 @@ def strip_source_comments(text: str) -> str:
     protected = STRING_CHAIN_RX.sub(protect, protected)
     protected = JSX_STRING_EXPRESSION_RX.sub(protect, protected)
 
+    def protect_bounded_partial_literal(match: re.Match[str]) -> str:
+        literal = match.group("literal")
+        if "<!--" not in literal and "{/*" not in literal:
+            return match.group(0)
+        return match.group("prefix") + protect_literal(literal)
+
+    def protect_literal(literal: str) -> str:
+        literals.append(literal)
+        return f"\0{len(literals) - 1}\0"
+
+    # A delimiter may be only one visible segment inside an assigned string,
+    # object value, argument, array item, or JSX attribute. Protect those
+    # grammar-bounded literals before removing real source comments. The
+    # boundaries deliberately avoid treating prose apostrophes as JS strings.
+    protected = BOUNDED_STRING_LITERAL_RX.sub(protect_bounded_partial_literal, protected)
+
     def protect_comment_shaped_literal(match: re.Match[str]) -> str:
         body = match.group(0)[1:-1].strip()
         if (
@@ -386,6 +413,18 @@ def rendered_source_projection(text: str) -> str:
     if "&" in projected:
         decoded_entities = html.unescape(projected)
         projected = normalize_text(decoded_entities) if decoded_entities != projected else projected
+
+    rendered_attributes: list[str] = []
+
+    def collect_rendered_attribute(match: re.Match[str]) -> str:
+        value = match.group("value").strip()
+        if value.startswith("{"):
+            value = value[1:-1].strip()
+        rendered_attributes.append(literal_value(value))
+        return match.group(0)
+
+    if "=" in projected and "<" in projected:
+        projected = RENDERED_ATTRIBUTE_RX.sub(collect_rendered_attribute, projected)
     if "`" in projected and "${" in projected:
         projected = TEMPLATE_CONSTANT_RX.sub(
             lambda match: template_constant_value(match.group(0)),
@@ -432,6 +471,8 @@ def rendered_source_projection(text: str) -> str:
         )
     if "<" in projected and ">" in projected:
         projected = JSX_TAG_RX.sub("", projected)
+    if rendered_attributes:
+        projected += "\n" + "\n".join(rendered_attributes)
     return projected
 
 
@@ -588,6 +629,16 @@ def run_self_test() -> None:
         "comment delimiters inside a JSX string are visible": (
             "<p>{\"<!-- si&#103;n " + COMPLETION_SECOND + " -->\"}</p>"
         ),
+        "comment delimiters inside a partial assigned string are visible": (
+            "const label = \"prefix <!-- si&#103;n " + COMPLETION_SECOND
+            + " --> suffix\"; return <p>{label}</p>"
+        ),
+        "entity-split accessibility attribute": (
+            "<div aria-label=\"si&#103;n " + COMPLETION_SECOND + "\" />"
+        ),
+        "entity-split rendered JSX attribute expression": (
+            "<div title={'si&#103;n " + COMPLETION_SECOND + "'} />"
+        ),
         "unicode escape in a JSX string": (
             "<p>{'si\\u0067n " + COMPLETION_SECOND + "'}</p>"
         ),
@@ -660,6 +711,10 @@ def run_self_test() -> None:
         ),
         "non-rendered template body": (
             "<template><span>si&#103;n " + COMPLETION_SECOND + "</span></template>"
+        ),
+        "real comment between prose apostrophes": (
+            "<p>Don't <!-- si&#103;n " + COMPLETION_SECOND
+            + " --> preserve comments that aren't literals.</p>"
         ),
     }
 

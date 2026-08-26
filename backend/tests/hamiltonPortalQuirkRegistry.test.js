@@ -79,7 +79,7 @@ describe('registry round-trip + observer', () => {
     const res = await observePortalQuirks(db, { runs, minCrossHost: 3 })
     expect(res.observed).toBe(3)
     expect(res.lane1_written).toBe(3) // each host got a data rule (autonomous)
-    expect(res.lane2_briefs).toHaveLength(1) // the recurring pattern → one owner-approval brief
+    expect(res.lane2_briefs).toHaveLength(1) // the recurring pattern → one owner decision brief
     expect(res.lane2_briefs[0].patch_authored_by_anya).toBe(false)
     // Re-run is idempotent: no duplicate brief.
     const again = await observePortalQuirks(db, { runs, minCrossHost: 3 })

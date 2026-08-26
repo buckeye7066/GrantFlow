@@ -91,6 +91,9 @@ test('the scanner detects rendered wording inside string delimiters and JS escap
   const tick = String.fromCharCode(96)
   const probes = [
     `<p>{"<!-- ${['si', '&#103;', 'n ', completionTail].join('')} -->"}</p>`,
+    `const label = "prefix <!-- ${['si', '&#103;', 'n ', completionTail].join('')} --> suffix"; return <p>{label}</p>`,
+    `<div aria-label="${['si', '&#103;', 'n ', completionTail].join('')}" />`,
+    `<div title={'${['si', '&#103;', 'n ', completionTail].join('')}'} />`,
     `<p>{'${['si', '\\', 'u0067n ', completionTail].join('')}'}</p>`,
     `<p>{'${['si', '\\', 'x67n ', completionTail].join('')}'}</p>`,
     `<p>{'si${slash}u{000067}n ${completionTail}'}</p>`,
@@ -145,6 +148,7 @@ test('the rendered projection ignores inert bodies and preserves even-slash and 
     `<script>const label = 'si' + 'gn ' + '${completionTail}'</script>`,
     `<style>.label::after { content: 'si' + 'gn ' + '${completionTail}' }</style>`,
     `<template><span>si&#103;n ${completionTail}</span></template>`,
+    `<p>Don't <!-- ${['si', '&#103;', 'n ', completionTail].join('')} --> preserve comments that aren't literals.</p>`,
     'The assignment offers deterministic work distribution.',
     'A sign officer witnesses the applicant signature.',
   ]

@@ -9,7 +9,7 @@
 #   merge a red PR. Nothing upstream enforces "verified before merge" any more, so
 #   the evidence gate has to live here, in the merge step.
 #
-#   This is an EVIDENCE gate, not an approval gate: nobody is asked for
+#   This gate evaluates EVIDENCE: nobody is asked for
 #   permission. Checks green -> it merges, by itself, immediately. Checks red or
 #   missing -> it refuses and says exactly why. There is no dry-run mode and no
 #   "would have merged" path; every run either merges or fails out loud.
@@ -17,7 +17,7 @@
 #   It is also NOT a background sweeper. It merges exactly the one PR number you
 #   hand it. The repo already has .github/workflows/auto-merge-recent-prs.yml for
 #   scheduled sweeping; a second competing sweeper would be a defect. (Note that
-#   that workflow additionally requires a human approval, which is why it never
+#   that workflow additionally requires operator action, which is why it never
 #   merges agent-authored PRs -- this script is the path that does.)
 set -euo pipefail
 

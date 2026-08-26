@@ -112,7 +112,7 @@ export const PIPELINE_STAGE_HELP = Object.freeze({
 
   declined: {
     label: 'Declined',
-    plainEnglish: 'The funder did not approve this application.',
+    plainEnglish: 'The funder declined this application.',
     nextStep: 'Keep notes on what was learned and look for similar opportunities to apply to instead.',
   },
 

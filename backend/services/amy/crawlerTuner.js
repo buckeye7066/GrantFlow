@@ -375,7 +375,7 @@ function failedSourceRecords(evaluation) {
 }
 
 /**
- * Build the human-approval queue of deeper crawler improvements from the cohort
+ * Build the owner-decision queue of deeper crawler improvements from the cohort
  * evaluations. These map systematic weaknesses to concrete files/levers.
  *
  * @param {Array<object>} evaluations

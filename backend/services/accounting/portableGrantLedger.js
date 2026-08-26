@@ -25,7 +25,9 @@ function safeCurrency(value) {
 
 function safeDate(value) {
   const text = String(value ?? '').trim()
-  const match = text.match(/^(\d{4})-(\d{2})-(\d{2})/)
+  const match = text.match(
+    /^(\d{4})-(\d{2})-(\d{2})(?:T(\d{2}):(\d{2}):(\d{2})(?:\.\d{1,9})?(?:Z|[+-](\d{2}):(\d{2})))?$/i,
+  )
   if (!match) throw new AccountingValidationError(`invalid accounting date: ${text || '(empty)'}`)
   const date = `${match[1]}-${match[2]}-${match[3]}`
   const parsed = new Date(`${date}T00:00:00Z`)
@@ -35,6 +37,16 @@ function safeDate(value) {
     || parsed.getUTCMonth() + 1 !== Number(match[2])
     || parsed.getUTCDate() !== Number(match[3])
   ) throw new AccountingValidationError(`invalid accounting date: ${text}`)
+  if (match[4] !== undefined) {
+    const hours = Number(match[4])
+    const minutes = Number(match[5])
+    const seconds = Number(match[6])
+    const offsetHours = match[7] === undefined ? 0 : Number(match[7])
+    const offsetMinutes = match[8] === undefined ? 0 : Number(match[8])
+    if (hours > 23 || minutes > 59 || seconds > 59 || offsetHours > 23 || offsetMinutes > 59) {
+      throw new AccountingValidationError(`invalid accounting date: ${text}`)
+    }
+  }
   return date
 }
 

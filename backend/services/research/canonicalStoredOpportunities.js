@@ -1,3 +1,5 @@
+import { opportunityLifecycleVisibilitySql } from '../../config/matchSurfacing.js'
+
 const MAX_OPPORTUNITIES = 2_000
 const QUERY_BATCH_SIZE = 400
 
@@ -55,10 +57,15 @@ async function storedDecisionColumn(db) {
 
 export async function loadCanonicalStoredOpportunities(db, { profileId, opportunityIds = null }) {
   const decisionColumn = await storedDecisionColumn(db)
+  const lifecyclePredicate = opportunityLifecycleVisibilitySql({
+    tableAlias: 'fo',
+    dialect: db?.dialect || 'sqlite',
+  })
   const select = `SELECT fo.*, m.${decisionColumn} AS canonical_decision
       FROM profile_opportunity_matches m
       JOIN funding_opportunities fo ON fo.id = m.opportunity_id
-     WHERE m.profile_id = ?`
+     WHERE m.profile_id = ?
+       AND ${lifecyclePredicate}`
   let rows = []
   if (opportunityIds === null) {
     rows = await db.prepare(

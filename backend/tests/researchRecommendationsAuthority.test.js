@@ -96,6 +96,27 @@ describe('research recommendation canonical authority', () => {
     expect(db.queries.some((sql) => sql.includes('m.decision AS canonical_decision'))).toBe(true)
   })
 
+  it('filters inactive and hidden catalog rows in SQL before the candidate limit', async () => {
+    const db = canonicalDb([{
+      id: 'active-below-history',
+      title: 'Active Research Award',
+      match_decision: 'ACCEPT',
+      is_active: 1,
+      is_hidden: 0,
+    }])
+
+    const result = await loadCanonicalStoredOpportunities(db, {
+      profileId: 'profile-1',
+      opportunityIds: null,
+    })
+    const candidateQuery = db.queries.find((sql) => sql.includes('FROM profile_opportunity_matches'))
+
+    expect(result.opportunities.map((row) => row.id)).toEqual(['active-below-history'])
+    expect(candidateQuery).toContain('COALESCE(fo.is_active, 1) = 1')
+    expect(candidateQuery).toContain('COALESCE(fo.is_hidden, 0) = 0')
+    expect(candidateQuery.indexOf('COALESCE(fo.is_active')).toBeLessThan(candidateQuery.indexOf('LIMIT'))
+  })
+
   it('builds research attributes only from the authorized stored profile and sections', async () => {
     const db = {
       prepare(sql) {

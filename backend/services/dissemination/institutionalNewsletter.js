@@ -2,7 +2,8 @@ import { createHash } from 'node:crypto'
 
 const EMAIL_RX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
 const PLACEHOLDER_DOMAIN_RX = /\.(?:invalid|test)$|@(?:example\.(?:com|org|net)|localhost)$/i
-const WORD_RX = /[a-z][a-z0-9-]{2,}/g
+const WORD_RX = /[a-z][a-z0-9-]*/g
+const SHORT_RESEARCH_TERMS = new Set(['ai', 'ml', 'r'])
 const STOP_WORDS = new Set(['and', 'for', 'from', 'grant', 'grants', 'funding', 'the', 'with'])
 const MAX_GROUPS = 500
 const MAX_RECIPIENTS = 20_000
@@ -57,7 +58,7 @@ function httpsUrl(value) {
 
 function tokens(...values) {
   return new Set(values.flatMap((value) => text(value).toLowerCase().match(WORD_RX) || [])
-    .filter((value) => !STOP_WORDS.has(value)))
+    .filter((value) => (value.length >= 3 || SHORT_RESEARCH_TERMS.has(value)) && !STOP_WORDS.has(value)))
 }
 
 function overlap(left, right) {

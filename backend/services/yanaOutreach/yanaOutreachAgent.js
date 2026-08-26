@@ -5,19 +5,19 @@
  * Yana's job is lead DISCOVERY + DRAFTING — she finds + qualifies leads and
  * turns them into reviewable drafts. A human (or, in the canonical pipeline,
  * John saving to the Outlook DRAFT folder) reviews drafts and decides whether
- * to send. Sending is a SEPARATE, manual, human-approved action — it is NOT
+ * to send. Sending is a SEPARATE, person-triggered action — it is NOT
  * part of Yana's automated cycle.
  *
  * Yana's automated pipeline (what runs end-to-end, freely):
  *   discover-prospects → verify-contacts → score-fit
  *   → build-packets   → qualify          → draft-outreach   → (drafts saved for review)
  *
- * Separate, human-gated, NOT automated by Yana:
- *   send-outreach   (a person explicitly approves an attempt, then transmits)
+ * Separate, person-triggered, NOT automated by Yana:
+ *   send-outreach   (a person explicitly authorizes an attempt, then transmits)
  *
  * FULL_CYCLE therefore runs discovery → draft only and STOPS at saved drafts;
  * it never transmits. The send-outreach mode is the one explicit place a human
- * can push an already-approved draft out the door, and it self-gates per
+ * can push an finalized draft out the door, and it self-gates per
  * attempt. Each phase is its own callable mode so admins can step the pipeline
  * forward one phase at a time.
  *
@@ -245,8 +245,8 @@ export async function runYanaOutreach({
   // intended steady state. Auto-send being off is NOT a degraded state; it is
   // how Yana is meant to operate (drafts only).
   //
-  // The single genuine gate is the SEPARATE, human-approved send-outreach step
-  // (the one place a person transmits an already-approved draft). That step is
+  // The single genuine gate is the SEPARATE, person-triggered send-outreach step
+  // (the one place a person transmits an finalized draft). That step is
   // not part of Yana's automated cycle, and it self-gates per attempt via
   // checkSendIsAllowed (refuses when !cfg.enabled, when unapproved, on
   // suppression/DNC, etc.). We hard-refuse the dedicated SEND mode up front only
@@ -261,7 +261,7 @@ export async function runYanaOutreach({
       agent: YANA_OUTREACH_AGENT_NAME,
       reason: 'send_disabled',
       detail: 'Manual outreach SEND is off. Yana finds leads and saves drafts for review regardless; ' +
-        'set YANA_LEADS_ENABLED=true only if you also want the separate human-approved send step enabled.',
+        'set YANA_LEADS_ENABLED=true only if you also want the separate person-triggered send step enabled.',
       mode: requestedMode,
     }
   }
@@ -310,7 +310,7 @@ export async function runYanaOutreach({
     if (effectiveMode === YANA_OUTREACH_MODES.DRAFT_OUTREACH || effectiveMode === YANA_OUTREACH_MODES.FULL_CYCLE) {
       summary.phases.draft = await phaseDraft({ db, options, config: cfg })
     }
-    // SEND is a SEPARATE, human-approved action — NOT part of Yana's automated
+    // SEND is a SEPARATE, person-triggered action — NOT part of Yana's automated
     // cycle. FULL_CYCLE deliberately stops at saved drafts; only an explicit
     // send-outreach request reaches the (self-gating) send phase.
     if (effectiveMode === YANA_OUTREACH_MODES.SEND_OUTREACH) {
@@ -412,7 +412,7 @@ export async function getYanaOutreachStatus(db, { config = null } = {}) {
   return {
     agent: YANA_OUTREACH_AGENT_NAME,
     // Yana's discovery + drafting always run; `enabled` only governs the
-    // SEPARATE, human-approved send step. Surface that plainly so the console
+    // SEPARATE, person-triggered send step. Surface that plainly so the console
     // never reads "Yana disabled" for an agent that is happily finding leads
     // and saving drafts.
     role: 'lead_discovery_and_drafting',

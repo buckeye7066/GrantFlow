@@ -131,6 +131,25 @@ describe('institutional newsletter bundle', () => {
     expect(html).not.toContain('Expired Oncology Award')
   })
 
+  it.each(['AI', 'ML', 'R'])('matches the explicit short research topic %s', (topic) => {
+    const bundle = buildInstitutionalNewsletterBundle({
+      ...baseInput,
+      groups: [{
+        id: `short-${topic.toLowerCase()}`,
+        name: `${topic} Faculty`,
+        topic_terms: [topic],
+        recipient_profile_ids: ['profile-1'],
+      }],
+      opportunities: [{
+        id: `short-${topic.toLowerCase()}-award`,
+        title: `${topic} Research Fellowship`,
+        application_url: `https://funding.example.org/${topic.toLowerCase()}`,
+      }],
+    })
+
+    expect(bundle.editions[0].opportunity_ids).toEqual([`short-${topic.toLowerCase()}-award`])
+  })
+
   it('rejects ambiguous group identities and invalid edition dates', () => {
     expect(() => buildInstitutionalNewsletterBundle({
       ...baseInput,
