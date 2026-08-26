@@ -7,14 +7,16 @@
   "start_command": "npm run dev:full",
   "stop_command": "taskkill-by-port",
   "$readiness_comment": "THIS per-repo file is the manifest the runner ACTUALLY READS for grantflow — loadManifest (tools/eva-edge-runner/src/config.mjs) prefers qa/user-journeys.json over the qa/manifests/grantflow.json bundle. The 2026-08-01 readiness fix (#1087) landed only in the bundle, so the runner kept using this file's `port_env` (a field the runner never understood) + 60s timeout, readiness silently degraded to GET http://localhost:5173/api/health, and grantflow reported startup_failed on 2026-08-01 and 2026-08-04 whenever a cold dev:full took >60s. Keep this block IDENTICAL to the bundle manifest's — tools/eva-edge-runner/test/manifests.test.mjs now asserts they agree.",
-  "readiness_probe": { "type": "http", "path": "/api/health", "port": 8080, "timeout_ms": 120000 },
+  "readiness_probe": { "type": "http", "path": "/api/health", "port": 8080, "timeout_ms": 120000, "warm_paths": ["/@vite/client"] },
   "base_url": "http://localhost:5173",
   "test_target": "disposable-local-instance",
   "required_env": ["AUTH_JWT_SECRET", "CORS_ORIGIN", "SMOKE_MODE", "DISABLE_AI", "SQLITE_DB_PATH"],
   "launch_env": {
     "NODE_ENV": "development",
     "DB_PROVIDER": "sqlite",
-    "CORS_ORIGIN": "http://127.0.0.1:5173",
+    "PORT": "8080",
+    "VITE_APP_BASE": "/",
+    "CORS_ORIGIN": "http://localhost:5173",
     "SMOKE_MODE": "1",
     "DISABLE_AI": "1",
     "SQLITE_DB_PATH": ".eva-tmp/grantflow/grantflow.sqlite"

@@ -10,7 +10,7 @@
   "base_url": "http://localhost:8080",
   "test_target": "disposable-local-instance",
   "required_env": ["PORT"],
-  "launch_env": { "PORT": "8080" },
+  "launch_env": { "PORT": "8080", "FCC_DATA_DIR": ".eva-tmp/family-castle-clash/data" },
   "seed_command": "none (offline PIN accounts; register fully offline; no secrets required)",
   "reset_command": "remove disposable account/state data under the data root and restart",
   "cleanup": "rm -rf .eva-tmp/family-castle-clash && remove any fixture accounts (eva-fixture) created during the run",
