@@ -32,7 +32,7 @@ test('the complete tracked tree satisfies the delivery-language policy', () => {
   assert.equal(result.status, 0, result.stderr || result.stdout)
 })
 
-test('the scanner reads the tracked index before an unstaged worktree replacement', (t) => {
+test('the scanner batches root-anchored index reads before worktree replacements', (t) => {
   const fixture = mkdtempSync(path.join(os.tmpdir(), 'grantflow-language-policy-'))
   t.after(() => rmSync(fixture, { recursive: true, force: true }))
   const fixtureEnv = { ...process.env }
@@ -41,23 +41,28 @@ test('the scanner reads the tracked index before an unstaged worktree replacemen
   mkdirSync(path.join(fixture, 'scripts'), { recursive: true })
   copyFileSync(scanner, path.join(fixture, 'scripts/check-release-language.py'))
 
-  const noun = ['appro', 'val'].join('')
-  const stagedText = ['man', 'ual ', noun].join('')
-  const fixturePath = path.join(fixture, 'tracked.txt')
+  mkdirSync(path.join(fixture, 'backend'), { recursive: true })
+  writeFileSync(path.join(fixture, '.env.example'), 'ordinary root value')
+  const stagedText = ['si', 'gn ', 'off'].join('')
+  const fixturePath = path.join(fixture, 'backend/.env.example')
   writeFileSync(fixturePath, stagedText)
 
-  for (const args of [['init', '-q'], ['add', 'scripts/check-release-language.py', 'tracked.txt']]) {
+  for (const args of [[
+    'init', '-q',
+  ], [
+    'add', 'scripts/check-release-language.py', '.env.example', 'backend/.env.example',
+  ]]) {
     const git = spawnSync('git', args, { cwd: fixture, encoding: 'utf8', env: fixtureEnv })
     assert.equal(git.status, 0, git.stderr || git.stdout)
   }
 
   writeFileSync(fixturePath, 'ordinary deployment evidence')
-  const result = spawnSync('python3', ['scripts/check-release-language.py'], {
-    cwd: fixture,
+  const result = spawnSync('python3', ['../scripts/check-release-language.py'], {
+    cwd: path.join(fixture, 'backend'),
     encoding: 'utf8',
     env: fixtureEnv,
   })
 
   assert.equal(result.status, 1, result.stderr || result.stdout)
-  assert.match(result.stdout, /tracked\.txt/)
+  assert.match(result.stdout, /backend\/\.env\.example/)
 })

@@ -177,9 +177,13 @@ def rendered_source_projection(text: str) -> str:
     # references as characters, so scanning their source spelling alone would
     # miss wording assembled at that boundary. Normalize again afterwards so
     # decoded format controls cannot create a second invisible separator path.
-    projected = normalize_text(html.unescape(normalize_text(text)))
+    projected = normalize_text(text)
+    # Strip only comments that are comments in the source grammar. Encoded
+    # delimiters render as ordinary visible text in a browser; decoding first
+    # and then deleting them would incorrectly hide that visible content.
     projected = HTML_COMMENT_RX.sub("", projected)
     projected = JSX_COMMENT_RX.sub("", projected)
+    projected = normalize_text(html.unescape(projected))
     projected = JSX_STRING_EXPRESSION_RX.sub(lambda match: literal_value(match.group(1)), projected)
 
     def join_literals(match: re.Match[str]) -> str:
@@ -203,38 +207,85 @@ def prohibited_labels(text: str) -> list[str]:
     ]
 
 
-def tracked_text_files() -> list[pathlib.Path]:
-    raw_paths = subprocess.check_output(["git", "ls-files", "-z"]).split(b"\0")
-    return [
-        pathlib.Path(raw.decode("utf-8", "surrogateescape"))
-        for raw in raw_paths
-        if raw
-    ]
+def repository_root() -> pathlib.Path:
+    root = subprocess.check_output(
+        ["git", "rev-parse", "--show-toplevel"], text=True
+    ).strip()
+    return pathlib.Path(root)
 
 
-def read_tracked_bytes(path: pathlib.Path) -> bytes:
-    try:
-        # The index is the exact tracked revision being checked. Read it first
-        # so an unstaged worktree edit cannot hide a staged prohibited phrase,
-        # and so sparse worktrees remain equivalent to complete CI checkouts.
-        return subprocess.check_output(
-            ["git", "show", f":{path.as_posix()}"], stderr=subprocess.DEVNULL
+def tracked_index_entries(root: pathlib.Path) -> list[tuple[pathlib.Path, str | None]]:
+    """Return root-relative tracked paths and their stage-zero blob ids."""
+
+    raw_entries = subprocess.check_output(
+        ["git", "ls-files", "--stage", "--full-name", "-z"], cwd=root
+    ).split(b"\0")
+    entries: list[tuple[pathlib.Path, str | None]] = []
+    for raw_entry in raw_entries:
+        if not raw_entry:
+            continue
+        metadata, raw_path = raw_entry.split(b"\t", 1)
+        mode, raw_oid, stage = metadata.split(b" ", 2)
+        if stage != b"0" or mode == b"160000":
+            continue
+        oid = raw_oid.decode("ascii")
+        if not oid.strip("0"):
+            oid = None
+        entries.append((pathlib.Path(raw_path.decode("utf-8", "surrogateescape")), oid))
+    return entries
+
+
+def read_index_blobs(root: pathlib.Path, object_ids: list[str]) -> dict[str, bytes]:
+    """Read every requested index blob through one Git batch process."""
+
+    unique_ids = list(dict.fromkeys(object_ids))
+    if not unique_ids:
+        return {}
+    process = subprocess.Popen(
+        ["git", "cat-file", "--batch"],
+        cwd=root,
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    output, error = process.communicate(
+        "".join(f"{oid}\n" for oid in unique_ids).encode("ascii")
+    )
+    if process.returncode:
+        raise subprocess.CalledProcessError(
+            process.returncode, process.args, output=output, stderr=error
         )
-    except subprocess.CalledProcessError:
-        # This only applies to unusual intent-to-add/index states where
-        # `git ls-files` reports a path before an index blob exists.
-        return path.read_bytes()
+
+    blobs: dict[str, bytes] = {}
+    offset = 0
+    for requested_oid in unique_ids:
+        header_end = output.find(b"\n", offset)
+        if header_end < 0:
+            raise RuntimeError("git cat-file returned a truncated header")
+        header = output[offset:header_end].split()
+        if len(header) != 3 or header[1] != b"blob":
+            raise RuntimeError(f"git cat-file did not return blob {requested_oid}")
+        size = int(header[2])
+        data_start = header_end + 1
+        data_end = data_start + size
+        if data_end >= len(output) or output[data_end:data_end + 1] != b"\n":
+            raise RuntimeError(f"git cat-file returned a truncated blob {requested_oid}")
+        blobs[requested_oid] = output[data_start:data_end]
+        offset = data_end + 1
+    return blobs
 
 
 def scan_repository() -> list[tuple[str, list[str]]]:
     violations: list[tuple[str, list[str]]] = []
-    for path in tracked_text_files():
+    root = repository_root()
+    entries = tracked_index_entries(root)
+    blobs = read_index_blobs(root, [oid for _, oid in entries if oid])
+    for path, oid in entries:
         if pathlib.PurePosixPath(path.as_posix()) == THIS_FILE:
             continue
-        try:
-            data = read_tracked_bytes(path)
-        except (OSError, subprocess.CalledProcessError):
-            continue
+        # A present index blob is always authoritative. The worktree fallback
+        # is reserved for an intent-to-add entry that has no blob yet.
+        data = blobs[oid] if oid else (root / path).read_bytes()
         if b"\0" in data:
             continue
         labels = prohibited_labels(data.decode("utf-8", "ignore"))
@@ -285,6 +336,9 @@ def run_self_test() -> None:
         ),
         "encoded invisible control": (
             "owner " + COMPLETION_FIRST + "&#8203;" + COMPLETION_SECOND
+        ),
+        "encoded comment delimiters are visible": (
+            "<p>&lt;!-- si&#103;n " + COMPLETION_SECOND + " --&gt;</p>"
         ),
     }
     negative_probes = {
