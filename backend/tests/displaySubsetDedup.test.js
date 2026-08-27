@@ -20,7 +20,7 @@ import {
   collapseSameProgramDuplicates,
   dedupeByCanonicalIdentity,
 } from '../services/matching/fundingSourcePresentation.js'
-import { sameProgram, sponsorsAgree } from '../config/programIdentity.js'
+import { sameProgram, sponsorsAgree, stripProgramQualifiers } from '../config/programIdentity.js'
 
 const TENNCARE = 'TennCare'
 const DIDD = 'Tennessee Department of Intellectual and Developmental Disabilities'
@@ -128,5 +128,80 @@ describe('canonical-key finality stays ON by default', () => {
     // what its dedup removes from real pipelines.
     expect(sameProgram(HCBS_BARE, HCBS_PREFIXED)).toBe(false)
     expect(sameProgram(HCBS_BARE, HCBS_PREFIXED, { canonicalKeyIsFinal: false })).toBe(true)
+  })
+})
+
+describe('a trailing institution that NAMES a different award must not collapse', () => {
+  // stripProgramQualifiers used to drop everything after the first " at ", so
+  // "Engineering Excellence Award at Vanderbilt" and "… at Yale" both reduced
+  // to tokens ['engineering','excellence'], shared a t: identity, and the
+  // display pass (plus Robert's audit on unlinked rows) treated them as one
+  // program. Named campuses under one brand prefix are not spelling variants.
+  const AT_VANDY = {
+    id: 'at-vandy',
+    title: 'Engineering Excellence Award at Vanderbilt',
+    sponsor: 'State Board of Regents',
+    match_score: 80,
+  }
+  const AT_YALE = {
+    id: 'at-yale',
+    title: 'Engineering Excellence Award at Yale',
+    sponsor: 'State Board of Regents',
+    match_score: 70,
+    amount_min: 500,
+  }
+
+  it('stripProgramQualifiers keeps a named-institution " at …" suffix', () => {
+    expect(stripProgramQualifiers(AT_VANDY.title)).toMatch(/vanderbilt/i)
+    expect(stripProgramQualifiers(AT_YALE.title)).toMatch(/yale/i)
+  })
+
+  it('still strips a scope-only " at …" suffix (community colleges / statewide)', () => {
+    expect(stripProgramQualifiers('HOPE Scholarship at community colleges').trim())
+      .toBe(stripProgramQualifiers('HOPE Scholarship').trim())
+  })
+
+  it('sameProgram (display) keeps the two campus awards distinct', () => {
+    expect(sameProgram(AT_VANDY, AT_YALE, { canonicalKeyIsFinal: false })).toBe(false)
+  })
+
+  it('collapseSameProgramDuplicates keeps both campus awards on screen', () => {
+    const { deduped, removed } = collapseSameProgramDuplicates([AT_VANDY, AT_YALE])
+    expect(removed).toBe(0)
+    expect(deduped.map((r) => r.id).sort()).toEqual(['at-vandy', 'at-yale'])
+  })
+})
+
+describe('a dash suffix that NAMES a different award must not collapse', () => {
+  // Sibling of the open #1404 case: blanket dash-strip collapsed
+  // "HEAP - Heating Assistance" / "HEAP - Cooling Assistance" into t:heap.
+  const HEAP_HEAT = {
+    id: 'heap-heat',
+    title: 'HEAP - Heating Assistance',
+    sponsor: 'Tennessee Housing Development Agency',
+    match_score: 90,
+  }
+  const HEAP_COOL = {
+    id: 'heap-cool',
+    title: 'HEAP - Cooling Assistance',
+    sponsor: 'Tennessee Housing Development Agency',
+    match_score: 85,
+    amount_min: 100,
+  }
+
+  it('stripProgramQualifiers keeps a program-naming dash suffix', () => {
+    expect(stripProgramQualifiers(HEAP_HEAT.title)).toMatch(/heating/i)
+    expect(stripProgramQualifiers(HEAP_COOL.title)).toMatch(/cooling/i)
+  })
+
+  it('still strips a place/year dash suffix', () => {
+    expect(stripProgramQualifiers('HOPE Scholarship - Tennessee').trim())
+      .toBe(stripProgramQualifiers('HOPE Scholarship').trim())
+  })
+
+  it('collapseSameProgramDuplicates keeps both HEAP awards on screen', () => {
+    const { deduped, removed } = collapseSameProgramDuplicates([HEAP_HEAT, HEAP_COOL])
+    expect(removed).toBe(0)
+    expect(deduped.map((r) => r.id).sort()).toEqual(['heap-cool', 'heap-heat'])
   })
 })
