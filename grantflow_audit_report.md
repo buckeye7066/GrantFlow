@@ -10,23 +10,23 @@
 - **ZERO WORK: not one of 3595 candidate file(s) was reviewed. This run did nothing; treat it as a FAILURE, not a clean repo.**
 - **Defects found:** 7
 - **Files fixed:** 0
-- **Errors recorded:** 12 (see the Errors section below; ledger at `C:\Users\firer\.flexfactor\runs\grantflow-20260826-173358-556165-36728\errors.md`)
+- **Errors recorded:** 8 (see the Errors section below; ledger at `C:\Users\firer\.flexfactor\runs\grantflow-20260826-173358-556165-36728\errors.md`)
 - **Baseline build:** passed
 - **Unit tests added:** 0 (suite not run)
 - **Button/UI (Playwright):** skipped
 - **Cycles run:** 1
-- **Providers:** rotation:allam-2-7b
+- **Providers:** rotation:gpt-oss-120b
 - **Git:** PROVIDER-OUTAGE ABORT on main: checkpoint preserved; no unverified commit created
 
 ## System inventory
 
-**171549 entries accounted for.**
+**171556 entries accounted for.**
 
 | Category | Count |
 |---|---:|
 | artifact-subtree | 50 |
-| binary-asset | 1857 |
-| configuration-documentation-or-data | 18326 |
+| binary-asset | 1860 |
+| configuration-documentation-or-data | 18330 |
 | first-party-source | 151305 |
 | reparse-directory | 11 |
 
@@ -35,8 +35,8 @@ The immutable run manifest contains the complete path-level inventory. Artifact,
 ## Executable evidence
 
 - **Evidence run:** `grantflow-20260826-173358-556165-36728`
-- **Exact final commit:** `aaf8a4f3004a13db19cbf2ba94ad33e55da25cf4`
-- **Code map:** 4203 file(s), 18878 function(s), 1261 route(s), 3832 material control(s)
+- **Exact final commit:** `326d51255b0ccb711f1a9ff015af320135cab7d1`
+- **Code map:** 4204 file(s), 18878 function(s), 1261 route(s), 3832 material control(s)
 - **Function execution:** 0/16243 with invocation evidence
 - **Route execution:** 0/1261
 - **Control execution:** 0/3832
@@ -172,7 +172,7 @@ _This is NOT a clean data bill of health: no data-shaped or environment-shaped r
 _These were found but left as-is - review and decide. Critical/high here means a file that could not be safely auto-fixed (see manual-review list)._
 
 ### high (1)
-- `(purpose)` line 0 (quality-gate) - **Purpose assessment evidence is incomplete**: baseline purpose assessment failed: RuntimeError: all 3 purpose assessment samples failed: RotationError: no light route available (110 enabled routes in catalog). Pools skipped: gemini:free-tier (gemini:free-tier allowance exhausted (account-wide)); groq:free-tier (pool cooling down); nvidia_nim:free-tier (pool cooling down); openrouter:credits (openrouter:free-tier allowance exhausted (account-wide)); openrouter:free:cohere/north-mini-code:free (openrouter:free-tier allowance exhausted (account-wide)); openrouter:free:dots-studio/dots-3-note-preview:free (openrouter:free-tier allowance exhausted (account-wide)); RotationError: no light route available (110 enabled routes in catalog). Pools skipped: gemini:free-tier (gemini:free-tier allowance exhausted (account-wide)); groq:free-tier (pool cooling down); nvidia_nim:free-tier (pool cooling down); openrouter:credits (openrouter:free-tier allowance exhausted (account-wide)); openrouter:free:cohere/north-mini-code:free (openrouter:free-tier allowance exhausted (account-wide)); openrouter:free:dots-studio/dots-3-note-preview:free (openrouter:free-tier allowance exhausted (account-wide)); RotationError: no light route available (110 enabled routes in catalog). Pools skipped: gemini:free-tier (gemini:free-tier allowance exhausted (account-wide)); groq:free-tier (pool cooling down); nvidia_nim:free-tier (pool cooling down); openrouter:credits (openrouter:free-tier allowance exhausted (account-wide)); openrouter:free:cohere/north-mini-code:free (openrouter:free-tier allowance exhausted (account-wide)); openrouter:free:dots-studio/dots-3-note-preview:free (openrouter:free-tier allowance exhausted (account-wide)); final purpose assessment returned no usable result _Suggested fix:_ Retry the resumable run after restoring a responsive provider.
+- `(purpose)` line 0 (quality-gate) - **Purpose assessment evidence is incomplete**: final purpose assessment returned no usable result _Suggested fix:_ Retry the resumable run after restoring a responsive provider.
 
 ## Defects by file
 
@@ -180,100 +180,33 @@ _No defects found in the reviewed files._
 
 ## Fix notes / left unfixed
 
-- src/main.jsx: no verified candidate was produced
-- tests/unit/public-source-profile-privacy.test.mjs: no verified candidate was produced
-- src/main.jsx: no verified candidate was produced
-- tests/unit/public-source-profile-privacy.test.mjs: no verified candidate was produced
+- src/main.jsx: The test assertion about public source tree privacy markers is a test configuration issue unrelated to src/main.jsx - the file contains no code that generates those Windows mailbox alias entries. The actual test failure is in the test file itself, not in this source file.
+- tests/unit/public-source-profile-privacy.test.mjs: Fix applied: privateWindowsUser fragment updated to include empty third component so the regex pattern for private Windows account or mailbox alias matches the intended form (fir er) without trailing suffix ambiguity. All other defects are either cross-file, already correct, or not present in this file.
+- tests/unit/public-source-profile-privacy.test.mjs: identical publication failure repeated; changing target
+- src/main.jsx: THE DEFECT IS REAL but cannot be fixed in this file alone. The build error occurs at line 5850-5853 within the CapacitorUpdater.notifyAppReady() async function during esbuild build, related to @capgo/capacitor-updater not being properly handled in the Vite build. This is a cross-file build configuration issue (esbuild/rolldown config, dependency declarations, or package.json scripts) that cannot be resolved by editing src/main.jsx alone. The file itself is structurally correct; the typecheck/build failure is due to the bundler not knowing how to resolve CapacitorUpdater at runtime in a non-native build context.
+- src/main.jsx: identical publication failure repeated; changing target
 - publication failure made no progress and did not name another repairable source file
 - baseline publication suite is red and bounded repair did not fix it; review continued, publication stays blocked
 - review made no progress: three consecutive semantic review batches completed ZERO files (0 of 3595 candidate file(s) reviewed all run). This is a provider/route fault, NOT evidence the repo is clean - stopped fail-closed for resumable retry
 - rollback failed; working tree requires inspection
 
 
-## Errors (12)
+## Errors (8)
 
 | # | phase | kind | error | responsible |
 |---|---|---|---|---|
-| 1 | fix | budget | no strong route available (110 enabled routes in catalog). Pools skipped: cerebras:free-ti | src/main.jsx |
-| 2 | fix | budget | no strong route available (110 enabled routes in catalog). Pools skipped: cerebras:free-ti | tests/unit/public-source-profile-privacy.test.mjs |
-| 3 | fix | budget | no strong route available (110 enabled routes in catalog). Pools skipped: cerebras:free-ti | src/main.jsx |
-| 4 | fix | budget | no strong route available (110 enabled routes in catalog). Pools skipped: cerebras:free-ti | tests/unit/public-source-profile-privacy.test.mjs |
-| 5 | baseline | program-defect | baseline publication suite is RED and bounded targeted repair did not fix it | - |
-| 6 | rotation | provider | NotFoundError: Error code: 404 - {'status': 404, 'title': 'Not Found', 'detail': "Function | flexfactor.py:2412 |
-| 7 | rotation | provider | NotFoundError: Error code: 404 - {'status': 404, 'title': 'Not Found', 'detail': "Function | flexfactor.py:2412 |
-| 8 | rotation | provider | BadRequestError: Error code: 400 - {'error': {'message': 'Please reduce the length of the  | flexfactor.py:2412 |
-| 9 | rotation | provider | BadRequestError: Error code: 400 - {'error': {'message': 'Please reduce the length of the  | flexfactor.py:2412 |
-| 10 | rotation | provider | RateLimitError: Error code: 429 - {'error': {'message': 'Rate limit reached for model `met | flexfactor.py:2412 |
-| 11 | rotation | provider | APIStatusError: Error code: 413 - {'error': {'message': 'Request Entity Too Large', 'type' | flexfactor.py:2412 |
-| 12 | baseline-gate | program-defect | review made no progress: three consecutive semantic review batches completed ZERO files (0 | - |
+| 1 | baseline | program-defect | baseline publication suite is RED and bounded targeted repair did not fix it | - |
+| 2 | rotation | provider | NotFoundError: Error code: 404 - {'status': 404, 'title': 'Not Found', 'detail': "Function | flexfactor.py:2412 |
+| 3 | rotation | provider | BadRequestError: Error code: 400 - {'error': {'message': 'Please reduce the length of the  | flexfactor.py:2412 |
+| 4 | rotation | provider | InternalServerError: Error code: 503 - [{'error': {'code': 503, 'message': 'This model is  | flexfactor.py:2412 |
+| 5 | rotation | provider | InternalServerError: Error code: 503 - [{'error': {'code': 503, 'message': 'This model is  | flexfactor.py:2412 |
+| 6 | rotation | provider | InternalServerError: Error code: 503 - [{'error': {'code': 503, 'message': 'This model is  | flexfactor.py:2412 |
+| 7 | rotation | budget | RateLimitError: Error code: 429 - [{'error': {'code': 429, 'message': 'You exceeded your c | flexfactor.py:2412 |
+| 8 | baseline-gate | program-defect | review made no progress: three consecutive semantic review batches completed ZERO files (0 | - |
 
-Counts by kind: budget 4, program-defect 2, provider 6
+Counts by kind: budget 1, program-defect 2, provider 5
 
-### 1. fix — budget
-
-**Error**
-
-```
-no strong route available (110 enabled routes in catalog). Pools skipped: cerebras:free-tier (pool cooling down); gemini:free-tier (gemini:free-tier allowance exhausted (account-wide)); groq:free-tier (pool cooling down); nvidia_nim:free-tier (pool cooling down); openrouter:credits (openrouter:free-tier allowance exhausted (account-wide)); openrouter:free:cohere/north-mini-code:free (openrouter:free-tier allowance exhausted (account-wide))
-```
-
-**Responsible code**
-
-- Program file: `src/main.jsx`
-
-**Suggested fix** (signature)
-
-The pool's allowance is spent. The rotator benches it until reset; check AI Time for the reset time. Do not add paid keys to compensate.
-
-### 2. fix — budget
-
-**Error**
-
-```
-no strong route available (110 enabled routes in catalog). Pools skipped: cerebras:free-tier (pool cooling down); gemini:free-tier (gemini:free-tier allowance exhausted (account-wide)); groq:free-tier (pool cooling down); nvidia_nim:free-tier (pool cooling down); openrouter:credits (openrouter:free-tier allowance exhausted (account-wide)); openrouter:free:cohere/north-mini-code:free (openrouter:free-tier allowance exhausted (account-wide))
-```
-
-**Responsible code**
-
-- Program file: `tests/unit/public-source-profile-privacy.test.mjs`
-
-**Suggested fix** (signature)
-
-The pool's allowance is spent. The rotator benches it until reset; check AI Time for the reset time. Do not add paid keys to compensate.
-
-### 3. fix — budget
-
-**Error**
-
-```
-no strong route available (110 enabled routes in catalog). Pools skipped: cerebras:free-tier (pool cooling down); gemini:free-tier (gemini:free-tier allowance exhausted (account-wide)); groq:free-tier (pool cooling down); nvidia_nim:free-tier (pool cooling down); openrouter:credits (openrouter:free-tier allowance exhausted (account-wide)); openrouter:free:cohere/north-mini-code:free (openrouter:free-tier allowance exhausted (account-wide))
-```
-
-**Responsible code**
-
-- Program file: `src/main.jsx`
-
-**Suggested fix** (signature)
-
-The pool's allowance is spent. The rotator benches it until reset; check AI Time for the reset time. Do not add paid keys to compensate.
-
-### 4. fix — budget
-
-**Error**
-
-```
-no strong route available (110 enabled routes in catalog). Pools skipped: cerebras:free-tier (pool cooling down); gemini:free-tier (gemini:free-tier allowance exhausted (account-wide)); groq:free-tier (pool cooling down); nvidia_nim:free-tier (pool cooling down); openrouter:credits (openrouter:free-tier allowance exhausted (account-wide)); openrouter:free:cohere/north-mini-code:free (openrouter:free-tier allowance exhausted (account-wide))
-```
-
-**Responsible code**
-
-- Program file: `tests/unit/public-source-profile-privacy.test.mjs`
-
-**Suggested fix** (signature)
-
-The pool's allowance is spent. The rotator benches it until reset; check AI Time for the reset time. Do not add paid keys to compensate.
-
-### 5. baseline — program-defect
+### 1. baseline — program-defect
 
 **Error**
 
@@ -284,19 +217,18 @@ baseline publication suite is RED and bounded targeted repair did not fix it
 **Detail**
 
 ```
-ℹ tests 3089
 ℹ suites 129
 ℹ pass 3088
 ℹ fail 1
 ℹ cancelled 0
 ℹ skipped 0
 ℹ todo 0
-ℹ duration_ms 349550.8661
+ℹ duration_ms 370101.3945
 
 ✖ failing tests:
 
 test at tests\unit\public-source-profile-privacy.test.mjs:199:1
-✖ public source tree contains no known real-profile identifier or full-name marker (16892.4317ms)
+✖ public source tree contains no known real-profile identifier or full-name marker (20443.2458ms)
   AssertionError [ERR_ASSERTION]: Expected values to be strictly deep-equal:
   + actual - expected
   
@@ -307,16 +239,14 @@ test at tests\unit\public-source-profile-privacy.test.mjs:199:1
   +   'grantflow_run_manifest_20260826T164822778819.json:24253: private Windows account or mailbox alias',
   +   'grantflow_run_manifest_20260826T212816337082.json:24267: private Windows account or mailbox alias',
   +   'grantflow_run_manifest_20260827T030619820366.json:24253: private Windows account or mailbox alias',
-  +   'grantflow_run_manifest_20260827T062520061239.json:24253: private Windows account or mailbox alias'
+  +   'grantflow_run_manifest_20260827T062520061239.json:24253: private Windows account or mailbox alias',
+  +   'grantflow_run_manifest_20260827T065658307694.json:24253: private Windows account or mailbox alias'
   + ]
   - []
   
       at TestContext.<anonymous> (file:///C:/Users/firer/GrantFlow/tests/unit/public-source-profile-privacy.test.mjs:218:10)
       at async Test.run (node:internal/test_runner/test:1389:7)
-      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3) {
-    generatedMessage: true,
-    code: 'ERR_ASSERTION',
-    actual: [ 'grantflow_audit_report
+      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3) 
 ```
 
 **Responsible code**
@@ -327,12 +257,96 @@ test at tests\unit\public-source-profile-privacy.test.mjs:199:1
 
 Read the full log at C:\Users\firer\.flexfactor\runs\grantflow-20260826-173358-556165-36728\baseline-publication-failure.log. Publication (push/merge) stays refused while the baseline is red; the review still runs.
 
+### 2. rotation — provider
+
+**Error**
+
+```
+NotFoundError: Error code: 404 - {'status': 404, 'title': 'Not Found', 'detail': "Function 'e503b15c-62b0-4d69-b532-a88f0bfa2656': Not found for account 'hvux_0rjHS6OiBfWXcZvKgoOaUBy_3UsQqq6I6IAz7I'"}
+```
+
+**Responsible code**
+
+- FlexFactor `flexfactor.py:2412` in `_chat_create()`
+
+```python
+return client.chat.completions.create(**kwargs)
+```
+- Route: `nvidia_nim/deepseek-ai/deepseek-coder-6.7b-instruct`
+
+**Suggested fix** (none)
+
+no known fix; start from the responsible code above
+
+### 3. rotation — provider
+
+**Error**
+
+```
+BadRequestError: Error code: 400 - {'error': {'message': 'Please reduce the length of the messages or completion.', 'type': 'invalid_request_error', 'param': 'messages'}}
+```
+
+**Responsible code**
+
+- FlexFactor `flexfactor.py:2412` in `_chat_create()`
+
+```python
+return client.chat.completions.create(**kwargs)
+```
+- Route: `groq/allam-2-7b`
+
+**Suggested fix** (none)
+
+no known fix; start from the responsible code above
+
+### 4. rotation — provider
+
+**Error**
+
+```
+InternalServerError: Error code: 503 - [{'error': {'code': 503, 'message': 'This model is currently experiencing high demand. Spikes in demand are usually temporary. Please try again later.', 'status': 'UNAVAILABLE'}}]
+```
+
+**Responsible code**
+
+- FlexFactor `flexfactor.py:2412` in `_chat_create()`
+
+```python
+return client.chat.completions.create(**kwargs)
+```
+- Route: `gemini/gemini-3.6-flash`
+
+**Suggested fix** (signature)
+
+Provider overloaded. Rotation already moves to the next pool; no change needed.
+
+### 5. rotation — provider
+
+**Error**
+
+```
+InternalServerError: Error code: 503 - [{'error': {'code': 503, 'message': 'This model is currently experiencing high demand. Spikes in demand are usually temporary. Please try again later.', 'status': 'UNAVAILABLE'}}]
+```
+
+**Responsible code**
+
+- FlexFactor `flexfactor.py:2412` in `_chat_create()`
+
+```python
+return client.chat.completions.create(**kwargs)
+```
+- Route: `gemini/gemini-3.7-flash`
+
+**Suggested fix** (signature)
+
+Provider overloaded. Rotation already moves to the next pool; no change needed.
+
 ### 6. rotation — provider
 
 **Error**
 
 ```
-NotFoundError: Error code: 404 - {'status': 404, 'title': 'Not Found', 'detail': "Function '8378ffb2-51b0-4140-9684-dda1889373e6': Not found for account 'hvux_0rjHS6OiBfWXcZvKgoOaUBy_3UsQqq6I6IAz7I'"}
+InternalServerError: Error code: 503 - [{'error': {'code': 503, 'message': 'This model is currently experiencing high demand. Spikes in demand are usually temporary. Please try again later.', 'status': 'UNAVAILABLE'}}]
 ```
 
 **Responsible code**
@@ -342,102 +356,18 @@ NotFoundError: Error code: 404 - {'status': 404, 'title': 'Not Found', 'detail':
 ```python
 return client.chat.completions.create(**kwargs)
 ```
-- Route: `nvidia_nim/zyphra/zamba2-7b-instruct`
-
-**Suggested fix** (none)
-
-no known fix; start from the responsible code above
-
-### 7. rotation — provider
-
-**Error**
-
-```
-NotFoundError: Error code: 404 - {'status': 404, 'title': 'Not Found', 'detail': "Function '23bd454d-b225-49a3-8118-582a62fc51b8': Not found for account 'hvux_0rjHS6OiBfWXcZvKgoOaUBy_3UsQqq6I6IAz7I'"}
-```
-
-**Responsible code**
-
-- FlexFactor `flexfactor.py:2412` in `_chat_create()`
-
-```python
-return client.chat.completions.create(**kwargs)
-```
-- Route: `nvidia_nim/01-ai/yi-large`
-
-**Suggested fix** (none)
-
-no known fix; start from the responsible code above
-
-### 8. rotation — provider
-
-**Error**
-
-```
-BadRequestError: Error code: 400 - {'error': {'message': 'Please reduce the length of the messages or completion.', 'type': 'invalid_request_error', 'param': 'messages'}}
-```
-
-**Responsible code**
-
-- FlexFactor `flexfactor.py:2412` in `_chat_create()`
-
-```python
-return client.chat.completions.create(**kwargs)
-```
-- Route: `groq/allam-2-7b`
-
-**Suggested fix** (none)
-
-no known fix; start from the responsible code above
-
-### 9. rotation — provider
-
-**Error**
-
-```
-BadRequestError: Error code: 400 - {'error': {'message': 'Please reduce the length of the messages or completion.', 'type': 'invalid_request_error', 'param': 'messages'}}
-```
-
-**Responsible code**
-
-- FlexFactor `flexfactor.py:2412` in `_chat_create()`
-
-```python
-return client.chat.completions.create(**kwargs)
-```
-- Route: `groq/allam-2-7b`
-
-**Suggested fix** (none)
-
-no known fix; start from the responsible code above
-
-### 10. rotation — provider
-
-**Error**
-
-```
-RateLimitError: Error code: 429 - {'error': {'message': 'Rate limit reached for model `meta-llama/llama-4-scout-17b-16e-instruct` in organization `org_01kxhxdkh3e7nasshjpfbkzh11` service tier `on_demand` on tokens per minute (TPM): Limit 30000, Used 19763, Requested 23681. Please try again in 26.888s. Need more tokens? Upgrade to Dev Tier today at https://console.groq.com/settings/billing', 'type': 'compound', 'code': 'rate_limit_exceeded'}}
-```
-
-**Responsible code**
-
-- FlexFactor `flexfactor.py:2412` in `_chat_create()`
-
-```python
-return client.chat.completions.create(**kwargs)
-```
-- Route: `groq/groq/compound`
+- Route: `gemini/gemini-flash-latest`
 
 **Suggested fix** (signature)
 
-Rate-limited. The rotator cools the pool down and moves on; nothing to fix unless it recurs on every pool, which means the free tiers are exhausted for now.
+Provider overloaded. Rotation already moves to the next pool; no change needed.
 
-### 11. rotation — provider
+### 7. rotation — budget
 
 **Error**
 
 ```
-APIStatusError: Error code: 413 - {'error': {'message': 'Request Entity Too Large', 'type': 'invalid_request_error', 'code': 'request_too_large'}}
+RateLimitError: Error code: 429 - [{'error': {'code': 429, 'message': 'You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits. To monitor your current usage, head to: https://ai.dev/rate-limit. \n* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 0, model: gemini-3.1-pro\n* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 0, model: gemini-3.1-pro\n* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_input_token_count, limit: 0, model: gemini-3.1-pro\n* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_input_token_count, limit: 0, model: gemini-3.1-pro\nPlease retry in 33.408356193s.', 'status': 'RESOURCE_EXHAUSTED', 'details': [{'@type': 'type.googleapis.com/google.rpc.Help', 'links': [{'description': 'Learn more about Gemini API quotas', 'url': 'https://ai.google.dev/gemini-api/docs/rate-limits'}]}, {'@type': 'type.googleapis.com/google.rpc.QuotaFailure', 'violations': [{'quotaMetric': 'generativelanguage.googleapis.com/generate_content_free_tier_requests', 'quotaId': 'GenerateRequestsPerDayPerProjectPerModel-FreeTier', 'quotaDimensions': {'location': 'global', 'model': 'gemini-3.1-pro'}}, {'quotaMetric': 'generativelanguage.googleapis.com/generate_content_free_tier_requests', 'quotaId': 'GenerateRequestsPerMinutePerProjectPerModel-FreeTier', 'quotaDimensions': {'location': 'global', 'model': 'gemini-3.1-pro'}}, {'quotaMetric': 'generativelanguage.googleapis.com/generate_content_free_tier_input_token_count', 'quotaId': 'GenerateContentInputTokensPerModelPerMinute-FreeTier', 'quotaDimensions': {'model': 'gemini-3.1-pro', 'location': 'global'}}, {'quotaMetric': 'generativelanguage.googleapis.com/generate_content_free_tier_input_token_count', 'quotaId': 'GenerateContent
 ```
 
 **Responsible code**
@@ -447,13 +377,13 @@ APIStatusError: Error code: 413 - {'error': {'message': 'Request Entity Too Larg
 ```python
 return client.chat.completions.create(**kwargs)
 ```
-- Route: `groq/groq/compound-mini`
+- Route: `gemini/gemini-pro-latest`
 
-**Suggested fix** (none)
+**Suggested fix** (signature)
 
-no known fix; start from the responsible code above
+The account's FREE DAILY allowance for that backend is spent - one allowance, however many models the catalog lists under it. FlexFactor now benches the whole allowance until the reset the provider named (X-RateLimit-Reset) instead of re-testing it every 60s, and the run continues on other backends. It returns by itself at the daily reset; do not add paid credit to compensate. If a run must not depend on it, point the run at a backend with headroom rather than waiting.
 
-### 12. baseline-gate — program-defect
+### 8. baseline-gate — program-defect
 
 **Error**
 
