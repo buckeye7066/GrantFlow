@@ -1,6 +1,6 @@
 # GrantFLow — low / info findings (1)
 
-_Generated 2026-08-28T10:31:46. These are below the auto-fix bar and were left unchanged on purpose. Review and decide per item._
+_Generated 2026-08-28T12:09:57. These are below the auto-fix bar and were left unchanged on purpose. Review and decide per item._
 
 **Files with low/info issues:** 1
 
