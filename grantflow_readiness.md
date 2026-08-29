@@ -1,4 +1,4 @@
-# Production readiness — GrantFLow
+# Production readiness — GrantFlow
 
 **Verdict: NOT PRODUCTION READY**
 
