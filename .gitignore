@@ -142,3 +142,10 @@ grantflow_files_with_defects.txt
 CLAUDE.local.md
 
 eslint.json
+
+# FlexFactor run manifests: ~43MB each, and they embed the private Windows
+# account name - exactly what tests/unit/public-source-profile-privacy.test.mjs
+# exists to keep out of this tree. Autoclean committed 12 of them (~500MB,
+# 13.7M lines), which turned the privacy tripwire RED and so blocked
+# publication of every real fix. They belong to the run, not the repository.
+*_run_manifest_*.json
