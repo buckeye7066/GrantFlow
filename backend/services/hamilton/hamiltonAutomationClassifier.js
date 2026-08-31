@@ -47,6 +47,7 @@
  */
 
 import { isSearchEngineUrl } from '../../config/urlRules.js'
+import { normalizeBrowserTargetUrl } from './controlledBetaBrowserPolicy.js'
 import { isPointerKind } from '../../config/opportunityKindClasses.js'
 
 // Owner directive 2026-08-03: a POINTER row that carries a usable web URL is a
@@ -188,7 +189,13 @@ function readUrl(opportunity, grant) {
     // Google's sign-in wall 5x per task in prod). The orchestrator then
     // re-persists the nulled URL onto the task row, healing it in place.
     if (isSearchEngineUrl(candidate)) continue
-    return candidate
+    // A plain-http saved link on a PUBLIC host is upgraded to https HERE, at
+    // the one place every consumer reads the portal URL from (the task's
+    // portal_url/application_url, the launch gate, the engine). Live-verified
+    // 2026-08-31: with the upgrade only inside the engine, the orchestrator's
+    // launch gate still saw `http://www.aauw.org/...` and printed a packet
+    // "not a safe public HTTPS target". Private/loopback hosts are untouched.
+    return normalizeBrowserTargetUrl(candidate)
   }
   return null
 }

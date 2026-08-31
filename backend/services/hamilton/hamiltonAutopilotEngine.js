@@ -972,17 +972,25 @@ async function detectApplyLinks(page) {
         const href = el.href || ''
         if (!/^https?:/i.test(href)) continue
         const r = el.getBoundingClientRect()
-        if (!(r.width > 0 && r.height > 0)) continue
+        // Collapsed navigation (hamburger menus, mega-menus) hides the very
+        // "Apply" link a landing page routes through — thegatesscholarship.org
+        // and tnachieves.org/tn-promise both showed zero visible apply anchors
+        // in a headless viewport (live, 2026-08-31). A hidden anchor is still a
+        // real destination; it simply ranks below a visible one.
+        const hidden = !(r.width > 0 && r.height > 0)
         const text = (el.innerText || el.textContent || el.getAttribute('aria-label') || el.getAttribute('title') || '').trim().replace(/\s+/g, ' ')
         const textHit = rxList.some((r2) => new RegExp(r2.source, r2.flags).test(text))
+        // "Learn More & Apply" (tnachieves.org/tn-promise → collegefortn.org/tnpromise,
+        // live 2026-08-31): the word is there, the phrase patterns are not.
+        const weakTextHit = !textHit && /\bapply\b/i.test(text) && text.length <= 60
         const hrefHit = /\/(apply|application|applications|apply-now|applynow|start-application|scholarship-application|grant-application)(\/|\?|#|$|\.)/i.test(href)
           || /[?&](page|view|action)=apply/i.test(href)
-        if (!textHit && !hrefHit) continue
+        if (!textHit && !weakTextHit && !hrefHit) continue
         if (/\b(how to apply|apply(ing)? for (financial )?aid|before you apply|applied|application (status|deadline|process|tips|timeline|requirements|faq|guide))\b/i.test(text) && !hrefHit) continue
         const key = href.split('#')[0]
         if (seen.has(key)) continue
         seen.add(key)
-        out.push({ href, text: text.slice(0, 80), score: (textHit ? 2 : 0) + (hrefHit ? 1 : 0) })
+        out.push({ href, text: text.slice(0, 80), hidden, score: (textHit ? 2 : 0) + (weakTextHit ? 1 : 0) + (hrefHit ? 1 : 0) + (hidden ? 0 : 1) })
       }
       return out.sort((a, b) => b.score - a.score).slice(0, 8)
     }, { rxList: APPLY_NAV_PATTERNS.map((p) => ({ source: p.source, flags: p.flags })) })
@@ -1858,12 +1866,35 @@ export async function runAutopilot({
   // the same control) — see APPLY_NAV_PATTERNS.
   let applyNavClicks = 0
   const clickedApplyNav = new Set()
+  // Follow an apply BUTTON ("Apply", "Start application") from a landing page
+  // — bounded, never the same control twice. Returns true when it navigated.
+  // thegatesscholarship.org's apply control is a BUTTON on a page with no
+  // submit-looking control at all, so the no-form branch (which requires one)
+  // never reached it and the run ended as no_progress (live, 2026-08-31).
+  const tryFollowApplyButton = async () => {
+    if (applyNavClicks >= MAX_APPLY_NAV_CLICKS) return false
+    const applyNav = await detectButtons(page, APPLY_NAV_PATTERNS)
+    const nextApply = applyNav.find(
+      (b) => !clickedApplyNav.has(String(b.text || '').trim().toLowerCase()),
+    )
+    if (!nextApply) return false
+    applyNavClicks += 1
+    clickedApplyNav.add(String(nextApply.text || '').trim().toLowerCase())
+    trace.push({ step: 'follow_apply_link', detail: { text: String(nextApply.text || '').slice(0, 40) } })
+    reportLiveStep(runId, 'Opening the application form')
+    const followed = await clickButtonByBid(page, nextApply.bid)
+    if (!followed) return false
+    await page.waitForLoadState('domcontentloaded', { timeout: NAV_TIMEOUT_MS }).catch(() => null)
+    await page.waitForLoadState('networkidle', { timeout: 6000 }).catch(() => null)
+    return true
+  }
   // Follow an apply ANCHOR (not a button) from a landing page — bounded by the
   // same MAX_APPLY_NAV_CLICKS budget, never the same href twice, public-HTTPS
   // targets only. Returns true when the page navigated (caller re-inspects).
   const tryFollowApplyAnchor = async () => {
     if (applyNavClicks >= MAX_APPLY_NAV_CLICKS) return false
     const applyLinks = await detectApplyLinks(page)
+    trace.push({ step: 'apply_link_scan', detail: { candidates: applyLinks.length, sample: applyLinks.slice(0, 3).map((l) => ({ text: String(l.text || '').slice(0, 30), href: String(l.href || '').slice(0, 100), hidden: Boolean(l.hidden) })) } })
     const currentPage = (() => { try { return page.url().split('#')[0] } catch { return '' } })()
     const nextLink = applyLinks.find((l) => {
       const target = normalizeBrowserTargetUrl(l.href)
@@ -2456,22 +2487,7 @@ export async function runAutopilot({
         // never the same control twice) and re-inspect — the form it leads to
         // carries the fields Hamilton fills. Only reached when nothing was
         // fillable here, so it can never intercept a real submit.
-        const applyNav = await detectButtons(page, APPLY_NAV_PATTERNS)
-        const nextApply = applyNav.find(
-          (b) => !clickedApplyNav.has(String(b.text || '').trim().toLowerCase()),
-        )
-        if (nextApply && applyNavClicks < MAX_APPLY_NAV_CLICKS) {
-          applyNavClicks += 1
-          clickedApplyNav.add(String(nextApply.text || '').trim().toLowerCase())
-          trace.push({ step: 'follow_apply_link', detail: { text: String(nextApply.text || '').slice(0, 40) } })
-          reportLiveStep(runId, 'Opening the application form')
-          const followed = await clickButtonByBid(page, nextApply.bid)
-          if (followed) {
-            await page.waitForLoadState('domcontentloaded', { timeout: NAV_TIMEOUT_MS }).catch(() => null)
-            await page.waitForLoadState('networkidle', { timeout: 6000 }).catch(() => null)
-            continue // re-inspect the page the apply link led to
-          }
-        }
+        if (await tryFollowApplyButton()) continue // re-inspect the page the apply control led to
         // No apply BUTTON — look for an apply LINK (anchor), on this host or
         // the funder's portal vendor. Public-HTTPS only (the egress guard and
         // the target policy both still apply); bounded like the button path.
@@ -2739,7 +2755,7 @@ export async function runAutopilot({
       // A landing page with no controls at all but an "Apply" ANCHOR (the
       // Gates Scholarship home, tnachieves.org/tn-promise) is one click from
       // the form. Follow it before declaring no progress.
-      if (filled.length === 0 && await tryFollowApplyAnchor()) continue
+      if (filled.length === 0 && (await tryFollowApplyButton() || await tryFollowApplyAnchor())) continue
       trace.push({ step: 'no_progress', detail: { reason: 'no advance button found' } })
       return { status: 'blocked', blocker_kind: 'no_progress', blocker_detail: 'Hamilton could not find a Next/Submit button to continue', filled_fields: filled, pages_visited: pagesVisited, trace }
     }

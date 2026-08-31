@@ -169,6 +169,28 @@ async function tick({ db, logger = console } = {}) {
       logger?.warn?.('[hamilton:scheduler] session keep-alive failed:', err?.message || err)
     }
 
+    // Full-automation hygiene: settle quarantined "verify the portal" cards
+    // whose retained run shows a contact/newsletter form (no application was
+    // submitted), and re-queue "waiting for review" cards a full-automation
+    // profile never needed to review. Both bounded + idempotent; a failure
+    // here never fails the tick.
+    let autonomySweeps = null
+    try {
+      const { resolveContactFormVerifications, releaseParkedReviewsUnderFullAutomation } = await import('./hamiltonAutonomySweeps.js')
+      const verifications = await resolveContactFormVerifications(db, { limit: 50 })
+      const releases = await releaseParkedReviewsUnderFullAutomation(db, { limit: 200 })
+      autonomySweeps = { verifications, releases }
+      if ((verifications?.resolved || 0) > 0 || (releases?.released || 0) > 0) {
+        logger?.info?.('[hamilton:scheduler] autonomy sweeps', {
+          contact_forms_resolved: verifications?.resolved || 0,
+          reviews_released: releases?.released || 0,
+          reviews_kept: releases?.kept || 0,
+        })
+      }
+    } catch (err) {
+      logger?.warn?.('[hamilton:scheduler] autonomy sweeps failed:', err?.message || err)
+    }
+
     const summary = result?.summary || {}
     if ((summary.attempted || 0) > 0) {
       // no_run is the honest half of this line: `processed` only means the call
@@ -184,7 +206,7 @@ async function tick({ db, logger = console } = {}) {
         blocked: summary.blocked,
       })
     }
-    return { ran: true, result, verification: verificationSummary, keepAlive: keepAliveSummary }
+    return { ran: true, result, verification: verificationSummary, keepAlive: keepAliveSummary, autonomySweeps }
   } catch (err) {
     logger?.warn?.('[hamilton:scheduler] tick failed:', err?.message || err)
     return { ran: false, error: err?.message || String(err) }

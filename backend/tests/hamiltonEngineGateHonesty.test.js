@@ -93,6 +93,8 @@ function jsdomPage(html, { url = 'https://portal.example.org/apply', bodyTextLen
           submitted = true
           doc.body.innerHTML = '<h1>Application submitted</h1><p>Thank you. Your confirmation number is GATE-CONF-9931.</p>'
           doc.title = 'Application submitted'
+        } else {
+          el.dispatchEvent(new window.MouseEvent('click', { bubbles: true }))
         }
       },
     }
@@ -406,6 +408,43 @@ describe('apply-link discovery', () => {
     expect(hrefs).not.toContain('https://www.thegatesscholarship.org/how-to-apply')
     expect(hrefs).not.toContain('https://www.thegatesscholarship.org/faq')
     expect(hrefs.some((h) => h.startsWith('mailto:'))).toBe(false)
+  })
+  it('"Learn More & Apply" counts as an apply anchor; prose about applying does not', async () => {
+    const page = jsdomPage(`<html><body>
+      <a href="https://www.collegefortn.org/tnpromise/">Learn More & Apply</a>
+      <a href="https://www.youtube.com/watch?v=x">Click here for a TN Promise application tutorial video</a>
+      <a href="/how-to-apply">How to apply</a>
+    </body></html>`, { url: 'https://www.tnachieves.org/tn-promise' })
+    expect((await detectApplyLinks(page)).map((l) => l.href)).toEqual(['https://www.collegefortn.org/tnpromise/'])
+  })
+  it('a page with NO submit-like control but an apply BUTTON follows the button from the no_progress dead-end (the Gates home)', async () => {
+    const page = jsdomPage('<html><head><title>The Gates Scholarship: Home</title></head><body><h1>The Gates Scholarship</h1><button type="button">Apply</button></body></html>', { url: 'https://www.thegatesscholarship.org/' })
+    // Clicking the Apply button "navigates" to the form.
+    const origButton = page._doc.querySelector('button')
+    origButton.addEventListener('click', () => {
+      page._doc.body.innerHTML = '<form><label for="fn">First name</label><input id="fn" name="first_name" /><label for="essay">Essay</label><textarea id="essay" name="essay"></textarea><button type="submit">Submit application</button></form>'
+    })
+    const result = await runAutopilot({
+      url: 'https://www.thegatesscholarship.org/', profile: PROFILE, authorizations: FULL_AUTH,
+      allowAutoSubmit: true, fullAutomation: true,
+      beforeSubmit: async () => ({ allow: true, reason: 'authorized', decision: {} }),
+      _testPage: page,
+    })
+    const steps = (result.trace || []).map((t) => t.step)
+    expect(steps).toContain('follow_apply_link')
+    expect(steps).not.toContain('no_progress')
+    expect(page._submitted()).toBe(true)
+  })
+  it('a HIDDEN apply anchor (collapsed nav) is still discovered, ranked below a visible one', async () => {
+    const page = jsdomPage(`<html><body>
+      <nav data-hidden="1"><a href="https://apply.tnachieves.org/student/apply" data-hidden="1">Apply</a></nav>
+      <p>Tennessee Promise information.</p>
+    </body></html>`, { url: 'https://www.tnachieves.org/tn-promise' })
+    const links = await detectApplyLinks(page)
+    expect(links.map((l) => l.href)).toEqual(['https://apply.tnachieves.org/student/apply'])
+    expect(links[0].hidden).toBe(true)
+    const both = jsdomPage(`<html><body><a href="https://a.example.org/apply" data-hidden="1">Apply</a><a href="https://b.example.org/apply">Apply Now</a></body></html>`)
+    expect((await detectApplyLinks(both)).map((l) => l.href)).toEqual(['https://b.example.org/apply', 'https://a.example.org/apply'])
   })
   it('runAutopilot follows the apply anchor from a landing page instead of dead-ending as no_application_form', async () => {
     const page = jsdomPage('<html><body><h1>Tennessee Promise</h1><p>Info.</p><a href="https://apply.tnachieves.org/student/apply">Apply Now</a></body></html>', { url: 'https://www.tnachieves.org/tn-promise' })
