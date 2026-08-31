@@ -227,4 +227,62 @@ describe('a pre-task-creation skip closes the existing idle task', () => {
     })
     expect(result.policy.code).toBe('funding_source_profile_rejected')
   })
+
+  it('an UNRESOLVABLE source (opportunity AND grant rows purged) closes the dangling task before the 422 throw', async () => {
+    // The freeze this guards against, measured in prod 2026-08-31: the 5
+    // oldest-updated eligible tasks all pointed at purged source rows, the
+    // throw fired before any row update, and ORDER BY updated_at ASC LIMIT 5
+    // re-picked exactly those 5 on every scheduler tick — 241 eligible tasks
+    // (incl. 30 past-due waiting_for_window) were never attempted.
+    const db = makeDb()
+    await seedFixture(db)
+    const task = await seedTask(db)
+    await db.prepare('DELETE FROM funding_opportunities WHERE id = ?').run('opp-1')
+
+    let thrown = null
+    try {
+      await automateSingleSource(db, { profileId: PROFILE, source: { opportunity_id: 'opp-1' } })
+    } catch (err) {
+      thrown = err
+    }
+    expect(thrown).toBeTruthy()
+    expect(thrown.code).toBe('unresolvable_funding_source')
+    expect(thrown.status).toBe(422)
+    expect(thrown.closed_tasks).toEqual([task.id])
+
+    const after = await getApplicationTask(db, task.id)
+    expect(after.status).toBe('cancelled')
+    expect(after.last_agent_message).toMatch(/no longer exists/i)
+
+    // And the queue rotates: the cancelled task no longer matches the
+    // adapter's pickable predicate.
+    const nowIso = new Date(Date.now() + 1000).toISOString()
+    const picked = await db.prepare(`
+      SELECT id FROM application_tasks
+       WHERE (status IN ('queued','ready','analyzing','ready_to_start')
+          OR (status IN ('waiting_for_login','waiting_for_2fa','waiting_for_captcha','waiting_for_email_verification','waiting_for_window')
+              AND next_retry_at IS NOT NULL AND next_retry_at <= ?)
+          OR (status = 'blocked'
+              AND next_retry_at IS NOT NULL AND next_retry_at <= ?))
+    `).all(nowIso, nowIso)
+    expect(picked.map((r) => r.id)).not.toContain(task.id)
+  })
+
+  it('unresolvable-source close does NOT touch drafted human-facing work (waiting_for_review)', async () => {
+    const db = makeDb()
+    await seedFixture(db)
+    const task = await seedTask(db, { status: 'waiting_for_review' })
+    await db.prepare('DELETE FROM funding_opportunities WHERE id = ?').run('opp-1')
+
+    let thrown = null
+    try {
+      await automateSingleSource(db, { profileId: PROFILE, source: { opportunity_id: 'opp-1' } })
+    } catch (err) {
+      thrown = err
+    }
+    expect(thrown?.code).toBe('unresolvable_funding_source')
+    expect(thrown?.closed_tasks).toEqual([])
+    const after = await getApplicationTask(db, task.id)
+    expect(after.status).toBe('waiting_for_review')
+  })
 })

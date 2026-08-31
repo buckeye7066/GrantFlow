@@ -628,12 +628,33 @@ export async function automateSingleSource(db, {
   // it the card reads "Untitled application" forever (320 such cards in prod,
   // 2026-08-03). The ids came from a caller's stale snapshot — refuse loudly
   // so the caller re-lists, instead of persisting a card nobody can act on.
+  //
+  // And an EXISTING idle task pointing at the vanished pair must be CLOSED
+  // before the refusal, for the same reason the eligibility/pointer skips
+  // close theirs: this throw fires before ensureApplicationTask, so the task's
+  // updated_at never moved — and the scheduler picks ORDER BY updated_at ASC
+  // LIMIT 5, so the same dangling tasks headed the queue on EVERY tick and
+  // starved everything behind them. Measured in prod 2026-08-31: the 5 oldest
+  // eligible tasks all pointed at purged source rows, every 5-minute tick
+  // re-threw on exactly those 5, and 241 eligible tasks (including 30 past-due
+  // waiting_for_window rows) were never attempted — the whole fleet read
+  // "Hamilton is not working right now" while the scheduler ticked green.
   if (!opportunity && !grant) {
+    const closedTasks = await closeExistingTasksForRefusedSource(db, {
+      profileId: resolvedProfileId,
+      opportunityId,
+      grantId,
+      reason: 'unresolvable_funding_source',
+      message:
+        'Hamilton closed this task: its funding source no longer exists in the catalog '
+        + '(the opportunity and grant records were both removed), so there is nothing to apply to.',
+    })
     const err = new Error(
       `funding source not found (opportunity ${opportunityId || '—'}, grant ${grantId || '—'})`,
     )
     err.status = 422
     err.code = 'unresolvable_funding_source'
+    err.closed_tasks = closedTasks
     throw err
   }
 
