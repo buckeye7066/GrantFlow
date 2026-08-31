@@ -64,6 +64,7 @@ import {
   controlledBetaBrowserRefusal,
   installControlledBetaBrowserEgressGuard,
   isHamiltonBrowserTargetAllowed,
+  normalizeBrowserTargetUrl,
 } from './controlledBetaBrowserPolicy.js'
 import path from 'node:path'
 import { registrableDomain } from './hamiltonPortalCredentialService.js'
@@ -490,6 +491,19 @@ async function detectButtons(page, patterns) {
             ? `${form.getAttribute('id') || ''} ${form.getAttribute('name') || ''} ${form.getAttribute('aria-label') || ''} ${form.innerText || form.textContent || ''}`
             : ''
           const isPageFeedback = /\b(?:was this page helpful|rate this page|feedback (?:about|on) this page|did you find what you needed|how (?:helpful|useful) was this page)\b/i.test(formContext)
+          // A newsletter / "stay in touch" / contact-us / site-search form is
+          // not an application, however well its Submit button matches. Prod
+          // 2026-08-31: seven tasks reached the irreversible boundary on
+          // exactly these (first name + last name + email + Submit on a
+          // homepage) and then sat in submission_verification_required for a
+          // human to "check the portal" — for a mailing-list sign-up.
+          const formAttrs = form
+            ? `${form.getAttribute('id') || ''} ${form.getAttribute('name') || ''} ${form.getAttribute('class') || ''} ${form.getAttribute('aria-label') || ''} ${form.getAttribute('action') || ''}`
+            : ''
+          const isContactForm = !!form && (
+            /\b(newsletter|subscribe|subscription|mailing[-_ ]?list|mailchimp|mc-embedded|mc4wp|klaviyo|hubspot|stay[-_ ](informed|connected|updated|in[-_ ]touch)|contact[-_ ]?(us|form)|get[-_ ]in[-_ ]touch|site[-_ ]?search|searchform|search[-_ ]form)\b/i.test(formAttrs)
+            || /\b(?:sign up for (?:our )?(?:updates|news|newsletter|emails?)|subscribe to (?:our )?(?:newsletter|updates|emails?)|join our (?:mailing|email) list|stay (?:informed|connected|up to date|in the loop)|get (?:the latest|updates|news) (?:from|about|in your inbox)|contact us|send us a message|we'd love to hear from you|search this site|search the site)\b/i.test(formContext.slice(0, 1200))
+          )
           // A STABLE id per element. detectButtons runs once per pattern set
           // (submit / next / draft) and used to renumber from b0 each time, so
           // a button matching BOTH submit and next ("Submit and continue") was
@@ -502,7 +516,7 @@ async function detectButtons(page, patterns) {
             bid = `b${window.__hamiltonBtnSeq}`
             el.setAttribute('data-hamilton-btn', bid)
           }
-          out.push({ bid, text, inForm: !!form, formFieldCount, isPageFeedback })
+          out.push({ bid, text, inForm: !!form, formFieldCount, isPageFeedback, isContactForm })
           break
         }
       }
@@ -720,7 +734,17 @@ async function detectGate(page) {
   const hasPassword = await page.$('input[type="password"]:not([disabled])').catch(() => null)
   if (hasPassword) {
     const onLoginUrl = /\/(login|signin|sso|cas|shibboleth)/i.test(url)
-    return { kind: 'login', detail: onLoginUrl ? `Login required at ${url}` : 'Password input visible — login required' }
+    // A password box is not always a login WALL. A credit union's homepage
+    // carries an online-banking sign-in widget beside the scholarship
+    // announcement (www.tvfcu.com, prod 2026-08-31: five "retried this login"
+    // hand-offs on a page nobody needs to log in to). When the password lives
+    // in a small side widget on an otherwise content-rich page, it is
+    // incidental — Hamilton reads past it and works the page as usual.
+    if (!onLoginUrl && await isIncidentalLoginWidget(page)) {
+      // fall through to the remaining checks
+    } else {
+      return { kind: 'login', detail: onLoginUrl ? `Login required at ${url}` : 'Password input visible — login required' }
+    }
   }
   // 2FA / OTP heuristics.
   const hasOtp = await page.$('input[autocomplete*="one-time-code"], input[name*="otp"], input[name*="2fa"]').catch(() => null)
@@ -737,11 +761,274 @@ async function detectGate(page) {
     'iframe[src*="arkoselabs"], iframe[src*="funcaptcha"], iframe[src*="captcha" i], iframe[title*="challenge" i], iframe[title*="captcha" i], ' +
     'div.g-recaptcha, div.h-captcha, div.cf-turnstile, [data-sitekey], div[class*="captcha" i], div[id*="captcha" i]',
   ).catch(() => null)
-  if (hasCaptcha) return { kind: 'captcha', detail: 'CAPTCHA / human-verification challenge present' }
+  if (hasCaptcha) {
+    // An INVISIBLE reCAPTCHA (v3 score badge, or v2-invisible bound to the
+    // submit button) challenges nobody at page-open: the token is minted when
+    // the form is submitted. Treating the badge as a wall parked real pages
+    // behind "Hamilton hit a CAPTCHA" (Gravity Forms v3 on mtsu.edu /
+    // alsacramento.org, prod 2026-08-31) and sent the solver a V2 task for a
+    // V3 key (ERROR_INVALID_TASK_DATA). Report the SHAPE so the run loop can
+    // defer solving to the submit boundary instead of stopping here.
+    const shape = await readCaptchaShape(page)
+    return {
+      kind: 'captcha',
+      detail: shape.invisible ? 'Invisible reCAPTCHA present (solved at submit time)' : 'CAPTCHA / human-verification challenge present',
+      invisible: shape.invisible,
+      visible_widget: shape.visibleWidget,
+    }
+  }
   // Payment.
-  const hasPayment = await page.$('input[autocomplete="cc-number"], iframe[src*="stripe.com"], iframe[src*="braintree"]').catch(() => null)
-  if (hasPayment) return { kind: 'payment', detail: 'Payment widget visible' }
+  const payment = await detectPaymentGate(page, url)
+  if (payment) return payment
   return null
+}
+
+/**
+ * Is the page's password input an incidental widget (online-banking box,
+ * member-login sidebar) rather than the login wall of THIS page? True only
+ * when the password sits in a SMALL form (<= 3 fillable inputs) and the page
+ * is clearly something else: it carries other visible inputs outside that
+ * form, or it is a long content page. A page that is nothing but a login form
+ * (few inputs, short text) is still a login gate. Exported via _internal.
+ */
+async function isIncidentalLoginWidget(page) {
+  if (!page || typeof page.evaluate !== 'function') return false
+  try {
+    const res = await page.evaluate(() => {
+      function visible(el) {
+        if (!el) return false
+        const r = el.getBoundingClientRect()
+        const cs = window.getComputedStyle(el)
+        return r.width > 0 && r.height > 0 && cs.visibility !== 'hidden' && cs.display !== 'none'
+      }
+      const pass = Array.from(document.querySelectorAll('input[type="password"]:not([disabled])')).find(visible)
+      if (!pass) return { incidental: true, reason: 'no_visible_password' }
+      const form = pass.closest('form')
+      const fillable = (root) => Array.from(root.querySelectorAll('input, textarea, select')).filter((el) => {
+        const t = (el.getAttribute('type') || '').toLowerCase()
+        if (el.tagName.toLowerCase() === 'input' && ['hidden', 'submit', 'button', 'image', 'checkbox', 'radio'].includes(t)) return false
+        return visible(el)
+      })
+      const formInputs = form ? fillable(form) : [pass]
+      const allInputs = fillable(document)
+      const outside = allInputs.filter((el) => !form || !form.contains(el))
+      const bodyLen = (document.body?.innerText || '').trim().length
+      const title = `${document.title || ''} ${document.querySelector('h1')?.textContent || ''}`
+      const titleIsLogin = /\b(log ?in|sign ?in|member(s)? area|account access|authenticate)\b/i.test(title)
+      const smallForm = formInputs.length <= 3
+      const formText = form ? (form.innerText || '').slice(0, 600) : ''
+      const widgetish = /\b(online banking|internet banking|member login|account login|customer login|login to (your )?account|sign in to (your )?account|mobile banking|e-?banking|user id)\b/i.test(formText)
+      const incidental = smallForm && !titleIsLogin && (outside.length >= 1 || bodyLen > 3000 || widgetish)
+      return { incidental, formInputs: formInputs.length, outside: outside.length, bodyLen, titleIsLogin, widgetish }
+    })
+    return Boolean(res?.incidental)
+  } catch {
+    return false
+  }
+}
+
+/**
+ * Shape of the CAPTCHA on the page: is a VISIBLE challenge widget rendered
+ * (checkbox reCAPTCHA / hCaptcha / Turnstile box), or only an invisible
+ * reCAPTCHA (v3 badge, `render=` script, `size=invisible` anchor, v2 with
+ * data-size="invisible")? Exported via _internal.
+ */
+async function readCaptchaShape(page) {
+  if (!page || typeof page.evaluate !== 'function') return { invisible: false, visibleWidget: true }
+  try {
+    const res = await page.evaluate(() => {
+      function visible(el) {
+        if (!el) return false
+        const r = el.getBoundingClientRect()
+        const cs = window.getComputedStyle(el)
+        return r.width > 20 && r.height > 20 && cs.visibility !== 'hidden' && cs.display !== 'none' && cs.opacity !== '0'
+      }
+      const frames = Array.from(document.querySelectorAll('iframe[src*="recaptcha"], iframe[src*="hcaptcha"], iframe[src*="turnstile"], iframe[src*="challenges.cloudflare.com"], iframe[src*="arkoselabs"], iframe[src*="funcaptcha"], iframe[src*="captcha" i]'))
+      const widgetBoxes = Array.from(document.querySelectorAll('div.g-recaptcha, div.h-captcha, div.cf-turnstile, [data-sitekey]'))
+      const v3Script = Array.from(document.querySelectorAll('script[src*="recaptcha"]')).some((sc) => /[?&]render=[\w-]{20,}/.test(sc.getAttribute('src') || ''))
+      const badge = document.querySelector('.grecaptcha-badge')
+      const invisibleAnchor = frames.some((f) => /size=invisible/.test(f.getAttribute('src') || ''))
+      const invisibleBox = widgetBoxes.some((b) => (b.getAttribute('data-size') || '').toLowerCase() === 'invisible')
+      const visibleWidget = frames.some((f) => !/size=invisible/.test(f.getAttribute('src') || '') && visible(f))
+        || widgetBoxes.some((b) => (b.getAttribute('data-size') || '').toLowerCase() !== 'invisible' && visible(b) && !(b.closest && b.closest('.grecaptcha-badge')))
+      const invisible = !visibleWidget && (v3Script || Boolean(badge) || invisibleAnchor || invisibleBox)
+      return { invisible, visibleWidget }
+    })
+    return { invisible: Boolean(res?.invisible), visibleWidget: Boolean(res?.visibleWidget) }
+  } catch {
+    return { invisible: false, visibleWidget: true }
+  }
+}
+
+/**
+ * Payment gate — only when the page is actually asking THIS applicant to pay:
+ * a card-number input, or a hosted payment frame on a page that talks about a
+ * fee/checkout. A bare Stripe iframe (a "Donate" widget on a scholarship
+ * listing — bold.org, prod 2026-08-31) is not a payment step in the
+ * application. The detail names the URL and the amount when it is visible, so
+ * the stop is actionable instead of a bare "Payment widget visible".
+ */
+async function detectPaymentGate(page, url = '') {
+  const cardInput = await page.$('input[autocomplete="cc-number"]:not([disabled]), input[name*="card_number" i]:not([disabled]), input[name*="cardnumber" i]:not([disabled]), input[id*="card-number" i]:not([disabled]), input[id*="cardnumber" i]:not([disabled])').catch(() => null)
+  const hostedFrame = cardInput ? null : await page.$('iframe[src*="stripe.com"], iframe[src*="braintree"], iframe[src*="paypal.com/smart"], iframe[src*="checkout.square"]').catch(() => null)
+  if (!cardInput && !hostedFrame) return null
+  let text = ''
+  try { text = String(await page.$eval('body', (el) => (el && (el.innerText || el.textContent)) || '')) } catch { text = '' }
+  const feeRx = /\b(application fee|processing fee|registration fee|entry fee|nonrefundable fee|non-refundable fee|pay(?:ment)? (?:of|due|required|now)|checkout|order total|amount due|total due|billing (?:details|information))\b/i
+  const feeMention = feeRx.test(text)
+  if (!cardInput && !feeMention) return null
+  let amount = null
+  const feeIdx = text.search(feeRx)
+  const window = feeIdx >= 0 ? text.slice(Math.max(0, feeIdx - 160), feeIdx + 240) : text
+  const m = window.match(/\$\s?(\d{1,3}(?:,\d{3})*(?:\.\d{2})?|\d+(?:\.\d{2})?)/)
+  if (m) amount = `$${m[1]}`
+  const where = url ? ` at ${url}` : ''
+  return {
+    kind: 'payment',
+    detail: amount
+      ? `Payment step${where}: the portal asks for a payment of ${amount} (${cardInput ? 'card number field' : 'hosted checkout'} shown). Hamilton never pays; open the link, complete the payment, and Hamilton will continue on the next run.`
+      : `Payment step${where}: the portal shows a ${cardInput ? 'card number field' : 'hosted checkout'} and mentions a fee. Hamilton never pays; open the link, complete the payment, and Hamilton will continue on the next run.`,
+    amount,
+  }
+}
+
+// Playwright throws these when the page navigates (or a frame detaches)
+// between our query and its evaluation — a race, not a portal fact. Prod
+// 2026-08-31: "page.$$eval: Execution context was destroyed, most likely
+// because of a navigation" failed a whole task on hud.gov. Wait for the new
+// document and ask again, twice at most.
+const CONTEXT_LOSS_RX = /Execution context was destroyed|Cannot find context with specified id|Frame was detached|Target closed|Target page, context or browser has been closed|Navigation interrupted|frame got detached/i
+async function retryOnContextLoss(page, fn, { attempts = 3, settleMs = 600 } = {}) {
+  let lastErr = null
+  for (let i = 0; i < attempts; i += 1) {
+    try {
+      return await fn()
+    } catch (err) {
+      lastErr = err
+      if (!CONTEXT_LOSS_RX.test(String(err?.message || err))) throw err
+      let closed = false
+      try { closed = typeof page?.isClosed === 'function' ? page.isClosed() : false } catch { closed = false }
+      if (closed) throw err
+      await page.waitForLoadState?.('domcontentloaded', { timeout: NAV_TIMEOUT_MS }).catch(() => null)
+      await new Promise((r) => setTimeout(r, settleMs))
+    }
+  }
+  throw lastErr
+}
+
+// A navigation target that is a FILE (PDF/DOC application form) makes
+// Chromium start a download instead of rendering a page; Playwright reports
+// it as "page.goto: Download is starting". That is not an engine failure —
+// it is a document pathway, and the orchestrator handles it as one.
+const DOWNLOAD_STARTING_RX = /Download is starting/i
+const DOCUMENT_URL_RX = /\.(pdf|docx?|xlsx?|rtf|odt)(\?|#|$)/i
+class DocumentDownloadTarget extends Error {
+  constructor(url) { super(`document_download:${url}`); this.code = 'document_download'; this.documentUrl = url }
+}
+
+/**
+ * Open the portal with one honest recovery: a slow site that misses the
+ * domcontentloaded deadline gets a second, longer attempt that only waits for
+ * the response to COMMIT (jjpaf.org took >25s in prod 2026-08-31 and was
+ * recorded as "could not reach"). A file target raises DocumentDownloadTarget.
+ * Connection resets / DNS failures still surface as-is (portal_unreachable).
+ */
+async function navigateWithRecovery(page, url, { navTimeoutMs = NAV_TIMEOUT_MS, trace = null } = {}) {
+  if (DOCUMENT_URL_RX.test(String(url || ''))) throw new DocumentDownloadTarget(url)
+  try {
+    await page.goto(url, { waitUntil: 'domcontentloaded', timeout: navTimeoutMs })
+    return { attempts: 1 }
+  } catch (err) {
+    const msg = String(err?.message || err)
+    if (DOWNLOAD_STARTING_RX.test(msg)) throw new DocumentDownloadTarget(url)
+    if (!/Timeout \d+ms exceeded/i.test(msg)) throw err
+    trace?.push({ step: 'navigate_retry', detail: { reason: 'timeout', wait_until: 'commit', timeout_ms: navTimeoutMs * 2 } })
+    try {
+      await page.goto(url, { waitUntil: 'commit', timeout: navTimeoutMs * 2 })
+    } catch (err2) {
+      if (DOWNLOAD_STARTING_RX.test(String(err2?.message || err2))) throw new DocumentDownloadTarget(url)
+      throw err2
+    }
+    await page.waitForLoadState('domcontentloaded', { timeout: navTimeoutMs }).catch(() => null)
+    return { attempts: 2 }
+  }
+}
+
+/**
+ * Landing pages link to the real application with an ANCHOR, not a button —
+ * "Apply", "Application", "Apply Now" in the nav or body — and often to a
+ * different host (the funder's portal vendor). detectButtons only sees
+ * button-like controls, so these pages dead-ended as no_application_form
+ * (thegatesscholarship.org, tnachieves.org/tn-promise, prod 2026-08-31).
+ * Returns visible http(s) links whose text or href looks like an apply link,
+ * most specific first. Exported via _internal.
+ */
+async function detectApplyLinks(page) {
+  try {
+    const links = await page.$$eval('a[href]', (els, { rxList }) => {
+      const out = []
+      const seen = new Set()
+      for (const el of els) {
+        const href = el.href || ''
+        if (!/^https?:/i.test(href)) continue
+        const r = el.getBoundingClientRect()
+        if (!(r.width > 0 && r.height > 0)) continue
+        const text = (el.innerText || el.textContent || el.getAttribute('aria-label') || el.getAttribute('title') || '').trim().replace(/\s+/g, ' ')
+        const textHit = rxList.some((r2) => new RegExp(r2.source, r2.flags).test(text))
+        const hrefHit = /\/(apply|application|applications|apply-now|applynow|start-application|scholarship-application|grant-application)(\/|\?|#|$|\.)/i.test(href)
+          || /[?&](page|view|action)=apply/i.test(href)
+        if (!textHit && !hrefHit) continue
+        if (/\b(how to apply|apply(ing)? for (financial )?aid|before you apply|applied|application (status|deadline|process|tips|timeline|requirements|faq|guide))\b/i.test(text) && !hrefHit) continue
+        const key = href.split('#')[0]
+        if (seen.has(key)) continue
+        seen.add(key)
+        out.push({ href, text: text.slice(0, 80), score: (textHit ? 2 : 0) + (hrefHit ? 1 : 0) })
+      }
+      return out.sort((a, b) => b.score - a.score).slice(0, 8)
+    }, { rxList: APPLY_NAV_PATTERNS.map((p) => ({ source: p.source, flags: p.flags })) })
+    return Array.isArray(links) ? links : []
+  } catch {
+    return []
+  }
+}
+
+// Field keys a mailing-list / contact form asks for. A form whose filled keys
+// all fall in here, with no application-shaped field anywhere in it, is a
+// CONTACT form regardless of what its button says.
+const CONTACT_FORM_KEYS = new Set([
+  'first_name', 'last_name', 'full_name', 'name', 'email', 'phone', 'zip', 'zip_code', 'postal_code',
+  'city', 'state', 'country', 'school', 'organization', 'org_name', 'organization_name', 'message', 'comments',
+])
+const APPLICATION_FIELD_SIGNAL_RX = /\b(essay|personal statement|statement of|gpa|grade point|graduat|date of birth|birth ?date|\bdob\b|major|degree|income|household|award|scholarship|applicant|upload|resume|résumé|transcript|reference|recommend|amount requested|budget|project (title|description|summary)|financial need|ssn|social security|student id|enrollment|semester|term|academic|citizenship|ethnicity|gender|veteran|disability|employer|occupation|address line|street)\b/i
+/**
+ * Is the form Hamilton is about to submit a contact / newsletter form rather
+ * than an application? Pure. Exported via _internal.
+ */
+const APPLICATION_CONTEXT_RX = /\b(appl(?:y|ication|icant)|scholarship|fellowship|grant|award|nominat|enrol|registration|request (?:for )?(?:funding|assistance|aid))/i
+const CONTACT_BUTTON_RX = /^(submit|subscribe|sign ?up|send|go|search|join|get updates|stay informed|keep me (?:posted|informed))$/i
+function isContactOrNewsletterForm({ submitButton = null, fields = [], filled = [], pageTitle = '' } = {}) {
+  const formFieldCount = Number(submitButton?.formFieldCount) || 0
+  const list = Array.isArray(fields) ? fields : []
+  const labels = list.map((f) => `${f?.label || ''} ${f?.name || ''} ${f?.id || ''} ${f?.placeholder || ''}`).join(' | ')
+  const hasApplicationSignal = APPLICATION_FIELD_SIGNAL_RX.test(labels)
+  // The page or the button SAYS this is an application → it is one. A
+  // three-field "Submit application" form on a page titled "Application" is a
+  // real (short) application, never a newsletter.
+  if (APPLICATION_CONTEXT_RX.test(String(submitButton?.text || ''))) return false
+  if (APPLICATION_CONTEXT_RX.test(String(pageTitle || ''))) return false
+  if (hasApplicationSignal) return false
+  // Structural evidence on the form itself (newsletter / contact-us / search
+  // ids, classes, actions, or copy) is sufficient.
+  if (submitButton?.isContactForm === true) return true
+  // Otherwise only the narrowest shape: a tiny form (<= 3 fields, no long-form
+  // or choice fields) whose filled keys are all contact identity and whose
+  // button is a bare Submit/Subscribe/Send.
+  const filledKeys = (Array.isArray(filled) ? filled : []).map((f) => String(f?.key || '').toLowerCase())
+  const onlyContactKeys = filledKeys.length > 0 && filledKeys.every((k) => CONTACT_FORM_KEYS.has(k))
+  const hasLongOrChoice = list.some((f) => f?.tag === 'textarea' || f?.tag === 'select' || f?.type === 'file' || f?.type === 'radio')
+  const bareButton = CONTACT_BUTTON_RX.test(String(submitButton?.text || '').trim())
+  if (onlyContactKeys && !hasLongOrChoice && bareButton && formFieldCount > 0 && formFieldCount <= 3) return true
+  return false
 }
 
 export function computeAgeYears(dobStr, now = new Date()) {
@@ -1458,6 +1745,11 @@ export async function runAutopilot({
     return { status: 'cancelled', blocker_kind: 'cancelled', blocker_detail: 'Hamilton task was cancelled before browser launch.', filled_fields: filled, pages_visited: 0, trace }
   }
 
+  // A plain-http saved link is upgraded to https for PUBLIC hosts before the
+  // target check (the SSRF floor is unchanged — see normalizeBrowserTargetUrl).
+  const originalUrl = url
+  url = normalizeBrowserTargetUrl(url)
+  if (url !== originalUrl) trace.push({ step: 'url_upgraded_to_https', detail: { from: originalUrl, to: url } })
   if (!isHamiltonBrowserTargetAllowed(url)) {
     const refusal = controlledBetaBrowserRefusal()
     return {
@@ -1559,10 +1851,41 @@ export async function runAutopilot({
   // zero: solver ran, solved:true, then blocked anyway). Live-diagnosed on the
   // U.S. Bank form 2026-08-22.
   let captchaSolved = false
+  // An INVISIBLE reCAPTCHA (v3 / v2-invisible) was seen: nothing to solve at
+  // page-open; the boundary solve below mints the token when the form goes.
+  let captchaInvisible = false
   // Landing-page → application-form navigation state (bounded, never re-clicks
   // the same control) — see APPLY_NAV_PATTERNS.
   let applyNavClicks = 0
   const clickedApplyNav = new Set()
+  // Follow an apply ANCHOR (not a button) from a landing page — bounded by the
+  // same MAX_APPLY_NAV_CLICKS budget, never the same href twice, public-HTTPS
+  // targets only. Returns true when the page navigated (caller re-inspects).
+  const tryFollowApplyAnchor = async () => {
+    if (applyNavClicks >= MAX_APPLY_NAV_CLICKS) return false
+    const applyLinks = await detectApplyLinks(page)
+    const currentPage = (() => { try { return page.url().split('#')[0] } catch { return '' } })()
+    const nextLink = applyLinks.find((l) => {
+      const target = normalizeBrowserTargetUrl(l.href)
+      const key = `href:${target.split('#')[0]}`
+      return target.split('#')[0] !== currentPage && !clickedApplyNav.has(key) && isHamiltonBrowserTargetAllowed(target)
+    })
+    if (!nextLink) return false
+    const target = normalizeBrowserTargetUrl(nextLink.href)
+    applyNavClicks += 1
+    clickedApplyNav.add(`href:${target.split('#')[0]}`)
+    trace.push({ step: 'follow_apply_link', detail: { text: String(nextLink.text || '').slice(0, 40), href: target.slice(0, 200), via: 'anchor' } })
+    reportLiveStep(runId, 'Opening the application form')
+    try {
+      await navigateWithRecovery(page, target, { navTimeoutMs: NAV_TIMEOUT_MS, trace })
+      await page.waitForLoadState('networkidle', { timeout: 6000 }).catch(() => null)
+      return true
+    } catch (err) {
+      if (err instanceof DocumentDownloadTarget) throw err
+      trace.push({ step: 'follow_apply_link_failed', detail: { href: target.slice(0, 200), error: String(err?.message || err).split('\n')[0].slice(0, 160) } })
+      return false
+    }
+  }
   const missingIdentityKinds = new Set()
   // Required portal-specific questions Hamilton could not answer from the
   // profile (owner doctrine 2026-08-22, condition 2). Collected here; the
@@ -1627,7 +1950,7 @@ export async function runAutopilot({
       detail: { host: (() => { try { return new URL(url).host } catch { return null } })() },
     })
     trace.push({ step: 'navigate', detail: { url } })
-    await page.goto(url, { waitUntil: 'domcontentloaded', timeout: NAV_TIMEOUT_MS })
+    await navigateWithRecovery(page, url, { navTimeoutMs: NAV_TIMEOUT_MS, trace })
 
     while (pagesVisited < MAX_PAGES) {
       if (signal?.aborted) {
@@ -1637,13 +1960,21 @@ export async function runAutopilot({
       reportLiveStep(runId, 'Reading the application page', { detail: { page: pagesVisited } })
       trace.push({ step: 'page', detail: { index: pagesVisited, url: (() => { try { return page.url() } catch { return null } })() } })
 
-      let gate = await detectGate(page)
+      let gate = await retryOnContextLoss(page, () => detectGate(page))
       // A captcha this run's solver already SOLVED is not a live gate — the
       // token is injected; the lingering widget DOM must not re-block. Proceed
       // to fill/submit (a genuinely unapplied token surfaces later as an honest
       // validation/submit failure, never a fabricated success).
       if (gate && (gate.kind === 'captcha' || gate.kind === 'bot_protected') && captchaSolved) {
         trace.push({ step: 'captcha_cleared', detail: { note: 'solved token injected; ignoring lingering widget' } })
+        gate = null
+      }
+      // An INVISIBLE reCAPTCHA challenges nobody at page-open — the token is
+      // minted on submit. Read past it; the submit boundary solves it (v3 task
+      // type) right before the click, when the token is actually consumed.
+      if (gate && gate.kind === 'captcha' && gate.invisible === true) {
+        if (!captchaInvisible) trace.push({ step: 'captcha_invisible_deferred', detail: { note: 'invisible reCAPTCHA; solved at the submit boundary' } })
+        captchaInvisible = true
         gate = null
       }
       if (gate) {
@@ -1702,6 +2033,18 @@ export async function runAutopilot({
             captchaSolved = true
             continue
           }
+          // The detector matched captcha-NAMED markup (a hidden badge, a
+          // theme's `.captcha-field` wrapper) but there is no solvable
+          // challenge on the page: no vendor widget, no sitekey. That is an
+          // INERT decoration, not a wall — cfocoeeregion.com / easttennessee
+          // foundation.org parked five tasks on it (prod 2026-08-31). Read
+          // past it; a real challenge that appears at submit time is caught by
+          // the boundary solve or surfaces as an honest submit bounce.
+          if (gate.kind === 'captcha' && verdict.reason === 'no_solvable_challenge') {
+            trace.push({ step: 'captcha_inert', detail: { note: 'captcha markup with no solvable challenge; not a gate' } })
+            captchaSolved = true
+            continue
+          }
         }
         if (gate.kind === '2fa' && attemptVerification && !twoFactorAttempted) {
           twoFactorAttempted = true
@@ -1736,11 +2079,11 @@ export async function runAutopilot({
         return { status: 'blocked', blocker_kind: sigGate.kind, blocker_detail: sigGate.detail, filled_fields: filled, pages_visited: pagesVisited, trace }
       }
 
-      const fields = await detectFields(page)
-      const submitButtons = (await detectButtons(page, SUBMIT_BUTTON_PATTERNS))
+      const fields = await retryOnContextLoss(page, () => detectFields(page))
+      const submitButtons = (await retryOnContextLoss(page, () => detectButtons(page, SUBMIT_BUTTON_PATTERNS)))
         .filter((b) => !SUBMIT_BUTTON_EXCLUDE_RX.test(String(b.text || '')))
-      const nextButtons   = await detectButtons(page, NEXT_BUTTON_PATTERNS)
-      const draftButtons  = await detectButtons(page, DRAFT_BUTTON_PATTERNS)
+      const nextButtons   = await retryOnContextLoss(page, () => detectButtons(page, NEXT_BUTTON_PATTERNS))
+      const draftButtons  = await retryOnContextLoss(page, () => detectButtons(page, DRAFT_BUTTON_PATTERNS))
       trace.push({ step: 'inspect', detail: summarisePageState(page, fields, [...submitButtons, ...nextButtons, ...draftButtons]) })
 
       // Map and fill recognised fields.
@@ -2129,6 +2472,10 @@ export async function runAutopilot({
             continue // re-inspect the page the apply link led to
           }
         }
+        // No apply BUTTON — look for an apply LINK (anchor), on this host or
+        // the funder's portal vendor. Public-HTTPS only (the egress guard and
+        // the target policy both still apply); bounded like the button path.
+        if (await tryFollowApplyAnchor()) continue // re-inspect the page the apply link led to
         trace.push({
           step: 'no_application_form',
           detail: { ignored_submit_like_controls: submitButtons.map((b) => b.text).slice(0, 5) },
@@ -2137,6 +2484,23 @@ export async function runAutopilot({
           status: 'blocked',
           blocker_kind: 'no_application_form',
           blocker_detail: 'This page has no application form to fill — the only submit-like controls are page chrome or navigation links (informational page). Hamilton degrades to the manual funder-contact packet pathway.',
+          filled_fields: filled, pages_visited: pagesVisited, trace, logged_in: loggedIn,
+        }
+      }
+
+      // A contact / newsletter form is never an application, whatever its
+      // button says. Refuse the click and degrade honestly instead of
+      // submitting a mailing-list sign-up and then asking a human to "verify
+      // the portal" for it.
+      if (canSubmit && isContactOrNewsletterForm({
+        submitButton: submitCandidates[0], fields, filled,
+        pageTitle: await Promise.resolve(page.title?.()).catch(() => ''),
+      })) {
+        trace.push({ step: 'contact_form_not_application', detail: { button: submitCandidates[0].text, form_fields: submitCandidates[0].formFieldCount, filled_keys: filled.map((f) => f.key).slice(0, 8) } })
+        return {
+          status: 'blocked',
+          blocker_kind: 'no_application_form',
+          blocker_detail: 'The only form on this page is a contact / newsletter sign-up, not an application (Hamilton did not submit it). Hamilton degrades to the manual funder-contact packet pathway.',
           filled_fields: filled, pages_visited: pagesVisited, trace, logged_in: loggedIn,
         }
       }
@@ -2164,8 +2528,8 @@ export async function runAutopilot({
         // blank form with no visible error (Google tokens expire ~120s and
         // are single-use). Re-solve at the boundary whenever a captcha was
         // present this run, so the token the submit carries is fresh.
-        if (solveCaptcha && captchaAttempted) {
-          trace.push({ step: 'captcha_refresh_attempt' })
+        if (solveCaptcha && (captchaAttempted || captchaInvisible)) {
+          trace.push({ step: 'captcha_refresh_attempt', detail: captchaInvisible && !captchaAttempted ? { invisible: true } : undefined })
           try {
             const refreshed = await solveCaptcha(page)
             trace.push({ step: 'captcha_refresh_result', detail: { solved: Boolean(refreshed?.solved), vendor: refreshed?.vendor || null } })
@@ -2372,6 +2736,10 @@ export async function runAutopilot({
           }
         }
       }
+      // A landing page with no controls at all but an "Apply" ANCHOR (the
+      // Gates Scholarship home, tnachieves.org/tn-promise) is one click from
+      // the form. Follow it before declaring no progress.
+      if (filled.length === 0 && await tryFollowApplyAnchor()) continue
       trace.push({ step: 'no_progress', detail: { reason: 'no advance button found' } })
       return { status: 'blocked', blocker_kind: 'no_progress', blocker_detail: 'Hamilton could not find a Next/Submit button to continue', filled_fields: filled, pages_visited: pagesVisited, trace }
     }
@@ -2380,6 +2748,16 @@ export async function runAutopilot({
   } catch (err) {
     const raw = err?.message || String(err)
     if (submitClicked) await retainSubmitCapture()
+    if (err instanceof DocumentDownloadTarget) {
+      trace.push({ step: 'document_download_target', detail: { url: String(err.documentUrl || '').slice(0, 300) } })
+      return {
+        status: 'blocked',
+        blocker_kind: 'document_download',
+        blocker_detail: `The application link is a downloadable document, not a web form: ${err.documentUrl}. Hamilton switches to the document (print/mail) pathway with that file as the form.`,
+        document_url: err.documentUrl,
+        filled_fields: filled, pages_visited: pagesVisited, trace, logged_in: loggedIn,
+      }
+    }
     if (signal?.aborted) {
       return {
         status: 'cancelled', blocker_kind: 'cancelled',
@@ -2442,6 +2820,9 @@ export const _internal = {
   matchFieldKey, readProfileValues, applyNarrativeAnswers,
   clickButtonByBid, FEEDBACK_VALIDATION_IGNORE_RX,
   detectGate, detectBotWall, attemptLogin,
+  isIncidentalLoginWidget, readCaptchaShape, detectPaymentGate,
+  retryOnContextLoss, navigateWithRecovery, DocumentDownloadTarget,
+  detectApplyLinks, isContactOrNewsletterForm, CONTEXT_LOSS_RX,
   extractConfirmationReference,
   extractConfirmationReferenceFromUrl,
   detectReceiptAcknowledgement,

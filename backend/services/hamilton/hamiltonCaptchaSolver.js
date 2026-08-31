@@ -119,13 +119,42 @@ export async function readCaptchaChallenge(page) {
         }
         return ''
       }
+      // reCAPTCHA v3 loads `api.js?render=<sitekey>` and renders only a badge;
+      // Gravity Forms / Fusion / Contact Form 7 all ship it that way. The
+      // widget selectors above miss it entirely (no div.g-recaptcha, and the
+      // anchor iframe is created lazily), so read the script tag too.
+      let v3Key = ''
+      let enterprise = false
+      for (const sc of document.querySelectorAll('script[src*="recaptcha"]')) {
+        const src = sc.getAttribute('src') || ''
+        if (/recaptcha\/enterprise\.js/i.test(src)) enterprise = true
+        const m = src.match(/[?&]render=([\w-]{20,})/)
+        if (m && m[1] !== 'explicit') v3Key = v3Key || m[1]
+      }
+      if (v3Key && !type) type = 'recaptcha'
+      try { if (window.grecaptcha && window.grecaptcha.enterprise) enterprise = true } catch { /* ignore */ }
       const sitekey = dataSite
         || attr('div.g-recaptcha', 'data-sitekey')
         || attr('div.h-captcha', 'data-sitekey')
         || attr('div.cf-turnstile', 'data-sitekey')
         || sitekeyFromIframe()
+        || v3Key
       if (!type && !sitekey) return null
-      return { type: type || 'unknown', sitekey: sitekey || null, pageUrl: window.location.href }
+      // Version: v3 when the key came from a render= script with no checkbox
+      // widget, or the anchor iframe says size=invisible with no data-sitekey
+      // widget box; v2-invisible when the widget box says data-size=invisible.
+      let version = 'v2'
+      let invisible = false
+      if (type === 'recaptcha') {
+        const widgetBox = document.querySelector('div.g-recaptcha')
+        const boxSize = (widgetBox && typeof widgetBox.getAttribute === 'function') ? (widgetBox.getAttribute('data-size') || '').toLowerCase() : ''
+        const anchorInvisible = Array.from(document.querySelectorAll('iframe[src*="recaptcha"]')).some((f) => /size=invisible/.test(f.getAttribute('src') || ''))
+        if (v3Key && (!widgetBox || v3Key === sitekey) && boxSize !== 'normal' && boxSize !== 'compact') { version = 'v3'; invisible = true }
+        else if (boxSize === 'invisible' || (anchorInvisible && !widgetBox)) { version = 'v2'; invisible = true }
+      }
+      const actionEl = document.querySelector('[data-action]')
+      const action = (actionEl && typeof actionEl.getAttribute === 'function' && actionEl.getAttribute('data-action')) || null
+      return { type: type || 'unknown', sitekey: sitekey || null, pageUrl: window.location.href, version, invisible, enterprise, action }
     })
   } catch {
     return null
@@ -150,22 +179,58 @@ export async function requestSolverToken(challenge, {
   const attempts = boundedInt(env[CAPTCHA_SOLVER_ENV_KEYS.attempts], DEFAULT_SOLVE_ATTEMPTS, MAX_SOLVE_ATTEMPTS)
   const interval = boundedInt(env[CAPTCHA_SOLVER_ENV_KEYS.intervalMs], DEFAULT_SOLVE_INTERVAL_MS, MAX_SOLVE_INTERVAL_MS)
 
-  const taskTypeByVendor = {
-    recaptcha: 'ReCaptchaV2TaskProxyLess',
-    hcaptcha: 'HCaptchaTaskProxyLess',
-    turnstile: 'AntiTurnstileTaskProxyLess',
+  // The task shape must match the CAPTCHA's real version. Sending a V2 task
+  // for a V3 key is what CapSolver answers with ERROR_INVALID_TASK_DATA — the
+  // exact failure on every mtsu.edu / alsacramento.org run (prod 2026-08-31).
+  const plans = solverTaskPlans(challenge)
+  let lastReason = 'no_task_plan'
+  for (let p = 0; p < plans.length; p += 1) {
+    const plan = plans[p]
+    const outcome = await runSolverTask({ base, key, attempts, interval, fetchImpl, now, challenge, task: plan.task })
+    if (outcome.solved) return { ...outcome, task_type: plan.task.type }
+    lastReason = outcome.reason
+    // Only a task-shape rejection earns the alternate plan; a timeout or an
+    // unsolvable verdict is final and must hand off, never loop the service.
+    if (!/ERROR_INVALID_TASK_DATA|ERROR_WRONG_CAPTCHA_ID|ERROR_INVALID_SITEKEY|ERROR_TASK_NOT_SUPPORTED/i.test(String(outcome.reason || ''))) return outcome
   }
-  const taskType = taskTypeByVendor[challenge.type] || 'ReCaptchaV2TaskProxyLess'
+  return { solved: false, reason: lastReason }
+}
 
+/**
+ * Ordered solver task payloads for a challenge, most likely shape first, then
+ * the alternate (v3 <-> v2, enterprise <-> plain). Pure; exported for tests.
+ */
+export function solverTaskPlans(challenge) {
+  const base = { websiteURL: challenge.pageUrl, websiteKey: challenge.sitekey }
+  const type = challenge.type
+  if (type === 'hcaptcha') return [{ task: { type: 'HCaptchaTaskProxyLess', ...base } }]
+  if (type === 'turnstile') return [{ task: { type: 'AntiTurnstileTaskProxyLess', ...base } }]
+  const enterprise = challenge.enterprise === true
+  const v3 = {
+    task: {
+      type: enterprise ? 'ReCaptchaV3EnterpriseTaskProxyLess' : 'ReCaptchaV3TaskProxyLess',
+      ...base,
+      pageAction: challenge.action || 'submit',
+      minScore: 0.7,
+    },
+  }
+  const v2 = {
+    task: {
+      type: enterprise ? 'ReCaptchaV2EnterpriseTaskProxyLess' : 'ReCaptchaV2TaskProxyLess',
+      ...base,
+      ...(challenge.invisible ? { isInvisible: true } : {}),
+    },
+  }
+  return challenge.version === 'v3' ? [v3, v2] : [v2, v3]
+}
+
+async function runSolverTask({ base, key, attempts, interval, fetchImpl, now, challenge, task }) {
   let taskId
   try {
     const createRes = await fetchImpl(`${base}/createTask`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({
-        clientKey: key,
-        task: { type: taskType, websiteURL: challenge.pageUrl, websiteKey: challenge.sitekey },
-      }),
+      body: JSON.stringify({ clientKey: key, task }),
     })
     const createBody = await createRes.json().catch(() => ({}))
     if (!createRes.ok || createBody?.errorId) {
@@ -320,6 +385,7 @@ export async function attemptCaptchaSolve(page, {
 
 export default {
   CAPTCHA_SOLVER_ENV_KEYS,
+  solverTaskPlans,
   isCaptchaSolverConfigured,
   readCaptchaChallenge,
   requestSolverToken,

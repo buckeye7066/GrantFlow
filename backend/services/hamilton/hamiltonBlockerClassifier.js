@@ -53,6 +53,9 @@ export const BLOCKER_CATEGORIES = Object.freeze([
   'deadline_expired',
   'unknown_application_method',
   'portal_unreachable',
+  // The application "page" is a downloadable file (PDF/DOC form) — a document
+  // pathway, not a browser failure (engine: DocumentDownloadTarget).
+  'document_download',
 ])
 
 // Mapping from raw engine `blocker_kind` strings to canonical categories.
@@ -90,6 +93,7 @@ const ENGINE_KIND_MAP = Object.freeze({
   bot_protected: 'portal_anti_bot_block',
   preflight: 'missing_required_information',
   portal_unreachable: 'portal_unreachable',
+  document_download: 'document_download',
 })
 
 const TEXT_RULES = Object.freeze([
