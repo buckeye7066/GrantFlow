@@ -141,8 +141,8 @@ function blockerSummary(task) {
     blocked_login_required: 'Hamilton needs you to sign in to this portal.',
     waiting_for_2fa: 'The portal asked for a two-factor code.',
     blocked_2fa: 'The portal asked for a two-factor code.',
-    waiting_for_captcha: 'The portal put up a captcha Hamilton cannot answer.',
-    blocked_captcha: 'The portal put up a captcha Hamilton cannot answer.',
+    waiting_for_captcha: "The portal put up a CAPTCHA Hamilton's solver could not clear yet — he retries automatically; a side-by-side sign-in with a saved session unblocks it now.",
+    blocked_captcha: "The portal put up a CAPTCHA Hamilton's solver could not clear — open it once side-by-side and save the session; Hamilton resumes on the next run.",
     waiting_for_email_verification: 'A verification link was emailed and still needs clicking.',
     waiting_for_missing_info: 'Hamilton needs information the profile does not have yet.',
     blocked_missing_info: 'Hamilton needs information the profile does not have yet.',
@@ -154,6 +154,12 @@ function blockerSummary(task) {
     ready_to_fax: 'The packet is ready to fax.',
   }[status]
 
+  // An auth wall's own message now names the portal, the solver's last verdict
+  // and the fix (hamiltonAuthBackupPlan) — strictly more useful than the generic
+  // label, so it wins whenever Hamilton wrote one.
+  if (named && /^(waiting_for_(login|2fa|captcha|email_verification)|blocked_(login_required|2fa|captcha))$/.test(status) && task?.last_agent_message) {
+    return task.last_agent_message
+  }
   if (named) return named
   // `last_agent_message` is Hamilton's own explanation and it is persisted on
   // every row. Preferring it over a generic sentence is most of this fix.

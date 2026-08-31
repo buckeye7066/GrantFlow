@@ -105,7 +105,7 @@ describe('HamiltonAutomationWatch', () => {
       tasks: [task({ status: 'waiting_for_captcha', apply_url: 'https://funder.org/apply' })],
     })
     renderAt()
-    expect(await screen.findByText(/captcha hamilton cannot answer/i)).toBeTruthy()
+    expect(await screen.findByText(/captcha hamilton's solver could not clear yet/i)).toBeTruthy()
     // And it links somewhere the owner can actually finish it.
     const link = screen.getByRole('link', { name: /open the funder/i })
     expect(link.getAttribute('href')).toBe('https://funder.org/apply')
