@@ -127,8 +127,8 @@
     "db:restore": "node scripts/restore-db.mjs"
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.120.0",
-    "@aws-sdk/client-textract": "^3.1117.0",
+    "@anthropic-ai/sdk": "^0.122.0",
+    "@aws-sdk/client-textract": "^3.1120.0",
     "@babel/parser": "7.29.8",
     "@capacitor/android": "8.5.0",
     "@capacitor/app": "^8.1.1",
@@ -139,7 +139,7 @@
     "@sentry/node": "10.71.0",
     "acorn": "^8.18.0",
     "adm-zip": "^0.6.0",
-    "axios": "^1.19.0",
+    "axios": "^1.20.0",
     "bcryptjs": "^3.0.3",
     "better-sqlite3": "^12.11.1",
     "chalk": "^4.1.2",
@@ -149,20 +149,20 @@
     "dotenv": "^17.4.2",
     "express": "^5.2.1",
     "express-rate-limit": "^8.6.2",
-    "fast-xml-parser": ">=5.11.0",
+    "fast-xml-parser": ">=5.11.1",
     "helmet": "^8.3.0",
     "imapflow": "1.7.6",
     "jsonwebtoken": "9.0.3",
     "mammoth": "^1.12.1",
     "multer": "^2.2.0",
     "node-fetch": "^3.3.2",
-    "openai": "^7.5.0",
+    "openai": "^7.8.0",
     "pdf-parse": "^1.1.1",
     "pg": "^8.23.0",
     "playwright": "^1.62.1",
     "psl": "1.15.0",
-    "resend": "^6.22.1",
-    "stripe": "^22.5.0",
+    "resend": "^6.24.0",
+    "stripe": "^22.6.0",
     "tesseract.js": "^7.0.0",
     "twilio": "^6.1.0",
     "zipcodes": "^8.0.0",
@@ -253,6 +253,6 @@
   },
   "optionalDependencies": {
     "@esbuild/linux-x64": "^0.28.2",
-    "@rollup/rollup-linux-x64-gnu": "^4.63.0"
+    "@rollup/rollup-linux-x64-gnu": "^4.63.1"
   }
 }
