@@ -2498,6 +2498,7 @@ async function runAutopilotPathway(db, {
       text: engineResult.blocker_detail,
       detail: engineResult.blocker_detail,
       url,
+      ...(engineResult.document_url ? { context: { document_url: engineResult.document_url } } : {}),
     })
     await appendTaskEvent(db, {
       taskId: task.id,

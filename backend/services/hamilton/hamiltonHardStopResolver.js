@@ -209,6 +209,14 @@ export const BLOCKER_PROFILE = Object.freeze({
     admin_required: true,
     user_required: true,
   },
+  document_download: {
+    title: 'Application is a downloadable form',
+    message: 'The application link is a PDF/DOC form, not a web portal. Hamilton prepared the packet with that form for printing and mailing.',
+    required_action: 'print_and_mail',
+    severity: 'info',
+    admin_required: false,
+    user_required: true,
+  },
   unknown: {
     title: 'Hamilton hit an unrecognised blocker',
     message: 'Hamilton paused for a blocker she could not classify. An admin should review the captured page text.',
@@ -340,9 +348,20 @@ export async function resolveBlocker(db, ctx, blockerInput) {
       directive = await resolveUnknownMethod(db, ctx, blockerInput)
       break
     case 'portal_unreachable':
-      // Nothing to retry against a dead host — alert with the engine's
-      // human-readable detail (never the raw Playwright error).
-      directive = blocked('portal_unreachable', blockerInput?.detail || BLOCKER_PROFILE.portal_unreachable.message)
+      // A dead or blocking host is a reason to look for the funder's REAL page
+      // before giving up: many saved links are stale (tnpromise.gov moved to
+      // tnachieves; tn.gov resets datacenter connections). URL rescue first;
+      // only when nothing verifiable exists is the host declared unreachable —
+      // with the engine's human-readable detail, never the raw Playwright text.
+      directive = await resolveUnreachable(db, ctx, blockerInput)
+      break
+    case 'document_download':
+      // The "portal" is a PDF/DOC application form. That is the document
+      // pathway by definition (owner condition 1: physical-copy funder): build
+      // the packet and hand it over ready to print + mail, naming the form.
+      directive = degraded('document_form_packet', 'mail',
+        `The application is a downloadable form (${String(blockerInput?.context?.document_url || blockerInput?.url || '').slice(0, 200) || 'PDF/DOC'}), not a web portal. Hamilton prepared the packet under profile Documents with printing and mailing instructions.`,
+        { document_url: blockerInput?.context?.document_url || null })
       break
     default:
       directive = escalate('unknown', `Hamilton could not classify this blocker: ${blockerInput?.text || blockerInput?.detail || ''}`)
@@ -500,8 +519,14 @@ async function resolveCaptcha(db, ctx, input) {
   if (session) {
     return ok('reuse_session_to_avoid_captcha', { session_id: session.id }, 'Reused authenticated session that does not trigger CAPTCHA.')
   }
-  // No saved session — escalate. Hamilton NEVER attempts to defeat CAPTCHA.
-  return escalate('pause_for_user_captcha', 'Portal triggered CAPTCHA. Hamilton never solves CAPTCHAs; please complete it once and save a session.', { portal_host: host })
+  // No saved session — escalate with what actually happened. Under full
+  // automation the solver already ran (the engine tries it before this
+  // resolver sees the gate); its reason is in the detail. Say so instead of
+  // the stale "Hamilton never solves CAPTCHAs".
+  const detail = String(input?.detail || input?.text || '').slice(0, 200)
+  return escalate('pause_for_user_captcha',
+    `Portal triggered a CAPTCHA the solver could not clear${detail ? ` (${detail})` : ''}. Complete it once in a side-by-side session on ${ctx.portalUrl || host || 'the portal'} and save the session; Hamilton resumes on the next run.`,
+    { portal_host: host, portal_url: ctx.portalUrl || null })
 }
 
 async function resolvePayment(db, ctx, input) {
@@ -512,10 +537,14 @@ async function resolvePayment(db, ctx, input) {
   // envelope; it flags the source for human review and leaves the task blocked
   // WITHOUT any submission having happened.
   const host = ctx.portalUrl ? normalizeHost(ctx.portalUrl) : null
-  const label = String(input?.context?.label || input?.text || input?.detail || '').slice(0, 200)
+  const label = String(input?.context?.label || input?.text || input?.detail || '').slice(0, 400)
+  // The engine's detail already names the URL and the amount when visible
+  // ("Payment step at <url>: the portal asks for a payment of $25 …"); keep it
+  // so the stop is actionable rather than a bare "payment required".
+  const engineDetail = /^Payment step/i.test(label) ? label : null
   return escalate('payment_not_supported',
-    'This source is asking for a payment. Legitimate grants and funding sources never charge an application fee, so Hamilton will not pay and did not submit — please review whether this source belongs in the pipeline.',
-    { portal_host: host, flagged_label: label, charged: false })
+    `${engineDetail ? `${engineDetail} ` : ''}Legitimate grants and funding sources never charge an application fee, so Hamilton will not pay and did not submit — pay it yourself at the link if you want this one, or leave it; Hamilton continues on the next run.${engineDetail ? '' : ` (${ctx.portalUrl || host || 'portal'})`}`,
+    { portal_host: host, portal_url: ctx.portalUrl || null, flagged_label: label, charged: false })
 }
 
 async function resolveWetSignature(db, ctx, input) {
@@ -588,6 +617,17 @@ async function resolveAntiBot(db, ctx, input) {
   }
   return degraded('switch_to_packet', policy.fallback_path || 'pdf_docx',
     `${host} is blocking automated access. Hamilton built a manual completion packet instead.`, { policy })
+}
+
+async function resolveUnreachable(db, ctx, input) {
+  try {
+    const rescue = await attemptRuntimeUrlRescue(ctx, input, ctx?._urlRescueDeps || {})
+    if (rescue?.url) {
+      return ok('application_url_rescued', { application_url: rescue.url, probe: rescue.probe },
+        `The saved link did not answer; Hamilton found the funder's live application page (${rescue.url}) and is continuing there.`)
+    }
+  } catch { /* best-effort — fall through to the honest block */ }
+  return blocked('portal_unreachable', input?.detail || BLOCKER_PROFILE.portal_unreachable.message)
 }
 
 async function resolveAmbiguousField(db, ctx, input) {

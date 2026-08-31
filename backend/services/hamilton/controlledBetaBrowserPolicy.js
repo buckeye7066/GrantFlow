@@ -59,6 +59,33 @@ export function isPublicHttpsPortalUrl(value) {
   }
 }
 
+/**
+ * A saved portal link is often `http://` (older catalog rows, hand-typed
+ * application_url values, redirects captured before the site moved to TLS).
+ * Public sites answer on HTTPS, and refusing the plain-http form as a
+ * "private, loopback, or unsafe target" was a false stop measured in prod
+ * 2026-08-31 (www.aauw.org, www.nsf.gov, jkcf.org — every one a public funder
+ * site). Upgrade the scheme for PUBLIC hosts only; anything private/loopback
+ * stays exactly as it was so the SSRF floor is untouched. Non-URLs and
+ * non-http schemes are returned unchanged.
+ */
+export function normalizeBrowserTargetUrl(value) {
+  const raw = String(value || '').trim()
+  if (!raw) return raw
+  try {
+    const url = new URL(raw)
+    if (url.protocol !== 'http:') return raw
+    if (url.username || url.password) return raw
+    if (isPrivateOrLocalHostname(url.hostname)) return raw
+    url.protocol = 'https:'
+    // A literal :80 no longer makes sense once the scheme is https.
+    if (url.port === '80') url.port = ''
+    return url.toString()
+  } catch {
+    return raw
+  }
+}
+
 /** Navigation targets: reserved fixture OR public HTTPS (SSRF-safe). */
 export function isHamiltonBrowserTargetAllowed(value) {
   return isControlledBetaSyntheticBrowserUrl(value) || isPublicHttpsPortalUrl(value)
