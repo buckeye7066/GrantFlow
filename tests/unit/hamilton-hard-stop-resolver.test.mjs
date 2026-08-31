@@ -81,12 +81,15 @@ function resetCaches() {
 // ── classifier ──────────────────────────────────────────────────────
 
 describe('hamiltonBlockerClassifier', () => {
-  it('exports the 17 spec categories incl. distinct signature/attestation', () => {
-    assert.equal(BLOCKER_CATEGORIES.length, 17)
+  it('exports the 18 spec categories incl. distinct signature/attestation and the document pathway', () => {
+    assert.equal(BLOCKER_CATEGORIES.length, 18)
     assert.ok(BLOCKER_CATEGORIES.includes('wet_signature_required'))
     assert.ok(BLOCKER_CATEGORIES.includes('digital_signature_required'))
     assert.ok(BLOCKER_CATEGORIES.includes('legal_attestation_required'))
     assert.ok(BLOCKER_CATEGORIES.includes('portal_unreachable'))
+    // A PDF/DOC application target is a DOCUMENT pathway, not a browser failure.
+    assert.ok(BLOCKER_CATEGORIES.includes('document_download'))
+    assert.equal(classifyBlocker({ kind: 'document_download' }).category, 'document_download')
   })
 
   it('classifies network/navigation failures as portal_unreachable, never unknown', () => {
