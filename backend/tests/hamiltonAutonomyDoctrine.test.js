@@ -32,6 +32,19 @@ const {
 } = await import('../services/hamilton/hamiltonAutonomySweeps.js')
 
 const { detectAutopilotRunLoop, diagnoseRunOutcomes, classifyEngineFailure, decideTermsForbiddenSource } = _internal
+const { classifyFundingSource } = await import('../services/hamilton/hamiltonAutomationClassifier.js')
+
+// ── E. the classifier's resolved URL is the https form (the launch gate reads it)
+describe('classifier resolved_url upgrades public http:// links', () => {
+  it('http://www.aauw.org → https://www.aauw.org on the classification every consumer reads', () => {
+    const c = classifyFundingSource({ opportunity: { id: 'o1', title: 'AAUW International Fellowships', application_url: 'http://www.aauw.org/what-we-do/educational-funding-and-awards/international-fellowships/' }, grant: null })
+    expect(c.resolved_url).toBe('https://www.aauw.org/what-we-do/educational-funding-and-awards/international-fellowships/')
+  })
+  it('a private host stays exactly as stored', () => {
+    const c = classifyFundingSource({ opportunity: { id: 'o2', title: 'x', application_url: 'http://10.0.0.5/apply' }, grant: null })
+    expect(c.resolved_url).toBe('http://10.0.0.5/apply')
+  })
+})
 
 function makeDb() {
   _resetSchemaCache()

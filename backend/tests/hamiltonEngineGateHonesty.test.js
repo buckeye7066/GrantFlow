@@ -407,6 +407,17 @@ describe('apply-link discovery', () => {
     expect(hrefs).not.toContain('https://www.thegatesscholarship.org/faq')
     expect(hrefs.some((h) => h.startsWith('mailto:'))).toBe(false)
   })
+  it('a HIDDEN apply anchor (collapsed nav) is still discovered, ranked below a visible one', async () => {
+    const page = jsdomPage(`<html><body>
+      <nav data-hidden="1"><a href="https://apply.tnachieves.org/student/apply" data-hidden="1">Apply</a></nav>
+      <p>Tennessee Promise information.</p>
+    </body></html>`, { url: 'https://www.tnachieves.org/tn-promise' })
+    const links = await detectApplyLinks(page)
+    expect(links.map((l) => l.href)).toEqual(['https://apply.tnachieves.org/student/apply'])
+    expect(links[0].hidden).toBe(true)
+    const both = jsdomPage(`<html><body><a href="https://a.example.org/apply" data-hidden="1">Apply</a><a href="https://b.example.org/apply">Apply Now</a></body></html>`)
+    expect((await detectApplyLinks(both)).map((l) => l.href)).toEqual(['https://b.example.org/apply', 'https://a.example.org/apply'])
+  })
   it('runAutopilot follows the apply anchor from a landing page instead of dead-ending as no_application_form', async () => {
     const page = jsdomPage('<html><body><h1>Tennessee Promise</h1><p>Info.</p><a href="https://apply.tnachieves.org/student/apply">Apply Now</a></body></html>', { url: 'https://www.tnachieves.org/tn-promise' })
     const visited = []

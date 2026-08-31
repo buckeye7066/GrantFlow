@@ -972,7 +972,12 @@ async function detectApplyLinks(page) {
         const href = el.href || ''
         if (!/^https?:/i.test(href)) continue
         const r = el.getBoundingClientRect()
-        if (!(r.width > 0 && r.height > 0)) continue
+        // Collapsed navigation (hamburger menus, mega-menus) hides the very
+        // "Apply" link a landing page routes through — thegatesscholarship.org
+        // and tnachieves.org/tn-promise both showed zero visible apply anchors
+        // in a headless viewport (live, 2026-08-31). A hidden anchor is still a
+        // real destination; it simply ranks below a visible one.
+        const hidden = !(r.width > 0 && r.height > 0)
         const text = (el.innerText || el.textContent || el.getAttribute('aria-label') || el.getAttribute('title') || '').trim().replace(/\s+/g, ' ')
         const textHit = rxList.some((r2) => new RegExp(r2.source, r2.flags).test(text))
         const hrefHit = /\/(apply|application|applications|apply-now|applynow|start-application|scholarship-application|grant-application)(\/|\?|#|$|\.)/i.test(href)
@@ -982,7 +987,7 @@ async function detectApplyLinks(page) {
         const key = href.split('#')[0]
         if (seen.has(key)) continue
         seen.add(key)
-        out.push({ href, text: text.slice(0, 80), score: (textHit ? 2 : 0) + (hrefHit ? 1 : 0) })
+        out.push({ href, text: text.slice(0, 80), hidden, score: (textHit ? 2 : 0) + (hrefHit ? 1 : 0) + (hidden ? 0 : 1) })
       }
       return out.sort((a, b) => b.score - a.score).slice(0, 8)
     }, { rxList: APPLY_NAV_PATTERNS.map((p) => ({ source: p.source, flags: p.flags })) })
@@ -1864,6 +1869,7 @@ export async function runAutopilot({
   const tryFollowApplyAnchor = async () => {
     if (applyNavClicks >= MAX_APPLY_NAV_CLICKS) return false
     const applyLinks = await detectApplyLinks(page)
+    trace.push({ step: 'apply_link_scan', detail: { candidates: applyLinks.length, sample: applyLinks.slice(0, 3).map((l) => ({ text: String(l.text || '').slice(0, 30), href: String(l.href || '').slice(0, 100), hidden: Boolean(l.hidden) })) } })
     const currentPage = (() => { try { return page.url().split('#')[0] } catch { return '' } })()
     const nextLink = applyLinks.find((l) => {
       const target = normalizeBrowserTargetUrl(l.href)
