@@ -16,6 +16,7 @@ import { describe, it, expect, beforeEach } from 'vitest'
 const Database = (await import('better-sqlite3')).default
 const {
   reconcileOrphanedApplicationTasks,
+  closeOrphanedAutopilotRuns,
   IN_FLIGHT_STATUSES,
   RECOVERY_SCAN_STATUSES,
 } = await import('../startup/hamiltonTaskRecovery.js')
@@ -99,6 +100,8 @@ describe('reconcileOrphanedApplicationTasks (restart recovery)', () => {
       // how this sweep silently did nothing on Postgres for weeks, so it is
       // reported rather than skipped invisibly.
       skipped_unchanged: 0,
+      // Dead run-row ghosts closed by the same sweep (0 on a bare DB).
+      runs_closed: 0,
       task_ids: [],
       quarantined_task_ids: [],
     })
@@ -169,6 +172,97 @@ describe('reconcileOrphanedApplicationTasks (restart recovery)', () => {
       'submit_attempt_started',
       'submit_evidence_pending',
     ].sort())
+  })
+})
+
+function ensureRunsTable(db) {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS hamilton_autopilot_runs (
+      id TEXT PRIMARY KEY,
+      task_id TEXT NOT NULL,
+      profile_id TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'queued',
+      blocker_kind TEXT,
+      blocker_detail TEXT,
+      finished_at DATETIME,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+  `)
+}
+
+function seedRun(db, { id, status, updatedAt, finishedAt = null }) {
+  db.prepare(`
+    INSERT INTO hamilton_autopilot_runs (id, task_id, profile_id, status, finished_at, created_at, updated_at)
+    VALUES (?, 't-run', 'p1', ?, ?, ?, ?)
+  `).run(id, status, finishedAt, updatedAt, updatedAt)
+}
+
+describe('closeOrphanedAutopilotRuns (dead run-row ghosts)', () => {
+  let db
+  beforeEach(async () => {
+    db = makeDb()
+    await ensureApplicationTaskSchema(db)
+    ensureRunsTable(db)
+  })
+
+  it('closes STALE running/preflight runs as failed with an interrupted blocker and finished_at', async () => {
+    seedRun(db, { id: 'r1', status: 'running', updatedAt: OLD })
+    seedRun(db, { id: 'r2', status: 'preflight', updatedAt: OLD })
+    const closed = await closeOrphanedAutopilotRuns(db, { staleMinutes: 15 })
+    expect(closed).toBe(2)
+    const rows = db.prepare(`SELECT id, status, blocker_kind, finished_at FROM hamilton_autopilot_runs ORDER BY id`).all()
+    for (const row of rows) {
+      expect(row.status).toBe('failed')
+      expect(row.blocker_kind).toBe('interrupted')
+      expect(row.finished_at).toBeTruthy()
+    }
+  })
+
+  it('never closes a FRESH running run (a live browser can legitimately be mid-fill)', async () => {
+    seedRun(db, { id: 'r1', status: 'running', updatedAt: FRESH })
+    const closed = await closeOrphanedAutopilotRuns(db, { staleMinutes: 15 })
+    expect(closed).toBe(0)
+    expect(db.prepare(`SELECT status FROM hamilton_autopilot_runs WHERE id='r1'`).get().status).toBe('running')
+  })
+
+  it('leaves terminal runs untouched and keeps their finished_at', async () => {
+    seedRun(db, { id: 'r1', status: 'completed', updatedAt: OLD, finishedAt: OLD })
+    seedRun(db, { id: 'r2', status: 'blocked', updatedAt: OLD })
+    const closed = await closeOrphanedAutopilotRuns(db, { staleMinutes: 15 })
+    expect(closed).toBe(0)
+    expect(db.prepare(`SELECT status FROM hamilton_autopilot_runs WHERE id='r1'`).get().status).toBe('completed')
+    expect(db.prepare(`SELECT status FROM hamilton_autopilot_runs WHERE id='r2'`).get().status).toBe('blocked')
+  })
+
+  it('runs from reconcileOrphanedApplicationTasks even when NO tasks are in-flight (the prod 2026-08-31 shape)', async () => {
+    // The task side was already recovered on a prior pass; only the dead run
+    // rows remain, reading as "Working: filling portal" in every dashboard.
+    seedRun(db, { id: 'r1', status: 'running', updatedAt: OLD })
+    const r = await reconcileOrphanedApplicationTasks(db, { staleMinutes: 15 })
+    expect(r.scanned).toBe(0)
+    expect(r.runs_closed).toBe(1)
+    expect(db.prepare(`SELECT status FROM hamilton_autopilot_runs WHERE id='r1'`).get().status).toBe('failed')
+  })
+
+  it('also runs on the normal path (stale tasks present) and reports both counts', async () => {
+    await seedTask(db, { id: 't1', status: 'filling_portal', updatedAt: OLD })
+    seedRun(db, { id: 'r1', status: 'running', updatedAt: OLD })
+    const r = await reconcileOrphanedApplicationTasks(db, { staleMinutes: 15 })
+    expect(r.demoted).toBe(1)
+    expect(r.runs_closed).toBe(1)
+  })
+
+  it('treats an unreadable updated_at as stale, and is safe with no runs table', async () => {
+    seedRun(db, { id: 'r1', status: 'running', updatedAt: 'not-a-date' })
+    // created_at defaults to CURRENT_TIMESTAMP (fresh) — the fallback keeps it
+    // open; wipe it to prove the unreadable-everything case closes.
+    db.prepare(`UPDATE hamilton_autopilot_runs SET created_at = 'also-not-a-date' WHERE id='r1'`).run()
+    expect(await closeOrphanedAutopilotRuns(db, { staleMinutes: 15 })).toBe(1)
+
+    const bare = makeDb()
+    await ensureApplicationTaskSchema(bare)
+    expect(await closeOrphanedAutopilotRuns(bare, { staleMinutes: 15 })).toBe(0)
   })
 })
 
