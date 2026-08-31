@@ -90,9 +90,19 @@ function isOrganizationProfile(profile) {
   return false
 }
 
+// STUDENT-FUNDING signals, PRECISE by design (2026-08-30). The old list
+// matched /grant/, /aid/, /education/, /college/, /university/ and /student/
+// with no word boundaries — so virtually EVERY funding source in the catalog
+// (anything whose copy says "grant"), and even "Medicaid" (…aid…), read as
+// student funding, and housing / emergency-cash grants hard-blocked whole
+// profiles on "Profile is missing school / university" (CGMHN emergency cash,
+// Fair Haven, Seattle CDBG — owner dashboard 2026-08-30). A source is treated
+// as student funding only when it NAMES a student-aid instrument, or its own
+// declared kind says scholarship.
 const STUDENT_HINT_PATTERNS = [
-  /scholarship/i, /grant/i, /tuition/i, /aid/i, /fafsa/i, /college/i, /university/i,
-  /student/i, /education/i, /book\s*stipend/i, /housing\s*aid/i, /work[-\s]?study/i,
+  /scholarship/i, /tuition/i, /fafsa/i, /work[-\s]?study/i,
+  /\bstudent\s+(aid|loan|grant|financial)/i, /financial\s+aid\s+for\s+students/i,
+  /book\s*stipend/i, /\bundergraduate\b/i, /\bpostsecondary\s+education\b/i,
 ]
 
 const FINANCIAL_HINT_PATTERNS = [
@@ -120,6 +130,21 @@ function pickFirst(profile, paths) {
 }
 
 function normKey(k) { return String(k || '').trim().toLowerCase().replace(/[\s-]+/g, '_') }
+
+// A school named ANYWHERE the profile stores schools: a university_applications
+// entry, an education.schools[] row ({ name }), or any aliased scalar. The
+// deep scan cannot see `schools: [{ name }]` (a bare `name` key is deliberately
+// not a school alias — it collides with scholarship/org names), so the array
+// shapes are checked explicitly here.
+function profileHasSchool(profile, resolvedFields) {
+  const apps = pickFirst(profile, ['university_applications.applications'])
+    || get(profile, 'sections.university_applications.applications') || []
+  const firstApp = Array.isArray(apps) && apps.length > 0 ? apps[0] : null
+  if (firstApp && nonEmpty(firstApp.name)) return true
+  const schools = get(profile, 'education.schools') || get(profile, 'sections.education.schools') || []
+  if (Array.isArray(schools) && schools.some((s) => nonEmpty(s?.name) || nonEmpty(s?.school_name))) return true
+  return fieldPresent(profile, [], 'school_name', resolvedFields)
+}
 
 // Every reasonable spelling/synonym a value might be stored under, so a deep
 // scan recognises it wherever it lives in the profile tree.
@@ -299,11 +324,7 @@ export function recheckMissingProfileFields(profile, keys = [], resolvedFields =
   for (const rawKey of keys) {
     const key = normKey(rawKey)
     if (key === 'school_name') {
-      const apps = pickFirst(profile, ['university_applications.applications']) || []
-      const firstApp = Array.isArray(apps) && apps.length > 0 ? apps[0] : null
-      const present = (firstApp && nonEmpty(firstApp.name)) ||
-        fieldPresent(profile, [], 'school_name', resolvedFields)
-      if (!present) stillMissing.push(key)
+      if (!profileHasSchool(profile, resolvedFields)) stillMissing.push(key)
       continue
     }
     if (key === 'household_income') {
@@ -326,6 +347,8 @@ export function recheckMissingProfileFields(profile, keys = [], resolvedFields =
 }
 
 function looksLikeStudentFunding(opportunity) {
+  const kind = String(opportunity?.opportunity_kind || opportunity?.kind || '').trim().toLowerCase()
+  if (kind === 'scholarship') return true
   const text = [opportunity?.title, opportunity?.description, opportunity?.eligibility_text]
     .filter(Boolean).join(' ')
   return STUDENT_HINT_PATTERNS.some((rx) => rx.test(text))
@@ -409,22 +432,24 @@ export async function preflightSingleSource(db, {
     }
   }
 
-  // 2. Student funding requires school + program info — but ONLY for a profile
-  // that could BE a student. An organization (a church, a ministry, a nonprofit)
-  // is never a student, so a scholarship in its pipeline must never block on
-  // "missing school / university" (that is a pipeline-fit problem, not a field
-  // Hamilton can ask a church to supply). Accept a school named in a
-  // university_applications entry OR anywhere else in the profile.
+  // 2. Student funding usually wants school + program info — but ONLY for a
+  // profile that could BE a student, and even then it is a WARNING, never a
+  // hard stop (owner order 2026-08-30: preflight may only require fields the
+  // ACTUAL application needs — and preflight cannot see the form yet). The
+  // engine already files a precise, resolvable per-field ask the moment a real
+  // form demands a school it cannot answer (unanswered_required_fields →
+  // resolveOrCreateFieldHome), so hard-blocking here only prevented Hamilton
+  // from ever reaching forms that never ask for a school. An organization (a
+  // church, a ministry, a nonprofit) is never a student and is skipped
+  // entirely. Accept a school named in a university_applications entry OR
+  // anywhere else in the profile.
   if (!orgProfile && looksLikeStudentFunding(opportunity)) {
-    const apps = pickFirst(profile, ['university_applications.applications']) || []
-    const firstApp = Array.isArray(apps) && apps.length > 0 ? apps[0] : null
-    const hasSchool = (firstApp && nonEmpty(firstApp.name)) ||
-      fieldPresent(profile, [], 'school_name', resolvedFields)
+    const hasSchool = profileHasSchool(profile, resolvedFields)
     if (!hasSchool) {
-      blockers.push({
+      warnings.push({
         kind: 'missing_field', key: 'school_name',
         label: 'Profile is missing school / university',
-        detail: 'This funding source looks student-related; add the school under university_applications.',
+        detail: 'This funding source looks student-related and no school is on the profile. Hamilton will proceed; if the application form itself requires a school, he will ask for exactly that field.',
       })
     }
   }

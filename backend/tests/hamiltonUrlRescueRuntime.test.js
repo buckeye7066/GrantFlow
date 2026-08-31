@@ -36,13 +36,16 @@ describe('attemptRuntimeUrlRescue', () => {
     expect(res.url).toBe('https://tnemsfoundation.org/scholarship/apply')
   })
 
-  it('NEVER fabricates: empty search → nothing_verifiable, provider failure → search_failed', async () => {
+  it('NEVER fabricates: empty search → search_empty (a transient, NOT a finding about the funder), provider failure → search_failed', async () => {
+    // 2026-08-31: zero hits used to be reported as nothing_verifiable and
+    // parked the task on a manual packet — but zero hits is the recurring
+    // search-provider outage/quota signature, so the resolver now DEFERS it.
     const empty = await attemptRuntimeUrlRescue(ctxFor(), {}, {
       searchWebImpl: async () => [],
       checkUrlImpl: okProbe,
     })
     expect(empty.url).toBeNull()
-    expect(empty.reason).toBe('nothing_verifiable')
+    expect(empty.reason).toBe('search_empty')
 
     const failed = await attemptRuntimeUrlRescue(ctxFor(), {}, {
       searchWebImpl: async () => { throw new Error('provider down') },
@@ -50,6 +53,26 @@ describe('attemptRuntimeUrlRescue', () => {
     })
     expect(failed.url).toBeNull()
     expect(failed.reason).toBe('search_failed')
+  })
+
+  it('a search that RAN with real hits none of which verify is still nothing_verifiable (only that concludes the packet)', async () => {
+    const res = await attemptRuntimeUrlRescue(ctxFor(), {}, {
+      // A hit that fails the token-overlap plausibility bar for the title.
+      searchWebImpl: async () => [{ url: 'https://unrelated.example.com/page', title: 'Totally different subject', snippet: 'nothing shared' }],
+      checkUrlImpl: okProbe,
+    })
+    expect(res.url).toBeNull()
+    expect(res.reason).toBe('nothing_verifiable')
+    expect(res.hits).toBe(1)
+  })
+
+  it('a BOT-WALLED apply page (403 to the datacenter probe) is returned alive with bot_walled:true — never "nothing verifiable"', async () => {
+    const res = await attemptRuntimeUrlRescue(ctxFor(), {}, {
+      searchWebImpl: async () => [plausibleHit('https://tnemsfoundation.org/scholarship/apply')],
+      checkUrlImpl: async (url) => ({ status: 'broken', code: 403, finalUrl: url }),
+    })
+    expect(res.url).toBe('https://tnemsfoundation.org/scholarship/apply')
+    expect(res.bot_walled).toBe(true)
   })
 
   it('refuses to re-serve the SAME page the engine just dead-ended on (no loop)', async () => {

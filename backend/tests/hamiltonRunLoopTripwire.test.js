@@ -83,6 +83,26 @@ describe('detectAutopilotRunLoop', () => {
     await appendTaskEvent(db, { taskId: 't1', eventType: 'progress', status: 'filling_portal', step: 'x', message: 'still going', actorRole: 'agent' })
     expect((await detectAutopilotRunLoop(db, { taskId: 't1' }))?.kind).toBe('run_loop')
   })
+
+  it('NAMES the repeating dead-end (2026-08-31): the tripwire carries the last run blocker instead of "the last outcome is on the task"', async () => {
+    await seedRuns(db, 't1', MAX_AUTOPILOT_RUNS_PER_DAY, { ageMs: 120_000 })
+    // Stamp the newest run with the blocker that keeps killing the loop.
+    const newest = db.prepare(`SELECT id FROM hamilton_autopilot_runs WHERE task_id='t1' ORDER BY created_at DESC LIMIT 1`).get()
+    db.prepare(`UPDATE hamilton_autopilot_runs SET status='blocked', blocker_kind='login', blocker_detail='Password input visible — login required' WHERE id = ?`).run(newest.id)
+    const loop = await detectAutopilotRunLoop(db, { taskId: 't1' })
+    expect(loop?.kind).toBe('run_loop')
+    expect(loop.last_blocker_kind).toBe('login')
+    expect(loop.detail).toMatch(/Each attempt ended the same way: login/)
+    expect(loop.detail).toMatch(/Password input visible/)
+  })
+
+  it('a loop whose runs died with NO terminal record says so (crash/redeploy signature)', async () => {
+    await seedRuns(db, 't1', MAX_AUTOPILOT_RUNS_PER_DAY, { ageMs: 120_000 })
+    const loop = await detectAutopilotRunLoop(db, { taskId: 't1' })
+    expect(loop?.kind).toBe('run_loop')
+    expect(loop.last_blocker_kind).toBeNull()
+    expect(loop.detail).toMatch(/died without a terminal record/)
+  })
 })
 
 describe('persistTerminalOrFail', () => {

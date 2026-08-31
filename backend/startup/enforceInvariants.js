@@ -2080,8 +2080,14 @@ export async function enforceHamiltonTaskSelfHeal(db) {
       // last_agent_message for legacy rows blocked before items were recorded.
       let unresolvedItems = []
       try {
+        // `resolved IS NOT TRUE` on purpose: the column is INTEGER on SQLite
+        // but BOOLEAN on prod Postgres, where `resolved = 0` THROWS — this
+        // catch then swallowed it, unresolvedItems stayed [], and the sweep
+        // fell through to the legacy-message branch: prod re-queued tasks
+        // while never resolving their missing-info rows (the task proceeded
+        // AND kept showing the ask). The repo's own documented dialect trap.
         unresolvedItems = await db.prepare(
-          'SELECT kind, key FROM application_missing_info WHERE task_id = ? AND resolved = 0',
+          'SELECT kind, key FROM application_missing_info WHERE task_id = ? AND resolved IS NOT TRUE',
         ).all(String(task.id))
         if (!Array.isArray(unresolvedItems)) unresolvedItems = []
       } catch { unresolvedItems = [] }

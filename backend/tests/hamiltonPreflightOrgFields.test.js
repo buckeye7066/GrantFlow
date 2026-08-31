@@ -80,11 +80,42 @@ describe('preflight required fields scoped to profile type', () => {
     expect(missingKeys(report2)).not.toContain('organization_name')
   })
 
-  it('a PERSON applying for a scholarship IS asked for a school (the legitimate condition-2 ask is preserved)', async () => {
+  it('a PERSON applying for a scholarship gets a school WARNING, never a hard block (2026-08-30: preflight may only require what the actual form needs)', async () => {
     const profile = { id: 'p3', display_name: 'Jane Q Public', basic_information: { first_name: 'Jane', last_name: 'Public', email: 'j@example.com' } }
     const report = await preflightSingleSource(db, {
       profile, profileId: 'p3', source: { opportunity_id: 'opp-sch' }, opportunity: SCHOLARSHIP_OPP,
     })
-    expect(missingKeys(report)).toContain('school_name')
+    // The engine files a precise per-field ask if the real form demands a
+    // school; preflight no longer stops the run for it.
+    expect(missingKeys(report)).not.toContain('school_name')
+    expect(report.warnings.filter((w) => w.kind === 'missing_field').map((w) => w.key)).toContain('school_name')
+  })
+
+  it('a HOUSING / emergency-cash grant never even warns about school (the CGMHN / Fair Haven / Seattle CDBG class)', async () => {
+    const profile = { id: 'p4', display_name: 'Jane Q Public', basic_information: { first_name: 'Jane', last_name: 'Public', email: 'j@example.com' } }
+    const housingOpp = {
+      id: 'opp-housing',
+      title: 'Emergency Cash Assistance Grant',
+      description: 'Emergency financial assistance grants and aid for households facing eviction. Community development block grant program.',
+      application_url: 'https://example.org/apply',
+    }
+    const report = await preflightSingleSource(db, {
+      profile, profileId: 'p4', source: { opportunity_id: 'opp-housing' }, opportunity: housingOpp,
+    })
+    expect(missingKeys(report)).not.toContain('school_name')
+    expect(report.warnings.map((w) => w.key)).not.toContain('school_name')
+  })
+
+  it('a school stored as education.schools[] satisfies the school read (the alternation-class shape)', async () => {
+    const profile = {
+      id: 'p5',
+      display_name: 'Jane Q Public',
+      basic_information: { first_name: 'Jane', last_name: 'Public', email: 'j@example.com' },
+      education: { schools: [{ name: 'Middle Tennessee State University' }] },
+    }
+    const report = await preflightSingleSource(db, {
+      profile, profileId: 'p5', source: { opportunity_id: 'opp-sch' }, opportunity: SCHOLARSHIP_OPP,
+    })
+    expect(report.warnings.map((w) => w.key)).not.toContain('school_name')
   })
 })

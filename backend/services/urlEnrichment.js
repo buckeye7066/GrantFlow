@@ -106,7 +106,14 @@ export function isPlausibleOfficialHit(candidate, hit) {
   if (!candidate || !hit) return false
   if (!isHttpUrl(hit.url) || isSearchEngineUrl(hit.url)) return false
 
-  const tokens = significantTitleTokens(candidate.title)
+  let tokens = significantTitleTokens(candidate.title)
+  if (tokens.length < MIN_SIGNIFICANT_TOKENS) {
+    // A grant-shaped title ("Housing Grant") loses its identity words to the
+    // stopword list and used to be structurally unrescuable (the bar returned
+    // false for EVERY hit). The sponsor's own tokens are identity too — fold
+    // them in so the pair (title ∪ sponsor) is what must appear in the hit.
+    tokens = [...new Set([...tokens, ...significantTitleTokens(candidate.sponsor)])]
+  }
   if (tokens.length < MIN_SIGNIFICANT_TOKENS) return false
 
   const text = combinedHitText(hit)
@@ -156,14 +163,34 @@ export async function findOfficialUrlForOpportunity({ title, sponsor } = {}, dep
   try {
     const cleanTitle = typeof title === 'string' ? title.trim() : ''
     const cleanSponsor = typeof sponsor === 'string' ? sponsor.trim() : ''
-    const query = `"${cleanTitle}" ${cleanSponsor}`.trim()
 
-    const raw = await searchWebImpl(query, { count: MAX_SEARCH_HITS, timeoutMs: SEARCH_TIMEOUT_MS })
-    const hits = Array.isArray(raw) ? raw.slice(0, MAX_SEARCH_HITS) : []
+    // MULTI-QUERY (2026-08-30): one exact-phrase quoted query was the whole
+    // search. A title carrying punctuation/amounts ("Niche $40,000 No-Essay
+    // Scholarship") often returns zero results AS A PHRASE while the unquoted
+    // words find the apply page instantly — and zero hits was then reported as
+    // "searched the web and found nothing verifiable", parking the task on a
+    // manual packet. Try the exact phrase first (highest precision), then the
+    // unquoted words, then the words + "apply". Stop at the first query that
+    // yields hits; the plausibility + liveness bars below are unchanged, so
+    // this widens RECALL only, never what is trusted.
+    const queries = [...new Set([
+      `"${cleanTitle}" ${cleanSponsor}`.trim(),
+      `${cleanTitle} ${cleanSponsor}`.trim(),
+      `${cleanTitle} apply`.trim(),
+    ].filter((q) => q && q !== '""'))]
+
+    let hits = []
+    let searchedOnce = false
+    for (const query of queries) {
+      const raw = await searchWebImpl(query, { count: MAX_SEARCH_HITS, timeoutMs: SEARCH_TIMEOUT_MS })
+      searchedOnce = true
+      const list = Array.isArray(raw) ? raw.slice(0, MAX_SEARCH_HITS) : []
+      if (list.length > 0) { hits = list; break }
+    }
     if (hits.length === 0) {
       // Distinguishable "provider returned nothing" outcome — the caller's
       // outage guard uses hits===0 to avoid burning candidates.
-      return { url: null, searched: true, hits: 0 }
+      return { url: null, searched: searchedOnce, hits: 0 }
     }
 
     const plausible = hits.filter((h) => isPlausibleOfficialHit({ title: cleanTitle, sponsor: cleanSponsor }, h))
@@ -178,6 +205,20 @@ export async function findOfficialUrlForOpportunity({ title, sponsor } = {}, dep
       const probe = await checkUrlImpl(hit.url, { timeoutMs: PROBE_TIMEOUT_MS })
       if (probe && (probe.status === 'ok' || probe.status === 'redirect')) {
         return { url: probe.finalUrl || hit.url, hit, probe, searched: true, hits: hits.length }
+      }
+      // BOT-WALLED IS NOT DEAD (2026-08-30). A datacenter HEAD/GET probe gets
+      // 403/429/503 from every Cloudflare/Akamai-fronted scholarship host
+      // (niche.com, fastweb, scholarships.com) — the exact hosts this repo
+      // already classifies as bot_protected, with a real solver + co-browse
+      // ladder behind the engine. Marking them 'nothing verifiable' routed
+      // findable apply pages to a manual packet. Return the URL with the
+      // honest bot_walled flag; the engine's own bot-wall handling (solver /
+      // saved session / co-browse) is the next authority, never this probe.
+      if (probe && probe.status === 'broken' && [403, 429, 503].includes(Number(probe.code))) {
+        return {
+          url: probe.finalUrl || hit.url, hit, probe,
+          bot_walled: true, searched: true, hits: hits.length,
+        }
       }
     }
     return { url: null, searched: true, hits: hits.length }

@@ -115,7 +115,7 @@ export const BLOCKER_PROFILE = Object.freeze({
   },
   captcha_required: {
     title: 'CAPTCHA challenge',
-    message: 'The portal triggered CAPTCHA. Hamilton never solves CAPTCHAs; complete it once and Hamilton will resume from a saved session.',
+    message: 'The portal triggered a CAPTCHA that Hamilton\'s solver could not clear (or no solver is configured). Complete it once in a side-by-side login and save the session — Hamilton resumes from it automatically.',
     required_action: 'renew_session',
     severity: 'warning',
     admin_required: true,
@@ -675,7 +675,17 @@ export async function attemptRuntimeUrlRescue(ctx, input, deps = {}) {
   const sponsor = String(ctx?.opportunity?.sponsor || ctx?.opportunity?.funder || '').trim()
   if (!title) return { url: null, reason: 'no_title_to_search' }
   const found = await findOfficialUrlForOpportunity({ title, sponsor }, deps)
-  if (!found?.url) return { url: null, reason: found?.searched === false ? 'search_failed' : 'nothing_verifiable' }
+  if (!found?.url) {
+    // Three DIFFERENT facts that used to print as one ("found nothing
+    // verifiable"): the search provider FAILED, the search ran and returned
+    // ZERO hits (an outage/quota signature far more often than a real
+    // absence), and the search returned hits none of which passed the bars.
+    // Only the last is a finding about the funder.
+    const reason = found?.searched === false
+      ? 'search_failed'
+      : Number(found?.hits) === 0 ? 'search_empty' : 'nothing_verifiable'
+    return { url: null, reason, hits: found?.hits ?? null }
+  }
   if (isSearchEngineUrl(found.url)) return { url: null, reason: 'search_results_page' }
   const current = String(input?.url || ctx?.portalUrl || '').trim().replace(/\/+$/, '').toLowerCase()
   const candidate = String(found.url).trim().replace(/\/+$/, '').toLowerCase()
@@ -695,18 +705,51 @@ export async function attemptRuntimeUrlRescue(ctx, input, deps = {}) {
   if (nonApplication) {
     return { url: null, reason: nonApplication.reason, rejected_url: found.url }
   }
-  return { url: found.url, probe: found.probe || null, hits: found.hits ?? null }
+  return {
+    url: found.url,
+    probe: found.probe || null,
+    hits: found.hits ?? null,
+    // Alive-but-bot-walled (403/429/503 to the datacenter probe): a REAL page
+    // the engine's own bot-wall ladder (solver / saved session / co-browse)
+    // should get, never a "nothing verifiable" packet.
+    bot_walled: found.bot_walled === true,
+  }
 }
 
 export async function resolveUnknownMethod(db, ctx, input) {
   // FIRST: try to FIND the funder's real application page and keep going.
+  let rescue = null
   try {
-    const rescue = await attemptRuntimeUrlRescue(ctx, input, ctx?._urlRescueDeps || {})
+    rescue = await attemptRuntimeUrlRescue(ctx, input, ctx?._urlRescueDeps || {})
     if (rescue?.url) {
-      return ok('application_url_rescued', { application_url: rescue.url, probe: rescue.probe },
-        `Hamilton found the funder's own application page (${rescue.url}), verified it is live, and is continuing there.`)
+      return ok('application_url_rescued',
+        { application_url: rescue.url, probe: rescue.probe, ...(rescue.bot_walled ? { bot_walled: true } : {}) },
+        rescue.bot_walled
+          ? `Hamilton found the funder's application page (${rescue.url}); its bot protection refused the liveness probe, so Hamilton is continuing there through the bot-wall handling (solver / saved session / co-browse).`
+          : `Hamilton found the funder's own application page (${rescue.url}), verified it is live, and is continuing there.`)
     }
-  } catch { /* best-effort — fall through to the honest packet */ }
+  } catch { rescue = null /* best-effort — fall through to the honest packet */ }
+
+  // SEARCH INFRASTRUCTURE FAILURE IS NOT A FINDING ABOUT THE FUNDER
+  // (2026-08-30, the dominant "manual pathway" bucket). When the web-search
+  // provider failed or returned zero hits — the recurring SearXNG/Brave outage
+  // signature — parking the task on a manual funder-contact packet converts a
+  // transient infrastructure problem into permanent human work. Defer instead:
+  // the scheduler re-attempts once search is back, and only a search that RAN
+  // and returned real hits none of which verified may conclude "nothing
+  // verifiable".
+  if (rescue && (rescue.reason === 'search_failed' || rescue.reason === 'search_empty')) {
+    return {
+      outcome: 'deferred',
+      strategy: 'url_rescue_search_unavailable',
+      retry: false,
+      fallback: null,
+      detail: rescue.reason === 'search_failed'
+        ? 'Hamilton could not search the web for this funder\'s application page (the search provider failed). This says nothing about the funder — Hamilton will retry automatically.'
+        : 'Hamilton\'s web search returned no results at all for this funder — the usual signature of a search-provider outage or quota, not proof the page does not exist. Hamilton will retry automatically.',
+      payload: { reason: rescue.reason, hits: rescue.hits ?? null },
+    }
+  }
   // A POINTER / DIRECTORY / REFERENCE row has NO application anyone submits.
   // After URL rescue found no real apply page, parking it in waiting_for_review
   // as a "funder-contact packet — the final review and submit are yours" is a
@@ -725,10 +768,19 @@ export async function resolveUnknownMethod(db, ctx, input) {
       `This source is ${what}, not an application anyone submits — Hamilton searched for a real application page and found none. Recorded as a research lead; there is nothing here for you to review or submit.`)
   }
   // Nothing verifiable found: degrade to a "funder contact packet" so the
-  // user always has something useful to send, and say plainly that the
-  // search was tried.
+  // user always has something useful to send, and say PRECISELY what was
+  // tried and why each candidate was refused (a bare "nothing verifiable"
+  // hid provider outages and near-misses alike).
+  const why = rescue?.reason
+    ? ({
+      same_dead_end_page: 'the only verifiable page is the same one Hamilton already dead-ended on',
+      funder_mismatch: `the best live page belongs to a different funder (${rescue.rejected_url || 'rejected'})`,
+      nothing_verifiable: `the web search returned ${rescue.hits ?? 'some'} result(s) but none verified as the funder's own live application page`,
+      no_title_to_search: 'the record has no title to search for',
+    })[rescue.reason] || `the search could not verify a page (${rescue.reason})`
+    : 'the web search found nothing verifiable'
   return degraded('funder_contact_packet', 'manual',
-    'No clear application URL or submission method — Hamilton also searched the web for the funder\'s application page and found nothing verifiable. She prepared a funder-contact packet under profile Documents.')
+    `No clear application URL or submission method — Hamilton also searched the web for the funder's application page: ${why}. She prepared a funder-contact packet under profile Documents.`)
 }
 
 // ── Helpers ─────────────────────────────────────────────────────────

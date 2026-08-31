@@ -220,8 +220,71 @@ const APPLY_NAV_PATTERNS = [
   /start\s*(?:your\s*|an?\s*)?application/i, /begin\s*(?:your\s*|an?\s*)?application/i,
   /start\s*(?:your\s*)?app\b/i, /go\s*to\s*(?:the\s*)?application/i, /open\s*application/i,
   /application\s*form/i,
+  // 2026-08-30: real funder sites (NAMI / Seattle CDBG / Alaska Housing class)
+  // reach the form through ordinary navigation copy, not a button labelled
+  // "Apply". Navigation-only patterns — this list is consulted ONLY on a page
+  // with no fillable form, so widening it cannot intercept a submit.
+  /how\s*to\s*apply/i, /application\s*portal/i, /online\s*application/i,
+  /submit\s*(?:an\s*|your\s*)?application/i, /apply\s*for\s*(?:funding|assistance|this)/i,
 ]
 const MAX_APPLY_NAV_CLICKS = 3
+
+/**
+ * The www/apex twin of a URL (https://x.org/p → https://www.x.org/p and vice
+ * versa), or null when there is no meaningful twin. Pure; used by the initial
+ * navigation's second-method verification before a site is declared dead.
+ */
+function wwwVariantUrl(rawUrl) {
+  try {
+    const u = new URL(String(rawUrl))
+    const host = u.hostname.toLowerCase()
+    if (host.startsWith('www.')) {
+      u.hostname = host.slice(4)
+    } else if (host.split('.').length === 2) {
+      u.hostname = `www.${host}`
+    } else {
+      return null // a real subdomain has no conventional www twin
+    }
+    return u.toString()
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Apply-NAV anchors (2026-08-30). detectButtons deliberately scans only
+ * button-shaped controls (`button`, `input[type=submit|button]`,
+ * `a[role=button]`) so a plain hyperlink can never be treated as a SUBMIT —
+ * but the apply-nav fallback needs plain `<a href>` links too: on most funder
+ * sites "Apply" / "How to apply" is an ordinary anchor, and the documented fix
+ * for the biggest waiting_for_review bucket could never fire on them. Scans
+ * anchors only, stamps the same data-hamilton-btn id so clickButtonByBid can
+ * drive the result, and is consulted ONLY from the no-fillable-form fallback.
+ */
+async function detectApplyNavAnchors(page, patterns) {
+  try {
+    return await page.$$eval('a[href]', (els, { rxList }) => {
+      const out = []
+      for (const el of els) {
+        const text = (el.innerText || '').trim()
+        if (!text || text.length > 80) continue
+        const href = el.getAttribute('href') || ''
+        if (/^(#|javascript:|mailto:|tel:)/i.test(href.trim())) continue
+        if (!rxList.some((r) => new RegExp(r.source, r.flags).test(text))) continue
+        let bid = el.getAttribute('data-hamilton-btn')
+        if (!bid) {
+          window.__hamiltonBtnSeq = (window.__hamiltonBtnSeq || 0) + 1
+          bid = `b${window.__hamiltonBtnSeq}`
+          el.setAttribute('data-hamilton-btn', bid)
+        }
+        out.push({ bid, text, inForm: false, formFieldCount: 0, isPageFeedback: false })
+      }
+      return out
+    }, { rxList: patterns.map((p) => ({ source: p.source, flags: p.flags })) })
+  } catch {
+    return []
+  }
+}
 
 // ── Profile reader (mirrors mapping in packet generator) ─────────────
 
@@ -560,6 +623,76 @@ function actionableSubmitButtons(submitButtons, { anyFieldFilled = false, recogn
   return list.filter((b) => b && b.inForm && Number(b.formFieldCount) > 0)
 }
 
+/**
+ * Click the SUBMIT control with a verdict the irreversible boundary can trust.
+ *
+ * Returns { clicked, dispatched }:
+ *   - clicked:    the click ran and the post-click settle completed.
+ *   - dispatched: whether a click event may have REACHED the page. false means
+ *     provably not — the handle was gone, or every attempt failed during
+ *     Playwright's pre-dispatch actionability phase (a TimeoutError there
+ *     fires no event). Only a failure AFTER dispatch could have submitted,
+ *     and those set dispatched=true so the caller stays conservative.
+ *
+ * WHY (2026-08-30): "Submit button could not be clicked" (TSAC / HOPE / GAMS /
+ * Aspire) ended runs in submission_verification_required — "a submission may
+ * have gone through" — for clicks that provably never fired: SPA re-renders
+ * drop the data-hamilton-btn attribute between detect and click, so page.$
+ * returned null and NOTHING was ever clicked, yet the task was quarantined as
+ * an uncertain submission a human had to reconcile. The fallback re-detects
+ * the control by its own text before giving up.
+ */
+async function clickSubmitControl(page, candidate, patterns) {
+  const first = await clickButtonByBidVerdict(page, candidate.bid)
+  if (first.clicked || first.dispatched) return first
+  // The stamped attribute vanished (SPA re-render) or the click never got past
+  // actionability. Re-detect submit-looking controls and retry the one whose
+  // text matches the candidate we already vetted. Never widens the choice:
+  // only an exact-text match of the ALREADY-CHOSEN control is retried.
+  try {
+    const again = await detectButtons(page, patterns)
+    const wantText = String(candidate.text || '').trim().toLowerCase()
+    const match = again.find((b) => String(b.text || '').trim().toLowerCase() === wantText)
+    if (match) return await clickButtonByBidVerdict(page, match.bid)
+  } catch { /* fall through to the honest failure */ }
+  return { clicked: false, dispatched: false }
+}
+
+async function clickButtonByBidVerdict(page, bid) {
+  const sel = `[data-hamilton-btn="${bid}"]`
+  const h = await page.$(sel).catch(() => null)
+  if (!h) return { clicked: false, dispatched: false }
+  try {
+    const navWait = page.waitForNavigation({ timeout: NAV_TIMEOUT_MS, waitUntil: 'domcontentloaded' }).catch(() => null)
+    await h.scrollIntoViewIfNeeded?.({ timeout: STEP_TIMEOUT_MS }).catch(() => {})
+    let clicked = false
+    let mayHaveDispatched = false
+    const attempt = async (fn) => {
+      try { await fn(); clicked = true } catch (err) {
+        // A TimeoutError fires during Playwright's PRE-dispatch actionability
+        // wait — no event reached the page. Any other error (context destroyed
+        // by a navigation the click itself caused, target closed) may have
+        // fired the event, so the boundary must stay conservative.
+        if (!/Timeout|timeout/.test(String(err?.message || err))) mayHaveDispatched = true
+      }
+    }
+    await attempt(() => h.click({ timeout: STEP_TIMEOUT_MS }))
+    if (!clicked) await attempt(() => h.click({ timeout: STEP_TIMEOUT_MS, force: true }))
+    if (!clicked) await attempt(() => h.evaluate((el) => el.click()))
+    if (!clicked) return { clicked: false, dispatched: mayHaveDispatched }
+    await Promise.race([
+      navWait,
+      new Promise((r) => setTimeout(r, 1500)),
+    ])
+    await page.waitForLoadState('domcontentloaded', { timeout: NAV_TIMEOUT_MS }).catch(() => null)
+    return { clicked: true, dispatched: true }
+  } catch {
+    // The click may have fired before the failure (e.g. the navigation it
+    // caused destroyed the context) — conservative.
+    return { clicked: false, dispatched: true }
+  }
+}
+
 async function clickButtonByBid(page, bid) {
   const sel = `[data-hamilton-btn="${bid}"]`
   const h = await page.$(sel)
@@ -713,6 +846,9 @@ async function detectBotWall(page) {
   return null
 }
 
+const PAYMENT_WIDGET_SELECTOR =
+  'input[autocomplete="cc-number"], iframe[src*="stripe.com"], iframe[src*="braintree"]'
+
 async function detectGate(page) {
   // Full-page bot-protection interstitial FIRST — it replaces the whole app, so
   // a bot-wall must win over the login/captcha/field heuristics (a challenge
@@ -761,6 +897,7 @@ async function detectGate(page) {
     'iframe[src*="arkoselabs"], iframe[src*="funcaptcha"], iframe[src*="captcha" i], iframe[title*="challenge" i], iframe[title*="captcha" i], ' +
     'div.g-recaptcha, div.h-captcha, div.cf-turnstile, [data-sitekey], div[class*="captcha" i], div[id*="captcha" i]',
   ).catch(() => null)
+<<<<<<< HEAD
   if (hasCaptcha) {
     // An INVISIBLE reCAPTCHA (v3 score badge, or v2-invisible bound to the
     // submit button) challenges nobody at page-open: the token is minted when
@@ -1037,6 +1174,73 @@ function isContactOrNewsletterForm({ submitButton = null, fields = [], filled = 
   const bareButton = CONTACT_BUTTON_RX.test(String(submitButton?.text || '').trim())
   if (onlyContactKeys && !hasLongOrChoice && bareButton && formFieldCount > 0 && formFieldCount <= 3) return true
   return false
+=======
+  if (hasCaptcha) return { kind: 'captcha', detail: 'CAPTCHA / human-verification challenge present' }
+  // Payment — PRECISE about what the widget is FOR (2026-08-30). Nonprofit
+  // funder sites routinely embed a DONATION card widget (a Stripe/Braintree
+  // iframe in a "Donate" sidebar/footer) on the same page as the application;
+  // the old presence-only test ("Payment widget visible") parked those runs as
+  // payment stops (Silver Maple / Bright Lite / Lee Cockrell, owner dashboard
+  // 2026-08-30). A donation ask is not an application fee. The gate now reads
+  // the widget's OWN surrounding text:
+  //   - fee wording → genuine payment stop, with the evidence named;
+  //   - donation wording (and no fee wording) → not a gate at all;
+  //   - ambiguous → gate only when the widget sits inside a real <form>
+  //     (where a submit would actually charge), never for page chrome.
+  const hasPayment = await page.$(PAYMENT_WIDGET_SELECTOR).catch(() => null)
+  if (hasPayment) {
+    let paymentContext = null
+    try {
+      paymentContext = await page.evaluate?.((selector) => {
+        const nodes = [...document.querySelectorAll(selector)]
+        if (nodes.length === 0) return null
+        const texts = nodes.map((el) => {
+          const scope = el.closest('form, section, aside, dialog, [class*="donat" i], [id*="donat" i], [class*="sidebar" i], footer')
+            || el.parentElement?.parentElement?.parentElement
+            || el.parentElement
+            || el
+          return String((scope && (scope.innerText || scope.textContent)) || '').slice(0, 4000)
+        })
+        return { count: nodes.length, texts, inForm: nodes.some((el) => Boolean(el.closest('form'))) }
+      }, PAYMENT_WIDGET_SELECTOR)
+    } catch { paymentContext = null }
+    const verdict = classifyPaymentWidget(paymentContext)
+    if (verdict.gate) return { kind: 'payment', detail: verdict.detail }
+    // A donation/chrome widget is not a gate — fall through to the rest of the
+    // page (fields, submit hunt) exactly as if it were not there.
+  }
+  return null
+}
+
+
+// Application-fee wording — evidence the card widget charges FOR APPLYING.
+const PAYMENT_FEE_RX = /\b(?:application|processing|submission|registration|transcript|portal|filing)\s*fee\b|payment\s*(?:is\s*)?required|pay\s*to\s*(?:apply|submit)|fee\s*of\s*\$?\d|\$\d+(?:\.\d{2})?\s*(?:application|processing|submission)\b/i
+// Donation wording — the widget is a fundraising ask, not a fee.
+const PAYMENT_DONATION_RX = /\b(?:donat(?:e|ion|ions|ing)|give\s*now|give\s*today|support\s*(?:us|our)|contribution|fundrais\w*|tithe|offering|sponsor\s*(?:a|an|us))\b/i
+
+/**
+ * Classify a detected card widget from its surrounding text. Pure — exported
+ * via _internal for direct tests. `context` is null when the page could not be
+ * inspected; that stays a gate (conservative: a fee we cannot rule out must
+ * not be silently charged past).
+ */
+function classifyPaymentWidget(context) {
+  if (!context || !Array.isArray(context.texts)) {
+    return { gate: true, detail: 'Payment widget visible (context unreadable — treated as a payment step)' }
+  }
+  const joined = context.texts.join(' \n ')
+  const feeMatch = joined.match(PAYMENT_FEE_RX)
+  if (feeMatch) {
+    return { gate: true, detail: `Payment required — the page ties the card widget to a fee ("${String(feeMatch[0]).slice(0, 80)}"). Legitimate grants never charge to apply; flagged for review, nothing was paid.` }
+  }
+  if (PAYMENT_DONATION_RX.test(joined)) {
+    return { gate: false, detail: 'Card widget is a donation ask (not an application fee) — ignored.' }
+  }
+  if (context.inForm) {
+    return { gate: true, detail: 'Payment widget sits inside the application form (no fee or donation wording found) — treated as a payment step; nothing was paid.' }
+  }
+  return { gate: false, detail: 'Card widget is page chrome outside any form, with no fee wording — ignored.' }
+>>>>>>> 141d98f5 (Hamilton full-autonomy fixes: URL rescue, login/credential flow, preflight, consent propagation, post-submit verification)
 }
 
 export function computeAgeYears(dobStr, now = new Date()) {
@@ -1981,7 +2185,57 @@ export async function runAutopilot({
       detail: { host: (() => { try { return new URL(url).host } catch { return null } })() },
     })
     trace.push({ step: 'navigate', detail: { url } })
+<<<<<<< HEAD
     await navigateWithRecovery(page, url, { navTimeoutMs: NAV_TIMEOUT_MS, trace })
+=======
+    try {
+      await page.goto(url, { waitUntil: 'domcontentloaded', timeout: NAV_TIMEOUT_MS })
+    } catch (navErr) {
+      const navMsg = String(navErr?.message || navErr)
+      // DIRECT DOCUMENT LINK (2026-08-30, the AHFC PDF class): page.goto on a
+      // URL that starts a download throws "Download is starting". That is not
+      // a crash and not a dead site — the application IS a downloadable form.
+      // Route it to the document packet pathway instead of failing the run.
+      if (/download is starting/i.test(navMsg)) {
+        trace.push({ step: 'document_download', detail: { url } })
+        return {
+          status: 'blocked', blocker_kind: 'document_download',
+          blocker_detail: 'The application link is a direct document download (e.g. a PDF application form), not a web form. Hamilton switches to the document packet pathway.',
+          filled_fields: filled, pages_visited: pagesVisited, trace, logged_in: loggedIn,
+        }
+      }
+      // SECOND-METHOD VERIFY before declaring a site dead (2026-08-30): bare
+      // apex domains routinely lack the DNS/TLS wiring their www host has (and
+      // vice versa). One variant retry; a second failure falls through to the
+      // honest portal_unreachable classification in the outer catch.
+      const variant = wwwVariantUrl(url)
+      if (variant && /net::ERR_[A-Z_]+|\b(ENOTFOUND|ECONNREFUSED|ECONNRESET|ETIMEDOUT|EAI_AGAIN|EHOSTUNREACH)\b|getaddrinfo|Timeout \d+ms exceeded/i.test(navMsg)) {
+        trace.push({ step: 'navigate_variant_retry', detail: { from: url, to: variant } })
+        await page.goto(variant, { waitUntil: 'domcontentloaded', timeout: NAV_TIMEOUT_MS })
+        url = variant
+      } else {
+        throw navErr
+      }
+    }
+
+    // Retry-once wrapper for page inspection: a click's navigation can settle
+    // BETWEEN our load-state wait and the next $$eval, destroying the
+    // execution context mid-read ("Execution context was destroyed…
+    // navigation"). One re-settle + retry turns that race into a clean read;
+    // any other error still throws to the outer catch.
+    const inspectWithNavRetry = async (fn) => {
+      try {
+        return await fn()
+      } catch (err) {
+        const m = String(err?.message || err)
+        if (/Execution context was destroyed|Cannot find context|because of a navigation|Target (page|context).*closed/i.test(m)) {
+          await page.waitForLoadState('domcontentloaded', { timeout: NAV_TIMEOUT_MS }).catch(() => null)
+          return await fn()
+        }
+        throw err
+      }
+    }
+>>>>>>> 141d98f5 (Hamilton full-autonomy fixes: URL rescue, login/credential flow, preflight, consent propagation, post-submit verification)
 
     while (pagesVisited < MAX_PAGES) {
       if (signal?.aborted) {
@@ -2110,11 +2364,19 @@ export async function runAutopilot({
         return { status: 'blocked', blocker_kind: sigGate.kind, blocker_detail: sigGate.detail, filled_fields: filled, pages_visited: pagesVisited, trace }
       }
 
+<<<<<<< HEAD
       const fields = await retryOnContextLoss(page, () => detectFields(page))
       const submitButtons = (await retryOnContextLoss(page, () => detectButtons(page, SUBMIT_BUTTON_PATTERNS)))
         .filter((b) => !SUBMIT_BUTTON_EXCLUDE_RX.test(String(b.text || '')))
       const nextButtons   = await retryOnContextLoss(page, () => detectButtons(page, NEXT_BUTTON_PATTERNS))
       const draftButtons  = await retryOnContextLoss(page, () => detectButtons(page, DRAFT_BUTTON_PATTERNS))
+=======
+      const fields = await inspectWithNavRetry(() => detectFields(page))
+      const submitButtons = (await inspectWithNavRetry(() => detectButtons(page, SUBMIT_BUTTON_PATTERNS)))
+        .filter((b) => !SUBMIT_BUTTON_EXCLUDE_RX.test(String(b.text || '')))
+      const nextButtons   = await inspectWithNavRetry(() => detectButtons(page, NEXT_BUTTON_PATTERNS))
+      const draftButtons  = await inspectWithNavRetry(() => detectButtons(page, DRAFT_BUTTON_PATTERNS))
+>>>>>>> 141d98f5 (Hamilton full-autonomy fixes: URL rescue, login/credential flow, preflight, consent propagation, post-submit verification)
       trace.push({ step: 'inspect', detail: summarisePageState(page, fields, [...submitButtons, ...nextButtons, ...draftButtons]) })
 
       // Map and fill recognised fields.
@@ -2487,11 +2749,35 @@ export async function runAutopilot({
         // never the same control twice) and re-inspect — the form it leads to
         // carries the fields Hamilton fills. Only reached when nothing was
         // fillable here, so it can never intercept a real submit.
+<<<<<<< HEAD
         if (await tryFollowApplyButton()) continue // re-inspect the page the apply control led to
         // No apply BUTTON — look for an apply LINK (anchor), on this host or
         // the funder's portal vendor. Public-HTTPS only (the egress guard and
         // the target policy both still apply); bounded like the button path.
         if (await tryFollowApplyAnchor()) continue // re-inspect the page the apply link led to
+=======
+        const applyNav = [
+          ...(await detectButtons(page, APPLY_NAV_PATTERNS)),
+          // Plain anchors too — most funder sites reach the form through an
+          // ordinary "Apply" / "How to apply" hyperlink, not a button.
+          ...(await detectApplyNavAnchors(page, APPLY_NAV_PATTERNS)),
+        ]
+        const nextApply = applyNav.find(
+          (b) => !clickedApplyNav.has(String(b.text || '').trim().toLowerCase()),
+        )
+        if (nextApply && applyNavClicks < MAX_APPLY_NAV_CLICKS) {
+          applyNavClicks += 1
+          clickedApplyNav.add(String(nextApply.text || '').trim().toLowerCase())
+          trace.push({ step: 'follow_apply_link', detail: { text: String(nextApply.text || '').slice(0, 40) } })
+          reportLiveStep(runId, 'Opening the application form')
+          const followed = await clickButtonByBid(page, nextApply.bid)
+          if (followed) {
+            await page.waitForLoadState('domcontentloaded', { timeout: NAV_TIMEOUT_MS }).catch(() => null)
+            await page.waitForLoadState('networkidle', { timeout: 6000 }).catch(() => null)
+            continue // re-inspect the page the apply link led to
+          }
+        }
+>>>>>>> 141d98f5 (Hamilton full-autonomy fixes: URL rescue, login/credential flow, preflight, consent propagation, post-submit verification)
         trace.push({
           step: 'no_application_form',
           detail: { ignored_submit_like_controls: submitButtons.map((b) => b.text).slice(0, 5) },
@@ -2574,11 +2860,19 @@ export async function runAutopilot({
         }
         beforeSubmitCapture = beforeConfirmation
         reportLiveStep(runId, 'Submitting the application')
-        const clicked = await clickButtonByBid(page, submitCandidates[0].bid)
-        if (!clicked) {
+        const clickVerdict = await clickSubmitControl(page, submitCandidates[0], SUBMIT_BUTTON_PATTERNS)
+        if (!clickVerdict.clicked) {
+          // dispatched=false is a PROOF: the click never reached the page (the
+          // stamped control was gone or every attempt died pre-dispatch), so
+          // nothing was submitted and a retry is safe. Only a failure that may
+          // have fired the event keeps the conservative uncertain-submission
+          // quarantine.
           return {
             status: 'failed', blocker_kind: 'click_failed',
-            blocker_detail: 'Submit button could not be clicked after the durable submission boundary was acquired.',
+            blocker_detail: clickVerdict.dispatched
+              ? 'Submit click failed after it may have reached the page; check the portal before retrying.'
+              : 'Submit button could not be clicked (the control was never actually activated — no submission occurred). Safe to retry.',
+            provably_not_submitted: clickVerdict.dispatched !== true,
             ...retainedSubmitFields(),
             filled_fields: filled, pages_visited: pagesVisited, trace,
           }
@@ -2834,14 +3128,19 @@ export const _internal = {
   SIGNATURE_FIELD_PATTERNS, isTypedSignatureField, signatureConsentFor, detectAttestationGate,
   SUBMIT_BUTTON_PATTERNS, NEXT_BUTTON_PATTERNS, DRAFT_BUTTON_PATTERNS,
   matchFieldKey, readProfileValues, applyNarrativeAnswers,
-  clickButtonByBid, FEEDBACK_VALIDATION_IGNORE_RX,
+  clickButtonByBid, clickSubmitControl, clickButtonByBidVerdict, FEEDBACK_VALIDATION_IGNORE_RX,
   detectGate, detectBotWall, attemptLogin,
+<<<<<<< HEAD
   isIncidentalLoginWidget, readCaptchaShape, detectPaymentGate,
   retryOnContextLoss, navigateWithRecovery, DocumentDownloadTarget,
   detectApplyLinks, isContactOrNewsletterForm, CONTEXT_LOSS_RX,
+=======
+  classifyPaymentWidget, PAYMENT_WIDGET_SELECTOR,
+>>>>>>> 141d98f5 (Hamilton full-autonomy fixes: URL rescue, login/credential flow, preflight, consent propagation, post-submit verification)
   extractConfirmationReference,
   extractConfirmationReferenceFromUrl,
   detectReceiptAcknowledgement,
+  RECEIPT_ACK_RX,
   normalizedReference,
   captureConfirmation,
   mergeSubmitCapture,

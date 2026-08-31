@@ -1228,6 +1228,13 @@ const FIELD_ALIASES = Object.freeze({
   emailaddress: 'email', email_address: 'email', e_mail: 'email',
   dob: 'date_of_birth', birthdate: 'date_of_birth', birth_date: 'date_of_birth',
   ssn: 'social_security_number',
+  // School (2026-08-30): preflight's reader accepts five spellings but this
+  // reconcile map had NO school entry at all, so an editor writing
+  // education.current_institution (or Anya writing education.school_name)
+  // never cleared a task's school_name ask. One canonical segment.
+  school: 'school_name', university: 'school_name', college: 'school_name',
+  institution: 'school_name', institution_name: 'school_name',
+  current_school: 'school_name', current_institution: 'school_name',
 })
 
 function canonicalFieldSegment(value) {
@@ -1663,6 +1670,61 @@ export async function resolveMissingInfoItem(db, taskId, { kind, key, value, res
       String(key),
     )
   return Number(result?.changes ?? result?.rowCount ?? 0) > 0
+}
+
+/**
+ * The moment a credential or captured session APPEARS for a portal, every task
+ * parked on that portal's auth wall becomes immediately due (2026-08-30).
+ *
+ * The auth-backoff ladder's whole promise is "sign in once and Hamilton
+ * resumes on her own" — but resumption used to wait for the ladder's next
+ * timer (up to 24h after a few retries). This stamps next_retry_at = now on
+ * the profile's waiting_for_login / waiting_for_2fa / waiting_for_captcha
+ * tasks whose portal/application URL is on the same registrable domain, so
+ * the very next scheduler tick re-picks them. Best-effort; never throws.
+ *
+ * @returns {Promise<{ matched: number, resumed: number }>}
+ */
+export async function resumeAuthWaitingTasksForHost(db, { profileId, portalHost } = {}) {
+  const out = { matched: 0, resumed: 0 }
+  if (!db || !profileId || !portalHost) return out
+  const wanted = String(portalHost).toLowerCase().replace(/^www\./, '').replace(/\/.*$/, '')
+  if (!wanted) return out
+  const sameDomain = (raw) => {
+    try {
+      const h = new URL(String(raw)).hostname.toLowerCase().replace(/^www\./, '')
+      return h === wanted || h.endsWith(`.${wanted}`) || wanted.endsWith(`.${h}`)
+    } catch { return false }
+  }
+  try {
+    await ensureApplicationTaskSchema(db)
+    const rows = await db.prepare(
+      `SELECT id, portal_url, application_url FROM application_tasks
+        WHERE profile_id = ?
+          AND status IN ('waiting_for_login','waiting_for_2fa','waiting_for_captcha')`,
+    ).all(String(profileId))
+    const nowIso = new Date().toISOString()
+    for (const row of rows || []) {
+      if (!sameDomain(row.portal_url) && !sameDomain(row.application_url)) continue
+      out.matched += 1
+      try {
+        await db.prepare(
+          `UPDATE application_tasks SET next_retry_at = ?, updated_at = ${nowSqlLiteral(db)} WHERE id = ?`,
+        ).run(nowIso, row.id)
+        out.resumed += 1
+        await appendTaskEvent(db, {
+          taskId: row.id,
+          eventType: 'note',
+          status: null,
+          step: 'auth_resume',
+          message: `A saved login/session for ${wanted} just became available — Hamilton will retry this portal on the next tick instead of waiting out the backoff.`,
+          actorRole: 'agent',
+          details: { portal_host: wanted, resumed_by: 'credential_or_session_added' },
+        }).catch(() => {})
+      } catch { /* per-task best-effort */ }
+    }
+  } catch { /* table absent on bare DBs — nothing to resume */ }
+  return out
 }
 
 export { rowToTask as _rowToTask, rowToEvent as _rowToEvent, rowToMissing as _rowToMissing }

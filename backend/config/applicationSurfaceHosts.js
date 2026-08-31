@@ -91,7 +91,12 @@ export const CONTENT_FARM_HOST_PATTERNS = Object.freeze([
 export const VENDOR_CONTENT_HOST_PATTERNS = Object.freeze([
   /(^|\.)keela\.co$/i,
   /(^|\.)instrumentl\.com$/i,
-  /(^|\.)submittable\.com$/i, // the marketing site; tenant portals live on *.submittable.com paths handled elsewhere
+  // Submittable: ONLY the marketing site is vendor content. Tenant portals are
+  // REAL application surfaces on subdomains (nami.submittable.com — where the
+  // NAMI application actually lives, owner dashboard 2026-08-30); the previous
+  // (^|\.)submittable\.com$ refused every one of them, contradicting its own
+  // inline comment and routing findable applications to the manual packet.
+  /^(www\.)?submittable\.com$/i,
 ])
 
 export const NON_APPLICATION_HOST_CLASSES = Object.freeze({
