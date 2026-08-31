@@ -37,6 +37,11 @@ export const MAX_AUTO_RELEASES = 2
 export const AUTO_RELEASE_COOLDOWN_MS = 24 * 60 * 60_000
 export const AUTO_RELEASE_STEP = 'auto_release_full_automation'
 export const CONTACT_FORM_RESOLVED_STEP = 'contact_form_verification_resolved'
+// A TERMINAL `failed` task whose recorded failure is a race / network / click
+// condition (the class the orchestrator now retries instead of failing) — the
+// backlog that existed before that change. Nothing re-picks `failed`, so under
+// full automation these are re-queued once through the same bounded release.
+export const TRANSIENT_FAILURE_MESSAGE_RX = /could not reach|Execution context was destroyed|Target page, context or browser has been closed|Target closed|Download is starting|Submit button could not be clicked|Next button could not be clicked|net::ERR_|Timeout \d+ms exceeded|Navigation interrupted|frame got detached/i
 
 // Keys a mailing-list / contact form asks for (mirrors the engine's
 // CONTACT_FORM_KEYS; kept in step by the test).
@@ -151,7 +156,7 @@ export async function releaseParkedReviewsUnderFullAutomation(db, { limit = 100,
     rows = await db.prepare(
       `SELECT id, profile_id, status, last_agent_message
          FROM application_tasks
-        WHERE status = 'waiting_for_review'
+        WHERE status IN ('waiting_for_review', 'failed')
         ORDER BY updated_at ASC
         LIMIT ?`,
     ).all(Math.max(1, Math.min(1000, Number(limit) || 100)))
@@ -189,7 +194,11 @@ export async function releaseParkedReviewsUnderFullAutomation(db, { limit = 100,
       // moment the answer lands.
       const verdict = withOpenInfo.has(String(task.id))
         ? { keep: true, category: 'missing_info', legitimate: true }
-        : classifyNeedYouBlock(task, { hasUnresolvedInfo: false })
+        : task.status === 'failed'
+          ? (TRANSIENT_FAILURE_MESSAGE_RX.test(String(task.last_agent_message || ''))
+            ? { keep: false, category: 'transient_failure', legitimate: false }
+            : { keep: true, category: 'hard_failure', legitimate: false })
+          : classifyNeedYouBlock(task, { hasUnresolvedInfo: false })
       if (verdict.keep) {
         out.kept += 1
         out.kept_by_category[verdict.category] = (out.kept_by_category[verdict.category] || 0) + 1
@@ -203,7 +212,9 @@ export async function releaseParkedReviewsUnderFullAutomation(db, { limit = 100,
       const lastMs = parseDbTime(prior?.last_at)
       if (Number.isFinite(lastMs) && now - lastMs < AUTO_RELEASE_COOLDOWN_MS) { out.cooled_down += 1; continue }
 
-      const message = `Full automation is on for this profile, and this card was parked for a review no one needed (${String(task.last_agent_message || '').slice(0, 140) || 'no reason recorded'}). Hamilton re-queued it to try again himself (release ${priorCount + 1} of ${MAX_AUTO_RELEASES}).`
+      const message = task.status === 'failed'
+        ? `Full automation is on for this profile, and this task failed on a transient problem (${String(task.last_agent_message || '').slice(0, 140) || 'no reason recorded'}). Hamilton re-queued it to try again himself (release ${priorCount + 1} of ${MAX_AUTO_RELEASES}).`
+        : `Full automation is on for this profile, and this card was parked for a review no one needed (${String(task.last_agent_message || '').slice(0, 140) || 'no reason recorded'}). Hamilton re-queued it to try again himself (release ${priorCount + 1} of ${MAX_AUTO_RELEASES}).`
       await updateApplicationTask(db, task.id, {
         status: 'ready_to_start',
         nextRetryAt: null,

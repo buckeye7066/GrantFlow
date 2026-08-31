@@ -280,4 +280,18 @@ describe('releaseParkedReviewsUnderFullAutomation', () => {
     const events = db.prepare(`SELECT step FROM application_task_events WHERE task_id='stale' AND step='auto_release_full_automation'`).all()
     expect(events).toHaveLength(2)
   })
+
+  it('re-queues a TERMINAL failed task only when its recorded failure is transient (the pre-existing backlog)', async () => {
+    await grantFullAutomation('p1')
+    await seedTask(db, 'unreach', 'failed', { message: 'Hamilton Autopilot failed: Hamilton could not reach www.tn.gov — the site may be down or the saved portal link may be outdated.' })
+    await seedTask(db, 'race', 'failed', { message: 'Hamilton Autopilot failed: page.$$eval: Execution context was destroyed, most likely because of a navigation' })
+    await seedTask(db, 'click', 'failed', { message: 'Hamilton Autopilot failed: Submit button could not be clicked' })
+    await seedTask(db, 'hard', 'failed', { message: 'Hamilton Autopilot failed: TypeError: cannot read properties of undefined' })
+    const out = await releaseParkedReviewsUnderFullAutomation(db, { logger: quiet })
+    expect(out.released).toBe(3)
+    expect(out.released_ids.sort()).toEqual(['click', 'race', 'unreach'])
+    expect(out.kept_by_category.hard_failure).toBe(1)
+    expect(db.prepare(`SELECT status FROM application_tasks WHERE id='unreach'`).get().status).toBe('ready_to_start')
+    expect(db.prepare(`SELECT status FROM application_tasks WHERE id='hard'`).get().status).toBe('failed')
+  })
 })
