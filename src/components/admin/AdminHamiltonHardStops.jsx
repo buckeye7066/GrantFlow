@@ -9,6 +9,7 @@
 
 import React, { useEffect, useState, useCallback } from 'react'
 import client from '@/api/client'
+import { listProfiles } from '@/api/profiles'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Loader2, RefreshCw, AlertTriangle, CheckCircle2, X, Trash2, Unlock } from 'lucide-react'
@@ -38,6 +39,15 @@ function severityClass(s) {
   }
 }
 
+function normalizeProfiles(response) {
+  if (Array.isArray(response)) return response
+  if (!response || typeof response !== 'object') return []
+  for (const key of ['profiles', 'items', 'data', 'results']) {
+    if (Array.isArray(response[key])) return response[key]
+  }
+  return []
+}
+
 const TASK_FILTERS = [
   { id: 'blocked',   label: 'Pending hard stops' },
   { id: 'active',    label: 'Active' },
@@ -51,9 +61,34 @@ export default function AdminHamiltonHardStops() {
   const [busy, setBusy] = useState(null)
   const [blockers, setBlockers] = useState([])
   const [adminEmail, setAdminEmail] = useState(null)
+  const [profileNames, setProfileNames] = useState({})
   const [tasksByFilter, setTasksByFilter] = useState({
     blocked: [], active: [], failed: [], completed: [],
   })
+
+  const loadProfileNames = useCallback(async () => {
+    const names = {}
+    const pageSize = 200
+    let offset = 0
+
+    // Load enough pages to cover the complete profile roster instead of tying
+    // the operator display to an arbitrary first-page limit.
+    for (let page = 0; page < 25; page += 1) {
+      const response = await listProfiles({ limit: pageSize, offset })
+      const profiles = normalizeProfiles(response)
+
+      for (const profile of profiles) {
+        if (!profile?.id) continue
+        const name = profile.display_name ?? profile.name ?? profile.full_name ?? null
+        if (typeof name === 'string' && name.trim()) names[profile.id] = name.trim()
+      }
+
+      if (profiles.length < pageSize) break
+      offset += profiles.length
+    }
+
+    setProfileNames(names)
+  }, [])
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -67,14 +102,29 @@ export default function AdminHamiltonHardStops() {
       const next = { blocked: [], active: [], failed: [], completed: [] }
       taskResults.forEach((res, i) => { next[TASK_FILTERS[i].id] = Array.isArray(res?.tasks) ? res.tasks : [] })
       setTasksByFilter(next)
+
+      // Name lookup is presentation-only. A temporary profile-list failure must
+      // not hide the hard-stop dashboard itself.
+      try {
+        await loadProfileNames()
+      } catch {
+        setProfileNames({})
+      }
     } catch (err) {
       showErrorToast(toast, 'Could not load Hamilton admin dashboard', err?.message || 'See logs.')
     } finally {
       setLoading(false)
     }
-  }, [toast])
+  }, [toast, loadProfileNames])
 
   useEffect(() => { load() }, [load])
+
+  const profileNameFor = useCallback((record) => {
+    const directName = record?.profile_display_name ?? record?.profile_name ?? null
+    if (typeof directName === 'string' && directName.trim()) return directName.trim()
+    if (record?.profile_id && profileNames[record.profile_id]) return profileNames[record.profile_id]
+    return 'Unknown profile'
+  }, [profileNames])
 
   // Inline fixer already saved the field + cleared the stop server-side; drop the
   // row and refresh the task columns so a resumed task moves to "active".
@@ -130,9 +180,7 @@ export default function AdminHamiltonHardStops() {
   }
 
   // Release stuck "need you" portals so the next full-automation run revisits
-  // them — clears the retry backoff on the backlog that stopped before the
-  // block-removal fixes deployed. Uses the app's authenticated client (Bearer
-  // token), so it works where a raw console fetch 401s. Never submits.
+  // them. This never submits by itself.
   async function releaseNeedYou() {
     if (!window.confirm('Revisit every "needs you" card across all profiles and clear the block on any that is NOT one of the four legitimate hand-offs (physical-copy packet, genuinely-missing info, an unbeatable bot wall, or an existing external login). Cleared cards are revisited by the next full-automation run; ineligible sources are REMOVED to the Archived tab; any maybe-already-submitted card is left blocked. This never submits by itself.')) return
     setBusy('__release__')
@@ -194,7 +242,6 @@ export default function AdminHamiltonHardStops() {
         </div>
       </div>
 
-      {/* Status overview cards */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
         {TASK_FILTERS.map((f) => (
           <div key={f.id} className="border border-slate-200 rounded-lg p-3 bg-white">
@@ -228,7 +275,7 @@ export default function AdminHamiltonHardStops() {
           <tbody>
             {blockers.map((b) => (
               <tr key={b.id} className="border-t border-slate-100">
-                <td className="px-3 py-2 font-mono text-[11px] text-slate-700">{(b.profile_id || '').slice(0, 8)}</td>
+                <td className="px-3 py-2 text-sm font-medium text-slate-800" title={b.profile_id || ''}>{profileNameFor(b)}</td>
                 <td className="px-3 py-2 font-mono text-[11px] text-slate-700">{(b.funding_source_id || '—').slice(0, 8)}</td>
                 <td className="px-3 py-2 max-w-sm">
                   <div className="font-medium text-slate-900">{b.blocker_title || b.blocker_type}</div>
@@ -236,8 +283,6 @@ export default function AdminHamiltonHardStops() {
                   <span className={`mt-1 inline-block text-[10px] px-2 py-0.5 rounded border ${severityClass(b.severity)}`}>
                     {(b.blocker_type ?? '').replace(/_/g, ' ')}
                   </span>
-                  {/* Inline fix: for a missing/ambiguous field, type the value here
-                      and it's saved back to the profile + Hamilton resumes. */}
                   <HamiltonInlineHardStopFix blocker={b} onResolved={handleInlineResolved} />
                 </td>
                 <td className="px-3 py-2 text-xs text-slate-700">
@@ -264,7 +309,6 @@ export default function AdminHamiltonHardStops() {
         </table>
       </div>
 
-      {/* Recent tasks across all states */}
       {(['active', 'failed', 'completed']).map((state) => {
         const tasks = tasksByFilter[state] || []
         if (!tasks.length) return null
@@ -287,7 +331,7 @@ export default function AdminHamiltonHardStops() {
                   {tasks.map((t) => (
                     <tr key={t.id} className="border-t border-slate-100">
                       <td className="px-3 py-1.5 font-mono">{(t.id || '').slice(0, 8)}</td>
-                      <td className="px-3 py-1.5 font-mono">{(t.profile_id || '').slice(0, 8)}</td>
+                      <td className="px-3 py-1.5 font-medium text-slate-800" title={t.profile_id || ''}>{profileNameFor(t)}</td>
                       <td className="px-3 py-1.5 font-mono">{(t.opportunity_id || t.grant_id || '—').slice(0, 8)}</td>
                       <td className="px-3 py-1.5">{t.status}</td>
                       <td className="px-3 py-1.5">{t.updated_at ? new Date(t.updated_at).toLocaleString() : '—'}</td>
