@@ -83,7 +83,8 @@ import {
 } from './hamiltonPortalCredentialService.js'
 import { findValidSession, getSessionStorageState, importSession, markSessionExpired } from './hamiltonCredentialSessionService.js'
 import { createCaptureRequest } from './hamiltonSessionCaptureRequests.js'
-import { isAuthBlocker, planAuthBackup } from './hamiltonAuthBackupPlan.js'
+import { isAuthBlocker, planAuthBackup, AUTH_BACKOFF_MINUTES } from './hamiltonAuthBackupPlan.js'
+import { normalizeFafsaStatus, deriveFafsaCompleted } from '../college/fafsaStatus.js'
 import { missingCredentialNotice, hostOfUrl } from './hamiltonMissingCredential.js'
 import { runAutopilotIdentityForPortal } from './hamiltonPortalAutopilotIdentity.js'
 import { botProtectedNotice } from './hamiltonBotProtectedNotice.js'
@@ -830,6 +831,119 @@ export async function automateSingleSource(db, {
  */
 export const MAX_AUTOPILOT_RUNS_PER_DAY = 3
 
+/** Hosts whose ToS forbid agent automation AND whose content is a FEDERAL AID record or a benefit FINDER. */
+const FEDERAL_AID_HOST_RX = /(^|\.)studentaid\.gov$/i
+const BENEFIT_FINDER_HOST_RX = /(^|\.)benefits\.gov$/i
+
+function profileFafsaState(profile) {
+  const education = profile?.education || profile?.sections?.education || {}
+  const status = normalizeFafsaStatus(education)
+  return { stage: status.stage, filed: deriveFafsaCompleted(status.stage), updated_at: status.updated_at || null }
+}
+
+/**
+ * Pure decision for a ToS-forbidden host. Exported for tests.
+ * Returns null when the host is not a federal-aid / finder host (the caller
+ * falls through to the lawful packet).
+ */
+export function decideTermsForbiddenSource({ host, title, fafsa }) {
+  const h = String(host || '').toLowerCase()
+  if (FEDERAL_AID_HOST_RX.test(h)) {
+    if (fafsa?.filed) {
+      return {
+        route: 'fafsa_covered',
+        status: 'completed',
+        message: `"${title}" is federal aid awarded through your FAFSA, which your profile records as ${fafsa.stage}${fafsa.updated_at ? ` (${String(fafsa.updated_at).slice(0, 10)})` : ''}. There is no separate application — your school's financial-aid office packages it from the FAFSA. Nothing to do here.`,
+      }
+    }
+    return { route: 'fafsa_link', status: 'waiting_for_missing_info' }
+  }
+  if (BENEFIT_FINDER_HOST_RX.test(h)) {
+    return {
+      route: 'benefit_finder',
+      status: 'completed',
+      message: `benefits.gov is a federal benefit FINDER, not an application. "${title}" is applied for with the program's own agency (the finder page names it). Recorded as a research lead; there is nothing here for you to review or submit.`,
+    }
+  }
+  return null
+}
+
+async function routeTermsForbiddenSource(db, { task, run, profile, opportunity, grant, classification, userId, host, url }) {
+  const title = opportunity?.title || grant?.title || 'this funding source'
+  const decision = decideTermsForbiddenSource({ host, title, fafsa: profileFafsaState(profile) })
+  if (!decision) return null
+  if (decision.route === 'fafsa_link') {
+    const routed = await runFafsaLinkPathway(db, { task, profile, opportunity, grant, classification, userId })
+    await updateAutopilotRun(db, run.id, {
+      status: 'completed',
+      result: { skipped_browser: true, reason: 'federal_aid_via_fafsa', route: decision.route },
+      finishedAt: new Date().toISOString(),
+    }).catch(() => {})
+    return { ...routed, autopilot_run: run.id, skipped_browser: true, reason: 'federal_aid_via_fafsa' }
+  }
+  await updateApplicationTask(db, task.id, {
+    onlyIfStatuses: ['launching_portal'],
+    status: decision.status,
+    lastAgentMessage: decision.message,
+  })
+  await updateAutopilotRun(db, run.id, {
+    status: 'completed',
+    result: { skipped_browser: true, reason: decision.route, url },
+    finishedAt: new Date().toISOString(),
+  })
+  await appendTaskEvent(db, {
+    taskId: task.id, eventType: 'note', status: decision.status, step: decision.route,
+    message: decision.message, actorUserId: userId, actorRole: 'agent',
+    details: { host, url },
+  })
+  return { task: await reload(db, task.id), classification, autopilot_run: run.id, skipped_browser: true, reason: decision.route }
+}
+
+// Engine failures that are a RACE or a NETWORK condition, not a fact about
+// the application. Prod 2026-08-31: "page.$$eval: Execution context was
+// destroyed", "Target page, context or browser has been closed", 25 s
+// navigation timeouts and a connection reset each landed a task in the
+// TERMINAL `failed` state — which the scheduler never re-picks — while the
+// dashboard also kept re-selecting the grant and refusing "protected state
+// failed". A transient failure is retried on a bounded backoff; only the
+// exhausted case parks, and it parks as a NAMED blocked state with the link.
+export const FAILURE_BACKOFF_MINUTES = Object.freeze([30, 120, 480])
+const TRANSIENT_ENGINE_ERROR_RX = /Execution context was destroyed|Cannot find context with specified id|Frame was detached|Target closed|Target page, context or browser has been closed|Navigation interrupted|frame got detached|net::ERR_ABORTED|Protocol error|browser has disconnected|Timeout \d+ms exceeded/i
+/** Pure. Exported for tests. */
+export function classifyEngineFailure(engineResult = {}, { retryCount = 0, now = Date.now(), url = null } = {}) {
+  const kind = String(engineResult?.blocker_kind || '')
+  const detail = String(engineResult?.blocker_detail || '')
+  const firstLine = detail.split('\n')[0].slice(0, 200)
+  const transient = kind === 'portal_unreachable' || kind === 'click_failed'
+    || (kind === 'engine_error' && TRANSIENT_ENGINE_ERROR_RX.test(detail))
+  if (!transient) return { transient: false }
+  const prior = Math.max(0, Math.floor(Number(retryCount) || 0))
+  let host = ''
+  try { host = new URL(String(url || '')).hostname } catch { host = '' }
+  if (prior < FAILURE_BACKOFF_MINUTES.length) {
+    const mins = FAILURE_BACKOFF_MINUTES[prior]
+    return {
+      transient: true,
+      exhausted: false,
+      status: 'waiting_for_window',
+      nextRetryAt: new Date(now + mins * 60_000).toISOString(),
+      retryCount: prior + 1,
+      message: `Hamilton hit a transient problem on this portal (${kind}: ${firstLine}) and retries automatically in ~${mins >= 60 ? `${Math.round(mins / 60)} hr` : `${mins} min`} (attempt ${prior + 2} of ${FAILURE_BACKOFF_MINUTES.length + 1}).${kind === 'portal_unreachable' ? ' If the saved link is stale, the retry also searches for the funder\'s current application page.' : ''}`,
+    }
+  }
+  const where = url || host || 'the portal'
+  return {
+    transient: true,
+    exhausted: true,
+    status: 'blocked',
+    nextRetryAt: null,
+    retryCount: prior,
+    message: kind === 'portal_unreachable'
+      ? `Hamilton could not reach ${host || 'the funder\'s site'} on ${prior + 1} attempts over ~10 hours (${firstLine}). The site refuses or times out for Hamilton's server. Open ${where} yourself — if it loads for you, apply there, or open it side-by-side (Portals → Autopilot → Open with Hamilton watching) so Hamilton drives it from your browser.`
+      : `Hamilton hit the same technical problem on ${where} ${prior + 1} times (${kind}: ${firstLine}). Open it side-by-side (Portals → Autopilot → Open with Hamilton watching) so Hamilton drives it from your browser, or apply there yourself.`,
+  }
+}
+
 /**
  * Returns a blocker `{ kind, detail, runs }` when this task has already used
  * its daily run budget with no human event since the oldest of those runs;
@@ -844,8 +958,15 @@ export async function detectAutopilotRunLoop(db, { taskId, now = Date.now(), max
     const t = Date.parse(r?.created_at || '')
     return Number.isFinite(t) && t >= dayAgo
   })
-  if (recent.length < maxRunsPerDay) return null
-  const oldestRecentMs = Math.min(...recent.map((r) => Date.parse(r.created_at)))
+  // A SCHEDULED deferral (listing reader unavailable, outside the access
+  // window) and a bounded auth backoff (login / 2FA / CAPTCHA, capped by
+  // AUTH_MAX_ATTEMPTS) are not the silent loop this tripwire exists for —
+  // each already carries its own bound and its own honest message. Counting
+  // them turned a 15-minute LLM-credit outage into "needs a human look" on 15
+  // tasks (prod 2026-08-31) while saying nothing about the credits.
+  const counted = recent.filter((r) => !isBoundedRetryRun(r))
+  if (counted.length < maxRunsPerDay) return null
+  const oldestRecentMs = Math.min(...counted.map((r) => Date.parse(r.created_at)))
   let humanSince = null
   try {
     humanSince = await db
@@ -857,10 +978,56 @@ export async function detectAutopilotRunLoop(db, { taskId, now = Date.now(), max
   } catch { humanSince = null }
   const humanMs = Date.parse(humanSince?.at || '')
   if (Number.isFinite(humanMs) && humanMs >= oldestRecentMs) return null
+  const diagnosis = diagnoseRunOutcomes(counted)
   return {
     kind: 'run_loop',
-    runs: recent.length,
-    detail: `Hamilton has opened this source ${recent.length} times in the last 24 hours without finishing it and nobody has touched the task since. Stopping so the loop cannot keep spending; it needs a human look (the last outcome is on the task).`,
+    runs: counted.length,
+    diagnosis,
+    retryable: diagnosis.retryable,
+    detail: diagnosis.retryable
+      ? `Hamilton has opened this source ${counted.length} times in the last 24 hours without finishing it. Every attempt ended the same way: ${diagnosis.summary}. That is a problem on Hamilton's side, not yours — he pauses this source for 24 hours and tries again with a fresh strategy (URL re-discovery, longer waits).`
+      : `Hamilton has opened this source ${counted.length} times in the last 24 hours without finishing it and nobody has touched the task since. Every attempt ended the same way: ${diagnosis.summary}. Stopping so the loop cannot keep spending — the blocker named above is what has to change (the last outcome is on the task).`,
+  }
+}
+
+const BOUNDED_AUTH_KINDS = new Set(['login', '2fa', 'captcha', 'sso', 'email_verification'])
+function isBoundedRetryRun(run) {
+  if (!run) return false
+  if (run.status === 'deferred') return true
+  if (run.status === 'blocked' && BOUNDED_AUTH_KINDS.has(String(run.blocker_kind || ''))) return true
+  return false
+}
+
+// Outcomes a repeat of which is a PORTAL or NETWORK condition worth another
+// attempt tomorrow, not a wall a human must clear.
+const TRANSIENT_LOOP_KINDS = new Set(['portal_unreachable', 'engine_error', 'click_failed', 'task_state_changed'])
+/**
+ * Name the dominant way a set of runs ended. Pure; exported for tests.
+ * `summary` is human-readable ("login — Saved login could not be completed
+ * automatically"), `retryable` says whether the dominant outcome is a
+ * transient class rather than a hard stop.
+ */
+export function diagnoseRunOutcomes(runs = []) {
+  const groups = new Map()
+  for (const r of runs || []) {
+    const kind = String(r?.blocker_kind || r?.status || 'unknown')
+    const key = `${r?.status || ''}:${kind}`
+    const g = groups.get(key) || { count: 0, status: r?.status || null, kind, detail: null }
+    g.count += 1
+    if (!g.detail && r?.blocker_detail) g.detail = String(r.blocker_detail).split('\n')[0].slice(0, 160)
+    groups.set(key, g)
+  }
+  const ranked = [...groups.values()].sort((a, b) => b.count - a.count)
+  const top = ranked[0] || { count: 0, status: null, kind: 'unknown', detail: null }
+  const summary = top.detail ? `${top.kind} — ${top.detail}` : `${top.kind}`
+  return {
+    dominant_status: top.status,
+    dominant_kind: top.kind,
+    dominant_detail: top.detail,
+    dominant_count: top.count,
+    total: (runs || []).length,
+    retryable: TRANSIENT_LOOP_KINDS.has(top.kind),
+    summary,
   }
 }
 
@@ -1546,15 +1713,18 @@ async function runAutopilotPathway(db, {
   // fourth time today when nobody has intervened since the first.
   const loop = await detectAutopilotRunLoop(db, { taskId: task.id })
   if (loop) {
+    const loopStatus = loop.retryable ? 'waiting_for_window' : 'blocked'
+    const pauseUntil = loop.retryable ? new Date(Date.now() + 24 * 60 * 60_000).toISOString() : null
     await updateApplicationTask(db, task.id, {
-      unlessCancelled: true, status: 'blocked', lastAgentMessage: loop.detail,
+      unlessCancelled: true, status: loopStatus, lastAgentMessage: loop.detail,
+      ...(loop.retryable ? { nextRetryAt: pauseUntil } : {}),
     }).catch(() => {})
     await appendTaskEvent(db, {
-      taskId: task.id, eventType: 'blocked', status: 'blocked', step: 'run_loop_tripwire',
+      taskId: task.id, eventType: 'blocked', status: loopStatus, step: 'run_loop_tripwire',
       message: loop.detail, actorUserId: userId, actorRole: 'agent',
-      details: { runs_last_24h: loop.runs, max_runs_per_day: MAX_AUTOPILOT_RUNS_PER_DAY },
+      details: { runs_last_24h: loop.runs, max_runs_per_day: MAX_AUTOPILOT_RUNS_PER_DAY, diagnosis: loop.diagnosis, paused_until: pauseUntil },
     }).catch(() => {})
-    return { task: await reload(db, task.id), classification, autopilot_run: null, blocked: true, reason: 'run_loop' }
+    return { task: await reload(db, task.id), classification, autopilot_run: null, blocked: true, reason: 'run_loop', diagnosis: loop.diagnosis }
   }
   const run = await createAutopilotRun(db, {
     taskId: task.id,
@@ -1736,6 +1906,19 @@ async function runAutopilotPathway(db, {
   const portalPolicy = await getPolicyFor(db, portalHostForPolicy).catch(() => null)
   const policyForbidsAutomation = !!(portalPolicy && portalPolicy.automation_allowed === false)
 
+  if (policyForbidsAutomation) {
+    // studentaid.gov / benefits.gov are not portals a packet can be mailed to.
+    // Federal student aid (Pell, FSEOG, Work-Study, the FAFSA itself) is
+    // awarded THROUGH the FAFSA the student files — route it to the existing
+    // FAFSA-link pathway (completes from the profile's FAFSA record, or files
+    // the one structured ask that auto-resumes when the FAFSA is recorded).
+    // A benefit FINDER (benefits.gov) is a research lead, not an application.
+    const federal = await routeTermsForbiddenSource(db, {
+      task, run, profile, opportunity, grant, classification, userId,
+      host: portalHostForPolicy, url,
+    })
+    if (federal) return federal
+  }
   if (policyForbidsAutomation || !browserAutomationPermittedForUrl(url, { extraAllowedHosts })) {
     const reason = policyForbidsAutomation
       ? `portal terms forbid agent automation (${portalHostForPolicy || 'this host'}); Hamilton respects the site's ToS and uses the lawful ${portalPolicy.fallback_path || 'pdf_docx'} packet instead`
@@ -2645,9 +2828,19 @@ async function runAutopilotPathway(db, {
     // out-of-window run. Only genuine outcomes (real awards, a truly empty
     // page, an insert/match error) become a waiting_for_review card below.
     if (decomposition?.enumeration_unavailable && Number(decomposition?.enumerated || 0) === 0 && childTaskIds.length === 0) {
-      const retryAt = new Date(Date.now() + DECOMPOSITION_RETRY_DELAY_MS).toISOString()
-      const why = (Array.isArray(decomposition?.notFound) ? decomposition.notFound.filter(Boolean) : []).join('; ')
+      // Escalating backoff (15m → 1h → 4h → 12h → 24h): an exhausted-credits
+      // outage lasts hours, and every retry opens a real browser. Named
+      // plainly when the provider says the account is out of credits — that
+      // is an OWNER action, and the card must say so instead of "needs a look".
+      const priorDeferrals = Number((await reload(db, task.id))?.retry_count) || 0
+      const backoffMins = AUTH_BACKOFF_MINUTES[Math.min(priorDeferrals, AUTH_BACKOFF_MINUTES.length - 1)]
+      const retryAt = new Date(Date.now() + Math.max(DECOMPOSITION_RETRY_DELAY_MS, backoffMins * 60_000)).toISOString()
+      const rawWhy = (Array.isArray(decomposition?.notFound) ? decomposition.notFound.filter(Boolean) : []).join('; ')
         || (decomposition.enumeration_transient ? 'the AI provider was momentarily unavailable' : 'no AI provider is configured')
+      const creditsOut = /credit balance|no credits|insufficient_quota|exceeded your current quota|billing/i.test(rawWhy)
+      const why = creditsOut
+        ? `Hamilton's AI reader has NO CREDITS (owner action: add credits to the Anthropic / OpenAI account configured on Railway) — provider said: ${rawWhy.slice(0, 300)}`
+        : rawWhy
       const deferMessage = `Hamilton found a page listing multiple awards but could not read them yet: ${why}. This is not evidence the page is empty — Hamilton will retry automatically (next attempt ${retryAt}).`
       await appendTaskEvent(db, {
         taskId: task.id, eventType: 'note', status: 'waiting_for_window', step: 'listing_decomposition_deferred',
@@ -2663,6 +2856,7 @@ async function runAutopilotPathway(db, {
         unlessCancelled: true,
         status: 'waiting_for_window',
         nextRetryAt: retryAt,
+        retryCount: priorDeferrals + 1,
         lastAgentMessage: deferMessage,
       }).catch(() => {})
       return { task: await reload(db, task.id), classification, autopilot_run: run.id, autopilot_result: engineResult, listing_decomposition: decomposition, deferred: true }
@@ -2757,18 +2951,30 @@ async function runAutopilotPathway(db, {
       taskId: task.id, userId,
     }).catch((err) => ({ error: err?.message || String(err) }))
     if (packet && !packet.error) {
+      // Under FULL AUTOMATION a funder-contact packet is not a review item: no
+      // human was going to "review" a source Hamilton could not find an
+      // application for (owner 2026-08-31: no "waiting for review" of packets
+      // Hamilton could deliver himself). It is recorded as a finished research
+      // lead with the packet on the profile's Documents and the page checked,
+      // and the task leaves the queue. No funder contact channel exists on
+      // these rows (prod: 0 of 72 carried a funder email), so nothing is sent;
+      // when a channel exists the delivery is the next step, not a review.
+      const packetDocId = packet.pdf_document_id || packet.docx_document_id
+      const autonomousResearchLead = fullAutomationActive && (degradedDirective.fallback === 'manual' || degradedDirective.fallback === 'pdf_docx')
       await updateApplicationTask(db, task.id, {
         unlessCancelled: true,
         outputDocxDocumentId: packet.docx_document_id,
         outputPdfDocumentId: packet.pdf_document_id || null,
-        outputDocumentId: packet.pdf_document_id || packet.docx_document_id,
+        outputDocumentId: packetDocId,
         mailingInstructions: packet.mailing_instructions,
         status: degradedDirective.fallback === 'mail' ? 'ready_to_print_mail'
               : degradedDirective.fallback === 'email' ? 'ready_to_email'
               : degradedDirective.fallback === 'fax' ? 'ready_to_fax'
+              : autonomousResearchLead ? 'completed'
               : 'waiting_for_review',
-        lastAgentMessage:
-          `Hamilton Autopilot switched to the ${degradedDirective.fallback || 'pdf_docx'} pathway: ${degradedDirective.detail || 'lawful fallback'}.`,
+        lastAgentMessage: autonomousResearchLead
+          ? `Hamilton found no application form to submit at ${url} (${degradedDirective.detail || 'no clear application method'}). He saved a funder-contact packet under profile Documents${packetDocId ? ` (/api/documents/${packetDocId}/download)` : ''} and closed this as a research lead — nothing here needs your review. If the funder later publishes an application page, re-discovery reopens it.`
+          : `Hamilton Autopilot switched to the ${degradedDirective.fallback || 'pdf_docx'} pathway: ${degradedDirective.detail || 'lawful fallback'}.`,
       })
       await updateAutopilotRun(db, run.id, {
         status: 'completed',
@@ -3204,7 +3410,12 @@ async function runAutopilotPathway(db, {
     // her own. Hamilton keeps working other applications in the meantime.
     const priorRetries = Number((await reload(db, task.id))?.retry_count) || 0
     const plan = isAuthBlocker(engineResult.blocker_kind)
-      ? planAuthBackup({ blockerKind: engineResult.blocker_kind, retryCount: priorRetries })
+      ? planAuthBackup({
+        blockerKind: engineResult.blocker_kind,
+        retryCount: priorRetries,
+        portalUrl: url,
+        lastReason: lastCaptchaSolverReason(engineResult) || null,
+      })
       : { isAuth: false }
 
     if (plan.isAuth) {
@@ -3329,6 +3540,42 @@ async function runAutopilotPathway(db, {
         type: blockerNotificationType(engineResult.blocker_kind),
         title: blockerTitle(engineResult.blocker_kind),
         message: plan.exhausted ? plan.message : (engineResult.blocker_detail || 'Hamilton Autopilot needs your help to continue.'),
+        severity: 'warning',
+        data: { task_id: task.id, run_id: run.id, blocker_kind: engineResult.blocker_kind, portal_url: url },
+      })
+    }
+  } else if ((() => {
+    return classifyEngineFailure(engineResult, { url }).transient
+  })()) {
+    // A race / network / click failure is retried on a bounded backoff; the
+    // exhausted case parks as a NAMED blocked state with the link, never as
+    // terminal `failed` that nothing ever re-picks.
+    const priorRetries = Number((await reload(db, task.id))?.retry_count) || 0
+    const plan = classifyEngineFailure(engineResult, { retryCount: priorRetries, url })
+    await updateApplicationTask(db, task.id, {
+      unlessCancelled: true,
+      status: plan.status,
+      nextRetryAt: plan.nextRetryAt,
+      retryCount: plan.retryCount,
+      lastAgentMessage: plan.message,
+    })
+    await appendTaskEvent(db, {
+      taskId: task.id,
+      eventType: plan.exhausted ? 'blocked' : 'note',
+      status: plan.status,
+      step: plan.exhausted ? 'autopilot' : 'transient_failure_retry',
+      message: plan.message,
+      actorUserId: userId,
+      actorRole: 'agent',
+      details: { autopilot_run_id: run.id, blocker_kind: engineResult.blocker_kind, next_retry_at: plan.nextRetryAt, retry_count: plan.retryCount, exhausted: plan.exhausted },
+    })
+    if (plan.exhausted) {
+      await emitHamiltonNotificationToProfileAndAdmins(db, {
+        profileId: task.profile_id,
+        profileUserId: task.user_id,
+        type: 'hamilton_task_blocked',
+        title: engineResult.blocker_kind === 'portal_unreachable' ? 'Hamilton cannot reach this funder site' : 'Hamilton needs a side-by-side run on this portal',
+        message: plan.message,
         severity: 'warning',
         data: { task_id: task.id, run_id: run.id, blocker_kind: engineResult.blocker_kind, portal_url: url },
       })
@@ -3477,6 +3724,19 @@ export async function handleBotProtectedBlock(db, {
   return updatedTask
 }
 
+// The solver's own last verdict from the run trace ("poll_failed:ERROR_…",
+// "no_solvable_challenge"), so the CAPTCHA hand-off says what was tried.
+function lastCaptchaSolverReason(engineResult) {
+  const trace = Array.isArray(engineResult?.trace) ? engineResult.trace : []
+  for (let i = trace.length - 1; i >= 0; i -= 1) {
+    const step = trace[i]
+    if ((step?.step === 'captcha_result' || step?.step === 'captcha_refresh_result') && step?.detail) {
+      return step.detail.reason ? `solver: ${step.detail.reason}` : (step.detail.solved ? 'solver: solved' : null)
+    }
+  }
+  return null
+}
+
 function blockerNotificationType(kind) {
   switch (kind) {
     case '2fa':       return 'hamilton_2fa_required'
@@ -3597,7 +3857,7 @@ export async function automateSelected(db, {
 }
 
 export const _internal = {
-  detectAutopilotRunLoop, persistTerminalOrFail,
+  detectAutopilotRunLoop, persistTerminalOrFail, diagnoseRunOutcomes, classifyEngineFailure, decideTermsForbiddenSource,
   loadProfileBundle, loadOpportunity, loadGrant, loadPortalLink,
   mapClassificationToInitialStatus, mapAutomationTypeToFinishedStatus,
   mapAutomationTypeToPipelineStage, notificationTypeForAutomation,

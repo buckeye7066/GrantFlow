@@ -60,6 +60,37 @@ export function isAuthBlocker(kind) {
   return Boolean(AUTH_STATUS_BY_KIND[normalizeKind(kind)])
 }
 
+// The stop must say WHAT wall it hit and WHERE, and what unblocks it. A
+// CAPTCHA and a login are different problems with different fixes; prod
+// 2026-08-31 showed four CAPTCHA tasks reading "retried this login several
+// times" — a login instruction for a wall no login clears.
+function exhaustedMessage(waitingStatus, { where, attempts, reasonNote }) {
+  switch (waitingStatus) {
+    case 'waiting_for_email_verification':
+      return `The portal account at ${where} is still not verified after ${attempts} checks. Open the verification email yourself (or finish one sign-in side-by-side and save the session); Hamilton resumes on the next run.`
+    case 'waiting_for_captcha':
+      return `The portal at ${where} put up a CAPTCHA the solver could not clear on ${attempts} attempts${reasonNote}. Open it once side-by-side (Portals → Autopilot → Open with Hamilton watching), pass the CAPTCHA, and save the session; Hamilton resumes on the next run.`
+    case 'waiting_for_2fa':
+      return `The portal at ${where} asks for a one-time code that never reached Hamilton's mailbox on ${attempts} attempts${reasonNote}. Point the portal account's 2FA at Hamilton's email/phone, or complete one sign-in side-by-side and save the session; Hamilton resumes on the next run.`
+    default:
+      return `Hamilton retried the sign-in at ${where} ${attempts} times without success${reasonNote}. Sign in once side-by-side (Portals → Autopilot → Open with Hamilton watching) or add the login to the vault; Hamilton resumes on the next run.`
+  }
+}
+
+function deferralMessage(waitingStatus, { where, mins, reasonNote }) {
+  const when = humanizeMinutes(mins)
+  switch (waitingStatus) {
+    case 'waiting_for_email_verification':
+      return `The portal account at ${where} is awaiting email verification. Hamilton re-checks his mailbox for the verification link in ~${when}; you can also open the message and click the verification link yourself. Hamilton resumes on his own once it is verified.`
+    case 'waiting_for_captcha':
+      return `The portal at ${where} put up a CAPTCHA Hamilton could not clear${reasonNote}. He retries with the solver in ~${when}; if you sign in there once side-by-side and save the session he resumes immediately.`
+    case 'waiting_for_2fa':
+      return `The portal at ${where} asked for a one-time code Hamilton could not read${reasonNote}. He retries in ~${when}; pointing the portal's 2FA at his email/phone, or one side-by-side sign-in with a saved session, lets him resume immediately.`
+    default:
+      return `Hamilton could not sign in at ${where}${reasonNote}. He keeps working other applications and retries in ~${when} (re-checking the vault and saved sessions); one side-by-side sign-in with a saved session lets him resume immediately.`
+  }
+}
+
 function humanizeMinutes(mins) {
   if (mins < 60) return `${mins} min`
   if (mins < 1440) return `${Math.round(mins / 60)} hr`
@@ -84,12 +115,14 @@ function humanizeMinutes(mins) {
  *   message: string,
  * }}
  */
-export function planAuthBackup({ blockerKind, retryCount = 0, now = Date.now() } = {}) {
+export function planAuthBackup({ blockerKind, retryCount = 0, now = Date.now(), portalUrl = null, lastReason = null } = {}) {
   const waitingStatus = AUTH_STATUS_BY_KIND[normalizeKind(blockerKind)]
   if (!waitingStatus) {
     return { isAuth: false, status: 'blocked', exhausted: false, nextRetryAt: null, retryInMinutes: null, attempt: 0, maxAttempts: AUTH_MAX_ATTEMPTS, message: '' }
   }
   const priorAttempts = Math.max(0, Math.floor(Number(retryCount) || 0))
+  const where = portalUrl ? String(portalUrl) : 'this portal'
+  const reasonNote = lastReason ? ` (last result: ${String(lastReason).slice(0, 120)})` : ''
   if (priorAttempts >= AUTH_MAX_ATTEMPTS) {
     return {
       isAuth: true,
@@ -99,15 +132,11 @@ export function planAuthBackup({ blockerKind, retryCount = 0, now = Date.now() }
       retryInMinutes: null,
       attempt: priorAttempts,
       maxAttempts: AUTH_MAX_ATTEMPTS,
-      message: waitingStatus === 'waiting_for_email_verification'
-        ? 'The portal account is still not verified. Open the verification email yourself (or finish the sign-in in a side-by-side login) before Hamilton can reuse the login for draft preparation.'
-        : 'Hamilton retried this login several times without success and needs you to complete the sign-in (and save the session) before she can continue.',
+      message: exhaustedMessage(waitingStatus, { where, attempts: priorAttempts, reasonNote }),
     }
   }
   const mins = AUTH_BACKOFF_MINUTES[priorAttempts]
-  const message = waitingStatus === 'waiting_for_email_verification'
-    ? `This portal account is awaiting email verification. Open the message and use its verification link yourself. Hamilton will re-check in ~${humanizeMinutes(mins)} and may then resume draft preparation; final Submit remains yours.`
-    : `Hamilton needs you to sign in to this portal once. She'll keep working other applications and automatically retry in ~${humanizeMinutes(mins)} — log in (and save the session) whenever you can and she can resume draft preparation. Final Submit remains yours.`
+  const message = deferralMessage(waitingStatus, { where, mins, reasonNote })
   return {
     isAuth: true,
     status: waitingStatus,
