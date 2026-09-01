@@ -41,6 +41,9 @@ Robert's auto-add path.
 - Do not map `opportunity_kind` onto a need. Kind is a structural class.
 - Do not refuse `RESOURCE` / `no_fundable_signal` at RELATABLE — that
   starves Pell/HOPE/NAEMT fixtures that carry `url` and no categories.
+- `from-opportunity` tests that expected `DECISION_ENGINE` must accept
+  earlier gold-standard gates (`GOLD_STANDARD:QUALIFIES` / `NEED_COVERAGE`)
+  unless the fixture is given a positive need so it can reach the engine.
 - Org/business pipelines still fail-open on need silence (Olivia /
   type-derived `business`). Individual-root is the inflation class.
 
