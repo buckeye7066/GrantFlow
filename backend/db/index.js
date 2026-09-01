@@ -4,7 +4,7 @@ import pg from 'pg';
 // Validate critical environment on startup
 import fs from 'fs';
 import { fileURLToPath } from 'url';
-import { dirname, join } from 'path';
+import { dirname, join, dirname as pathDirname } from 'path';
 import { assertProfileScopedSql } from './scopedQuery.js';
 
 // Validate critical environment on startup
@@ -59,6 +59,16 @@ function normalizeProvider(raw) {
 }
 
 function detectProvider() {
+  // Test override: honor TEST_DATABASE_URL in non-production to ensure isolation.
+  // This allows browser/e2e harnesses to point the server at a per-run database
+  // (sqlite file, sqlite memory, or a test postgres URL) without touching the
+  // deployed DATABASE_URL/DB_PROVIDER settings.
+  const testUrl = String(process.env.TEST_DATABASE_URL || '').trim()
+  if (testUrl && !isProd()) {
+    if (isPostgresUrl(testUrl)) return 'postgres'
+    // Any non-postgres URL/path is treated as sqlite (':memory:', 'file:…', '/tmp/…')
+    return 'sqlite'
+  }
   // Railway production invariant:
   // If Railway provides a Postgres DATABASE_URL, always prefer Postgres even if DB_PROVIDER is stale/mis-set.
   const isRailway =
@@ -757,7 +767,11 @@ export function getDb() {
   }
 
   if (provider === 'postgres') {
-    const url = inferPostgresUrlFromEnv()
+    // Test override: allow TEST_DATABASE_URL (postgres) in non-production to force an isolated DB
+    const testUrl = String(process.env.TEST_DATABASE_URL || '').trim()
+    const url = (!isProd() && testUrl && isPostgresUrl(testUrl))
+      ? testUrl
+      : inferPostgresUrlFromEnv()
     if (!url || !isPostgresUrl(url)) {
       throw new Error(
         '[db] Postgres configuration missing. Set DATABASE_URL to a postgres:// connection string, ' +
@@ -782,7 +796,24 @@ export function getDb() {
   const dataDir = join(__dirname, '..', 'data');
   if (!fs.existsSync(dataDir)) fs.mkdirSync(dataDir, { recursive: true });
 
-  const sqlitePath = resolveDefaultSqlitePath(dataDir);
+  // Test override: allow TEST_DATABASE_URL to point sqlite to an isolated path (':memory:' or file)
+  const testSqliteUrl = String(process.env.TEST_DATABASE_URL || '').trim()
+  let sqlitePath =
+    (!isProd() && testSqliteUrl && !isPostgresUrl(testSqliteUrl))
+      ? testSqliteUrl
+      : resolveDefaultSqlitePath(dataDir);
+  // Ensure parent directory exists for file-based sqlite paths under test.
+  if (!isProd() && sqlitePath && sqlitePath !== ':memory:') {
+    try {
+      const onDiskPath = sqlitePath.startsWith('file:') ? sqlitePath.slice(5) : sqlitePath
+      const dir = pathDirname(onDiskPath)
+      if (dir && !fs.existsSync(dir)) {
+        fs.mkdirSync(dir, { recursive: true })
+      }
+    } catch {
+      // best-effort
+    }
+  }
 
   // Production-grade invariant: SQLite must be on a persistent volume.
   // - If running on Railway and /mnt/data exists, we default there automatically.

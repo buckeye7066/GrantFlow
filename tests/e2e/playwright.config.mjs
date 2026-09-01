@@ -31,6 +31,11 @@ export default defineConfig({
       ...process.env,
       PORT: String(port),
       NODE_ENV: process.env.NODE_ENV || (process.env.CI ? 'test' : 'development'),
+      // Force an isolated per-run DB; never fall back to any shared/prod DB.
+      TEST_DATABASE_URL:
+        process.env.TEST_DATABASE_URL
+        || path.resolve(process.cwd(), 'test-results', `e2e-${Date.now()}.db`),
+      DB_AUTO_MIGRATE: process.env.DB_AUTO_MIGRATE || 'true',
       // Ensure deterministic seed aligns with backend admin defaults.
       ADMIN_EMAIL: e2eAdminEmail,
       ADMIN_NAME: process.env.ADMIN_NAME || 'Admin User',

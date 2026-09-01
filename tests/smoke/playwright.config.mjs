@@ -23,6 +23,16 @@ export default defineConfig({
       ...process.env,
       PORT: process.env.PORT || '8080',
       NODE_ENV: process.env.NODE_ENV || (process.env.CI ? 'test' : 'development'),
+      // Force an isolated test database per run; never silently reuse any shared/prod DB.
+      TEST_DATABASE_URL:
+        process.env.TEST_DATABASE_URL
+        || (process.env.CI
+              ? path.resolve(process.cwd(), 'test-results', `smoke-${Date.now()}.db`)
+              : path.resolve(process.cwd(), 'test-results', `smoke-local-${process.pid}.db`)),
+      DB_AUTO_MIGRATE: process.env.DB_AUTO_MIGRATE || 'true',
+      // Align backend admin token with the harness token used by the smoke tests.
+      SMOKE_ADMIN_TOKEN: process.env.SMOKE_ADMIN_TOKEN || 'test-admin-token',
+      ADMIN_TOKEN: process.env.ADMIN_TOKEN || process.env.SMOKE_ADMIN_TOKEN || 'test-admin-token',
     },
   },
   use: {
