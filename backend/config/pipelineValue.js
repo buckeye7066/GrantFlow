@@ -33,6 +33,10 @@ function sqlPrefix(alias) {
   return alias ? `${alias}.` : ''
 }
 
+function positiveSql(column) {
+  return `CASE WHEN ${column} > 0 THEN ${column} END`
+}
+
 function explicitRejectionSql(prefix) {
   return `(
     LOWER(COALESCE(CAST(${prefix}eligibility_status AS TEXT), '')) = 'ineligible'
@@ -61,7 +65,7 @@ function conservativeDollarSql(prefix) {
        AND ${prefix}amount_max > 0
        AND ${prefix}amount_max > ${prefix}amount_min * ${WIDE_AWARD_RANGE_RATIO}
       THEN CASE
-        WHEN NULLIF(${prefix}amount_requested, 0) IS NOT NULL
+        WHEN ${prefix}amount_requested > 0
          AND ABS(${prefix}amount_requested - ${prefix}amount_max) > 0.01
         THEN ${prefix}amount_requested
         ELSE ${prefix}amount_min
@@ -76,14 +80,15 @@ function conservativeDollarSql(prefix) {
  *
  * This intentionally does NOT apply eligibility or opportunity-kind filters.
  * Amount coverage, enrichment, and dead-link repair use it to answer whether a
- * row already carries a figure. Dollar surfaces must use pipelineDollarSql().
+ * row already carries a positive figure. Dollar surfaces must use
+ * pipelineDollarSql().
  */
 export function pipelineValueSql(alias = 'g') {
   const prefix = sqlPrefix(alias)
   return `COALESCE(
-    NULLIF(${prefix}amount_requested, 0),
-    NULLIF(${prefix}amount_max, 0),
-    NULLIF(${prefix}amount_min, 0),
+    ${positiveSql(`${prefix}amount_requested`)},
+    ${positiveSql(`${prefix}amount_max`)},
+    ${positiveSql(`${prefix}amount_min`)},
     0
   )`
 }
@@ -94,8 +99,8 @@ export function pipelineValueSql(alias = 'g') {
  * Callers select active statuses. This expression additionally contributes $0
  * for explicitly ineligible/rejected rows and for source kinds that publish no
  * fixed per-applicant award. Unknown or unlinked legacy kinds remain eligible.
- * A >10x floor/ceiling range uses the floor unless a distinct requested amount
- * proves that a separate ask was entered.
+ * A >10x positive floor/ceiling range uses the floor unless a distinct positive
+ * requested amount proves that a separate ask was entered.
  */
 export function pipelineDollarSql(gAlias = 'g', foAlias = null) {
   const prefix = sqlPrefix(gAlias)
@@ -115,11 +120,11 @@ export function pipelineValueWithCatalogSql(alias = 'g', foAlias = 'fo') {
   const prefix = sqlPrefix(alias)
   const foPrefix = sqlPrefix(foAlias)
   return `COALESCE(
-    NULLIF(${prefix}amount_requested, 0),
-    NULLIF(${prefix}amount_max, 0),
-    NULLIF(${prefix}amount_min, 0),
-    NULLIF(${foPrefix}amount_max, 0),
-    NULLIF(${foPrefix}amount_min, 0),
+    ${positiveSql(`${prefix}amount_requested`)},
+    ${positiveSql(`${prefix}amount_max`)},
+    ${positiveSql(`${prefix}amount_min`)},
+    ${positiveSql(`${foPrefix}amount_max`)},
+    ${positiveSql(`${foPrefix}amount_min`)},
     0
   )`
 }
