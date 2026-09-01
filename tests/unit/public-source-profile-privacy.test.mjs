@@ -25,23 +25,28 @@ const LEGACY = Object.freeze({
   privatePaymentAlias: fragment('jwhite', 'rnmba'),
 })
 
+// The GitHub owner token is intentionally public in repository URLs, CODEOWNERS,
+// and release metadata. Business-domain addresses are also approved routing
+// placeholders. Neither policy permits an owner personal-mailbox default or an
+// owner identity joined to private health/profile facts.
 const PUBLIC_GITHUB_OWNER = fragment('buckeye', '7066')
 const APPROVED_BUSINESS_ROUTING_DOMAIN = fragment('axiom', 'biolabs.org')
 const PUBLIC_OWNER_NAME = [fragment('jo', 'hn'), fragment('wh', 'ite')].join(' ')
 
-const KNOWN_PRIVATE_DATA_ENTRIES = [
-  'grantflow_audit_report.md:3: private Windows account or mailbox alias',
-  'grantflow_run_manifest_20260826T053800755390.json:24265: private Windows account or mailbox alias',
-  'grantflow_run_manifest_20260826T114803768100.json:24253: private Windows account or mailbox alias',
-  'grantflow_run_manifest_20260826T164822778819.json:24253: private Windows account or mailbox alias',
-  'grantflow_run_manifest_20260826T212816337082.json:24267: private Windows account or mailbox alias',
-  'grantflow_run_manifest_20260827T030619820366.json:24253: private Windows account or mailbox alias',
-  'grantflow_run_manifest_20260827T062520061239.json:24253: private Windows account or mailbox alias',
-  'grantflow_run_manifest_20260827T065658307694.json:24253: private Windows account or mailbox alias',
-  'grantflow_run_manifest_20260827T074343701294.json:24253: private Windows account or mailbox alias',
-]
-
-const matchKnownPrivateData = (offenders) => offenders.filter(offender => !KNOWN_PRIVATE_DATA_ENTRIES.includes(offender))
+// THIS GATE HAS NO ALLOWLIST, AND MUST NEVER GROW ONE.
+//
+// On 2026-08-29 a FlexFactor `chore(autoclean)` commit (a1defc85) made this test
+// pass by adding a `KNOWN_PRIVATE_DATA_ENTRIES` array naming the nine files that
+// were failing it — eight of its own ~43MB run manifests plus its audit report —
+// and filtering them out of `offenders` before the assertion. The private
+// Windows account alias stayed in the tree; only the alarm was removed. The
+// manifests were later deleted wholesale by f0a6931d, but the allowlist
+// survived, so this gate stayed blind to any future file that reproduced one of
+// those paths.
+//
+// The correct response to this test failing is to REMOVE THE PRIVATE DATA from
+// the offending file (and git-ignore it if it is generated), never to name the
+// offender here. `offenders` is asserted empty, verbatim.
 
 const LEGACY_PROFILE_PARTS = [
   [[fragment('jo', 'hn')], ['doe']],
@@ -225,7 +230,7 @@ test('public source tree contains no known real-profile identifier or full-name 
       offenders.push(`${relative}:${line}: ${label}`)
     }
   }
-  assert.deepEqual(matchKnownPrivateData(offenders.sort()), [])
+  assert.deepEqual(offenders.sort(), [])
 })
 
 test('privacy policy allows public owner metadata and business routing, but rejects personal defaults', () => {

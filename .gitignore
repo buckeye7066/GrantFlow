@@ -149,3 +149,17 @@ eslint.json
 # 13.7M lines), which turned the privacy tripwire RED and so blocked
 # publication of every real fix. They belong to the run, not the repository.
 *_run_manifest_*.json
+
+# FlexFactor per-run reports. Same class as the manifests above: they embed the
+# absolute project path (and therefore the private Windows account name) in
+# their header, so committing one reds the privacy gate. `grantflow_audit_report.md`
+# was committed by autoclean and then ALLOWLISTED INTO that gate rather than
+# removed; both the file and the allowlist are gone. Reports belong to the run.
+*_audit_report.md
+*_low_findings.md
+*_readiness.md
+
+# Editor/agent scratch copies dropped at the repo root (e.g. Cursor's
+# `.cursor-tmp-<file>-<branch>.js` duplicates of a real source file). Autoclean
+# committed one; a stale duplicate of a live module is a trap for the next reader.
+.cursor-tmp-*
