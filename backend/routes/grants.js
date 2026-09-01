@@ -530,7 +530,8 @@ router.get('/', async (req, res) => {
     let query = `
       SELECT g.*, o.name as organization_name,
              COALESCE(fo.state, o.state) AS state,
-             fo.opportunity_kind AS opportunity_kind
+             fo.opportunity_kind AS opportunity_kind,
+             ${pipelineDollarSql('g','fo')} AS pipeline_dollar_value
         FROM grants g
    LEFT JOIN organizations o ON g.organization_id = o.id
    LEFT JOIN funding_opportunities fo ON g.funding_opportunity_id = fo.id
@@ -2433,7 +2434,13 @@ router.post('/from-opportunity', async (req, res, next) => {
       const insertMatchReasons = JSON.stringify(
         [...baseReasons, ...trustReasonLines.filter((r) => !baseReasons.includes(r))],
       )
-      const amountRequested = normalizeMoney(opportunity.amount_max ?? opportunity.amount_min ?? null)
+      // Canonical writer default for requested amount (wide-range safeguard)
+      const { defaultPipelineRequestedAmount } = await import('../config/pipelineValue.js')
+      const amountRequested = defaultPipelineRequestedAmount({
+        amount_requested: normalizeMoney(opportunity.amount_requested ?? null),
+        amount_min: normalizeMoney(opportunity.amount_min ?? null),
+        amount_max: normalizeMoney(opportunity.amount_max ?? null),
+      })
       const notes = coerceString(opportunity.description, { maxLen: 500 })
       
       const contactInfo = parseOpportunityContact(opportunity)

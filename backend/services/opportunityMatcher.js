@@ -39,6 +39,7 @@ import { isDismissed as isPipelineDismissed } from './pipelineDismissals.js'
 import { classifyFundingResult, RESULT_BUCKETS } from '../config/fundingResultFilters.js'
 import { declaredNeedsFrom, evaluateDeclaredNeedCoverage } from './pipelinePrecision.js'
 import { createLogger } from '../utils/logger.js'
+import { defaultPipelineRequestedAmount } from '../config/pipelineValue.js'
 
 // Directory-style / referral resources must ALWAYS survive filtering (mission
 // rule). They are a place to search, not an opportunity an applicant is "the
@@ -790,7 +791,6 @@ export async function saveToProfilePipeline(
     const amountMinValue = toPositiveMoney(opportunity.amount_min ?? opportunity.amountMin)
     const amountMaxValue = toPositiveMoney(opportunity.amount_max ?? opportunity.amountMax)
     // Canonical writer default for requested amount (wide-range safeguard).
-    const { defaultPipelineRequestedAmount } = await import('../config/pipelineValue.js')
     const amountRequestedValue = defaultPipelineRequestedAmount({
       amount_requested: toPositiveMoney(opportunity.amount_requested ?? opportunity.requestedAmount),
       amount_min: amountMinValue,

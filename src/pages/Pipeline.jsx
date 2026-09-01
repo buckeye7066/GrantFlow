@@ -52,6 +52,8 @@ const usdCompact = new Intl.NumberFormat("en-US", {
 
 // Best-estimate dollar value for a grant card (requested → max → min → amount).
 function grantValue(grant) {
+  const server = Number(grant?.pipeline_dollar_value)
+  if (Number.isFinite(server)) return server
   // Zeroize non-dollar / ineligible rows so stage rollups reconcile with backend totals
   const decision = String(grant?.match_decision || '').toUpperCase();
   if (decision === 'REJECT') return 0;

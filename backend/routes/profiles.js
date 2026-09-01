@@ -539,7 +539,7 @@ async function enrichProfileWithSummary(db, profile) {
       .prepare(
         `
         SELECT COALESCE(SUM(${pipelineDollarSql('g','fo')}), 0) as total,
-               COALESCE(${unvaluedCountSql('g')}, 0) as unvalued
+               COALESCE(${unvaluedCountSql('g','fo')}, 0) as unvalued
           FROM grants g
      LEFT JOIN funding_opportunities fo ON fo.id = g.funding_opportunity_id
          WHERE g.profile_id = ?
@@ -561,7 +561,7 @@ async function enrichProfileWithSummary(db, profile) {
         .prepare(
           `
           SELECT COALESCE(SUM(${pipelineDollarSql('g','fo')}), 0) as total,
-                 COALESCE(${unvaluedCountSql('g')}, 0) as unvalued
+                 COALESCE(${unvaluedCountSql('g','fo')}, 0) as unvalued
             FROM grants g
        LEFT JOIN funding_opportunities fo ON fo.id = g.funding_opportunity_id
            WHERE g.organization_id = ?
@@ -2177,6 +2177,7 @@ router.get('/:id/pipeline-potential', async (req, res) => {
                 COALESCE(g.amount_status, fo.amount_status) AS amount_status,
                 g.eligibility_status, g.match_decision,
                 fo.opportunity_kind AS opportunity_kind,
+                ${pipelineDollarSql('g','fo')} AS pipeline_dollar_value,
                 g.notes, fo.description AS opportunity_description,
                 g.contact_name, g.contact_email, g.contact_phone,
                 g.funder_fax, g.funder_address,
@@ -2185,7 +2186,7 @@ router.get('/:id/pipeline-potential', async (req, res) => {
            FROM grants g
            LEFT JOIN funding_opportunities fo ON fo.id = g.funding_opportunity_id
           WHERE g.profile_id = ? AND g.status IN (${placeholders})
-          ORDER BY COALESCE(g.amount_requested, g.amount_max, g.amount_min, 0) DESC, g.title ASC`,
+          ORDER BY COALESCE(${pipelineDollarSql('g','fo')}, COALESCE(g.amount_requested, g.amount_max, g.amount_min, 0)) DESC, g.title ASC`,
       )
       .all(id, ...PIPELINE_ACTIVE_STATUSES)
     items = (rows || []).map((g) => {
@@ -2206,6 +2207,7 @@ router.get('/:id/pipeline-potential', async (req, res) => {
         eligibility_status: g.eligibility_status ?? null,
         match_decision: g.match_decision ?? null,
         opportunity_kind: g.opportunity_kind ?? null,
+        pipeline_dollar_value: g.pipeline_dollar_value != null ? Number(g.pipeline_dollar_value) : null,
         // A fuller description for the printable packet (still capped).
         description: desc ? String(desc).slice(0, 600) : null,
         // Contact + how-to-apply, so the printout stands on its own.
@@ -2229,7 +2231,11 @@ router.get('/:id/pipeline-potential', async (req, res) => {
 
   // Same value fallback as the headline total and the frontend's
   // estimatedValue(), so the breakdown reconciles with the card.
-  const total = items.reduce((sum, g) => sum + grantPipelineDollarValue(g), 0)
+  const total = items.reduce((sum, g) => {
+    const server = Number(g?.pipeline_dollar_value)
+    if (Number.isFinite(server)) return sum + server
+    return sum + grantPipelineDollarValue(g)
+  }, 0)
   return res.json({ profile_id: id, total, count: items.length, items })
 })
 

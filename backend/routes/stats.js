@@ -81,7 +81,7 @@ async function computeDashboardStats(db, scope) {
   const pipelineStatusClause = `status IN (${PIPELINE_ACTIVE_STATUSES.map(() => '?').join(', ')})`
   const pipelineRow = await db
     .prepare(`SELECT COALESCE(SUM(${pipelineDollarSql('g', 'fo')}), 0) as total,
-                     COALESCE(${unvaluedCountSql('g')}, 0) as unvalued
+                     COALESCE(${unvaluedCountSql('g','fo')}, 0) as unvalued
               FROM grants g
               LEFT JOIN funding_opportunities fo ON fo.id = g.funding_opportunity_id
               WHERE ${grantScopeSql} AND g.${pipelineStatusClause}`)

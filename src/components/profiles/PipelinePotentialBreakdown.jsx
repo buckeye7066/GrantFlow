@@ -131,6 +131,8 @@ const PHASE_ORDER = ["Preparing", "Applied", "Approved"]
 // section sums to something meaningful even when a source has a range, not a
 // single requested figure).
 function estimatedValue(item) {
+  const server = Number(item?.pipeline_dollar_value)
+  if (Number.isFinite(server)) return server
   // Zeroize rows that should not contribute dollars
   const decision = String(item?.match_decision || '').toUpperCase()
   if (decision === 'REJECT') return 0

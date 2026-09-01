@@ -111,6 +111,23 @@ describe('pipeline dollar contract', () => {
     expect(grantPipelineValue({ amount_requested: 6500 })).toBe(6500)
     expect(grantPipelineValue({ amount_max: 5000 })).toBe(5000)
     expect(grantPipelineValue({ amount_min: 1000 })).toBe(1000)
+  it('defaultPipelineRequestedAmount picks floor for wide-range envelopes', async () => {
+    const mod = await import('../config/pipelineValue.js')
+    const f = mod.defaultPipelineRequestedAmount
+    expect(f({ amount_requested: 42000000, amount_min: 1000000, amount_max: 42000000 })).toBe(1_000_000)
+    expect(f({ amount_requested: 25000, amount_min: 10000, amount_max: 50000 })).toBe(25000)
+    expect(f({ amount_min: 10000, amount_max: 50000 })).toBe(50000)
+    expect(f({ amount_min: 1000000, amount_max: 42000000 })).toBe(1_000_000)
+    expect(f({})).toBe(null)
+  })
+
+  it('grantPipelineValue fallback holds (requested → max → min), wide-range noted by constant', () => {
+    const a = { amount_requested: 6500 }
+    const b = { amount_max: 5000 }
+    const c = { amount_min: 1000 }
+    expect(grantPipelineValue(a)).toBe(6500)
+    expect(grantPipelineValue(b)).toBe(5000)
+    expect(grantPipelineValue(c)).toBe(1000)
     expect(PIPELINE_ACTIVE_STATUSES).toContain('submitted')
     expect(typeof pipelineValueSql()).toBe('string')
     expect(typeof pipelineDollarSql('g', 'fo')).toBe('string')
