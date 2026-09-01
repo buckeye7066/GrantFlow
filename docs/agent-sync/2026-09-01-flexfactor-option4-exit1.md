@@ -81,3 +81,11 @@ Do not dest-approve Mastodon. Do not publish.
 3. Open a new PR. Wait for exact-head production-readiness green on
    both OS, then merge.
 4. Do not force-push `main`.
+
+## Follow-up `596b4a8` (2026-09-01T23:14Z)
+
+`/tmp/ff-option4-close` EXIT 1 only on independent-final-review:
+3b cited `SyntaxError` + `git checkout` of the planted baseline after
+`add()` was already `a + b` and the suite was GREEN. Product invariants
+PASS. `596b4a8` drops baseline-checkout reproductions and SyntaxError
+claims on a compiling file. New run: `/tmp/ff-option4-cert`.

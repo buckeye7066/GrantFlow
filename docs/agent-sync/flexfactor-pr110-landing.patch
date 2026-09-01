@@ -1,7 +1,7 @@
 From 06c7d10b61b59047a6cd86018ca5662f6a4e3a5c Mon Sep 17 00:00:00 2001
 From: Cursor Agent <cursoragent@cursor.com>
 Date: Tue, 1 Sep 2026 19:17:46 +0000
-Subject: [PATCH 01/14] fix(ci): run autoclean preverify tests in
+Subject: [PATCH 01/15] fix(ci): run autoclean preverify tests in
  production-readiness
 
 The new flexfactor_autoclean_preverify_tests.py module existed on the
@@ -34,7 +34,7 @@ index 77610ad..ad86ef9 100644
 From 7aab5ec6d9a4846ff3bbd5373c9052bc60078a7a Mon Sep 17 00:00:00 2001
 From: Cursor Agent <cursoragent@cursor.com>
 Date: Tue, 1 Sep 2026 20:33:10 +0000
-Subject: [PATCH 02/14] fix(apply): classify Cross-file dependency as no-fix
+Subject: [PATCH 02/15] fix(apply): classify Cross-file dependency as no-fix
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
 Content-Transfer-Encoding: 8bit
@@ -248,7 +248,7 @@ index 5a051a1..485250a 100644
 From 745255550e22813c8a343b4dbe885e55fd30ef05 Mon Sep 17 00:00:00 2001
 From: Cursor Agent <cursoragent@cursor.com>
 Date: Tue, 1 Sep 2026 20:36:59 +0000
-Subject: [PATCH 03/14] fix(apply): retry silent in-file no-ops and escalate
+Subject: [PATCH 03/15] fix(apply): retry silent in-file no-ops and escalate
 
 A second option-4 run classified Cross-file dependency correctly
 but the author then returned changed=false with notes=None, which
@@ -387,7 +387,7 @@ index 485250a..4b7c974 100644
 From b15f048f9174dde33162b35101a68020f5c2c651 Mon Sep 17 00:00:00 2001
 From: Cursor Agent <cursoragent@cursor.com>
 Date: Tue, 1 Sep 2026 20:42:51 +0000
-Subject: [PATCH 04/14] fix(stack): detect unpacked Python fixtures via tests/
+Subject: [PATCH 04/15] fix(stack): detect unpacked Python fixtures via tests/
 
 Option 4's hello.py fixture has no pyproject/requirements, so
 _detect_stack left is_python=False and test_cmd empty. The author
@@ -457,7 +457,7 @@ index 4b7c974..f692711 100644
 From 426193e4b3dab7950299347104c1a78e1c0b7424 Mon Sep 17 00:00:00 2001
 From: Cursor Agent <cursoragent@cursor.com>
 Date: Tue, 1 Sep 2026 20:54:34 +0000
-Subject: [PATCH 05/14] fix(apply): apply a finding-named return when the model
+Subject: [PATCH 05/15] fix(apply): apply a finding-named return when the model
  cannot
 
 Free local authors kept reverting syntax-invalid hello.py patches on
@@ -742,7 +742,7 @@ index f692711..622570f 100644
 From e1d22d7be766d138ad4395fcd32fbd0d3e79c357 Mon Sep 17 00:00:00 2001
 From: Cursor Agent <cursoragent@cursor.com>
 Date: Tue, 1 Sep 2026 21:04:28 +0000
-Subject: [PATCH 06/14] fix(apply): compile Python fixes with this interpreter
+Subject: [PATCH 06/15] fix(apply): compile Python fixes with this interpreter
 
 Bare `python` is missing on Debian/cloud images, so the per-file
 py_compile gate rolled back every correct named-return write with
@@ -836,7 +836,7 @@ index 622570f..f725f37 100644
 From f335a7b59569c2e80f3b05e4a7394633ecb53073 Mon Sep 17 00:00:00 2001
 From: Cursor Agent <cursoragent@cursor.com>
 Date: Tue, 1 Sep 2026 21:20:57 +0000
-Subject: [PATCH 07/14] fix(apply): refuse whole-file fallback when the defect
+Subject: [PATCH 07/15] fix(apply): refuse whole-file fallback when the defect
  anchor is already gone
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
@@ -919,7 +919,7 @@ index f725f37..f6dfe60 100644
 From ac16a5bed3dc02cbd43ee8ca1d020e63a0ad5532 Mon Sep 17 00:00:00 2001
 From: Cursor Agent <cursoragent@cursor.com>
 Date: Tue, 1 Sep 2026 21:38:27 +0000
-Subject: [PATCH 08/14] fix(apply): refuse whole-file fallback when the defect
+Subject: [PATCH 08/15] fix(apply): refuse whole-file fallback when the defect
  excerpt is already gone
 
 The first missing-anchor retry then a silent no-op (apply_err empty)
@@ -977,7 +977,7 @@ index f6dfe60..606868b 100644
 From 8d0bb28f780006adccbfcf72d5ee7d509d0f060b Mon Sep 17 00:00:00 2001
 From: Cursor Agent <cursoragent@cursor.com>
 Date: Tue, 1 Sep 2026 21:47:14 +0000
-Subject: [PATCH 09/14] fix(apply): retry incomplete reviews and drop stale
+Subject: [PATCH 09/15] fix(apply): retry incomplete reviews and drop stale
  certifier claims
 
 qwen 3b option-4 runs aborted after cycle 1 when every finding failed the
@@ -1261,7 +1261,7 @@ index 606868b..6bd15e3 100644
 From 4d6c2b27d065fb33b4c53dba9cd0e35a3d9fc09c Mon Sep 17 00:00:00 2001
 From: Cursor Agent <cursoragent@cursor.com>
 Date: Tue, 1 Sep 2026 21:59:12 +0000
-Subject: [PATCH 10/14] fix(review): recover excerpts the 3b named in prose
+Subject: [PATCH 10/15] fix(review): recover excerpts the 3b named in prose
 
 qwen 3b titles a real defect (duplicate return) and leaves
 source_excerpt/trigger/observable_failure empty, so the evidence gate
@@ -1383,7 +1383,7 @@ index 6bd15e3..b36485a 100644
 From a877a4745981f447699998bc73101f30059a3026 Mon Sep 17 00:00:00 2001
 From: Cursor Agent <cursoragent@cursor.com>
 Date: Tue, 1 Sep 2026 22:09:10 +0000
-Subject: [PATCH 11/14] fix(baseline): name the publication return pair so
+Subject: [PATCH 11/15] fix(baseline): name the publication return pair so
  phase 0 cannot weaken tests
 
 Unittest reprints only the test line (assertEqual(add(2, 3), 5) / -1 != 5),
@@ -1763,7 +1763,7 @@ index b36485a..d8d98f2 100644
 From f3bfa29b5ab13af7456ec1e43c114617b0b70bbb Mon Sep 17 00:00:00 2001
 From: Cursor Agent <cursoragent@cursor.com>
 Date: Tue, 1 Sep 2026 22:14:12 +0000
-Subject: [PATCH 12/14] fix(apply): refuse named-return when the replacement is
+Subject: [PATCH 12/15] fix(apply): refuse named-return when the replacement is
  already in the file
 
 After phase 0 writes return a + b, the same finding text
@@ -1878,7 +1878,7 @@ index d8d98f2..bd199f7 100644
 From 084af8409a7402da85df0020b93b58c92d0967a3 Mon Sep 17 00:00:00 2001
 From: Cursor Agent <cursoragent@cursor.com>
 Date: Tue, 1 Sep 2026 22:41:17 +0000
-Subject: [PATCH 13/14] fix(apply): roll back test-file writes that delete test
+Subject: [PATCH 13/15] fix(apply): roll back test-file writes that delete test
  methods
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
@@ -2059,7 +2059,7 @@ index bd199f7..e85301d 100644
 From e8685f7fcf607cf2865d3c2eec1502f539a48639 Mon Sep 17 00:00:00 2001
 From: Cursor Agent <cursoragent@cursor.com>
 Date: Tue, 1 Sep 2026 23:01:22 +0000
-Subject: [PATCH 14/14] fix(prodready): close option-4 EXIT 1 on purpose-fit
+Subject: [PATCH 14/15] fix(prodready): close option-4 EXIT 1 on purpose-fit
  reject and stale certifier
 
 A competitor ACCEPT that cannot map onto an owner acceptance criterion is now
@@ -2325,6 +2325,165 @@ index e85301d..f2b1aac 100644
  
      def test_report_renders_the_ledger_with_reasons(self):
          research = {"competitors": [self._comp("ok"),
+-- 
+2.43.0
+
+
+From 596b4a82f7de62163c189435e7b4312b79da8288 Mon Sep 17 00:00:00 2001
+From: Cursor Agent <cursoragent@cursor.com>
+Date: Tue, 1 Sep 2026 23:14:39 +0000
+Subject: [PATCH 15/15] fix(review): drop certifier SyntaxError claims that
+ checkout the baseline
+
+Independent final review still failed after stale/style grounding because
+qwen 3b rejected the exact final SHA with SyntaxError plus git checkout of
+the planted baseline. The current tree compiled and the suite was GREEN.
+Treat a baseline-checkout reproduction and a SyntaxError on a compiling
+file as contradicted, so the exact-commit gate can close.
+---
+ flexfactor.py       | 49 +++++++++++++++++++++++++++++++++++++---
+ flexfactor_tests.py | 54 +++++++++++++++++++++++++++++++++++++++++++++
+ 2 files changed, 100 insertions(+), 3 deletions(-)
+
+diff --git a/flexfactor.py b/flexfactor.py
+index 2f52835..e85bd0e 100644
+--- a/flexfactor.py
++++ b/flexfactor.py
+@@ -9341,8 +9341,43 @@ def _asks_to_remove_tested_symbol(finding: dict, haystack: str) -> bool:
+     return False
+ 
+ 
+-def _ground_independent_findings(findings: list, haystack: str) -> list:
+-    """Drop stale / test-imported-symbol claims from the final certifier."""
++def _file_py_compiles(project_dir: str, rel: str) -> bool:
++    """True when ``python -m py_compile`` accepts the named first-party file."""
++    rel = str(rel or "").replace("\\", "/").strip().lstrip("./")
++    if not rel or ".." in rel.split("/"):
++        return False
++    path = os.path.join(os.path.abspath(project_dir), rel)
++    if not os.path.isfile(path):
++        return False
++    try:
++        cp = subprocess.run(
++            [_python_exe(), "-m", "py_compile", path],
++            capture_output=True, text=True, timeout=20)
++    except (OSError, subprocess.TimeoutExpired):
++        return False
++    return cp.returncode == 0
++
++
++def _independent_finding_contradicted(finding: dict, project_dir: str,
++                                      *, baseline_sha: str | None = None) -> str:
++    """Why a certifier claim is contradicted by the current tree, or ''."""
++    blob = " ".join(str((finding or {}).get(k) or "") for k in
++                    ("title", "problem", "reproduction", "reason", "fix"))
++    if baseline_sha:
++        short = str(baseline_sha).strip()[:8]
++        if short and short in blob and re.search(r"\bcheckout\b", blob, re.I):
++            return "reproduces-baseline-not-candidate"
++    if re.search(r"syntaxerror|invalid syntax", blob, re.I) and project_dir:
++        rel = str((finding or {}).get("file") or "").replace("\\", "/").strip()
++        if rel and _file_py_compiles(project_dir, rel):
++            return "syntax-claim-but-file-compiles"
++    return ""
++
++
++def _ground_independent_findings(findings: list, haystack: str,
++                                 *, project_dir: str = "",
++                                 baseline_sha: str | None = None) -> list:
++    """Drop stale / test-imported-symbol / tree-contradicted certifier claims."""
+     kept: list = []
+     for finding in findings or []:
+         if not isinstance(finding, dict):
+@@ -9358,6 +9393,12 @@ def _ground_independent_findings(findings: list, haystack: str) -> list:
+         if _independent_finding_is_style_nit(finding):
+             print(f"  [evidence] independent-final: dropped style nit '{title}'")
+             continue
++        why = _independent_finding_contradicted(
++            finding, project_dir, baseline_sha=baseline_sha)
++        if why:
++            print(f"  [evidence] independent-final: dropped contradicted "
++                  f"'{title}' ({why})")
++            continue
+         kept.append(finding)
+     return kept
+ 
+@@ -13035,7 +13076,9 @@ def _independent_final_review(reviewer, project_dir: str, baseline_sha: str | No
+         # qwen cited ``return a - b`` after baseline-repair already wrote
+         # ``return a + b``, and asked to remove ``greet`` which tests import).
+         haystack = _current_tree_haystack(project_dir)
+-        findings = _ground_independent_findings(findings, haystack)
++        findings = _ground_independent_findings(
++            findings, haystack, project_dir=project_dir,
++            baseline_sha=baseline_sha)
+         verdict = str(data.get("verdict") or "")
+         grounded_reject = verdict != "approve" and bool(findings)
+         if verdict != "approve" and not findings:
+diff --git a/flexfactor_tests.py b/flexfactor_tests.py
+index f2b1aac..0e87818 100644
+--- a/flexfactor_tests.py
++++ b/flexfactor_tests.py
+@@ -4760,6 +4760,60 @@ class RelComponentsTests(unittest.TestCase):
+         self.assertEqual(data["verdict"], "approve", data)
+         self.assertEqual(data["findings"], [])
+ 
++    def test_independent_final_review_drops_syntaxerror_on_compiling_file(self):
++        """Live option 4 2026-09-01 close run: 3b rejected the exact final
++        SHA with ``SyntaxError: invalid syntax`` and ``git checkout`` of the
++        baseline. hello.py compiled; suite was GREEN."""
++        import subprocess
++        import tempfile
++        with tempfile.TemporaryDirectory() as tmp:
++            subprocess.run(["git", "init", "-q", "-b", "main"], cwd=tmp, check=True)
++            with open(os.path.join(tmp, "hello.py"), "w", encoding="utf-8") as fh:
++                fh.write("def add(a, b):\n    return a - b\n")
++            subprocess.run(["git", "add", "-A"], cwd=tmp, check=True)
++            subprocess.run(
++                ["git", "-c", "user.email=t@t", "-c", "user.name=t",
++                 "commit", "-q", "-m", "plant"],
++                cwd=tmp, check=True)
++            baseline = subprocess.run(
++                ["git", "rev-parse", "HEAD"], cwd=tmp,
++                capture_output=True, text=True).stdout.strip()
++            with open(os.path.join(tmp, "hello.py"), "w", encoding="utf-8") as fh:
++                fh.write("def add(a, b):\n    return a + b\n")
++            subprocess.run(["git", "add", "-A"], cwd=tmp, check=True)
++            subprocess.run(
++                ["git", "-c", "user.email=t@t", "-c", "user.name=t",
++                 "commit", "-q", "-m", "fix add"],
++                cwd=tmp, check=True)
++            sha = subprocess.run(
++                ["git", "rev-parse", "HEAD"], cwd=tmp,
++                capture_output=True, text=True).stdout.strip()
++
++            class _SyntaxReviewer:
++                judge_model = "qwen2.5-coder:3b"
++
++                def structured(self, system, prompt, schema, **_kw):
++                    return {
++                        "verdict": "reject",
++                        "commit": sha,
++                        "findings": [{
++                            "severity": "high",
++                            "file": "hello.py",
++                            "line": 1,
++                            "title": "SyntaxError: invalid syntax",
++                            "reproduction": (
++                                f"git checkout {baseline}\npython3 hello.py"
++                            ),
++                        }],
++                        "evidence_consistent": False,
++                        "reason": "patch causes SyntaxError",
++                    }
++
++            data = ff._independent_final_review(
++                _SyntaxReviewer(), tmp, baseline, sha, {"x": 1})
++        self.assertEqual(data["verdict"], "approve", data)
++        self.assertEqual(data["findings"], [])
++
+     def test_asks_to_remove_tested_symbol(self):
+         tests = "from hello import add, greet\n\ndef test_greet(self):\n    greet('x')\n"
+         self.assertTrue(ff._asks_to_remove_tested_symbol(
 -- 
 2.43.0
 
