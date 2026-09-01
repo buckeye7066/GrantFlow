@@ -323,6 +323,16 @@ export async function saveCredential(db, {
     `SELECT id FROM hamilton_portal_credentials WHERE profile_id = ? AND portal_host = ? AND username = ? LIMIT 1`,
   ).get(String(profileId), host, String(username))
 
+  // A saved login is the unblock every waiting_for_login task on this host has
+  // been retrying for — make them due NOW instead of waiting out the backoff
+  // timer. Best-effort; never fails the save.
+  const resumeWaiting = async () => {
+    try {
+      const { resumeAuthWaitingTasksForHost } = await import('./applicationTaskStore.js')
+      await resumeAuthWaitingTasksForHost(db, { profileId, portalHost: host })
+    } catch { /* best-effort */ }
+  }
+
   if (existing) {
     await db.prepare(
       `UPDATE hamilton_portal_credentials SET
@@ -333,6 +343,7 @@ export async function saveCredential(db, {
        WHERE id = ?`,
     ).run(String(userId), label, loginUrl, String(username),
       enc.value_ciphertext, enc.iv, enc.tag, provenance, existing.id)
+    await resumeWaiting()
     return rowToMasked(await db.prepare('SELECT * FROM hamilton_portal_credentials WHERE id = ?').get(existing.id))
   }
 
@@ -347,6 +358,7 @@ export async function saveCredential(db, {
   ).run(id, String(userId), String(profileId), host, label, loginUrl, String(username),
     enc.value_ciphertext, enc.iv, enc.tag,
     null, null, null, provenance)
+  await resumeWaiting()
   return rowToMasked(await db.prepare('SELECT * FROM hamilton_portal_credentials WHERE id = ?').get(id))
 }
 

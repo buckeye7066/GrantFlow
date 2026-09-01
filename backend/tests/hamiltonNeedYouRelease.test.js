@@ -129,7 +129,12 @@ describe('POST /admin/release-need-you (classified)', () => {
     expect(res.body.kept).toBe(2)      // packet + open-info
     expect(res.body.kept_by_category).toMatchObject({ physical_copy: 1, missing_info: 1 })
     expect(res.body.kept_by_category.ineligible).toBeUndefined()
-    expect(await retryOf('draft')).toBeNull()          // released
+    // RELEASED means DUE NOW, never NULL: the scheduler re-picks waiting_*/
+    // blocked tasks only when next_retry_at IS NOT NULL AND due, so a NULL
+    // here un-queued exactly the tasks this route claims to release.
+    const draftRetry = await retryOf('draft')
+    expect(draftRetry).toBeTruthy()
+    expect(Date.parse(draftRetry)).toBeLessThanOrEqual(Date.now() + 1000)
     expect(await statusOf('inelig')).toBe('cancelled') // removed to archive
     expect(await retryOf('packet')).toBe('2099-01-01') // kept
     expect(await retryOf('info')).toBe('2099-01-01')   // kept

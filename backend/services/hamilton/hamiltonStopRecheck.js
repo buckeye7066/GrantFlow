@@ -42,7 +42,13 @@ import { createLogger } from '../../utils/logger.js'
 
 const log = createLogger('service:hamiltonStopRecheck')
 
-const RECHECKABLE_KEYS = ['crawler_profile_rules', 'application_url']
+// 'school_name' (2026-08-30): preflight used to HARD-BLOCK any source whose
+// copy merely said "grant"/"aid" on "Profile is missing school / university".
+// That bar is retired — a missing school is a preflight WARNING now, and the
+// engine asks for the exact field only when a real form requires it — so every
+// unresolved school_name stop is a stop whose writer no longer exists. The
+// recheck clears them so those tasks resume instead of sitting blocked forever.
+const RECHECKABLE_KEYS = ['crawler_profile_rules', 'application_url', 'school_name']
 const SKIP_STATUSES = ['submitted', 'failed', 'cancelled', 'completed']
 
 function usableUrl(...candidates) {
@@ -130,6 +136,18 @@ export async function recheckHamiltonPolicyStops(db, { limit = 200, enforce = tr
     let resolvedHere = 0
     let cancelled = false
     for (const item of items) {
+      if (String(item.key) === 'school_name') {
+        // The preflight rule that wrote this stop is retired (missing school is
+        // a warning; the engine asks per-form when a form really requires it).
+        // Resolve unconditionally so the task resumes.
+        if (!enforce) continue
+        const ok = await resolveMissingInfoItem(db, taskId, {
+          kind: item.kind, key: item.key,
+          value: 'preflight_school_bar_retired', resolvedBy: 'stop_recheck',
+        })
+        if (ok) { resolvedHere += 1; out.itemsResolved += 1 }
+        continue
+      }
       if (String(item.key) === 'application_url') {
         const url = usableUrl(
           task.application_url, task.portal_url,

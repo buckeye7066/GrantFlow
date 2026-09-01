@@ -731,6 +731,21 @@ export async function automateSingleSource(db, {
 
   const initialStatus = mapClassificationToInitialStatus(classification.automation_type)
 
+  // Profile-wide full-automation consent reaches tasks CREATED AFTER the
+  // grant (2026-08-30). propagateAutoSubmitToTasks is a one-shot sweep over
+  // the tasks that exist when the toggle flips; every task minted later (the
+  // scheduler, listing children, new selections) landed with the column's
+  // DEFAULT false and drafted forever. When the caller did not specify, the
+  // live full-automation verdict is the intent. Fail closed on a read error.
+  let batchAllowAutoSubmit = options?.allow_auto_submit === undefined
+    ? undefined
+    : Boolean(options.allow_auto_submit)
+  if (batchAllowAutoSubmit === undefined) {
+    try {
+      if ((await isFullAutomationEnabled(db, resolvedProfileId))?.enabled) batchAllowAutoSubmit = true
+    } catch { /* keep undefined — stored value untouched */ }
+  }
+
   // 1. Create / fetch the task with the new automation columns.
   const task = await ensureApplicationTask(db, {
     profileId: resolvedProfileId,
@@ -746,8 +761,9 @@ export async function automateSingleSource(db, {
     currentStep: classification.automation_type,
     // Persist the batch's effective auto-submit option so the stored column
     // reflects runtime truth (an idempotent re-POST refreshes it). undefined
-    // when the batch didn't specify → stored value left untouched.
-    allowAutoSubmit: options?.allow_auto_submit === undefined ? undefined : Boolean(options.allow_auto_submit),
+    // when the batch didn't specify AND the profile is not in full automation
+    // → stored value left untouched.
+    allowAutoSubmit: batchAllowAutoSubmit,
   })
 
   await appendTaskEvent(db, {
@@ -979,14 +995,23 @@ export async function detectAutopilotRunLoop(db, { taskId, now = Date.now(), max
   const humanMs = Date.parse(humanSince?.at || '')
   if (Number.isFinite(humanMs) && humanMs >= oldestRecentMs) return null
   const diagnosis = diagnoseRunOutcomes(counted)
+  // The NEWEST run that actually recorded a blocker — surfaced on the verdict
+  // so callers (the tripwire event, the task message) can name the repeating
+  // dead-end without re-reading the ledger. Null when nothing recorded one,
+  // which is itself the crash/redeploy signature the summary spells out.
+  const lastBlockerRun = [...counted]
+    .sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at))
+    .find((r) => r?.blocker_kind || r?.blocker_detail) || null
   return {
     kind: 'run_loop',
     runs: counted.length,
     diagnosis,
     retryable: diagnosis.retryable,
+    last_blocker_kind: lastBlockerRun?.blocker_kind || null,
+    last_blocker_detail: lastBlockerRun?.blocker_detail || null,
     detail: diagnosis.retryable
-      ? `Hamilton has opened this source ${counted.length} times in the last 24 hours without finishing it. Every attempt ended the same way: ${diagnosis.summary}. That is a problem on Hamilton's side, not yours — he pauses this source for 24 hours and tries again with a fresh strategy (URL re-discovery, longer waits).`
-      : `Hamilton has opened this source ${counted.length} times in the last 24 hours without finishing it and nobody has touched the task since. Every attempt ended the same way: ${diagnosis.summary}. Stopping so the loop cannot keep spending — the blocker named above is what has to change (the last outcome is on the task).`,
+      ? `Hamilton has opened this source ${counted.length} times in the last 24 hours without finishing it. Each attempt ended the same way: ${diagnosis.summary}. That is a problem on Hamilton's side, not yours — he pauses this source for 24 hours and tries again with a fresh strategy (URL re-discovery, longer waits).`
+      : `Hamilton has opened this source ${counted.length} times in the last 24 hours without finishing it and nobody has touched the task since. Each attempt ended the same way: ${diagnosis.summary}. Stopping so the loop cannot keep spending — the blocker named above is what has to change (the last outcome is on the task).`,
   }
 }
 
@@ -1019,7 +1044,15 @@ export function diagnoseRunOutcomes(runs = []) {
   }
   const ranked = [...groups.values()].sort((a, b) => b.count - a.count)
   const top = ranked[0] || { count: 0, status: null, kind: 'unknown', detail: null }
-  const summary = top.detail ? `${top.kind} — ${top.detail}` : `${top.kind}`
+  const anyBlocker = (runs || []).some((r) => r?.blocker_kind || r?.blocker_detail)
+  // No run in the window recorded a blocker at all: the runs did not END,
+  // they DIED (a crash or a redeploy mid-run). Naming that is the whole
+  // point of the diagnosis — a bare status word ('running') told nobody.
+  const summary = top.detail
+    ? `${top.kind} — ${top.detail}`
+    : anyBlocker
+      ? `${top.kind}`
+      : `${top.kind} — no run recorded a blocker; the runs died without a terminal record (likely a crash or redeploy mid-run)`
   return {
     dominant_status: top.status,
     dominant_kind: top.kind,
@@ -1717,12 +1750,20 @@ async function runAutopilotPathway(db, {
     const pauseUntil = loop.retryable ? new Date(Date.now() + 24 * 60 * 60_000).toISOString() : null
     await updateApplicationTask(db, task.id, {
       unlessCancelled: true, status: loopStatus, lastAgentMessage: loop.detail,
-      ...(loop.retryable ? { nextRetryAt: pauseUntil } : {}),
+      // A hard-blocked loop park must NULL the retry stamp: the adapter re-picks
+      // any blocked task whose next_retry_at is due, so a stale due stamp made
+      // the same task head the queue every tick and re-trip this wire forever.
+      nextRetryAt: pauseUntil,
     }).catch(() => {})
     await appendTaskEvent(db, {
       taskId: task.id, eventType: 'blocked', status: loopStatus, step: 'run_loop_tripwire',
       message: loop.detail, actorUserId: userId, actorRole: 'agent',
-      details: { runs_last_24h: loop.runs, max_runs_per_day: MAX_AUTOPILOT_RUNS_PER_DAY, diagnosis: loop.diagnosis, paused_until: pauseUntil },
+      details: {
+        runs_last_24h: loop.runs, max_runs_per_day: MAX_AUTOPILOT_RUNS_PER_DAY,
+        diagnosis: loop.diagnosis, paused_until: pauseUntil,
+        last_blocker_kind: loop.diagnosis?.dominant_kind || null,
+        last_blocker_detail: loop.diagnosis?.dominant_detail || null,
+      },
     }).catch(() => {})
     return { task: await reload(db, task.id), classification, autopilot_run: null, blocked: true, reason: 'run_loop', diagnosis: loop.diagnosis }
   }
@@ -1773,12 +1814,24 @@ async function runAutopilotPathway(db, {
   // Preflight (re-runs the lightweight checks; the launch screen
   // already passed them, but conditions can change between authorization
   // and launch).
+  // The RUN path passes the resolved-field cache too (2026-08-30). The launch
+  // screen (hamiltonPreflightResolver) and the boot self-heal both preflight
+  // WITH the operator-supplied answers cache; this call did not — so a field
+  // the operator had already resolved passed preflight everywhere except on
+  // the actual run, and the task OSCILLATED: run blocks → self-heal (with
+  // cache) re-queues → run re-blocks. Same inputs at every entry point.
+  let runResolvedFields = null
+  try {
+    const { getResolvedFieldsAsMap } = await import('./hamiltonResolvedFieldStore.js')
+    runResolvedFields = await getResolvedFieldsAsMap(db, task.profile_id)
+  } catch { runResolvedFields = null }
   const preflight = await preflightSingleSource(db, {
     profile,
     profileId: task.profile_id,
     source: { opportunity_id: opportunity?.id || null, grant_id: grant?.id || null, task_id: task.id },
     opportunity,
     grant,
+    resolvedFields: runResolvedFields,
   })
   await updateAutopilotRun(db, run.id, { preflight })
   if (!preflight.ok) {
@@ -2046,6 +2099,15 @@ async function runAutopilotPathway(db, {
   if (fullAutomationActive && authorizations) {
     authorizations.use_standing_attestation = true
     authorizations.submit_applications = true
+    // Full automation IS the credential/session consent too (its grant writes
+    // all eight FULL_AUTOMATION_AUTHORIZATION_TYPES) — but profiles that
+    // consented through an older/partial flow can hold the full-automation
+    // verdict while missing these two type rows, and then the vault + saved-
+    // session reads below are silently gated OFF: Hamilton parks "waiting for
+    // login" on portals whose credential/session is sitting right there
+    // (2026-08-30, the waiting_for_login retry-forever bucket).
+    authorizations.use_saved_credentials_reference = true
+    authorizations.use_saved_session = true
   }
   if (allowAutoSubmit && !reviewedPortalSubmissionExecutionAvailable(url, { fullAutomation: fullAutomationActive })) {
     allowAutoSubmit = false
@@ -2129,6 +2191,16 @@ async function runAutopilotPathway(db, {
     }
   }
 
+  // CAPABILITY vs SUBMIT AUTHORITY (2026-08-30). `allowAutoSubmit` is the
+  // verdict for the irreversible CLICK this run; the engine's 2FA-clearing,
+  // captcha solver, identity-vault fill, and e-signature are CONSENT-scoped
+  // capabilities the profile's full-automation grant already covers. Gating
+  // them on allowAutoSubmit meant one run-scoped withhold (portal URL not
+  // browser-executable, global kill switch, a tailored-gate miss) silently
+  // stripped every capability too — a full-automation profile lost 2FA/
+  // identity/captcha/e-sign exactly on the runs that needed them, and the
+  // draft it saved was less complete than consent allowed.
+  const consentedCapabilities = fullAutomationActive || allowAutoSubmit
   // Captured outside the callback so the final run receipt retains the exact
   // authorization decision that acquired the irreversible-action lease. The
   // engine result must not be able to overwrite or omit this boundary proof.
@@ -2272,6 +2344,16 @@ async function runAutopilotPathway(db, {
         actorUserId: userId, actorRole: 'agent',
       }).catch(() => {})
     }
+    // A credential still PENDING REGISTRATION is a password for an account
+    // that does not exist yet (the signup brain minted it and the registration
+    // never completed). Handing it to the engine produced a misleading
+    // "saved login could not be completed" and — worse — its presence blocked
+    // the signup-recovery path (`!loginCredential` gate) from ever finishing
+    // the registration. Treat it as no usable credential, exactly like the
+    // identity brain itself does.
+    if (loginCredential?.pending_registration) {
+      loginCredential = null
+    }
   }
 
   // Resolve a durable saved SESSION for this portal host (a storageState the
@@ -2396,22 +2478,55 @@ async function runAutopilotPathway(db, {
     const priorKind = await latestFinishedBlockerKind(db, { taskId: task.id, excludeRunId: run.id }).catch(() => null)
     if (priorKind && isAuthBlocker(priorKind)) {
       knownAuthWallKind = priorKind
-      engineResult = {
-        status: 'blocked',
-        blocker_kind: priorKind,
-        blocker_detail: `Fast-skip: this portal previously required authentication (${priorKind}) and no saved credential or session is available yet. Hamilton skipped the browser launch and will re-check the vault on the next retry.`,
-        fast_skipped: true,
+      // SIGNUP STILL GETS ITS CHANCE ON A FAST-SKIP RETRY (2026-08-30). The
+      // fast-skip used to bypass the whole resolver ladder — including the
+      // account-creation recovery — so a login wall with no credential got
+      // exactly ONE signup attempt EVER (on the first run, before any wall was
+      // known). Under full automation, a login-walled retry with no credential
+      // is precisely when the signup brain should run: a successful
+      // registration writes a usable credential and the real browser path
+      // resumes this same run.
+      if (priorKind === 'login' && !vaultLockedForHost && !signupAttempted
+          && authorizations.use_saved_credentials_reference) {
+        signupAttempted = true
+        const createAccountAuthorized = isPortalAccountCreationAuthorized({
+          fullAutomationActive,
+          useSavedCredentialsReference: authorizations.use_saved_credentials_reference === true,
+        })
+        if (createAccountAuthorized) {
+          const recovered = await attemptPortalSignupRecovery(db, {
+            profileId: task.profile_id,
+            userId: userId || task.user_id || 'system_admin_token',
+            taskId: task.id,
+            url,
+            profile,
+            createPortalAccountAuthorized: true,
+            _identityRunner: options?._identityRunner || null,
+          })
+          if (recovered.credential) {
+            loginCredential = recovered.credential
+            knownAuthWallKind = null // real browser path — Hamilton can log in now
+          }
+        }
       }
-      await appendTaskEvent(db, {
-        taskId: task.id,
-        eventType: 'progress',
-        status: 'filling_portal',
-        step: 'autopilot',
-        message: `Known ${priorKind} wall + no saved credential/session — browser launch skipped (cheap vault re-check retry).`,
-        actorUserId: userId,
-        actorRole: 'agent',
-        details: { autopilot_run_id: run.id, blocker_kind: priorKind, fast_skipped: true },
-      })
+      if (knownAuthWallKind) {
+        engineResult = {
+          status: 'blocked',
+          blocker_kind: priorKind,
+          blocker_detail: `Fast-skip: this portal previously required authentication (${priorKind}) and no saved credential or session is available yet. Hamilton skipped the browser launch and will re-check the vault on the next retry.`,
+          fast_skipped: true,
+        }
+        await appendTaskEvent(db, {
+          taskId: task.id,
+          eventType: 'progress',
+          status: 'filling_portal',
+          step: 'autopilot',
+          message: `Known ${priorKind} wall + no saved credential/session — browser launch skipped (cheap vault re-check retry).`,
+          actorUserId: userId,
+          actorRole: 'agent',
+          details: { autopilot_run_id: run.id, blocker_kind: priorKind, fast_skipped: true },
+        })
+      }
     }
   }
 
@@ -2461,17 +2576,19 @@ async function runAutopilotPathway(db, {
           // signup path has done this since 2026-08-20; the RUN path, which is
           // where a real portal login actually hits 2FA, never had a caller.
           //
-          // `allowAutoSubmit` is the consent gate on purpose. It is
-          // resolveSubmissionDecision's own verdict (submit_applications granted
-          // + allow_auto_submit + no require_human_review veto), i.e. exactly
-          // what hasFullAutomation() describes — so consent is READ from the one
-          // authority rather than re-derived here into a second one that can
-          // drift from it.
+          // `consentedCapabilities` is the consent gate on purpose, and BOTH of
+          // its terms are read from an authority rather than re-derived here:
+          // `allowAutoSubmit` is resolveSubmissionDecision's own verdict for THIS
+          // run (submit_applications granted + allow_auto_submit + no
+          // require_human_review veto), and `fullAutomationActive` is the
+          // profile's stored full-automation grant (isFullAutomationEnabled).
+          // The union matters: a run-scoped withhold must not strip capabilities
+          // the profile's standing grant already covers (see above).
           //
           // The db handle stays on THIS side of the boundary: the engine's
           // contract is that nothing reads the database mid-run, so it receives
           // a solver, not a connection.
-          ...(allowAutoSubmit
+          ...(consentedCapabilities
             ? {
               attemptVerification: (livePage) => attemptAutomatedVerification(db, livePage, {
                 fullAutomation: true,
@@ -2484,18 +2601,18 @@ async function runAutopilotPathway(db, {
           // electronic signature — typed name + e-sign checkbox — with the
           // applicant's own name. Consent is the ONE flag, read from the one
           // authority; the engine re-checks the granted types itself.
-          fullAutomation: allowAutoSubmit,
+          fullAutomation: consentedCapabilities,
           // Identity-proofing values (SSN / DOB / gov-ID / FSA-ID / SSO) from the
           // ENCRYPTED per-profile vault, decrypted here (the orchestrator owns
           // the db) and passed in so the engine's no-db-mid-run contract holds.
           // Only under full automation; absent = the field stays a hand-off.
-          ...(allowAutoSubmit ? { identityValues: await loadIdentityValuesForFill(db, task.profile_id).catch(() => null) } : {}),
+          ...(consentedCapabilities ? { identityValues: await loadIdentityValuesForFill(db, task.profile_id).catch(() => null) } : {}),
           // CAPTCHA solver: only under full automation AND only when the owner
           // configured a solver key. With no key isCaptchaSolverConfigured is
           // false and this stays null, so a CAPTCHA is the same hard hand-off
           // it has always been. The db never crosses the engine boundary — the
           // solver closes over page + env only.
-          ...(allowAutoSubmit && isCaptchaSolverConfigured()
+          ...(consentedCapabilities && isCaptchaSolverConfigured()
             ? { solveCaptcha: (livePage) => attemptCaptchaSolve(livePage, { fullAutomation: true }) }
             : {}),
           // LLM field-understanding: answer portal-specific questions Hamilton's
@@ -2596,6 +2713,10 @@ async function runAutopilotPathway(db, {
     // resolve — it is a decomposition target. Break out and hand it to the
     // listing-decomposition handler below instead of the auth/resolver ladder.
     if (engineResult.status === 'blocked' && engineResult.blocker_kind === 'listing_page') break
+    // A SPA-hub apply surface WITH a saved session is a harvest target — hand
+    // it to the hub harvester below rather than the URL-rescue ladder (which
+    // can only re-find the same page).
+    if (engineResult.status === 'blocked' && engineResult.blocker_kind === 'spa_apply_surface' && storageState) break
 
     // ── Signup path (Portal Autopilot Identity) instead of parking ──
     // A login gate with NO usable credential anywhere (profile vault, admin
@@ -2675,7 +2796,7 @@ async function runAutopilotPathway(db, {
       taskId: task.id, profileId: task.profile_id, userId,
       portalUrl: url, opportunity, profile, classification,
       documentCandidates: documents,
-      fullAutomation: allowAutoSubmit,
+      fullAutomation: consentedCapabilities,
     }, {
       kind: engineResult.blocker_kind,
       text: engineResult.blocker_detail,
@@ -2724,6 +2845,33 @@ async function runAutopilotPathway(db, {
       degradedDirective = directive
       break
     }
+    if (directive.outcome === 'deferred') {
+      // A transient infrastructure failure (e.g. the URL-rescue web search
+      // provider is down) — not a finding about this task. Park it retryable
+      // exactly like the listing-decomposition defer so the scheduler
+      // re-attempts automatically; never a manual packet, never "needs you".
+      const retryAt = new Date(Date.now() + DECOMPOSITION_RETRY_DELAY_MS).toISOString()
+      const deferMessage = `${directive.detail || 'A transient infrastructure failure interrupted this run.'} Next automatic attempt: ${retryAt}.`
+      await updateApplicationTask(db, task.id, {
+        unlessCancelled: true,
+        status: 'waiting_for_window',
+        nextRetryAt: retryAt,
+        lastAgentMessage: deferMessage,
+      }).catch(() => {})
+      await updateAutopilotRun(db, run.id, {
+        status: 'deferred',
+        result: { ...engineResult, deferred: true, reason: directive.strategy, directive },
+        blockerKind: null,
+        blockerDetail: null,
+        finishedAt: new Date().toISOString(),
+      }).catch(() => {})
+      await appendTaskEvent(db, {
+        taskId: task.id, eventType: 'note', status: 'waiting_for_window', step: 'resolver_deferred',
+        message: deferMessage, actorUserId: userId, actorRole: 'agent',
+        details: { autopilot_run_id: run.id, directive },
+      }).catch(() => {})
+      return { task: await reload(db, task.id), classification, autopilot_run: run.id, autopilot_result: engineResult, deferred: true, reason: directive.strategy }
+    }
     // 'blocked' or 'escalated' — Hamilton will surface the blocker to the user.
     break
   }
@@ -2757,6 +2905,69 @@ async function runAutopilotPathway(db, {
       finishedAt: new Date().toISOString(),
     })
     return { task: taskAfterEngine, classification, autopilot_run: run.id, autopilot_result: engineResult, cancelled: true }
+  }
+
+  // ── SPA-HUB HARVEST (2026-08-31): the built-and-tested bold.org /
+  // scholarshipowl harvester (hubHarvest.js) finally gets its production
+  // caller. A spa_apply_surface dead-end WITH a saved session is exactly the
+  // state it exists for: load the logged-in matched list, enumerate the award
+  // cards, admit each through the canonical inserter, and 4-gate them for this
+  // profile. Consent is forwarded VERBATIM; the default apply driver detects
+  // the in-SPA surface and NEVER blind-clicks a submit (deps.submit stays
+  // unset — the repo carries no unattended blind-submit path). A harvest that
+  // enumerates nothing falls through to the existing co-browse hand-off.
+  if (!options?._listingChild && engineResult?.blocker_kind === 'spa_apply_surface' && storageState) {
+    let harvest = null
+    try {
+      const { harvestHub } = await import('./hubHarvest.js')
+      const { spaApplyHub } = await import('./spaApplySurface.js')
+      const hub = spaApplyHub(url)
+      if (hub?.key) {
+        const { chromium } = await import('playwright')
+        const { launchPortalBrowser, REALISTIC_PORTAL_UA } = await import('./browserLaunch.js')
+        const { browser } = await launchPortalBrowser(chromium, { headless: true, targetUrl: url })
+        try {
+          const context = await browser.newContext({ userAgent: REALISTIC_PORTAL_UA, storageState })
+          const hubPage = await context.newPage()
+          harvest = await harvestHub({
+            db, profile, profileSections: profile?.sections || null,
+            hubKey: hub.key, page: hubPage,
+            allowAutoSubmit, authorizations,
+          })
+        } finally {
+          try { await browser.close() } catch { /* ignore */ }
+        }
+      }
+    } catch (err) {
+      console.warn(`[hamiltonOrchestrator] spa-hub harvest failed (non-fatal): ${err?.message || err}`)
+      harvest = null
+    }
+    if (harvest && Number(harvest.enumerated) > 0) {
+      engineResult.hub_harvest = harvest
+      const harvestSummary = `Hamilton harvested this scholarship hub with the saved session: ${harvest.enumerated} award(s) enumerated, ${harvest.admitted} admitted to matching, ${harvest.accepted} accepted for this profile, ${harvest.applies_attempted} apply attempt(s), ${harvest.submitted} confirmed submission(s). Accepted awards are now catalog rows Hamilton pursues individually.`
+      await appendTaskEvent(db, {
+        taskId: task.id, eventType: 'progress', status: 'filling_portal', step: 'hub_harvest',
+        message: harvestSummary, actorUserId: userId, actorRole: 'agent',
+        details: { autopilot_run_id: run.id, hub_harvest: harvest },
+      }).catch(() => {})
+      const hubTerminalStatus = fullAutomationActive ? 'completed' : 'waiting_for_review'
+      await persistTerminalOrFail(db, { task, run, userId, label: 'hub_harvest_run' }, () => updateAutopilotRun(db, run.id, {
+        status: 'completed',
+        result: { ...engineResult, hub_harvest: harvest, hub_terminal_status: hubTerminalStatus },
+        blockerKind: null,
+        blockerDetail: null,
+        finishedAt: new Date().toISOString(),
+      }))
+      await persistTerminalOrFail(db, { task, run, userId, label: 'hub_harvest_task' }, () => updateApplicationTask(db, task.id, {
+        unlessCancelled: true,
+        status: hubTerminalStatus,
+        lastAgentMessage: harvestSummary,
+      }))
+      return { task: await reload(db, task.id), classification, autopilot_run: run.id, autopilot_result: engineResult, hub_harvest: harvest }
+    }
+    // Harvest could not enumerate (dead session / empty list / unknown hub):
+    // fall through to the ordinary blocked handling, which carries the
+    // co-browse guidance the spa blocker has always had.
   }
 
   if (!options?._listingChild && engineResult?.blocker_kind === 'listing_page' && engineResult?.listing_snapshot) {
@@ -3064,6 +3275,51 @@ async function runAutopilotPathway(db, {
     // recorded funder-side, so a retry is safe and quarantine would strand a
     // fixable run forever (measured 2026-08-23: an aged-out captcha token
     // bounces the U.S. Bank form exactly this way, with no visible error).
+    // A submit CLICK that provably never activated the control is the same
+    // honest class (2026-08-30): the engine proved no click event reached the
+    // page (stale control handle / pre-dispatch timeout), so nothing was
+    // submitted, quarantining it as "a submission may have gone through" was
+    // false, and a retry is safe. Park it as a plain blocked click_failed
+    // instead — the run-loop tripwire still bounds retries.
+    if (engineResult.status === 'failed'
+        && engineResult.blocker_kind === 'click_failed'
+        && engineResult.provably_not_submitted === true) {
+      const clickDetail = engineResult.blocker_detail
+        || 'Submit button could not be clicked (no click ever reached the page — no submission occurred).'
+      const clickFailedTask = await updateApplicationTask(db, task.id, {
+        unlessCancelled: true,
+        status: 'blocked',
+        currentStep: 'submit_click_failed',
+        nextRetryAt: null,
+        lastAgentMessage: clickDetail,
+      })
+      await updateAutopilotRun(db, run.id, {
+        status: 'failed',
+        result: engineResult,
+        blockerKind: 'click_failed',
+        blockerDetail: clickDetail,
+        finishedAt: new Date().toISOString(),
+      })
+      await appendTaskEvent(db, {
+        taskId: task.id,
+        eventType: 'blocked',
+        status: 'blocked',
+        step: 'submit_click_failed',
+        message: clickDetail,
+        actorUserId: userId,
+        actorRole: 'agent',
+        details: { autopilot_run_id: run.id, provably_not_submitted: true },
+      }).catch(() => {})
+      return {
+        task: clickFailedTask,
+        classification,
+        autopilot_run: run.id,
+        autopilot_result: engineResult,
+        blocked: true,
+        blocker_kind: 'click_failed',
+      }
+    }
+
     if (engineResult.status === 'blocked'
         && engineResult.blocker_kind === 'submit_rejected_bounce'
         && engineResult.provably_not_submitted === true) {
@@ -3346,6 +3602,11 @@ async function runAutopilotPathway(db, {
     // is still vetoing a full-automation profile.
     const withheldReason = engineResult.submit_withheld_reason
       || (autoSubmitGate && autoSubmitGate.enforced && !autoSubmitGate.submit ? autoSubmitGate.reason : null)
+      // When auto-submit was withheld BEFORE the engine ever ran (the decision
+      // itself said no), the engine never reaches beforeSubmit and the gate is
+      // never evaluated — so the one state that most needs a diagnosis used to
+      // carry NO reason at all. Name the decision's own reason.
+      || (!allowAutoSubmit ? (submissionDecision?.reason || 'auto_submit_not_authorized') : null)
       || null
     const reasonSuffix = withheldReason ? ` (auto-submit withheld: ${withheldReason})` : ''
     // Owner 2026-08-22: under full automation the profile user has ALREADY
@@ -3473,7 +3734,14 @@ async function runAutopilotPathway(db, {
       const blockerHost = hostOfUrl(url)
       const credentialMissing = !!blockerHost
         && !credentialedDomains.has(registrableDomain(blockerHost) || blockerHost)
-      if (credentialMissing) {
+      // Notify on the FIRST park only (2026-08-30): the ladder retries up to
+      // five times and every retry used to re-page the owner with the same
+      // "sign in once" ask — five notifications per credential-less portal.
+      // The retry cadence itself is unchanged (fast-skip keeps it cheap and
+      // every retry still re-checks the vault); only the paging is deduped.
+      if (plan.attempt > 1) {
+        // no-op: the attempt-1 notification already carries the ask.
+      } else if (credentialMissing) {
         const notice = missingCredentialNotice({
           profileId: task.profile_id,
           host: blockerHost,

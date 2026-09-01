@@ -83,6 +83,35 @@ describe('detectAutopilotRunLoop', () => {
     await appendTaskEvent(db, { taskId: 't1', eventType: 'progress', status: 'filling_portal', step: 'x', message: 'still going', actorRole: 'agent' })
     expect((await detectAutopilotRunLoop(db, { taskId: 't1' }))?.kind).toBe('run_loop')
   })
+
+  it('NAMES the repeating dead-end (2026-08-31): the tripwire carries the last run blocker instead of "the last outcome is on the task"', async () => {
+    await seedRuns(db, 't1', MAX_AUTOPILOT_RUNS_PER_DAY, { ageMs: 120_000 })
+    // Stamp the blocker that keeps killing the loop. It must NOT be a bounded
+    // auth kind (login / 2fa / captcha / sso / email_verification): those runs
+    // are deliberately excluded from the loop budget so an auth backoff can
+    // never trip this wire.
+    db.prepare(`UPDATE hamilton_autopilot_runs SET status='blocked', blocker_kind='no_application_form', blocker_detail='No application form found on the page' WHERE task_id='t1'`).run()
+    const loop = await detectAutopilotRunLoop(db, { taskId: 't1' })
+    expect(loop?.kind).toBe('run_loop')
+    expect(loop.last_blocker_kind).toBe('no_application_form')
+    expect(loop.last_blocker_detail).toMatch(/No application form found/)
+    expect(loop.detail).toMatch(/Each attempt ended the same way: no_application_form/)
+    expect(loop.detail).toMatch(/No application form found/)
+  })
+
+  it('a BOUNDED auth blocker (login) never trips the wire — the auth backoff owns those retries', async () => {
+    await seedRuns(db, 't1', MAX_AUTOPILOT_RUNS_PER_DAY, { ageMs: 120_000 })
+    db.prepare(`UPDATE hamilton_autopilot_runs SET status='blocked', blocker_kind='login', blocker_detail='Password input visible — login required' WHERE task_id='t1'`).run()
+    expect(await detectAutopilotRunLoop(db, { taskId: 't1' })).toBeNull()
+  })
+
+  it('a loop whose runs died with NO terminal record says so (crash/redeploy signature)', async () => {
+    await seedRuns(db, 't1', MAX_AUTOPILOT_RUNS_PER_DAY, { ageMs: 120_000 })
+    const loop = await detectAutopilotRunLoop(db, { taskId: 't1' })
+    expect(loop?.kind).toBe('run_loop')
+    expect(loop.last_blocker_kind).toBeNull()
+    expect(loop.detail).toMatch(/died without a terminal record/)
+  })
 })
 
 describe('persistTerminalOrFail', () => {

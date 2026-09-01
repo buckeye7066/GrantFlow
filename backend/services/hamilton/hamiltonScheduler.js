@@ -190,6 +190,19 @@ async function tick({ db, logger = console } = {}) {
     } catch (err) {
       logger?.warn?.('[hamilton:scheduler] autonomy sweeps failed:', err?.message || err)
     }
+    // Post-submit verification: re-check parked submission_verification_required
+    // tasks (bounded, spaced, read-only portal probes) so a submission that DID
+    // go through gets confirmed autonomously instead of waiting for a human.
+    let verificationRecheckSummary = null
+    try {
+      const { runSubmissionVerificationSweep } = await import('./hamiltonSubmissionVerifier.js')
+      verificationRecheckSummary = await runSubmissionVerificationSweep(db, { limit: resolveBatchSize() })
+      if (verificationRecheckSummary?.checked > 0) {
+        logger?.info?.('[hamilton:scheduler] submission verification re-check', verificationRecheckSummary)
+      }
+    } catch (err) {
+      logger?.warn?.('[hamilton:scheduler] submission verification re-check failed:', err?.message || err)
+    }
 
     const summary = result?.summary || {}
     if ((summary.attempted || 0) > 0) {
@@ -206,7 +219,7 @@ async function tick({ db, logger = console } = {}) {
         blocked: summary.blocked,
       })
     }
-    return { ran: true, result, verification: verificationSummary, keepAlive: keepAliveSummary, autonomySweeps }
+    return { ran: true, result, verification: verificationSummary, keepAlive: keepAliveSummary, autonomySweeps, submissionVerification: verificationRecheckSummary }
   } catch (err) {
     logger?.warn?.('[hamilton:scheduler] tick failed:', err?.message || err)
     return { ran: false, error: err?.message || String(err) }

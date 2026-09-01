@@ -263,6 +263,18 @@ export async function importSession(db, {
     imported_via: importedVia,
     session_established_at: sessionEstablishedAt,
   }
+  // A NEW authenticated session is the unblock every waiting_for_login/2fa/
+  // captcha task on this host has been retrying for — make them due NOW
+  // instead of waiting out the backoff timer (up to 24h). Keep-alive refreshes
+  // are cookie re-saves, not new logins, and never trigger it. Best-effort.
+  const resumeWaiting = async () => {
+    if (isKeepAliveRefresh) return
+    try {
+      const { resumeAuthWaitingTasksForHost } = await import('./applicationTaskStore.js')
+      await resumeAuthWaitingTasksForHost(db, { profileId, portalHost: host })
+    } catch { /* never fail a session import over the resume nudge */ }
+  }
+
   if (existing) {
     await db.prepare(
       `UPDATE hamilton_saved_sessions SET
@@ -271,6 +283,7 @@ export async function importSession(db, {
           metadata_json = ?, updated_at = ${nowFn}
         WHERE id = ?`,
     ).run(label, encrypted, authenticationStrategy, expiresAt, JSON.stringify(safeMeta), existing.id)
+    await resumeWaiting()
     return rowToSession(await db.prepare('SELECT * FROM hamilton_saved_sessions WHERE id = ?').get(existing.id))
   }
   const id = crypto.randomUUID()
@@ -281,6 +294,7 @@ export async function importSession(db, {
       VALUES (?, ?, ?, ?, ?, ?, ?, ${nowFn}, ?, 'valid', ?, ${nowFn}, ${nowFn})`,
   ).run(id, String(userId), String(profileId), host, label, encrypted,
     authenticationStrategy, expiresAt, JSON.stringify(safeMeta))
+  await resumeWaiting()
   return rowToSession(await db.prepare('SELECT * FROM hamilton_saved_sessions WHERE id = ?').get(id))
 }
 

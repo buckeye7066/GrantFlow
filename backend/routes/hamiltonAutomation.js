@@ -929,10 +929,20 @@ router.post('/authorize', async (req, res) => {
       })
     }
 
+    // A FULL-AUTOMATION grant is PROFILE-WIDE by its own consent language
+    // (2026-08-31). The modal defaults scope to 'funding_source' whenever
+    // sources happen to be pre-selected (and this route defaults to 'task'),
+    // so the exact consent the owner's full-automation toggle records was
+    // scoped to whichever sources were on screen — invisible to
+    // resolveSubmissionDecision for every OTHER source, while the scope-blind
+    // isFullAutomationEnabled read said "on". Readiness said yes, the gate
+    // said missing_submit_authorization, and consented drafts never submitted.
+    const effectiveScope = isFullAutomationGrant(types, options) ? 'profile' : scope
+
     const ids = await recordAuthorizations(req.db, {
       userId,
       profileId,
-      scope,
+      scope: effectiveScope,
       fundingSourceIds,
       taskIds,
       authorizationTypes: types,
@@ -2935,14 +2945,22 @@ router.post('/admin/release-need-you', async (req, res) => {
       }
     }
 
-    // Clear the backoff ONLY on the non-legitimate blocks.
+    // Make the released tasks DUE NOW on the non-legitimate blocks.
+    //
+    // NOT NULL (2026-08-30): the scheduler's due-work SELECT
+    // (hamiltonAgentAdapter) re-picks waiting_*/blocked tasks only when
+    // `next_retry_at IS NOT NULL AND next_retry_at <= now` — a NULL there is
+    // the "genuine human hand-off, never re-picked" marker. Setting NULL here
+    // therefore UN-queued exactly the tasks this route claims to release; they
+    // could never be revisited until a human ran them by hand.
     let changed = 0
     if (releaseIds.length > 0) {
       const nowFn = req.db?.dialect === 'postgres' ? 'now()' : 'CURRENT_TIMESTAMP'
+      const nowIso = new Date().toISOString()
       const ph = releaseIds.map(() => '?').join(', ')
       const upd = await req.db.prepare(
-        `UPDATE application_tasks SET next_retry_at = NULL, updated_at = ${nowFn} WHERE id IN (${ph})`,
-      ).run(...releaseIds)
+        `UPDATE application_tasks SET next_retry_at = ?, updated_at = ${nowFn} WHERE id IN (${ph})`,
+      ).run(nowIso, ...releaseIds)
       changed = upd?.changes ?? releaseIds.length
     }
 

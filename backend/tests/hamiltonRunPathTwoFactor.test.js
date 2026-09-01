@@ -118,8 +118,10 @@ describe('consent: the solver is supplied ONLY under full automation', () => {
     const call = src.slice(src.indexOf('engineResult = await runAutopilot({'),
       src.indexOf('} finally {', src.indexOf('engineResult = await runAutopilot({')))
     expect(call).toContain('attemptVerification')
-    // Consent must come from resolveSubmissionDecision's verdict, not a second
-    // locally-derived predicate that can drift from it.
-    expect(call).toMatch(/allowAutoSubmit\s*\n?\s*\?/)
+    // Consent must come from an authority, never a locally-derived predicate:
+    // this run's resolveSubmissionDecision verdict (allowAutoSubmit) OR the
+    // profile's stored full-automation grant (fullAutomationActive).
+    expect(call).toMatch(/consentedCapabilities\s*\n?\s*\?/)
+    expect(src).toContain('const consentedCapabilities = fullAutomationActive || allowAutoSubmit')
   })
 })

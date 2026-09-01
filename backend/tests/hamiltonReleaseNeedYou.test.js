@@ -76,16 +76,24 @@ beforeEach(async () => {
 const retryOf = async (id) => (await db.prepare('SELECT next_retry_at FROM application_tasks WHERE id = ?').get(id))?.next_retry_at
 
 describe('POST /admin/release-need-you', () => {
-  it('clears the backoff on releasable need-you tasks and reports counts', async () => {
+  it('makes releasable need-you tasks DUE NOW (never NULL — NULL is un-pickable) and reports counts', async () => {
+    const before = new Date().toISOString()
     const res = await request(app()).post('/api/hamilton/automation/admin/release-need-you').send({ profileId: PID })
     expect(res.status).toBe(200)
     expect(res.body.released).toBe(3) // review + login + captcha
     // The route's key is `released_by_status` (nothing else in the product
     // ever read `by_status` — this assertion was the only consumer).
     expect(res.body.released_by_status).toMatchObject({ waiting_for_review: 1, blocked_login_required: 1, blocked_captcha: 1 })
-    expect(await retryOf('t-review')).toBeNull()
-    expect(await retryOf('t-login')).toBeNull()
-    expect(await retryOf('t-captcha')).toBeNull()
+    // THE BUG THIS PINS (2026-08-30): the route used to set next_retry_at =
+    // NULL — but the scheduler's due-work SELECT re-picks waiting_*/blocked
+    // tasks only when next_retry_at IS NOT NULL AND due, so "releasing" a task
+    // actually UN-queued it forever. Released = stamped due-now.
+    for (const id of ['t-review', 't-login', 't-captcha']) {
+      const at = await retryOf(id)
+      expect(at).not.toBeNull()
+      expect(String(at) <= new Date(Date.now() + 1000).toISOString()).toBe(true)
+      expect(String(at) >= before.slice(0, 10)).toBe(true) // today, not a stale stamp
+    }
   })
 
   it('NEVER releases submission_verification_required (double-submit quarantine) or mail/fax', async () => {

@@ -506,7 +506,7 @@ export function serializeRunJson(value, fallback = '{}') {
   try {
     out = JSON.stringify(value ?? {}, (_k, v) => {
       if (typeof v === 'bigint') return v.toString()
-      if (typeof v === 'string') return v.includes(' ') ? v.split(' ').join('') : v
+      if (typeof v === 'string') return v.includes('\u0000') ? v.split('\u0000').join('') : v
       if (v && typeof v === 'object') {
         if (seen.has(v)) return '[circular]'
         seen.add(v)

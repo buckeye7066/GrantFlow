@@ -52,6 +52,15 @@ const AUTH_STATUS_BY_KIND = Object.freeze({
 export const AUTH_BACKOFF_MINUTES = Object.freeze([15, 60, 240, 720, 1440])
 export const AUTH_MAX_ATTEMPTS = AUTH_BACKOFF_MINUTES.length
 
+// CAPTCHA gets its OWN schedule (2026-08-30): a captcha wall does not clear
+// itself on a 15-minute cadence — what clears it is the owner-configured
+// solver on the next real run, or a human completing it once in co-browse and
+// saving the session. Retries start at 4h. This does NOT delay recovery:
+// importing a session / saving a credential now stamps the task due
+// immediately (resumeAuthWaitingTasksForHost), so the timer is only the
+// fallback cadence.
+export const CAPTCHA_BACKOFF_MINUTES = Object.freeze([240, 720, 1440])
+
 function normalizeKind(kind) {
   return String(kind || '').trim().toLowerCase()
 }
@@ -120,10 +129,12 @@ export function planAuthBackup({ blockerKind, retryCount = 0, now = Date.now(), 
   if (!waitingStatus) {
     return { isAuth: false, status: 'blocked', exhausted: false, nextRetryAt: null, retryInMinutes: null, attempt: 0, maxAttempts: AUTH_MAX_ATTEMPTS, message: '' }
   }
+  const schedule = waitingStatus === 'waiting_for_captcha' ? CAPTCHA_BACKOFF_MINUTES : AUTH_BACKOFF_MINUTES
+  const maxAttempts = schedule.length
   const priorAttempts = Math.max(0, Math.floor(Number(retryCount) || 0))
   const where = portalUrl ? String(portalUrl) : 'this portal'
   const reasonNote = lastReason ? ` (last result: ${String(lastReason).slice(0, 120)})` : ''
-  if (priorAttempts >= AUTH_MAX_ATTEMPTS) {
+  if (priorAttempts >= maxAttempts) {
     return {
       isAuth: true,
       status: 'blocked',
@@ -131,11 +142,11 @@ export function planAuthBackup({ blockerKind, retryCount = 0, now = Date.now(), 
       nextRetryAt: null,
       retryInMinutes: null,
       attempt: priorAttempts,
-      maxAttempts: AUTH_MAX_ATTEMPTS,
+      maxAttempts,
       message: exhaustedMessage(waitingStatus, { where, attempts: priorAttempts, reasonNote }),
     }
   }
-  const mins = AUTH_BACKOFF_MINUTES[priorAttempts]
+  const mins = schedule[priorAttempts]
   const message = deferralMessage(waitingStatus, { where, mins, reasonNote })
   return {
     isAuth: true,
@@ -144,7 +155,7 @@ export function planAuthBackup({ blockerKind, retryCount = 0, now = Date.now(), 
     nextRetryAt: new Date(now + mins * 60_000).toISOString(),
     retryInMinutes: mins,
     attempt: priorAttempts + 1,
-    maxAttempts: AUTH_MAX_ATTEMPTS,
+    maxAttempts,
     message,
   }
 }

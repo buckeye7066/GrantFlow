@@ -220,6 +220,12 @@ const APPLY_NAV_PATTERNS = [
   /start\s*(?:your\s*|an?\s*)?application/i, /begin\s*(?:your\s*|an?\s*)?application/i,
   /start\s*(?:your\s*)?app\b/i, /go\s*to\s*(?:the\s*)?application/i, /open\s*application/i,
   /application\s*form/i,
+  // 2026-08-30: real funder sites (NAMI / Seattle CDBG / Alaska Housing class)
+  // reach the form through ordinary navigation copy, not a button labelled
+  // "Apply". Navigation-only patterns — this list is consulted ONLY on a page
+  // with no fillable form, so widening it cannot intercept a submit.
+  /how\s*to\s*apply/i, /application\s*portal/i, /online\s*application/i,
+  /submit\s*(?:an\s*|your\s*)?application/i, /apply\s*for\s*(?:funding|assistance|this)/i,
 ]
 const MAX_APPLY_NAV_CLICKS = 3
 
@@ -558,6 +564,76 @@ function actionableSubmitButtons(submitButtons, { anyFieldFilled = false, recogn
   // application being submitted; degrade to the no_application_form path.
   if (Number(recognizedFieldCount) <= 0) return []
   return list.filter((b) => b && b.inForm && Number(b.formFieldCount) > 0)
+}
+
+/**
+ * Click the SUBMIT control with a verdict the irreversible boundary can trust.
+ *
+ * Returns { clicked, dispatched }:
+ *   - clicked:    the click ran and the post-click settle completed.
+ *   - dispatched: whether a click event may have REACHED the page. false means
+ *     provably not — the handle was gone, or every attempt failed during
+ *     Playwright's pre-dispatch actionability phase (a TimeoutError there
+ *     fires no event). Only a failure AFTER dispatch could have submitted,
+ *     and those set dispatched=true so the caller stays conservative.
+ *
+ * WHY (2026-08-30): "Submit button could not be clicked" (TSAC / HOPE / GAMS /
+ * Aspire) ended runs in submission_verification_required — "a submission may
+ * have gone through" — for clicks that provably never fired: SPA re-renders
+ * drop the data-hamilton-btn attribute between detect and click, so page.$
+ * returned null and NOTHING was ever clicked, yet the task was quarantined as
+ * an uncertain submission a human had to reconcile. The fallback re-detects
+ * the control by its own text before giving up.
+ */
+async function clickSubmitControl(page, candidate, patterns) {
+  const first = await clickButtonByBidVerdict(page, candidate.bid)
+  if (first.clicked || first.dispatched) return first
+  // The stamped attribute vanished (SPA re-render) or the click never got past
+  // actionability. Re-detect submit-looking controls and retry the one whose
+  // text matches the candidate we already vetted. Never widens the choice:
+  // only an exact-text match of the ALREADY-CHOSEN control is retried.
+  try {
+    const again = await detectButtons(page, patterns)
+    const wantText = String(candidate.text || '').trim().toLowerCase()
+    const match = again.find((b) => String(b.text || '').trim().toLowerCase() === wantText)
+    if (match) return await clickButtonByBidVerdict(page, match.bid)
+  } catch { /* fall through to the honest failure */ }
+  return { clicked: false, dispatched: false }
+}
+
+async function clickButtonByBidVerdict(page, bid) {
+  const sel = `[data-hamilton-btn="${bid}"]`
+  const h = await page.$(sel).catch(() => null)
+  if (!h) return { clicked: false, dispatched: false }
+  try {
+    const navWait = page.waitForNavigation({ timeout: NAV_TIMEOUT_MS, waitUntil: 'domcontentloaded' }).catch(() => null)
+    await h.scrollIntoViewIfNeeded?.({ timeout: STEP_TIMEOUT_MS }).catch(() => {})
+    let clicked = false
+    let mayHaveDispatched = false
+    const attempt = async (fn) => {
+      try { await fn(); clicked = true } catch (err) {
+        // A TimeoutError fires during Playwright's PRE-dispatch actionability
+        // wait — no event reached the page. Any other error (context destroyed
+        // by a navigation the click itself caused, target closed) may have
+        // fired the event, so the boundary must stay conservative.
+        if (!/Timeout|timeout/.test(String(err?.message || err))) mayHaveDispatched = true
+      }
+    }
+    await attempt(() => h.click({ timeout: STEP_TIMEOUT_MS }))
+    if (!clicked) await attempt(() => h.click({ timeout: STEP_TIMEOUT_MS, force: true }))
+    if (!clicked) await attempt(() => h.evaluate((el) => el.click()))
+    if (!clicked) return { clicked: false, dispatched: mayHaveDispatched }
+    await Promise.race([
+      navWait,
+      new Promise((r) => setTimeout(r, 1500)),
+    ])
+    await page.waitForLoadState('domcontentloaded', { timeout: NAV_TIMEOUT_MS }).catch(() => null)
+    return { clicked: true, dispatched: true }
+  } catch {
+    // The click may have fired before the failure (e.g. the navigation it
+    // caused destroyed the context) — conservative.
+    return { clicked: false, dispatched: true }
+  }
 }
 
 async function clickButtonByBid(page, bid) {
@@ -2574,11 +2650,19 @@ export async function runAutopilot({
         }
         beforeSubmitCapture = beforeConfirmation
         reportLiveStep(runId, 'Submitting the application')
-        const clicked = await clickButtonByBid(page, submitCandidates[0].bid)
-        if (!clicked) {
+        const clickVerdict = await clickSubmitControl(page, submitCandidates[0], SUBMIT_BUTTON_PATTERNS)
+        if (!clickVerdict.clicked) {
+          // dispatched=false is a PROOF: the click never reached the page (the
+          // stamped control was gone or every attempt died pre-dispatch), so
+          // nothing was submitted and a retry is safe. Only a failure that may
+          // have fired the event keeps the conservative uncertain-submission
+          // quarantine.
           return {
             status: 'failed', blocker_kind: 'click_failed',
-            blocker_detail: 'Submit button could not be clicked after the durable submission boundary was acquired.',
+            blocker_detail: clickVerdict.dispatched
+              ? 'Submit click failed after it may have reached the page; check the portal before retrying.'
+              : 'Submit button could not be clicked (the control was never actually activated — no submission occurred). Safe to retry.',
+            provably_not_submitted: clickVerdict.dispatched !== true,
             ...retainedSubmitFields(),
             filled_fields: filled, pages_visited: pagesVisited, trace,
           }
@@ -2834,7 +2918,7 @@ export const _internal = {
   SIGNATURE_FIELD_PATTERNS, isTypedSignatureField, signatureConsentFor, detectAttestationGate,
   SUBMIT_BUTTON_PATTERNS, NEXT_BUTTON_PATTERNS, DRAFT_BUTTON_PATTERNS,
   matchFieldKey, readProfileValues, applyNarrativeAnswers,
-  clickButtonByBid, FEEDBACK_VALIDATION_IGNORE_RX,
+  clickButtonByBid, clickSubmitControl, clickButtonByBidVerdict, FEEDBACK_VALIDATION_IGNORE_RX,
   detectGate, detectBotWall, attemptLogin,
   isIncidentalLoginWidget, readCaptchaShape, detectPaymentGate,
   retryOnContextLoss, navigateWithRecovery, DocumentDownloadTarget,
@@ -2842,6 +2926,7 @@ export const _internal = {
   extractConfirmationReference,
   extractConfirmationReferenceFromUrl,
   detectReceiptAcknowledgement,
+  RECEIPT_ACK_RX,
   normalizedReference,
   captureConfirmation,
   mergeSubmitCapture,

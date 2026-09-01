@@ -26,12 +26,31 @@ describe('resolveUnknownMethod — pointer/directory rows become research leads,
     expect(d.fallback).toBe('no_application')
   })
 
-  it('a REAL award (direct kind, ordinary url) with no findable page STILL gets the funder-contact packet (unchanged)', async () => {
-    const ctx = { opportunity: { title: 'Elks National Foundation Most Valuable Student', sponsor: 'Elks National Foundation', opportunity_kind: 'direct' }, portalUrl: 'https://www.elks.org/scholars/scholarships/mvs.cfm', ...rescueMiss }
+  it('a REAL award (direct kind, ordinary url) whose search VERIFIED nothing STILL gets the funder-contact packet (unchanged)', async () => {
+    // The search must RUN and return hits: zero hits is the outage signature
+    // below, not evidence about the funder.
+    const searchRanNothingVerified = {
+      _urlRescueDeps: {
+        searchWebImpl: async () => [{ url: 'https://en.wikipedia.org/wiki/Elks', title: 'Elks', snippet: 'encyclopedia entry' }],
+        checkUrlImpl: async (u) => ({ status: 'ok', finalUrl: u }),
+      },
+    }
+    const ctx = { opportunity: { title: 'Elks National Foundation Most Valuable Student', sponsor: 'Elks National Foundation', opportunity_kind: 'direct' }, portalUrl: 'https://www.elks.org/scholars/scholarships/mvs.cfm', ...searchRanNothingVerified }
     const d = await resolveUnknownMethod(null, ctx, { url: 'https://www.elks.org/scholars/scholarships/mvs.cfm' })
     expect(d.outcome).toBe('degraded')
     expect(d.fallback).toBe('manual')
     expect(d.strategy).toBe('funder_contact_packet')
+  })
+
+  it('a REAL award whose web search is DOWN defers instead of minting manual work', async () => {
+    // A search-provider outage says nothing about the funder. Parking the task
+    // on a funder-contact packet would convert a transient infrastructure
+    // failure into permanent human work.
+    const ctx = { opportunity: { title: 'Elks National Foundation Most Valuable Student', sponsor: 'Elks National Foundation', opportunity_kind: 'direct' }, portalUrl: 'https://www.elks.org/scholars/scholarships/mvs.cfm', ...rescueMiss }
+    const d = await resolveUnknownMethod(null, ctx, { url: 'https://www.elks.org/scholars/scholarships/mvs.cfm' })
+    expect(d.outcome).toBe('deferred')
+    expect(d.strategy).toBe('url_rescue_search_unavailable')
+    expect(d.fallback).toBeNull()
   })
 
   it('a rescued real application page still wins (no regression to the rescue path)', async () => {
