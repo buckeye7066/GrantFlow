@@ -93,17 +93,30 @@ const usd = new Intl.NumberFormat("en-US", {
 })
 
 function formatAmount(item) {
-  const req = Number(item?.amount_requested)
-  if (Number.isFinite(req) && req > 0) return usd.format(Math.round(req))
-  const min = Number(item?.amount_min)
-  const max = Number(item?.amount_max)
-  const hasMin = Number.isFinite(min) && min > 0
-  const hasMax = Number.isFinite(max) && max > 0
-  if (hasMin && hasMax) return min === max ? usd.format(Math.round(min)) : `${usd.format(Math.round(min))} – ${usd.format(Math.round(max))}`
-  if (hasMin) return `From ${usd.format(Math.round(min))}`
-  if (hasMax) return `Up to ${usd.format(Math.round(max))}`
-  // No numeric value — show the honest stored text/status instead of implying
-  // every blank row "varies" (most simply never listed an amount).
+  const contribution = estimatedValue(item)
+  if (Number.isFinite(contribution) && contribution > 0) {
+    return usd.format(Math.round(contribution))
+  }
+
+  const decision = String(item?.match_decision || "").trim().toLowerCase()
+  const eligibility = String(item?.eligibility_status || "").trim().toLowerCase()
+  if (decision === "reject" || eligibility === "ineligible") return "Not counted"
+
+  const kind = String(item?.opportunity_kind || "").trim().toLowerCase()
+  if (["directory", "referral", "school_portal", "past_award_intel", "benefit"].includes(kind)) {
+    return "No fixed award amount"
+  }
+
+  const rawCandidates = [item?.amount_requested, item?.amount_max, item?.amount_min]
+  const hasRawPositiveAmount = rawCandidates.some((value) => {
+    const numeric = Number(value)
+    return Number.isFinite(numeric) && numeric > 0
+  })
+  const serverValue = Number(item?.pipeline_dollar_value)
+  if (Number.isFinite(serverValue) && serverValue === 0 && hasRawPositiveAmount) {
+    return "No fixed award amount"
+  }
+
   return amountTextFallback(item) || "Amount not listed"
 }
 
