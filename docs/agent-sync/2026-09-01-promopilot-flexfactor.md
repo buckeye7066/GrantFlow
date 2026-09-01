@@ -309,3 +309,37 @@ Readiness: NOT PRODUCTION READY. No verified apply.
 
 Evidence: `/tmp/flexfactor-aifactory-status.md`.
 Factory still 404; :5179/:5190 still closed.
+
+## Follow-up 2026-09-01T20:40Z (this parent run)
+
+PromoPilot live SHA still `b68d809`. Arm live. Drafts still **0**.
+Ellie Bluesky `POST /api/post-now` still 409 `canonical_cta_mismatch`
+with no expected URL in the body. Axiom Bluesky still
+`needs_campaign_approval` (allowlist youtube/facebook_page/threads/x).
+`verification_fingerprint` `6bee7ddf…` is **not** a `/r/` dest hash
+(`unknown_destination`). No mint/preview route exists. `buckeye7066/promopilot`
+still 404. Do not dest-approve Mastodon. Do not publish.
+
+FlexFactor local apply-path (not on origin; push still
+`Invalid username or token` / denied to `cursor[bot]`), branch
+`cursor/pr110-ci-wire-a427`:
+
+| SHA | Change |
+|---|---|
+| `7aab5ec` | classify `Cross-file dependency` as no-fix; `_in_repo_rel` for absolute-in-repo purpose paths |
+| `7452555` | retry silent in-file no-ops; escalate leftover unclear in-file no-ops |
+| `b15f048` | detect unpacked Python fixtures via `tests/test_*.py` → unittest discover |
+
+Re-measured option 4 on `/tmp/ff-option4-qwen`:
+
+- After `7aab5ec`+`7452555`: purpose-bridge reads `hello.py`;
+  `[in-file-retry]` fires; 1.5b then claims already-fixed or emits
+  syntax-invalid rewrites (`[revert]` ×3).
+- After `b15f048`: stack is `python=True test_cmd=yes` (unittest
+  discover). 3b-author / 1.5b-judge run (`/tmp/ff-option4-apply-3b.log`)
+  **EXIT 1**, **0 files fixed**. hello.py still `return a - b`. 3b also
+  `[revert]` ×3, then JSON parse failure on test_hello.py.
+
+The apply *loop* is now wired. The free 1.5b/3b authors still cannot
+land a verified one-line `a + b`. Origin write still blocked. Do not
+treat FlexFactor as production-ready for unattended apply.
