@@ -63,10 +63,7 @@ import { looksLikeApplicationPath } from './robertFunderLeads.js'
 import { isDismissed } from '../pipelineDismissals.js'
 import {
   loadProfileFacts as canonicalLoadProfileFacts,
-  gateRelatable,
-  gateQualifies,
-  gateCoversNeed,
-  gateRealOffline,
+  qualifyForPipeline,
   PROTECTED_GRANT_STATUSES,
 } from './robertPipelineAudit.js'
 
@@ -431,21 +428,16 @@ async function loadOpportunityRow(db, oppId) {
  * @returns { pass: boolean, reason: string|null, harvest_first?: boolean }
  */
 export function qualifyForProfile(oppRow, facts, { now = new Date(), requirePositiveNeed = true } = {}) {
-  const relatable = gateRelatable(oppRow, { now })
-  if (!relatable.pass) {
-    // A hub/pointer is harvested (decomposed), never auto-added whole.
-    return { pass: false, reason: relatable.reason || 'not_relatable', harvest_first: relatable.harvest_first === true }
+  // ONE gold-standard implementation (robertPipelineAudit.qualifyForPipeline)
+  // shared with saveToProfilePipeline admission and the individual-root boot net.
+  const verdict = qualifyForPipeline(oppRow, facts, { now, requirePositiveNeed })
+  if (!verdict.pass) {
+    return {
+      pass: false,
+      reason: verdict.reason,
+      harvest_first: verdict.harvest_first === true,
+    }
   }
-  const qualifies = gateQualifies(oppRow, facts)
-  if (!qualifies.pass) return { pass: false, reason: qualifies.reason || 'not_qualified' }
-  const covers = gateCoversNeed(oppRow, facts)
-  if (!covers.pass) return { pass: false, reason: covers.reason || 'need_not_covered' }
-  // ADMISSION bar: a positive declared-need overlap, not just fail-open silence.
-  if (requirePositiveNeed && !(Array.isArray(covers.evidence?.matched) && covers.evidence.matched.length > 0)) {
-    return { pass: false, reason: 'covers_need:no_positive_declared_match' }
-  }
-  const realOffline = gateRealOffline(oppRow, { now })
-  if (realOffline && realOffline.pass === false) return { pass: false, reason: realOffline.reason || 'not_real' }
   return { pass: true, reason: null }
 }
 

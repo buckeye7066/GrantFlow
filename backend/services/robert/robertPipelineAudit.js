@@ -78,6 +78,7 @@ import { stageOfLifeConflictForSections } from '../../config/stageOfLifeEligibil
 import {
   declaredNeedsFrom,
   evaluateDeclaredNeedCoverage,
+  isIndividualRootProfile,
   parseMaybeJson,
 } from '../pipelinePrecision.js'
 import { recordDismissal, reconcileDismissedGrants } from '../pipelineDismissals.js'
@@ -168,6 +169,7 @@ export function deriveProfileFacts(row, sections, { profileId = null } = {}) {
     applicantType,
     states,
     needs,
+    individualRoot: isIndividualRootProfile(row, applicantType),
     protectedProfile: PROTECTED_PROFILE_NAME_RX.test(String(row?.display_name ?? '')),
   }
 }
@@ -390,11 +392,21 @@ export function gateRelatable(row, { now = new Date() } = {}) {
     }
   }
   if (classification.bucket === RESULT_BUCKETS.RESOURCE) {
-    return {
-      pass: false,
-      reason: REJECTION_REASONS.DIRECTORY_ONLY,
-      harvest_first: true,
-      evidence: { bucket: classification.bucket, reasons: classification.reasons },
+    // `no_fundable_signal` is a PRESENTATION bucket (Discover puts sparse
+    // rows in Directories). It is NOT proof the row is a listing — a named
+    // Pell/HOPE/NAEMT award with only title+URL is relatable. Refuse only
+    // pointer-shaped reasons; the other three gold-standard gates decide
+    // the rest.
+    const pointerReasons = (classification.reasons || []).filter(
+      (r) => r !== 'no_fundable_signal' && r !== 'empty_row',
+    )
+    if (pointerReasons.length > 0) {
+      return {
+        pass: false,
+        reason: REJECTION_REASONS.DIRECTORY_ONLY,
+        harvest_first: true,
+        evidence: { bucket: classification.bucket, reasons: pointerReasons },
+      }
     }
   }
   return { pass: true, reason: null, evidence: { bucket: classification.bucket } }
@@ -473,11 +485,25 @@ export function gateQualifies(row, facts) {
  * profile we cannot read, not a profile with nothing to fund, and this gate
  * DELETES — so silence must never remove anyone's funding.
  */
-export function gateCoversNeed(row, facts) {
+export function gateCoversNeed(row, facts, { requirePositive = false } = {}) {
   // ONE implementation (services/pipelinePrecision.js) shared with the
-  // admission gate and the boot sweep. Silence on either side is neutral and
-  // REPORTED through `detail`, never folded into a bare "kept".
+  // admission gate and the boot sweep. Silence on either side is reported
+  // through `detail`. ADMISSION and the individual-root boot net set
+  // `requirePositive` so a row that cannot answer "yes, this meets a need"
+  // does not stay in the pipeline.
   const verdict = evaluateDeclaredNeedCoverage(row, facts?.needs)
+  if (requirePositive && !(Array.isArray(verdict.matched) && verdict.matched.length > 0)) {
+    return {
+      pass: false,
+      reason: 'covers_need:no_positive_declared_match',
+      evidence: {
+        gate: 'covers_need',
+        detail: verdict.detail,
+        profile_needs: verdict.profile_needs,
+        opportunity_needs: verdict.opportunity_needs,
+      },
+    }
+  }
   if (verdict.pass) {
     return {
       pass: true,
@@ -522,6 +548,45 @@ export function gateCoversNeed(row, facts) {
  * during boot must never read as "dead". Returns `null` when this half has
  * nothing to say (the networked half then decides for Robert).
  */
+/**
+ * Gold-standard pipeline bar (owner 2026-08-21 / 2026-09-01): a source
+ * reaches a pipeline only when it is REAL, RELATABLE, the profile QUALIFIES,
+ * and it MEETS A DECLARED NEED. ADMISSION requires a POSITIVE need overlap
+ * (`requirePositiveNeed`, default true) — fail-open silence is what inflated
+ * individual pipelines with rows that could not answer "yes" to the need
+ * conjunct. Removal of org pipelines may still call the four gates separately
+ * without that flag so an unreadable row is counted, not deleted.
+ *
+ * REAL here is the DETERMINISTIC half only (expired / no URL). A boot or
+ * admission write never spends the network; a funder outage must never read
+ * as "dead".
+ */
+export function qualifyForPipeline(row, facts, { now = new Date(), requirePositiveNeed = true } = {}) {
+  const relatable = gateRelatable(row, { now })
+  if (!relatable.pass) {
+    return {
+      pass: false,
+      gate: GATES.RELATABLE,
+      reason: relatable.reason || 'not_relatable',
+      harvest_first: relatable.harvest_first === true,
+      verdict: relatable,
+    }
+  }
+  const qualifies = gateQualifies(row, facts)
+  if (!qualifies.pass) {
+    return { pass: false, gate: GATES.QUALIFIES, reason: qualifies.reason || 'not_qualified', verdict: qualifies }
+  }
+  const covers = gateCoversNeed(row, facts, { requirePositive: requirePositiveNeed })
+  if (!covers.pass) {
+    return { pass: false, gate: GATES.COVERS_NEED, reason: covers.reason || 'need_not_covered', verdict: covers }
+  }
+  const realOffline = gateRealOffline(row, { now })
+  if (realOffline && realOffline.pass === false) {
+    return { pass: false, gate: GATES.REAL, reason: realOffline.reason || 'not_real', verdict: realOffline }
+  }
+  return { pass: true, gate: null, reason: null, verdict: covers }
+}
+
 export function gateRealOffline(row, { now = new Date() } = {}) {
   const expired = isClearlyExpiredProgram(row, now)
   if (expired) {
@@ -534,7 +599,7 @@ export function gateRealOffline(row, { now = new Date() } = {}) {
       evidence: { gate: 'real', detail: `deadline_passed:${row.deadline}` },
     }
   }
-  const url = row?.application_url || row?.source_url || null
+  const url = row?.application_url || row?.apply_url || row?.source_url || row?.url || null
   if (!url) {
     return { pass: false, reason: REJECTION_REASONS.NO_REAL_URL, evidence: { gate: 'real', detail: 'no_url_to_verify' } }
   }
@@ -544,7 +609,7 @@ export function gateRealOffline(row, { now = new Date() } = {}) {
 export async function gateReal(row, { now = new Date(), checkUrl = defaultCheckUrl, attempts = REAL_GATE_MAX_ATTEMPTS } = {}) {
   const offline = gateRealOffline(row, { now })
   if (offline) return offline
-  const url = row?.application_url || row?.source_url || null
+  const url = row?.application_url || row?.apply_url || row?.source_url || row?.url || null
 
   let last = null
   for (let attempt = 1; attempt <= Math.max(1, attempts); attempt += 1) {
@@ -1133,6 +1198,7 @@ export default {
   persistGapNotes,
   programIdentityKey,
   programTokens,
+  qualifyForPipeline,
   rankDuplicate,
   sameProgram,
 }

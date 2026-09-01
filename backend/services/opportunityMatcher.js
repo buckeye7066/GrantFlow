@@ -5,6 +5,10 @@
  *
  * Pipeline gates (in order):
  *   1. SOURCE_ALLOWLIST  — blocks non-approved sources
+ *   1.5 DISMISSED        — sticky user removals
+ *   1.75 FUNDING_RESULT  — not_a_grant junk chain
+ *   1.9 GOLD STANDARD    — real / relatable / meets a need / qualifies
+ *                          (qualifyForPipeline; positive need for individuals)
  *   2. DECISION_ENGINE   — REJECT = hard ineligible
  *   3. EXCLUSION_ENGINE   — custom suppression rules
  *   4. THRESHOLD          — pipeline admission floor; never changes the score
@@ -37,7 +41,7 @@ import {
 } from '../utils/grantFingerprint.js'
 import { isDismissed as isPipelineDismissed } from './pipelineDismissals.js'
 import { classifyFundingResult, RESULT_BUCKETS } from '../config/fundingResultFilters.js'
-import { declaredNeedsFrom, evaluateDeclaredNeedCoverage } from './pipelinePrecision.js'
+import { deriveProfileFacts, qualifyForPipeline } from './robert/robertPipelineAudit.js'
 import { createLogger } from '../utils/logger.js'
 
 // Directory-style / referral resources must ALWAYS survive filtering (mission
@@ -378,32 +382,42 @@ async function admitToPipeline(db, profileContext, opportunity, ctx = {}) {
       }, decision?.score ?? null)
     }
 
-    // Gate 1.9: DECLARED-NEED coverage (services/pipelinePrecision.js).
-    // Owner order 2026-08-21: a source reaches a pipeline only if it MEETS A
-    // NEED THE PROFILE DECLARED. The decision engine below deliberately scores
-    // need coverage rather than rejecting on it ("a low score alone is not
-    // hard ineligibility"), so until this gate a row serving only a need the
-    // profile never declared could be admitted on applicant type + geography.
-    // Structured declarations only (never mined prose); silence on EITHER side
-    // is neutral and passes — the profile that declares nothing is one we
-    // cannot read, the row that states no need vocabulary is silent, not
-    // contrary. Reported as `live_reject` so every promotion/sweep sink already
-    // classifies it as terminal.
+    // Gate 1.9: the FOUR-GATE gold standard (real / relatable / meets a
+    // declared need / the profile qualifies). Owner order 2026-08-21 and
+    // restated 2026-09-01: nothing that cannot answer yes to all four reaches
+    // a pipeline. `qualifyForPipeline` is the ONE implementation Robert's
+    // auto-add, the individual-root boot net, and this writer share.
+    // Positive need overlap is required — fail-open silence is what inflated
+    // individual pipelines. Directories stay on Discover (locator rule); they
+    // are not leaf applications. Reported as `live_reject` so every
+    // promotion/sweep sink already classifies it as terminal.
     {
-      const declaredNeeds = declaredNeedsFrom(rawProfile, profileSections)
-      const needCoverage = evaluateDeclaredNeedCoverage(opportunity, declaredNeeds)
-      if (!needCoverage.pass) {
+      const facts = deriveProfileFacts(rawProfile, profileSections, { profileId })
+      // Positive need overlap is the gold standard for INDIVIDUAL pipelines
+      // (the inflation class). Org/business pipelines keep fail-open silence
+      // so a mission-typed org is not starved when a grant states no need
+      // vocabulary — type-derived needs still produce a positive match when
+      // the row does name one (Olivia / small_business → business).
+      const gold = qualifyForPipeline(opportunity, facts, {
+        requirePositiveNeed: facts.individualRoot === true,
+      })
+      if (!gold.pass) {
+        const gateName = gold.gate === 'covers_need' ? 'NEED_COVERAGE' : `GOLD_STANDARD:${String(gold.gate || 'failed').toUpperCase()}`
         if (!quiet) log.info(
-          `[opportunityMatcher] Gate:NEED_COVERAGE suppressed "${opportunity?.title}" — profile declares [${needCoverage.profile_needs.join(', ')}], opportunity serves [${needCoverage.opportunity_needs.join(', ')}]`,
+          `[opportunityMatcher] Gate:${gateName} suppressed "${opportunity?.title}" — ${gold.reason}`,
         )
         return denied('live_reject', {
           saved: false,
-          reason: `Does not meet a declared need: profile declares [${needCoverage.profile_needs.join(', ')}]; opportunity serves [${needCoverage.opportunity_needs.join(', ')}]`,
-          gate: 'NEED_COVERAGE',
+          reason: gold.reason === 'covers_need:no_positive_declared_match'
+            ? `Does not meet a declared need: profile declares [${(gold.verdict?.evidence?.profile_needs || []).join(', ')}]; opportunity serves [${(gold.verdict?.evidence?.opportunity_needs || []).join(', ')}]`
+            : `Failed pipeline gold standard (${gold.gate}): ${gold.reason}`,
+          gate: gateName,
           matchPercentage: null,
           threshold,
           decision: 'REJECT',
-          needCoverage,
+          goldStandard: { gate: gold.gate, reason: gold.reason, evidence: gold.verdict?.evidence ?? null },
+          needCoverage: gold.verdict?.evidence ?? null,
+          individualRoot: facts.individualRoot === true,
         }, decision?.score ?? null)
       }
     }

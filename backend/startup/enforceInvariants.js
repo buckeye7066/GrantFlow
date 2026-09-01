@@ -5296,15 +5296,15 @@ const TERMINAL_TASK_STATUSES = Object.freeze([
  * currently on a pipeline will be removed.").
  *
  * The per-call gate is `opportunityMatcher.admitToPipeline` (source allowlist,
- * tombstones, junk chain, NEED_COVERAGE, decision engine — which carries the
- * applicant-type, stage-of-life, geography, eligibility and aid-preference
- * gates). This is the NET over rows every pre-gate writer left behind. It runs
- * Robert's four-gate verifier (services/robert/robertPipelineAudit.js —
- * RELATABLE / QUALIFIES / COVERS_NEED / REAL) over EVERY profile's pipeline on
- * every boot, with ONE difference from Robert's manual tool: the REAL gate is
- * its DETERMINISTIC half only (title-stated sunset, long-past deadline, no URL).
- * A boot never spends minutes on HEAD requests, and a funder's bad afternoon
- * must never read as "dead" (the `unverifiable` rule).
+ * tombstones, junk chain, the four-gate gold standard, decision engine). This
+ * is the NET over rows every pre-gate writer left behind. It runs Robert's
+ * four-gate verifier (services/robert/robertPipelineAudit.js — RELATABLE /
+ * QUALIFIES / COVERS_NEED / REAL) over EVERY profile's pipeline on every boot.
+ * Individual-root profiles require a POSITIVE declared-need overlap (the same
+ * bar admission uses). The REAL gate is its DETERMINISTIC half only
+ * (title-stated sunset, long-past deadline, no URL). A boot never spends
+ * minutes on HEAD requests, and a funder's bad afternoon must never read as
+ * "dead" (the `unverifiable` rule).
  *
  * REMOVAL / RE-LABEL (the owner's two halves):
  *   - An early/discovery-status row that fails a gate is TOMBSTONED
@@ -5438,7 +5438,13 @@ export async function enforcePipelinePrecision(db) {
             if (!verdict.pass) failedGate = GATES.QUALIFIES
           }
           if (!failedGate) {
-            verdict = gateCoversNeed(row, facts)
+            // Individual-root pipelines use the gold-standard POSITIVE need
+            // bar (the same requirePositiveNeed admission uses). Fail-open
+            // silence is what left unlabeled scholarships / benefits in
+            // every person-type pipeline. Org/business pipelines keep the
+            // fail-open reading so an unreadable row is counted, not deleted.
+            const requirePositive = facts.individualRoot === true
+            verdict = gateCoversNeed(row, facts, { requirePositive })
             if (!verdict.pass) failedGate = GATES.COVERS_NEED
             else if (profileDeclaresNoNeeds) counts.needNeutralProfile += 1
             else if (verdict?.evidence?.detail === 'opportunity_states_no_need_vocabulary') counts.needNeutralRow += 1

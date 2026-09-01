@@ -31,7 +31,7 @@ if (!url) {
   process.exit(2)
 }
 const asJson = process.argv.includes('--json')
-const strictNeeds = process.argv.includes('--no-section-keys')
+const looseSectionKeys = process.argv.includes('--section-keys')
 
 const { Client } = require('pg')
 const client = new Client({
@@ -117,9 +117,9 @@ const totals = {
 for (const p of profiles) {
   let facts, rows
   try { facts = await loadProfileFacts(db, p.id) } catch (e) { totals.failed += 1; if (totals.errors.length < 5) totals.errors.push(`${p.id}: ${e?.message || e}`); continue }
-  // `--no-section-keys`: measure the STRICT reading of "declared" (explicit
-  // need arrays + tags only; a section merely EXISTING is not a declaration).
-  if (strictNeeds) facts = { ...facts, needs: declaredNeedsFrom(facts.profile, facts.sections, { includeSectionKeys: false }) }
+  // `--section-keys`: measure the OLD loose reading (a section merely EXISTING
+  // counted as a declared need). Default is the gold-standard strict reading.
+  if (looseSectionKeys) facts = { ...facts, needs: declaredNeedsFrom(facts.profile, facts.sections, { includeSectionKeys: true }) }
   if (facts.protectedProfile) { totals.protected_profiles_skipped += 1; continue }
   try { rows = await loadPipelineRows(db, p.id) } catch (e) { totals.failed += 1; if (totals.errors.length < 5) totals.errors.push(`${p.id}: ${e?.message || e}`); continue }
   if (!rows.length) continue

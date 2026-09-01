@@ -36,15 +36,24 @@
  *     `normalizeNeedCategory` the profile side uses.
  *   - "At least PART" of one declared need is the owner's bar: one overlapping
  *     canonical need passes.
- *   - SILENCE IS NEUTRAL ON BOTH SIDES and is REPORTED, never hidden. A profile
- *     that declares no needs is a profile we cannot read, not a profile with
- *     nothing to fund; a row that states no need vocabulary is silent, not
- *     contrary. Both outcomes carry a distinct `detail` so every sweep can
- *     count them per reason instead of folding them into "kept".
+ *   - A section merely EXISTING is not a declaration. Nearly every person-type
+ *     profile carries empty `housing` / `education` / `health_medical` /
+ *     `family_life` schema sections (measured 2026-08-23), so treating the
+ *     section KEY as a need made every individual look the same and flooded
+ *     their pipelines. Explicit need arrays, tags, and structured TYPE-derived
+ *     needs (student→education, small_business→business) still count.
+ *     `includeSectionKeys:true` remains for a census of the old loose reading.
+ *   - SILENCE IS REPORTED, never hidden. `evaluateDeclaredNeedCoverage` still
+ *     fails OPEN so a REMOVAL sweep can count unreadable rows without deleting
+ *     them. ADMISSION (and the individual-root boot net) require a POSITIVE
+ *     overlap — that is the gold standard for what GETS THROUGH. A profile
+ *     that declares no needs, or a row that states no need vocabulary, cannot
+ *     answer "yes, this meets a need" and does not enter an individual pipeline.
  */
 
 import { normalizeNeedCategory } from './profileNormalizer.js'
 import { CANONICAL_NEED_CATEGORIES } from '../constants/needCategories.js'
+import { getParentChain, resolveProfileType } from './profileTypeRegistry.js'
 
 /**
  * The CANONICAL need vocabulary, read from the registry rather than hand-typed.
@@ -70,7 +79,34 @@ export const NEED_COVERAGE_DETAIL = Object.freeze({
   OPPORTUNITY_STATES_NO_NEEDS: 'opportunity_states_no_need_vocabulary',
   MATCHED: 'declared_need_matched',
   UNCOVERED: 'no_declared_need_covered',
+  NO_POSITIVE_MATCH: 'no_positive_declared_match',
 })
+
+/**
+ * Individual-root family (person / household / student / veteran). Same roots
+ * `isIndividualLikeProfileType` uses — org roots win so a veteran-owned
+ * business is not treated as a person. Used to apply the gold-standard
+ * positive-need bar to individual pipelines without touching org ones.
+ */
+const INDIVIDUAL_ROOT_TYPES = Object.freeze(['individual', 'family', 'student', 'veteran'])
+const ORG_ROOT_TYPES = Object.freeze([
+  'business', 'nonprofit', 'public_agency', 'local_government', 'school',
+  'school_district', 'church', 'library', 'government', 'organization',
+])
+
+export function isIndividualRootProfile(profileRow, applicantType = null) {
+  const raw = applicantType
+    || profileRow?.primary_type
+    || profileRow?.applicant_type
+    || profileRow?.type
+    || profileRow?.profile_type
+    || null
+  const id = resolveProfileType(raw)
+  if (!id) return false
+  const chain = [id, ...getParentChain(id)]
+  if (chain.some((t) => ORG_ROOT_TYPES.includes(t))) return false
+  return chain.some((t) => INDIVIDUAL_ROOT_TYPES.includes(t))
+}
 
 export function canonicalNeed(value) {
   if (typeof value !== 'string') return null
@@ -91,7 +127,7 @@ export function parseMaybeJson(value, fallback) {
  * @param {object|null} sections    `{ section_key: parsedData }`
  * @returns {string[]} canonical need ids, de-duplicated, insertion-ordered
  */
-export function declaredNeedsFrom(profileRow, sections, { includeSectionKeys = true } = {}) {
+export function declaredNeedsFrom(profileRow, sections, { includeSectionKeys = false } = {}) {
   const needs = new Set()
   const addNeed = (value) => {
     const canonical = canonicalNeed(value)
@@ -104,12 +140,9 @@ export function declaredNeedsFrom(profileRow, sections, { includeSectionKeys = t
   }
   const sectionMap = sections && typeof sections === 'object' ? sections : {}
   for (const [key, section] of Object.entries(sectionMap)) {
-    // A section KEY that IS a canonical need (`housing`, `education`,
-    // `employment`, `health_medical`, `family_life`) counts as a declaration
-    // (Robert's rule). MEASURED in prod 2026-08-23: nearly every profile
-    // carries those five sections, so this arm makes "declared needs" read
-    // the same for a biolab, the admin vault and a stress-cohort synthetic.
-    // `includeSectionKeys:false` lets a census measure the strict reading.
+    // A section KEY that IS a canonical need used to count as a declaration.
+    // Default is OFF: empty schema sections are not a need. Opt-in remains
+    // for the census `--section-keys` reading of the old loose rule.
     if (includeSectionKeys) addNeed(key)
     const parsed = parseMaybeJson(section, null)
     if (!parsed || typeof parsed !== 'object') continue
@@ -157,7 +190,18 @@ export function typeDerivedNeeds(profileRow, sections) {
     const canonical = canonicalNeed(value)
     if (canonical) out.add(canonical)
   }
-  for (const field of TYPE_NEED_ROW_FIELDS) add(profileRow?.[field])
+  for (const field of TYPE_NEED_ROW_FIELDS) {
+    add(profileRow?.[field])
+    // Walk the registry parent chain so `college_student` → `student` →
+    // education. The leaf token itself is often not a need id (`college_student`
+    // normalises to `student`, which is not in CANONICAL_NEED_IDS); the parent
+    // `student` is what `normalizeNeedCategory` maps to `education`.
+    const resolved = resolveProfileType(profileRow?.[field])
+    if (resolved) {
+      add(resolved)
+      for (const parent of getParentChain(resolved)) add(parent)
+    }
+  }
   const sectionMap = sections && typeof sections === 'object' ? sections : {}
   for (const section of Object.values(sectionMap)) {
     const parsed = parseMaybeJson(section, null)
@@ -175,6 +219,19 @@ export function typeDerivedNeeds(profileRow, sections) {
  * The needs an opportunity row SAYS it serves — canonicalised.
  * @returns {string[]}
  */
+/**
+ * When a row states no structured need vocabulary, infer ONLY from phrases
+ * the title/kind themselves use (scholarship → education). Never from
+ * description prose. Lets unlabeled Pell/HOPE/NAEMT rows still answer the
+ * need conjunct for a student without reopening fail-open silence.
+ */
+const TITLE_STATED_NEED_PATTERNS = Object.freeze([
+  [/\b(?:scholarships?|fellowships?|pell\b|fafsa|tuition|work[\s-]?study|student aid|financial aid)\b/i, 'education'],
+  [/\b(?:snap|food pantry|food bank|nutrition assistance)\b/i, 'food'],
+  [/\b(?:liheap|rental assistance|rent assistance|section 8)\b/i, 'housing'],
+  [/\b(?:small business grant|business grant)\b/i, 'business'],
+])
+
 export function opportunityNeedVocabulary(row) {
   const supported = new Set()
   const add = (value) => {
@@ -188,6 +245,15 @@ export function opportunityNeedVocabulary(row) {
   }
   add(row?.funding_category)
   add(row?.opportunity_type)
+  if (supported.size === 0) {
+    // Kind is a structural class (scholarship/program), not a need. A crawler
+    // that stamps `opportunity_kind='scholarship'` on a generic row must not
+    // mint an education match. Only phrases the TITLE itself states count.
+    const title = String(row?.title ?? '')
+    for (const [rx, need] of TITLE_STATED_NEED_PATTERNS) {
+      if (rx.test(title)) add(need)
+    }
+  }
   return [...supported]
 }
 
@@ -238,6 +304,7 @@ export default {
   NEED_COVERAGE_DETAIL,
   canonicalNeed,
   declaredNeedsFrom,
+  isIndividualRootProfile,
   opportunityNeedVocabulary,
   evaluateDeclaredNeedCoverage,
 }

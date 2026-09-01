@@ -116,7 +116,7 @@ const emsProfileContext = {
     id: 'p1',
     primary_type: 'individual',
     state: 'TN',
-    needs: JSON.stringify(['professional_development', 'employment']),
+    needs: JSON.stringify(['education', 'professional_development', 'employment']),
   },
   sections: {
     employment: { occupation: 'EMT', notes: 'Paramedic training and EMS continuing education' },

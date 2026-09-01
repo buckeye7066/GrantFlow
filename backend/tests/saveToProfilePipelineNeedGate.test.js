@@ -6,7 +6,9 @@
  * THE PROFILE DECLARED. The decision engine scores need coverage instead of
  * rejecting on it ("a low score alone is not hard ineligibility"), so Gate 1.9
  * is the ONE place conjunct (1) is enforced at admission. Structured
- * declarations only; silence on either side is neutral.
+ * declarations only. Individual-root admission requires a POSITIVE need
+ * overlap (the gold standard); fail-open silence is what inflated those
+ * pipelines.
  *
  * Same fixture conventions as saveToProfilePipelineGates.test.js: a minimal
  * in-memory better-sqlite3 schema and a focused decision-engine mock so the
@@ -123,7 +125,7 @@ describe('saveToProfilePipeline — NEED_COVERAGE gate', () => {
     expect(countGrants(db)).toBe(1)
   })
 
-  it('stays NEUTRAL when the opportunity states no need vocabulary', async () => {
+  it('ADMITS a title-stated scholarship that has no structured need vocabulary (inferred education)', async () => {
     const opp = {
       id: 'opp-silent',
       title: 'Murfreesboro Community Scholarship',
@@ -135,9 +137,36 @@ describe('saveToProfilePipeline — NEED_COVERAGE gate', () => {
     expect(result.saved).toBe(true)
   })
 
-  it('stays NEUTRAL when the profile declares no needs', async () => {
-    const result = await saveToProfilePipeline(db, legalOpp('opp-legal-2'), 'p1', silentProfileContext, 90, 55)
-    expect(result.saved).toBe(true)
+  it('REFUSES an unlabeled generic row and a legal-only row when the individual declares no needs', async () => {
+    const unlabeled = {
+      id: 'opp-generic',
+      title: 'Generic Community Opportunity',
+      sponsor: 'Someone',
+      source: 'grants_gov',
+      application_url: 'https://example-generic.org/opportunity/apply',
+    }
+    const unlabeledResult = await saveToProfilePipeline(db, unlabeled, 'p1', silentProfileContext, 90, 55)
+    expect(unlabeledResult.saved).toBe(false)
+    expect(unlabeledResult.gate).toBe('NEED_COVERAGE')
+    const legalResult = await saveToProfilePipeline(db, legalOpp('opp-legal-2'), 'p1', silentProfileContext, 90, 55)
+    expect(legalResult.saved).toBe(false)
+    expect(legalResult.gate).toBe('NEED_COVERAGE')
+    expect(countGrants(db)).toBe(0)
+  })
+
+  it('REFUSES a directory pointer at the gold-standard RELATABLE gate (not a leaf application)', async () => {
+    const directory = {
+      id: 'opp-dir',
+      title: 'findhelp — Local assistance programs',
+      sponsor: 'findhelp',
+      opportunity_kind: 'DIRECTORY',
+      source: 'web_search',
+      application_url: 'https://www.findhelp.org',
+    }
+    const result = await saveToProfilePipeline(db, directory, 'p1', needProfileContext, 90, 55)
+    expect(result.saved).toBe(false)
+    expect(result.gate).toBe('GOLD_STANDARD:RELATABLE')
+    expect(countGrants(db)).toBe(0)
   })
 
   it('records the denial as a TERMINAL live_reject for promotion sinks', async () => {

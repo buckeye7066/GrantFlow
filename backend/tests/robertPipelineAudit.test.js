@@ -31,6 +31,7 @@ const audit = await import('../services/robert/robertPipelineAudit.js')
 
 const {
   auditProfilePipeline, gateRelatable, gateQualifies, gateCoversNeed, gateReal,
+  qualifyForPipeline,
   programIdentityKey, sameProgram, rankDuplicate, buildAmyNotation, isAmyAutonomousLever,
   loadGapNotesForAmy, GATES,
 } = audit
@@ -304,6 +305,37 @@ describe('every gate can actually reject, and can actually pass', () => {
   it('COVERS_NEED is NEUTRAL when the profile declares nothing (silence never deletes)', () => {
     const blank = { ...facts, needs: [] }
     expect(gateCoversNeed({ title: 'Anything', categories: '["transportation"]' }, blank).pass).toBe(true)
+  })
+
+  it('COVERS_NEED with requirePositive is the individual gold standard — silence cannot answer yes', () => {
+    const blank = { ...facts, needs: [] }
+    expect(gateCoversNeed({ title: 'Anything', categories: '["transportation"]' }, blank, { requirePositive: true }).pass).toBe(false)
+    expect(gateCoversNeed({ title: 'Generic Community Opportunity' }, facts, { requirePositive: true }).pass).toBe(false)
+    expect(gateCoversNeed({ title: 'Campus Book Voucher', categories: '["education"]' }, facts, { requirePositive: true }).pass).toBe(true)
+    expect(gateCoversNeed({ title: 'Tennessee HOPE Scholarship' }, facts, { requirePositive: true }).pass).toBe(true)
+  })
+
+  it('qualifyForPipeline is the gold standard: Pell passes, a directory fails RELATABLE, generic fails need', () => {
+    const pell = {
+      title: 'Federal Pell Grant', sponsor: 'Federal Student Aid',
+      entity_types_allowed: '["student","family"]', categories: '["education"]',
+      application_url: 'https://studentaid.gov/pell',
+    }
+    expect(qualifyForPipeline(pell, facts, { requirePositiveNeed: true }).pass).toBe(true)
+    const directory = {
+      title: 'findhelp — Local assistance programs', sponsor: 'findhelp',
+      opportunity_kind: 'DIRECTORY', application_url: 'https://www.findhelp.org',
+    }
+    const dir = qualifyForPipeline(directory, facts, { requirePositiveNeed: true })
+    expect(dir.pass).toBe(false)
+    expect(dir.gate).toBe(GATES.RELATABLE)
+    const generic = {
+      title: 'Generic Community Opportunity', sponsor: 'Someone',
+      entity_types_allowed: '["student"]', application_url: 'https://example-generic.org/opportunity/apply',
+    }
+    const gen = qualifyForPipeline(generic, facts, { requirePositiveNeed: true })
+    expect(gen.pass).toBe(false)
+    expect(gen.gate).toBe(GATES.COVERS_NEED)
   })
 
   it('REAL rejects a 404 and passes a live page', async () => {
