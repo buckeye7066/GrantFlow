@@ -270,13 +270,24 @@ describe('from-opportunity delegates hard eligibility to the canonical saver', (
       'institution applicant restriction',
       'Institution Research Program',
       'Eligible applicants are institutions of higher education only.',
+      // Gold-standard QUALIFIES uses the same applicantTypeGate the engine
+      // would; it now fires first so the row never reaches DECISION_ENGINE.
+      'GOLD_STANDARD:QUALIFIES',
+      null,
     ],
     [
       'profession lock',
       'Ohio Nurses Foundation — CE Scholarships',
       'Scholarships for continuing education.',
+      // Title infers education; declare that need so NEED_COVERAGE passes
+      // and the profession lock still lands on DECISION_ENGINE.
+      'DECISION_ENGINE',
+      JSON.stringify(['education']),
     ],
-  ])('rejects %s through DECISION_ENGINE, not a route-local second trial', async (_label, title, description) => {
+  ])('rejects %s through the canonical saver, not a route-local second trial', async (_label, title, description, expectedGate, needsJson) => {
+    if (needsJson) {
+      db.prepare('UPDATE profiles SET tags = ? WHERE id = ?').run(needsJson, 'profile-1')
+    }
     db.prepare(
       `INSERT INTO funding_opportunities
          (id, title, sponsor, description, application_url, source, record_origin, source_trust_tier)
@@ -294,7 +305,7 @@ describe('from-opportunity delegates hard eligibility to the canonical saver', (
 
     expect(response.status).toBe(422)
     expect(response.body.error).toBe('pipeline_gate_failed')
-    expect(response.body.gate).toBe('DECISION_ENGINE')
+    expect(response.body.gate).toBe(expectedGate)
     expect(db.prepare('SELECT COUNT(*) AS count FROM grants').get().count).toBe(0)
   })
 })
