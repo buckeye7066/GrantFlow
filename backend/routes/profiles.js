@@ -2218,6 +2218,68 @@ router.get('/:id/pipeline-potential', async (req, res) => {
   return res.json({ profile_id: id, total, count: items.length, items })
 })
 
+// GET /api/profiles/:id/pipeline-dollar-audit
+//
+// Read-only before/after audit of pipeline dollar semantics for a single profile.
+// legacy_total: historical contract (amount_requested ?? amount_max ?? amount_min)
+// canonical_total: new choke-point contract (pipelineValueSql) which excludes
+//                  ineligible/REJECT rows and no-per-award kinds, and treats
+//                  wide ranges conservatively.
+router.get('/:id/pipeline-dollar-audit', async (req, res) => {
+  const { id } = req.params
+  const isAdmin = req.ctx?.isAdmin === true
+
+  // Authorization mirrors /:id/pipeline-potential
+  let row = null
+  try {
+    row = await req.db.prepare(`${profileSelect} WHERE p.id = ?`).get(id)
+  } catch (error) {
+    console.error('[profiles] Failed to load profile row for pipeline-dollar-audit:', error)
+    return res.status(500).json(formatError(error))
+  }
+  if (!row || row.status === 'deleted') {
+    return res.status(404).json({ error: 'Profile not found' })
+  }
+  if (!isAdmin) {
+    const userId = req.ctx?.userId ?? null
+    if (!userId) return res.status(401).json({ error: 'Authentication required' })
+    if (!canAccessProfileRowFromCtx(req.ctx, row)) {
+      return res.status(403).json({ error: 'Access denied' })
+    }
+  }
+
+  const placeholders = PIPELINE_ACTIVE_STATUSES.map(() => '?').join(',')
+  // Legacy semantics: best-available numeric, no eligibility or kind gates.
+  const LEGACY_VAL = `COALESCE(NULLIF(g.amount_requested, 0), NULLIF(g.amount_max, 0), NULLIF(g.amount_min, 0), 0)`
+  const CANON_VAL = pipelineValueSql('g')
+
+  try {
+    const { legacy_total = 0, canonical_total = 0, count = 0 } = await req.db
+      .prepare(
+        `SELECT
+             COALESCE(SUM(${LEGACY_VAL}), 0) AS legacy_total,
+             COALESCE(SUM(${CANON_VAL}), 0)  AS canonical_total,
+             COUNT(*)                         AS count
+           FROM grants g
+          WHERE g.profile_id = ?
+            AND g.status IN (${placeholders})`,
+      ) // audit:allow dynamic-sql — static fragments from code, no user input
+      .get(id, ...PIPELINE_ACTIVE_STATUSES)
+
+    return res.json({
+      profile_id: id,
+      active_statuses: PIPELINE_ACTIVE_STATUSES,
+      legacy_total,
+      canonical_total,
+      delta: Number(canonical_total) - Number(legacy_total),
+      count,
+    })
+  } catch (error) {
+    console.error('[profiles] pipeline-dollar-audit failed:', error?.message || error)
+    return res.status(500).json(formatError(error))
+  }
+})
+
 const TOP_LEVEL_PROFILE_KEYS = new Set(['display_name', 'primary_type', 'organization_id', 'status', 'tags'])
 
 // GET /api/profiles/:id/readiness — profile completeness gate
