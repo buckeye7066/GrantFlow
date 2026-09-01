@@ -59,9 +59,9 @@ const envGenerator = readText('scripts/generate-env-examples.mjs')
 const healthRoutes = readText('backend/routes/health.js')
 const nvmrc = readText('.nvmrc').trim()
 const mobileNodeRuntime = readText('.node-version-mobile').trim()
-const nodeRuntimeVersion = '20.20.2'
+const nodeRuntimeVersion = '22.22.0'
 const mobileNodeRuntimeVersion = '22.22.0'
-const nodeEngineRange = '>=20.19.0 <21'
+const nodeEngineRange = '>=22.0.0 <23'
 
 function checkWorkflowNodeRuntimePins() {
   const workflowsDir = path.join(root, '.github', 'workflows')
