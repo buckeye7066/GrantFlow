@@ -202,7 +202,7 @@ export function defaultPipelineRequestedAmount(input = {}) {
   const floor = positiveMoney(input.amount_min ?? input.amountMin ?? input.min)
   const ceiling = positiveMoney(input.amount_max ?? input.amountMax ?? input.max)
   const isWide = Boolean(floor && ceiling && ceiling > floor * WIDE_AWARD_RANGE_RATIO)
-  if (requested != null) {
+  if (requested !== null && requested !== undefined) {
     // If this looks like a historic auto-ceiling copy on a wide range, use the floor.
     if (isWide && Math.abs(requested - ceiling) <= 0.01) return floor ?? requested
     return requested
