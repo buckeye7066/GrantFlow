@@ -730,6 +730,23 @@ export async function resolveUnknownMethod(db, ctx, input) {
     }
   } catch { rescue = null /* best-effort — fall through to the honest packet */ }
 
+  // A POINTER / DIRECTORY / REFERENCE row has NO application anyone submits.
+  // After URL rescue found no real apply page, parking it in waiting_for_review
+  // as a "funder-contact packet — the final review and submit are yours" is a
+  // hand-off that demands a human do something that cannot be done (the "Music &
+  // Performing Arts Scholarship Finder — the submit is yours" class, owner
+  // 2026-08-23: "these should be autonomous"). It is a RESEARCH LEAD, not a
+  // task. Complete it as no_application. The signal is the row's OWN kind and
+  // url (a pointer kind, or a url the applicationSurfaceHosts registry already
+  // classifies as a directory/search/reference page) — never a fabricated one.
+  const ownKind = String(ctx?.opportunity?.opportunity_kind || ctx?.opportunity?.kind || '')
+  const ownUrl = String(input?.url || ctx?.portalUrl || '')
+  const nonApp = ownUrl ? classifyNonApplicationSurface(ownUrl) : null
+  if (isPointerKind(ownKind) || nonApp) {
+    const what = isPointerKind(ownKind) ? `a ${ownKind.toLowerCase()} listing` : (nonApp?.reason || 'a reference page')
+    return degraded('directory_no_application', 'no_application',
+      `This source is ${what}, not an application anyone submits — Hamilton searched for a real application page and found none. Recorded as a research lead; there is nothing here for you to review or submit.`)
+  }
   // SEARCH INFRASTRUCTURE FAILURE IS NOT A FINDING ABOUT THE FUNDER
   // (2026-08-30, the dominant "manual pathway" bucket). When the web-search
   // provider failed or returned zero hits — the recurring SearXNG/Brave outage
@@ -749,23 +766,6 @@ export async function resolveUnknownMethod(db, ctx, input) {
         : 'Hamilton\'s web search returned no results at all for this funder — the usual signature of a search-provider outage or quota, not proof the page does not exist. Hamilton will retry automatically.',
       payload: { reason: rescue.reason, hits: rescue.hits ?? null },
     }
-  }
-  // A POINTER / DIRECTORY / REFERENCE row has NO application anyone submits.
-  // After URL rescue found no real apply page, parking it in waiting_for_review
-  // as a "funder-contact packet — the final review and submit are yours" is a
-  // hand-off that demands a human do something that cannot be done (the "Music &
-  // Performing Arts Scholarship Finder — the submit is yours" class, owner
-  // 2026-08-23: "these should be autonomous"). It is a RESEARCH LEAD, not a
-  // task. Complete it as no_application. The signal is the row's OWN kind and
-  // url (a pointer kind, or a url the applicationSurfaceHosts registry already
-  // classifies as a directory/search/reference page) — never a fabricated one.
-  const ownKind = String(ctx?.opportunity?.opportunity_kind || ctx?.opportunity?.kind || '')
-  const ownUrl = String(input?.url || ctx?.portalUrl || '')
-  const nonApp = ownUrl ? classifyNonApplicationSurface(ownUrl) : null
-  if (isPointerKind(ownKind) || nonApp) {
-    const what = isPointerKind(ownKind) ? `a ${ownKind.toLowerCase()} listing` : (nonApp?.reason || 'a reference page')
-    return degraded('directory_no_application', 'no_application',
-      `This source is ${what}, not an application anyone submits — Hamilton searched for a real application page and found none. Recorded as a research lead; there is nothing here for you to review or submit.`)
   }
   // Nothing verifiable found: degrade to a "funder contact packet" so the
   // user always has something useful to send, and say PRECISELY what was

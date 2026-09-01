@@ -132,13 +132,9 @@ export function planAuthBackup({ blockerKind, retryCount = 0, now = Date.now(), 
   const schedule = waitingStatus === 'waiting_for_captcha' ? CAPTCHA_BACKOFF_MINUTES : AUTH_BACKOFF_MINUTES
   const maxAttempts = schedule.length
   const priorAttempts = Math.max(0, Math.floor(Number(retryCount) || 0))
-<<<<<<< HEAD
   const where = portalUrl ? String(portalUrl) : 'this portal'
   const reasonNote = lastReason ? ` (last result: ${String(lastReason).slice(0, 120)})` : ''
-  if (priorAttempts >= AUTH_MAX_ATTEMPTS) {
-=======
   if (priorAttempts >= maxAttempts) {
->>>>>>> 141d98f5 (Hamilton full-autonomy fixes: URL rescue, login/credential flow, preflight, consent propagation, post-submit verification)
     return {
       isAuth: true,
       status: 'blocked',
@@ -146,29 +142,12 @@ export function planAuthBackup({ blockerKind, retryCount = 0, now = Date.now(), 
       nextRetryAt: null,
       retryInMinutes: null,
       attempt: priorAttempts,
-<<<<<<< HEAD
-      maxAttempts: AUTH_MAX_ATTEMPTS,
+      maxAttempts,
       message: exhaustedMessage(waitingStatus, { where, attempts: priorAttempts, reasonNote }),
     }
   }
-  const mins = AUTH_BACKOFF_MINUTES[priorAttempts]
-  const message = deferralMessage(waitingStatus, { where, mins, reasonNote })
-=======
-      maxAttempts,
-      message: waitingStatus === 'waiting_for_email_verification'
-        ? 'The portal account is still not verified. Open the verification email yourself (or finish the sign-in in a side-by-side login) before Hamilton can reuse the login for draft preparation.'
-        : waitingStatus === 'waiting_for_captcha'
-          ? 'The portal keeps demanding a human-verification challenge Hamilton\'s solver could not clear. Complete it once in a side-by-side (co-browse) login and save the session; Hamilton resumes from it automatically.'
-          : 'Hamilton retried this login several times without success and needs you to complete the sign-in (and save the session) before she can continue.',
-    }
-  }
   const mins = schedule[priorAttempts]
-  const message = waitingStatus === 'waiting_for_email_verification'
-    ? `This portal account is awaiting email verification. Open the message and use its verification link yourself. Hamilton will re-check in ~${humanizeMinutes(mins)} and may then resume draft preparation; final Submit remains yours.`
-    : waitingStatus === 'waiting_for_captcha'
-      ? `The portal put up a human-verification challenge. Complete it once in a side-by-side (co-browse) login and save the session — Hamilton resumes the moment it is saved, and will otherwise re-check in ~${humanizeMinutes(mins)}.`
-      : `Hamilton needs you to sign in to this portal once. She'll keep working other applications and automatically retry in ~${humanizeMinutes(mins)} — log in (and save the session) whenever you can and she can resume draft preparation. Final Submit remains yours.`
->>>>>>> 141d98f5 (Hamilton full-autonomy fixes: URL rescue, login/credential flow, preflight, consent propagation, post-submit verification)
+  const message = deferralMessage(waitingStatus, { where, mins, reasonNote })
   return {
     isAuth: true,
     status: waitingStatus,

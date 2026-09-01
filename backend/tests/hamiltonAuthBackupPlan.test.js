@@ -37,7 +37,7 @@ describe('planAuthBackup', () => {
     expect(done.exhausted).toBe(true)
     expect(done.status).toBe('blocked')
     expect(done.nextRetryAt).toBeNull()
-    expect(done.message).toMatch(/complete the sign-in/)
+    expect(done.message).toMatch(/sign in once side-by-side|complete the sign-in/i)
   })
 
   it('CAPTCHA gets its own sane schedule: first retry is HOURS out, not 15 minutes', () => {
@@ -47,7 +47,7 @@ describe('planAuthBackup', () => {
     expect(first.retryInMinutes).toBe(CAPTCHA_BACKOFF_MINUTES[0])
     expect(first.retryInMinutes).toBeGreaterThanOrEqual(240)
     expect(first.maxAttempts).toBe(CAPTCHA_BACKOFF_MINUTES.length)
-    expect(first.message).toMatch(/co-browse/i)
+    expect(first.message).toMatch(/side-by-side|co-browse/i)
 
     const done = planAuthBackup({ blockerKind: 'captcha', retryCount: CAPTCHA_BACKOFF_MINUTES.length, now })
     expect(done.exhausted).toBe(true)

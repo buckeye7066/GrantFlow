@@ -994,16 +994,24 @@ export async function detectAutopilotRunLoop(db, { taskId, now = Date.now(), max
   } catch { humanSince = null }
   const humanMs = Date.parse(humanSince?.at || '')
   if (Number.isFinite(humanMs) && humanMs >= oldestRecentMs) return null
-<<<<<<< HEAD
   const diagnosis = diagnoseRunOutcomes(counted)
+  // The NEWEST run that actually recorded a blocker — surfaced on the verdict
+  // so callers (the tripwire event, the task message) can name the repeating
+  // dead-end without re-reading the ledger. Null when nothing recorded one,
+  // which is itself the crash/redeploy signature the summary spells out.
+  const lastBlockerRun = [...counted]
+    .sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at))
+    .find((r) => r?.blocker_kind || r?.blocker_detail) || null
   return {
     kind: 'run_loop',
     runs: counted.length,
     diagnosis,
     retryable: diagnosis.retryable,
+    last_blocker_kind: lastBlockerRun?.blocker_kind || null,
+    last_blocker_detail: lastBlockerRun?.blocker_detail || null,
     detail: diagnosis.retryable
-      ? `Hamilton has opened this source ${counted.length} times in the last 24 hours without finishing it. Every attempt ended the same way: ${diagnosis.summary}. That is a problem on Hamilton's side, not yours — he pauses this source for 24 hours and tries again with a fresh strategy (URL re-discovery, longer waits).`
-      : `Hamilton has opened this source ${counted.length} times in the last 24 hours without finishing it and nobody has touched the task since. Every attempt ended the same way: ${diagnosis.summary}. Stopping so the loop cannot keep spending — the blocker named above is what has to change (the last outcome is on the task).`,
+      ? `Hamilton has opened this source ${counted.length} times in the last 24 hours without finishing it. Each attempt ended the same way: ${diagnosis.summary}. That is a problem on Hamilton's side, not yours — he pauses this source for 24 hours and tries again with a fresh strategy (URL re-discovery, longer waits).`
+      : `Hamilton has opened this source ${counted.length} times in the last 24 hours without finishing it and nobody has touched the task since. Each attempt ended the same way: ${diagnosis.summary}. Stopping so the loop cannot keep spending — the blocker named above is what has to change (the last outcome is on the task).`,
   }
 }
 
@@ -1036,7 +1044,15 @@ export function diagnoseRunOutcomes(runs = []) {
   }
   const ranked = [...groups.values()].sort((a, b) => b.count - a.count)
   const top = ranked[0] || { count: 0, status: null, kind: 'unknown', detail: null }
-  const summary = top.detail ? `${top.kind} — ${top.detail}` : `${top.kind}`
+  const anyBlocker = (runs || []).some((r) => r?.blocker_kind || r?.blocker_detail)
+  // No run in the window recorded a blocker at all: the runs did not END,
+  // they DIED (a crash or a redeploy mid-run). Naming that is the whole
+  // point of the diagnosis — a bare status word ('running') told nobody.
+  const summary = top.detail
+    ? `${top.kind} — ${top.detail}`
+    : anyBlocker
+      ? `${top.kind}`
+      : `${top.kind} — no run recorded a blocker; the runs died without a terminal record (likely a crash or redeploy mid-run)`
   return {
     dominant_status: top.status,
     dominant_kind: top.kind,
@@ -1045,28 +1061,6 @@ export function diagnoseRunOutcomes(runs = []) {
     total: (runs || []).length,
     retryable: TRANSIENT_LOOP_KINDS.has(top.kind),
     summary,
-=======
-  // Diagnose WHY the loop never finishes (owner 2026-08-30: "nothing diagnoses
-  // WHY each loop never finishes"): pull the most recent finished run's blocker
-  // so the stop message NAMES the repeating dead-end instead of pointing at
-  // "the last outcome" in the abstract. Read-only, best-effort.
-  let lastBlocker = null
-  try {
-    const sorted = [...recent].sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at))
-    lastBlocker = sorted
-      .map((r) => ({ kind: r?.blocker_kind || null, detail: r?.blocker_detail || null, status: r?.status || null }))
-      .find((r) => r.kind || r.detail) || null
-  } catch { lastBlocker = null }
-  const why = lastBlocker
-    ? ` Each attempt ended the same way: ${lastBlocker.kind || lastBlocker.status || 'unrecorded'}${lastBlocker.detail ? ` — ${String(lastBlocker.detail).slice(0, 240)}` : ''}.`
-    : ' No run recorded a blocker — the runs died without a terminal record (likely a crash/redeploy mid-run).'
-  return {
-    kind: 'run_loop',
-    runs: recent.length,
-    last_blocker_kind: lastBlocker?.kind || null,
-    last_blocker_detail: lastBlocker?.detail || null,
-    detail: `Hamilton has opened this source ${recent.length} times in the last 24 hours without finishing it and nobody has touched the task since. Stopping so the loop cannot keep spending.${why}`,
->>>>>>> 141d98f5 (Hamilton full-autonomy fixes: URL rescue, login/credential flow, preflight, consent propagation, post-submit verification)
   }
 }
 
@@ -1752,38 +1746,24 @@ async function runAutopilotPathway(db, {
   // fourth time today when nobody has intervened since the first.
   const loop = await detectAutopilotRunLoop(db, { taskId: task.id })
   if (loop) {
-<<<<<<< HEAD
     const loopStatus = loop.retryable ? 'waiting_for_window' : 'blocked'
     const pauseUntil = loop.retryable ? new Date(Date.now() + 24 * 60 * 60_000).toISOString() : null
     await updateApplicationTask(db, task.id, {
       unlessCancelled: true, status: loopStatus, lastAgentMessage: loop.detail,
-      ...(loop.retryable ? { nextRetryAt: pauseUntil } : {}),
-=======
-    // Park with a +24h retry stamp, NOT a live one (2026-08-30). The adapter's
-    // blocked-arm re-picks any blocked task whose next_retry_at is due — the
-    // tripwire used to leave a stale due next_retry_at in place, so the SAME
-    // looped task headed the queue on EVERY 5-minute tick forever, each tick
-    // re-tripping the wire (the prod zero-runs-for-32h signature). In 24h the
-    // rolling window has moved and exactly one fresh attempt is allowed —
-    // bounded, autonomous, and it picks up any defect fix shipped meanwhile.
-    const loopRetryAt = new Date(Date.now() + 24 * 60 * 60_000).toISOString()
-    await updateApplicationTask(db, task.id, {
-      unlessCancelled: true, status: 'blocked', nextRetryAt: loopRetryAt, lastAgentMessage: loop.detail,
->>>>>>> 141d98f5 (Hamilton full-autonomy fixes: URL rescue, login/credential flow, preflight, consent propagation, post-submit verification)
+      // A hard-blocked loop park must NULL the retry stamp: the adapter re-picks
+      // any blocked task whose next_retry_at is due, so a stale due stamp made
+      // the same task head the queue every tick and re-trip this wire forever.
+      nextRetryAt: pauseUntil,
     }).catch(() => {})
     await appendTaskEvent(db, {
       taskId: task.id, eventType: 'blocked', status: loopStatus, step: 'run_loop_tripwire',
       message: loop.detail, actorUserId: userId, actorRole: 'agent',
-<<<<<<< HEAD
-      details: { runs_last_24h: loop.runs, max_runs_per_day: MAX_AUTOPILOT_RUNS_PER_DAY, diagnosis: loop.diagnosis, paused_until: pauseUntil },
-=======
       details: {
         runs_last_24h: loop.runs, max_runs_per_day: MAX_AUTOPILOT_RUNS_PER_DAY,
-        last_blocker_kind: loop.last_blocker_kind || null,
-        last_blocker_detail: loop.last_blocker_detail || null,
-        next_retry_at: loopRetryAt,
+        diagnosis: loop.diagnosis, paused_until: pauseUntil,
+        last_blocker_kind: loop.diagnosis?.dominant_kind || null,
+        last_blocker_detail: loop.diagnosis?.dominant_detail || null,
       },
->>>>>>> 141d98f5 (Hamilton full-autonomy fixes: URL rescue, login/credential flow, preflight, consent propagation, post-submit verification)
     }).catch(() => {})
     return { task: await reload(db, task.id), classification, autopilot_run: null, blocked: true, reason: 'run_loop', diagnosis: loop.diagnosis }
   }
@@ -2596,12 +2576,14 @@ async function runAutopilotPathway(db, {
           // signup path has done this since 2026-08-20; the RUN path, which is
           // where a real portal login actually hits 2FA, never had a caller.
           //
-          // `allowAutoSubmit` is the consent gate on purpose. It is
-          // resolveSubmissionDecision's own verdict (submit_applications granted
-          // + allow_auto_submit + no require_human_review veto), i.e. exactly
-          // what hasFullAutomation() describes — so consent is READ from the one
-          // authority rather than re-derived here into a second one that can
-          // drift from it.
+          // `consentedCapabilities` is the consent gate on purpose, and BOTH of
+          // its terms are read from an authority rather than re-derived here:
+          // `allowAutoSubmit` is resolveSubmissionDecision's own verdict for THIS
+          // run (submit_applications granted + allow_auto_submit + no
+          // require_human_review veto), and `fullAutomationActive` is the
+          // profile's stored full-automation grant (isFullAutomationEnabled).
+          // The union matters: a run-scoped withhold must not strip capabilities
+          // the profile's standing grant already covers (see above).
           //
           // The db handle stays on THIS side of the boundary: the engine's
           // contract is that nothing reads the database mid-run, so it receives
