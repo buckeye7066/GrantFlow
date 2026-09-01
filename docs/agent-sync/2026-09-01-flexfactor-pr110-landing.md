@@ -63,18 +63,21 @@ Do not `git add flexfactor` (symlink to `/home/ubuntu/src/flexfactor`).
 | `b15f048` | `tests/test_*.py` without packaging → `is_python=True`, unittest discover |
 | `426193e` | `_apply_named_return_statement` before the model |
 | `e1d22d7` | `_python_exe()` = `sys.executable`; py_compile + fixture tests use it |
-| `f335a7b` | refuse whole-file fallback when the defect anchor/excerpt is already gone |
+| `f335a7b` | refuse whole-file fallback when apply_err contains `anchor not found` |
+| `ac16a5b` | same refuse keyed on excerpt-gone, including silent no-op (`apply_err=""`) |
 
 Portable patch (also copied into this GrantFlow tree):
 `docs/agent-sync/flexfactor-pr110-landing.patch`
-(`git format-patch --stdout 634250c..HEAD`, 7 commits).
+(`git format-patch --stdout 634250c..HEAD`, 8 commits).
 Same bytes on this host at `/tmp/flexfactor-pr110-landing.patch`.
+One-shot apply from a writable token: `scripts/land-flexfactor-pr110.sh`.
 
 Verified locally this session (`python3 -m unittest … -q`):
 
 - `RelComponentsTests.test_named_return_swaps_only_the_defect_line`
 - `RelComponentsTests.test_fix_files_applies_named_return_before_the_model`
 - `RelComponentsTests.test_python_exe_is_this_interpreter_not_bare_python`
+- `RelComponentsTests.test_missing_anchor_refuses_whole_file_when_excerpt_is_gone`
 - `SweepIsWiredIntoCITests` (workflow list includes the preverify module)
 
 ## Write attempts this session (all refused)
@@ -145,6 +148,29 @@ this run; the first `[fixed]` line is the apply that mattered.
 Do not treat “purpose gaps closed 1/1” as proof `add()` is fixed —
 read `hello.py`. This run: `return a + b` is present, `return a - b`
 is gone.
+
+### Option 4 on `f335a7b` / fixture `/tmp/ff-option4-ready` (2026-09-01T21:27–21:35Z)
+
+Author: `qwen2.5-coder:3b`. Purpose contract authorized. Makefile + CI +
+`.gitignore` + README + LICENSE + `.env.example` seeded so the readiness
+rubric could close.
+
+- Phase 0 `[baseline-repair]` wrote `return a + b` from the failing
+  `test_add` output; `make` + unittest GREEN; committed on fixture `master`.
+- `[edit-keep]` refused the first missing-anchor whole-file attempt.
+- A later silent no-op still printed `[edit-fallback] … edits were a no-op`
+  (`ac16a5b` closes that door). Generation then failed (`Unterminated
+  string`); `hello.py` stayed clean — no appended test functions.
+- Independent after-run check: `add(2,3)=5`, suite OK, file is only
+  `add`/`greet`.
+- Readiness scorecard: **PRODUCTION READY 13/13, 0 blockers**
+  (`/tmp/ff-option4-ready/ff-option4-ready_readiness.md`).
+- Factory still **EXIT 1**: qwen 3b semantic review is INCOMPLETE
+  (ungrounded findings → `RuntimeError` at `_postprocess_review_findings`),
+  so the run reports ZERO WORK / not a verified-complete state. Purpose
+  assessor stayed UNSTABLE at 1/4 even after `add()` was correct. Do not
+  treat EXIT 1 as “add() is still broken.” Do not treat 13/13 as
+  FlexFactor-the-product being mergeable — that is still PR #110.
 
 ## What the next FlexFactor-scoped agent must do
 

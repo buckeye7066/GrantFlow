@@ -1,7 +1,7 @@
 From 06c7d10b61b59047a6cd86018ca5662f6a4e3a5c Mon Sep 17 00:00:00 2001
 From: Cursor Agent <cursoragent@cursor.com>
 Date: Tue, 1 Sep 2026 19:17:46 +0000
-Subject: [PATCH 1/7] fix(ci): run autoclean preverify tests in
+Subject: [PATCH 1/8] fix(ci): run autoclean preverify tests in
  production-readiness
 
 The new flexfactor_autoclean_preverify_tests.py module existed on the
@@ -34,7 +34,7 @@ index 77610ad..ad86ef9 100644
 From 7aab5ec6d9a4846ff3bbd5373c9052bc60078a7a Mon Sep 17 00:00:00 2001
 From: Cursor Agent <cursoragent@cursor.com>
 Date: Tue, 1 Sep 2026 20:33:10 +0000
-Subject: [PATCH 2/7] fix(apply): classify Cross-file dependency as no-fix
+Subject: [PATCH 2/8] fix(apply): classify Cross-file dependency as no-fix
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
 Content-Transfer-Encoding: 8bit
@@ -248,7 +248,7 @@ index 5a051a1..485250a 100644
 From 745255550e22813c8a343b4dbe885e55fd30ef05 Mon Sep 17 00:00:00 2001
 From: Cursor Agent <cursoragent@cursor.com>
 Date: Tue, 1 Sep 2026 20:36:59 +0000
-Subject: [PATCH 3/7] fix(apply): retry silent in-file no-ops and escalate
+Subject: [PATCH 3/8] fix(apply): retry silent in-file no-ops and escalate
 
 A second option-4 run classified Cross-file dependency correctly
 but the author then returned changed=false with notes=None, which
@@ -387,7 +387,7 @@ index 485250a..4b7c974 100644
 From b15f048f9174dde33162b35101a68020f5c2c651 Mon Sep 17 00:00:00 2001
 From: Cursor Agent <cursoragent@cursor.com>
 Date: Tue, 1 Sep 2026 20:42:51 +0000
-Subject: [PATCH 4/7] fix(stack): detect unpacked Python fixtures via tests/
+Subject: [PATCH 4/8] fix(stack): detect unpacked Python fixtures via tests/
 
 Option 4's hello.py fixture has no pyproject/requirements, so
 _detect_stack left is_python=False and test_cmd empty. The author
@@ -457,7 +457,7 @@ index 4b7c974..f692711 100644
 From 426193e4b3dab7950299347104c1a78e1c0b7424 Mon Sep 17 00:00:00 2001
 From: Cursor Agent <cursoragent@cursor.com>
 Date: Tue, 1 Sep 2026 20:54:34 +0000
-Subject: [PATCH 5/7] fix(apply): apply a finding-named return when the model
+Subject: [PATCH 5/8] fix(apply): apply a finding-named return when the model
  cannot
 
 Free local authors kept reverting syntax-invalid hello.py patches on
@@ -742,7 +742,7 @@ index f692711..622570f 100644
 From e1d22d7be766d138ad4395fcd32fbd0d3e79c357 Mon Sep 17 00:00:00 2001
 From: Cursor Agent <cursoragent@cursor.com>
 Date: Tue, 1 Sep 2026 21:04:28 +0000
-Subject: [PATCH 6/7] fix(apply): compile Python fixes with this interpreter
+Subject: [PATCH 6/8] fix(apply): compile Python fixes with this interpreter
 
 Bare `python` is missing on Debian/cloud images, so the per-file
 py_compile gate rolled back every correct named-return write with
@@ -836,7 +836,7 @@ index 622570f..f725f37 100644
 From f335a7b59569c2e80f3b05e4a7394633ecb53073 Mon Sep 17 00:00:00 2001
 From: Cursor Agent <cursoragent@cursor.com>
 Date: Tue, 1 Sep 2026 21:20:57 +0000
-Subject: [PATCH 7/7] fix(apply): refuse whole-file fallback when the defect
+Subject: [PATCH 7/8] fix(apply): refuse whole-file fallback when the defect
  anchor is already gone
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
@@ -912,6 +912,64 @@ index f725f37..f6dfe60 100644
      def test_python_exe_is_this_interpreter_not_bare_python(self):
          exe = ff._python_exe()
          self.assertTrue(os.path.isfile(exe), exe)
+-- 
+2.43.0
+
+
+From ac16a5bed3dc02cbd43ee8ca1d020e63a0ad5532 Mon Sep 17 00:00:00 2001
+From: Cursor Agent <cursoragent@cursor.com>
+Date: Tue, 1 Sep 2026 21:38:27 +0000
+Subject: [PATCH 8/8] fix(apply): refuse whole-file fallback when the defect
+ excerpt is already gone
+
+The first missing-anchor retry then a silent no-op (apply_err empty)
+still demoted to [edit-fallback] on the 21:35Z option-4 run. Key the
+refuse on the excerpt, not the error string.
+---
+ flexfactor.py       | 12 +++++++-----
+ flexfactor_tests.py |  5 ++++-
+ 2 files changed, 11 insertions(+), 6 deletions(-)
+
+diff --git a/flexfactor.py b/flexfactor.py
+index 140cbf3..ed32783 100644
+--- a/flexfactor.py
++++ b/flexfactor.py
+@@ -9225,12 +9225,14 @@ def _refuse_whole_file_after_missing_anchor(apply_err: str, text: str, findings:
+     Live option 4 2026-09-01: the first purpose-bridge wrote ``return a + b``.
+     The free assessor then re-emitted the same gaps; edit anchors for
+     ``return a - b`` were gone; ``[edit-fallback]`` regenerated the whole
+-    file and appended test functions into ``hello.py``. An anchor that is
+-    not in the file, when the finding's own excerpt is also gone, means
+-    the defect is already absent — stay put.
++    file and appended test functions into ``hello.py``. When the finding's
++    own excerpt is already absent, the defect is gone — stay put. Do not
++    key this on the apply_err string: a later no-op (``apply_err=""``,
++    printed as ``edits were a no-op``) is the same already-fixed state
++    and still fired whole-file on the 21:35Z run after the first
++    ``anchor not found`` retry.
+     """
+-    if "anchor not found" not in str(apply_err or ""):
+-        return False
++    del apply_err  # kept so existing call sites and tests stay typed
+     return not _excerpt_in_text(text, findings)
+ 
+ 
+diff --git a/flexfactor_tests.py b/flexfactor_tests.py
+index f6dfe60..606868b 100644
+--- a/flexfactor_tests.py
++++ b/flexfactor_tests.py
+@@ -4478,7 +4478,10 @@ class RelComponentsTests(unittest.TestCase):
+         self.assertFalse(ff._refuse_whole_file_after_missing_anchor(
+             "edit 1: anchor not found in file",
+             "    return a - b\n", findings))
+-        self.assertFalse(ff._refuse_whole_file_after_missing_anchor(
++        # Silent no-op after the first missing-anchor retry (live 21:35Z).
++        self.assertTrue(ff._refuse_whole_file_after_missing_anchor(
++            "", src, findings))
++        self.assertTrue(ff._refuse_whole_file_after_missing_anchor(
+             "edit 1: empty search anchor", src, findings))
+ 
+     def test_python_exe_is_this_interpreter_not_bare_python(self):
 -- 
 2.43.0
 
