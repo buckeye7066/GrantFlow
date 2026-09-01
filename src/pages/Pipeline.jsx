@@ -31,7 +31,6 @@ import { listProfiles } from "@/api/profiles";
 import { apiFetch } from "@/api/client";
 import { env } from "@/config/env.js";
 import { useAuthStore } from "@/stores/authStore";
-import { Money } from "@/components/ui/Money";
 import { canonicalStage } from "../../shared/pipelineStages.js";
 
 // "Your funding current" track: the four high-level phases of the pipeline,
@@ -49,16 +48,6 @@ const usdCompact = new Intl.NumberFormat("en-US", {
   currency: "USD",
   maximumFractionDigits: 0,
 });
-
-// Best-estimate dollar value for a grant card (requested → max → min → amount).
-function grantValue(grant) {
-  const candidates = [grant?.amount_requested, grant?.amount_awarded, grant?.amount_max, grant?.amount_min, grant?.amount];
-  for (const raw of candidates) {
-    const n = Number(raw);
-    if (Number.isFinite(n) && n > 0) return n;
-  }
-  return 0;
-}
 
 export default function Pipeline() {
   const [selectedProfileId, setSelectedProfileId] = useState("all");
@@ -394,11 +383,12 @@ export default function Pipeline() {
   }, [scopedGrants]);
 
   // "Your funding current" rollup — bucket the scoped grants into the four
-  // high-level phases shown in the track band. Counts + estimated dollar value
-  // per phase, derived live from the same grants the board renders.
+  // high-level phases shown in the track band. Counts derived live from the
+  // same grants the board renders. Dollar totals are sourced from the
+  // server-side canonical contract elsewhere (avoid reimplementing here).
   const fundingCurrent = useMemo(() => {
     const totals = Object.fromEntries(
-      FUNDING_CURRENT_PHASES.map((p) => [p.key, { count: 0, amount: 0 }]),
+      FUNDING_CURRENT_PHASES.map((p) => [p.key, { count: 0 }]),
     );
     const phaseByStatus = new Map();
     for (const phase of FUNDING_CURRENT_PHASES) {
@@ -410,15 +400,13 @@ export default function Pipeline() {
       const phaseKey = phaseByStatus.get(canon);
       if (!phaseKey) continue;
       totals[phaseKey].count += 1;
-      totals[phaseKey].amount += grantValue(grant);
     }
     return totals;
   }, [scopedGrants]);
 
-  const fundingCurrentTotal = useMemo(
-    () => Object.values(fundingCurrent).reduce((sum, p) => sum + p.amount, 0),
-    [fundingCurrent],
-  );
+  // Dollar total for the band is intentionally omitted here to avoid a diverging
+  // client-side reimplementation. The canonical total is shown via the
+  // PipelinePotentialBreakdown card on Profile Overview and related surfaces.
 
   const filteredGrants = useFilteredGrants(scopedGrants, filters, 'all');
 
@@ -713,7 +701,7 @@ export default function Pipeline() {
           {/* "Your funding current" track — live pipeline phases as a current,
               matching design/grantflow-dashboard.html. Shown only when there's
               something flowing, so an empty board stays clean. */}
-          {fundingCurrentTotal > 0 && (
+          {Object.values(fundingCurrent).some((p) => p.count > 0) && (
             <section className="rounded-2xl border border-current-line bg-current-card p-5">
               <h2 className="money mb-5 text-xs font-bold uppercase tracking-[0.12em] text-current-ink/55">
                 Your funding current
@@ -724,7 +712,7 @@ export default function Pipeline() {
                   className="absolute left-[12%] right-[12%] top-[7px] hidden h-1 rounded bg-gradient-to-r from-current-emerald via-current-sage to-current-amber md:block"
                 />
                 {FUNDING_CURRENT_PHASES.map((phase) => {
-                  const stats = fundingCurrent[phase.key] ?? { count: 0, amount: 0 };
+                  const stats = fundingCurrent[phase.key] ?? { count: 0 };
                   return (
                     <li key={phase.key} className="relative flex flex-col items-center text-center">
                       <span
@@ -737,11 +725,6 @@ export default function Pipeline() {
                       <span className="money mt-1 text-xs text-current-ink/55">
                         {stats.count} source{stats.count === 1 ? "" : "s"}
                       </span>
-                      <Money
-                        className={`mt-1.5 text-sm font-bold ${phase.awarded ? "text-[#a76a16]" : "text-current-ink"}`}
-                      >
-                        {usdCompact.format(Math.round(stats.amount))}
-                      </Money>
                     </li>
                   );
                 })}

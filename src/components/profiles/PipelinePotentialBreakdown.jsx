@@ -127,19 +127,6 @@ function escapeHtml(value) {
 // the funding moves from preparation → applied → approved.
 const PHASE_ORDER = ["Preparing", "Applied", "Approved"]
 
-// Best-estimate dollar value for a source (used for per-phase subtotals so each
-// section sums to something meaningful even when a source has a range, not a
-// single requested figure).
-function estimatedValue(item) {
-  const req = Number(item?.amount_requested)
-  if (Number.isFinite(req) && req > 0) return req
-  const max = Number(item?.amount_max)
-  if (Number.isFinite(max) && max > 0) return max
-  const min = Number(item?.amount_min)
-  if (Number.isFinite(min) && min > 0) return min
-  return 0
-}
-
 // Human contact + how-to-apply lines for a source, present-fields only.
 function contactLines(item) {
   const lines = []
@@ -211,13 +198,11 @@ function openPrintableBreakdown({ profileName, formattedTotal, items }) {
   const rows = orderedPhases
     .map((phase) => {
       const group = byPhase.get(phase)
-      const subtotal = group.reduce((s, it) => s + estimatedValue(it), 0)
       const header = `
         <tr class="phase-head">
           <td colspan="4">
             <span class="phase-name">${escapeHtml(phase)}</span>
             <span class="phase-count">${group.length} source${group.length === 1 ? "" : "s"}</span>
-            <span class="phase-sub">est. ${escapeHtml(usd.format(Math.round(subtotal)))}</span>
           </td>
         </tr>`
       return header + group.map(renderRow).join("")
