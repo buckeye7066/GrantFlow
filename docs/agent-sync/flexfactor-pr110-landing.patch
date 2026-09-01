@@ -1,7 +1,7 @@
 From 06c7d10b61b59047a6cd86018ca5662f6a4e3a5c Mon Sep 17 00:00:00 2001
 From: Cursor Agent <cursoragent@cursor.com>
 Date: Tue, 1 Sep 2026 19:17:46 +0000
-Subject: [PATCH 1/9] fix(ci): run autoclean preverify tests in
+Subject: [PATCH 01/10] fix(ci): run autoclean preverify tests in
  production-readiness
 
 The new flexfactor_autoclean_preverify_tests.py module existed on the
@@ -34,7 +34,7 @@ index 77610ad..ad86ef9 100644
 From 7aab5ec6d9a4846ff3bbd5373c9052bc60078a7a Mon Sep 17 00:00:00 2001
 From: Cursor Agent <cursoragent@cursor.com>
 Date: Tue, 1 Sep 2026 20:33:10 +0000
-Subject: [PATCH 2/9] fix(apply): classify Cross-file dependency as no-fix
+Subject: [PATCH 02/10] fix(apply): classify Cross-file dependency as no-fix
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
 Content-Transfer-Encoding: 8bit
@@ -248,7 +248,7 @@ index 5a051a1..485250a 100644
 From 745255550e22813c8a343b4dbe885e55fd30ef05 Mon Sep 17 00:00:00 2001
 From: Cursor Agent <cursoragent@cursor.com>
 Date: Tue, 1 Sep 2026 20:36:59 +0000
-Subject: [PATCH 3/9] fix(apply): retry silent in-file no-ops and escalate
+Subject: [PATCH 03/10] fix(apply): retry silent in-file no-ops and escalate
 
 A second option-4 run classified Cross-file dependency correctly
 but the author then returned changed=false with notes=None, which
@@ -387,7 +387,7 @@ index 485250a..4b7c974 100644
 From b15f048f9174dde33162b35101a68020f5c2c651 Mon Sep 17 00:00:00 2001
 From: Cursor Agent <cursoragent@cursor.com>
 Date: Tue, 1 Sep 2026 20:42:51 +0000
-Subject: [PATCH 4/9] fix(stack): detect unpacked Python fixtures via tests/
+Subject: [PATCH 04/10] fix(stack): detect unpacked Python fixtures via tests/
 
 Option 4's hello.py fixture has no pyproject/requirements, so
 _detect_stack left is_python=False and test_cmd empty. The author
@@ -457,7 +457,7 @@ index 4b7c974..f692711 100644
 From 426193e4b3dab7950299347104c1a78e1c0b7424 Mon Sep 17 00:00:00 2001
 From: Cursor Agent <cursoragent@cursor.com>
 Date: Tue, 1 Sep 2026 20:54:34 +0000
-Subject: [PATCH 5/9] fix(apply): apply a finding-named return when the model
+Subject: [PATCH 05/10] fix(apply): apply a finding-named return when the model
  cannot
 
 Free local authors kept reverting syntax-invalid hello.py patches on
@@ -742,7 +742,7 @@ index f692711..622570f 100644
 From e1d22d7be766d138ad4395fcd32fbd0d3e79c357 Mon Sep 17 00:00:00 2001
 From: Cursor Agent <cursoragent@cursor.com>
 Date: Tue, 1 Sep 2026 21:04:28 +0000
-Subject: [PATCH 6/9] fix(apply): compile Python fixes with this interpreter
+Subject: [PATCH 06/10] fix(apply): compile Python fixes with this interpreter
 
 Bare `python` is missing on Debian/cloud images, so the per-file
 py_compile gate rolled back every correct named-return write with
@@ -836,7 +836,7 @@ index 622570f..f725f37 100644
 From f335a7b59569c2e80f3b05e4a7394633ecb53073 Mon Sep 17 00:00:00 2001
 From: Cursor Agent <cursoragent@cursor.com>
 Date: Tue, 1 Sep 2026 21:20:57 +0000
-Subject: [PATCH 7/9] fix(apply): refuse whole-file fallback when the defect
+Subject: [PATCH 07/10] fix(apply): refuse whole-file fallback when the defect
  anchor is already gone
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
@@ -919,7 +919,7 @@ index f725f37..f6dfe60 100644
 From ac16a5bed3dc02cbd43ee8ca1d020e63a0ad5532 Mon Sep 17 00:00:00 2001
 From: Cursor Agent <cursoragent@cursor.com>
 Date: Tue, 1 Sep 2026 21:38:27 +0000
-Subject: [PATCH 8/9] fix(apply): refuse whole-file fallback when the defect
+Subject: [PATCH 08/10] fix(apply): refuse whole-file fallback when the defect
  excerpt is already gone
 
 The first missing-anchor retry then a silent no-op (apply_err empty)
@@ -977,7 +977,7 @@ index f6dfe60..606868b 100644
 From 8d0bb28f780006adccbfcf72d5ee7d509d0f060b Mon Sep 17 00:00:00 2001
 From: Cursor Agent <cursoragent@cursor.com>
 Date: Tue, 1 Sep 2026 21:47:14 +0000
-Subject: [PATCH 9/9] fix(apply): retry incomplete reviews and drop stale
+Subject: [PATCH 09/10] fix(apply): retry incomplete reviews and drop stale
  certifier claims
 
 qwen 3b option-4 runs aborted after cycle 1 when every finding failed the
@@ -1254,6 +1254,128 @@ index 606868b..6bd15e3 100644
  
  class WriteVsReplaceLeafSemanticsTests(unittest.TestCase):
      """Round-11: _write_contained REFUSES a symlink leaf; _replace_contained REPLACES
+-- 
+2.43.0
+
+
+From 4d6c2b27d065fb33b4c53dba9cd0e35a3d9fc09c Mon Sep 17 00:00:00 2001
+From: Cursor Agent <cursoragent@cursor.com>
+Date: Tue, 1 Sep 2026 21:59:12 +0000
+Subject: [PATCH 10/10] fix(review): recover excerpts the 3b named in prose
+
+qwen 3b titles a real defect (duplicate return) and leaves
+source_excerpt/trigger/observable_failure empty, so the evidence gate
+raises incomplete and burns every retry cycle. Fill those schema fields
+only from text already in the cited-line window.
+---
+ flexfactor.py       | 43 +++++++++++++++++++++++++++++++++++++++++++
+ flexfactor_tests.py | 32 ++++++++++++++++++++++++++++++++
+ 2 files changed, 75 insertions(+)
+
+diff --git a/flexfactor.py b/flexfactor.py
+index e36bd8b..bcde9a2 100644
+--- a/flexfactor.py
++++ b/flexfactor.py
+@@ -9219,6 +9219,28 @@ def _excerpt_in_text(text: str, findings: list) -> bool:
+     return False
+ 
+ 
++def _excerpt_from_finding_prose(finding: dict, nearby: str) -> str:
++    """Recover a source excerpt the model named in prose but left out of the field.
++
++    Live qwen 3b reviews cited ``return a + b`` / ``def greet`` in the title
++    or problem and left ``source_excerpt`` empty, so the evidence gate
++    treated a real defect as ungrounded. Only text that is already in
++    ``nearby`` (the cited-line window, or the whole file at line 0) is
++    accepted — this does not invent an excerpt.
++    """
++    blob = "\n".join(str((finding or {}).get(k) or "") for k in
++                     ("title", "problem", "fix", "evidence", "source_excerpt"))
++    for m in re.finditer(r"`([^`]+)`", blob):
++        cited = m.group(1).strip()
++        if len(cited) >= 6 and cited in nearby:
++            return cited
++    for src_line in str(nearby or "").splitlines():
++        stripped = src_line.strip()
++        if len(stripped) >= 8 and stripped in blob:
++            return stripped
++    return ""
++
++
+ def _current_tree_haystack(project_dir: str, *, extra: str = "") -> str:
+     """First-party text on disk right now. The patch is NOT included: a
+     removed defect line (``- return a - b``) must not keep a stale finding
+@@ -10623,6 +10645,27 @@ def _postprocess_review_findings(findings: list[dict], rel_path: str,
+                     nearby = "\n".join(lines[max(0, line - 4):min(len(lines), line + 3)])
+                 else:
+                     nearby = ""
++                # Free 3b reviewers name a real line in title/problem but leave
++                # source_excerpt/trigger/observable_failure empty, so the
++                # evidence gate dropped every finding and raised incomplete
++                # (live option 4 2026-09-01: "Duplicated Return Statement" on
++                # a file that literally had two `return a + b` lines). The
++                # excerpt-in-source bar is unchanged; only the schema fields
++                # the small model never emits are filled from text that is
++                # already in the file.
++                if line_valid and not (excerpt and excerpt in nearby):
++                    recovered = _excerpt_from_finding_prose(finding, nearby or source)
++                    if recovered:
++                        excerpt = recovered
++                        finding["source_excerpt"] = recovered
++                if line_valid and excerpt and excerpt in nearby:
++                    if not trigger:
++                        finding["trigger"] = excerpt
++                        trigger = excerpt
++                    if not failure:
++                        failure = str(finding.get("problem") or finding.get("title")
++                                      or excerpt).strip()
++                        finding["observable_failure"] = failure
+                 if (line_valid and excerpt and excerpt in nearby and trigger and failure):
+                     grounded.append(finding)
+                 else:
+diff --git a/flexfactor_tests.py b/flexfactor_tests.py
+index 6bd15e3..b36485a 100644
+--- a/flexfactor_tests.py
++++ b/flexfactor_tests.py
+@@ -4495,6 +4495,38 @@ class RelComponentsTests(unittest.TestCase):
+             exe,
+         )
+ 
++    def test_excerpt_from_finding_prose_requires_text_already_in_nearby(self):
++        nearby = "    return a + b\n    return a + b\n"
++        self.assertEqual(
++            ff._excerpt_from_finding_prose(
++                {"title": "Duplicated Return Statement",
++                 "problem": "two `return a + b` lines"},
++                nearby),
++            "return a + b")
++        self.assertEqual(
++            ff._excerpt_from_finding_prose(
++                {"title": "invented", "problem": "return a - b"},
++                nearby),
++            "")
++
++    def test_postprocess_grounds_a_3b_finding_that_omits_schema_fields(self):
++        import tempfile
++        src = "def add(a, b):\n    return a + b\n    return a + b\n"
++        finding = {
++            "title": "Duplicated Return Statement",
++            "problem": "hello.py has two `return a + b` lines",
++            "fix": "keep one return",
++            "line": 2,
++        }
++        with tempfile.TemporaryDirectory() as tmp:
++            with open(os.path.join(tmp, "hello.py"), "w", encoding="utf-8") as fh:
++                fh.write(src)
++            out = ff._postprocess_review_findings([finding], "hello.py", tmp)
++        self.assertEqual(len(out), 1)
++        self.assertEqual(out[0]["source_excerpt"], "return a + b")
++        self.assertEqual(out[0]["trigger"], "return a + b")
++        self.assertTrue(out[0]["observable_failure"])
++
+     def test_stale_review_finding_is_gone_from_current_tree_not_the_patch(self):
+         haystack = "def add(a, b):\n    return a + b\n"
+         self.assertTrue(ff._stale_review_finding(
 -- 
 2.43.0
 

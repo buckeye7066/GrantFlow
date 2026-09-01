@@ -66,10 +66,11 @@ Do not `git add flexfactor` (symlink to `/home/ubuntu/src/flexfactor`).
 | `f335a7b` | refuse whole-file fallback when apply_err contains `anchor not found` |
 | `ac16a5b` | same refuse keyed on excerpt-gone, including silent no-op (`apply_err=""`) |
 | `8d0bb28` | retry incomplete reviews on remaining cycles; drop stale purpose/final findings whose excerpt is already gone from HEAD |
+| `4d6c2b2` | recover `source_excerpt`/`trigger`/`observable_failure` from prose that already cites an in-file line, so a 3b review can complete |
 
 Portable patch (also copied into this GrantFlow tree):
 `docs/agent-sync/flexfactor-pr110-landing.patch`
-(`git format-patch --stdout 634250c..HEAD`, 9 commits).
+(`git format-patch --stdout 634250c..HEAD`, 10 commits).
 Same bytes on this host at `/tmp/flexfactor-pr110-landing.patch`.
 One-shot apply from a writable token: `scripts/land-flexfactor-pr110.sh`.
 
