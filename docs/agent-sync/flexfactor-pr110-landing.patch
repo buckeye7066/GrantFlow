@@ -1,7 +1,7 @@
 From 06c7d10b61b59047a6cd86018ca5662f6a4e3a5c Mon Sep 17 00:00:00 2001
 From: Cursor Agent <cursoragent@cursor.com>
 Date: Tue, 1 Sep 2026 19:17:46 +0000
-Subject: [PATCH 01/12] fix(ci): run autoclean preverify tests in
+Subject: [PATCH 01/13] fix(ci): run autoclean preverify tests in
  production-readiness
 
 The new flexfactor_autoclean_preverify_tests.py module existed on the
@@ -34,7 +34,7 @@ index 77610ad..ad86ef9 100644
 From 7aab5ec6d9a4846ff3bbd5373c9052bc60078a7a Mon Sep 17 00:00:00 2001
 From: Cursor Agent <cursoragent@cursor.com>
 Date: Tue, 1 Sep 2026 20:33:10 +0000
-Subject: [PATCH 02/12] fix(apply): classify Cross-file dependency as no-fix
+Subject: [PATCH 02/13] fix(apply): classify Cross-file dependency as no-fix
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
 Content-Transfer-Encoding: 8bit
@@ -248,7 +248,7 @@ index 5a051a1..485250a 100644
 From 745255550e22813c8a343b4dbe885e55fd30ef05 Mon Sep 17 00:00:00 2001
 From: Cursor Agent <cursoragent@cursor.com>
 Date: Tue, 1 Sep 2026 20:36:59 +0000
-Subject: [PATCH 03/12] fix(apply): retry silent in-file no-ops and escalate
+Subject: [PATCH 03/13] fix(apply): retry silent in-file no-ops and escalate
 
 A second option-4 run classified Cross-file dependency correctly
 but the author then returned changed=false with notes=None, which
@@ -387,7 +387,7 @@ index 485250a..4b7c974 100644
 From b15f048f9174dde33162b35101a68020f5c2c651 Mon Sep 17 00:00:00 2001
 From: Cursor Agent <cursoragent@cursor.com>
 Date: Tue, 1 Sep 2026 20:42:51 +0000
-Subject: [PATCH 04/12] fix(stack): detect unpacked Python fixtures via tests/
+Subject: [PATCH 04/13] fix(stack): detect unpacked Python fixtures via tests/
 
 Option 4's hello.py fixture has no pyproject/requirements, so
 _detect_stack left is_python=False and test_cmd empty. The author
@@ -457,7 +457,7 @@ index 4b7c974..f692711 100644
 From 426193e4b3dab7950299347104c1a78e1c0b7424 Mon Sep 17 00:00:00 2001
 From: Cursor Agent <cursoragent@cursor.com>
 Date: Tue, 1 Sep 2026 20:54:34 +0000
-Subject: [PATCH 05/12] fix(apply): apply a finding-named return when the model
+Subject: [PATCH 05/13] fix(apply): apply a finding-named return when the model
  cannot
 
 Free local authors kept reverting syntax-invalid hello.py patches on
@@ -742,7 +742,7 @@ index f692711..622570f 100644
 From e1d22d7be766d138ad4395fcd32fbd0d3e79c357 Mon Sep 17 00:00:00 2001
 From: Cursor Agent <cursoragent@cursor.com>
 Date: Tue, 1 Sep 2026 21:04:28 +0000
-Subject: [PATCH 06/12] fix(apply): compile Python fixes with this interpreter
+Subject: [PATCH 06/13] fix(apply): compile Python fixes with this interpreter
 
 Bare `python` is missing on Debian/cloud images, so the per-file
 py_compile gate rolled back every correct named-return write with
@@ -836,7 +836,7 @@ index 622570f..f725f37 100644
 From f335a7b59569c2e80f3b05e4a7394633ecb53073 Mon Sep 17 00:00:00 2001
 From: Cursor Agent <cursoragent@cursor.com>
 Date: Tue, 1 Sep 2026 21:20:57 +0000
-Subject: [PATCH 07/12] fix(apply): refuse whole-file fallback when the defect
+Subject: [PATCH 07/13] fix(apply): refuse whole-file fallback when the defect
  anchor is already gone
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
@@ -919,7 +919,7 @@ index f725f37..f6dfe60 100644
 From ac16a5bed3dc02cbd43ee8ca1d020e63a0ad5532 Mon Sep 17 00:00:00 2001
 From: Cursor Agent <cursoragent@cursor.com>
 Date: Tue, 1 Sep 2026 21:38:27 +0000
-Subject: [PATCH 08/12] fix(apply): refuse whole-file fallback when the defect
+Subject: [PATCH 08/13] fix(apply): refuse whole-file fallback when the defect
  excerpt is already gone
 
 The first missing-anchor retry then a silent no-op (apply_err empty)
@@ -977,7 +977,7 @@ index f6dfe60..606868b 100644
 From 8d0bb28f780006adccbfcf72d5ee7d509d0f060b Mon Sep 17 00:00:00 2001
 From: Cursor Agent <cursoragent@cursor.com>
 Date: Tue, 1 Sep 2026 21:47:14 +0000
-Subject: [PATCH 09/12] fix(apply): retry incomplete reviews and drop stale
+Subject: [PATCH 09/13] fix(apply): retry incomplete reviews and drop stale
  certifier claims
 
 qwen 3b option-4 runs aborted after cycle 1 when every finding failed the
@@ -1261,7 +1261,7 @@ index 606868b..6bd15e3 100644
 From 4d6c2b27d065fb33b4c53dba9cd0e35a3d9fc09c Mon Sep 17 00:00:00 2001
 From: Cursor Agent <cursoragent@cursor.com>
 Date: Tue, 1 Sep 2026 21:59:12 +0000
-Subject: [PATCH 10/12] fix(review): recover excerpts the 3b named in prose
+Subject: [PATCH 10/13] fix(review): recover excerpts the 3b named in prose
 
 qwen 3b titles a real defect (duplicate return) and leaves
 source_excerpt/trigger/observable_failure empty, so the evidence gate
@@ -1383,7 +1383,7 @@ index 6bd15e3..b36485a 100644
 From a877a4745981f447699998bc73101f30059a3026 Mon Sep 17 00:00:00 2001
 From: Cursor Agent <cursoragent@cursor.com>
 Date: Tue, 1 Sep 2026 22:09:10 +0000
-Subject: [PATCH 11/12] fix(baseline): name the publication return pair so
+Subject: [PATCH 11/13] fix(baseline): name the publication return pair so
  phase 0 cannot weaken tests
 
 Unittest reprints only the test line (assertEqual(add(2, 3), 5) / -1 != 5),
@@ -1763,7 +1763,7 @@ index b36485a..d8d98f2 100644
 From f3bfa29b5ab13af7456ec1e43c114617b0b70bbb Mon Sep 17 00:00:00 2001
 From: Cursor Agent <cursoragent@cursor.com>
 Date: Tue, 1 Sep 2026 22:14:12 +0000
-Subject: [PATCH 12/12] fix(apply): refuse named-return when the replacement is
+Subject: [PATCH 12/13] fix(apply): refuse named-return when the replacement is
  already in the file
 
 After phase 0 writes return a + b, the same finding text
@@ -1871,6 +1871,187 @@ index d8d98f2..bd199f7 100644
      def test_publication_finding_names_return_pair_from_assertion_and_file(self):
          """Live option 4 2026-09-01: unittest reprints only the TEST line.
  
+-- 
+2.43.0
+
+
+From 084af8409a7402da85df0020b93b58c92d0967a3 Mon Sep 17 00:00:00 2001
+From: Cursor Agent <cursoragent@cursor.com>
+Date: Tue, 1 Sep 2026 22:41:17 +0000
+Subject: [PATCH 13/13] fix(apply): roll back test-file writes that delete test
+ methods
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Cycle 1 of option 4 labeled Unreachable Code and deleted test_greet;
+the suite stayed green so the publication gate kept it. Building is
+not the bar. Also refuse whole-file fallback on test files — that
+path hung the 3b author for 7+ minutes on the same tree.
+---
+ flexfactor.py       | 49 ++++++++++++++++++++++++++++++
+ flexfactor_tests.py | 74 +++++++++++++++++++++++++++++++++++++++++++++
+ 2 files changed, 123 insertions(+)
+
+diff --git a/flexfactor.py b/flexfactor.py
+index 2481e23..46d37f4 100644
+--- a/flexfactor.py
++++ b/flexfactor.py
+@@ -10075,6 +10075,36 @@ def _is_test_path(rel: str) -> bool:
+     return any(m in low for m in _TEST_MARKERS) or os.path.basename(low).startswith("test_")
+ 
+ 
++_PY_TEST_DEF_RX = re.compile(
++    r"(?m)^[ \t]*def\s+(test_[A-Za-z_][A-Za-z0-9_]*)\s*\(")
++_ASSERT_CALL_RX = re.compile(
++    r"\b(?:assertEqual|assertIsNone|assertTrue|assertFalse|assertIn|"
++    r"assertRaises|expect\s*\(|\bassert\s+)")
++
++
++def _test_def_names(text: str) -> set[str]:
++    return set(_PY_TEST_DEF_RX.findall(str(text or "")))
++
++
++def _weakened_test_file(rel: str, before: str, after: str) -> str | None:
++    """Reason if a test-file candidate deleted tests or assertions.
++
++    Live option 4 2026-09-01: cycle 1 labeled ``Unreachable Code`` and
++    deleted ``test_greet``. The publication suite stayed green (only
++    ``test_add`` remained). Building is not the bar.
++    """
++    if not (_is_test_path(rel) or _TEST_FILE_RE.search(str(rel or ""))):
++        return None
++    lost = sorted(_test_def_names(before) - _test_def_names(after))
++    if lost:
++        return "deleted test method(s): " + ", ".join(lost)
++    before_n = len(_ASSERT_CALL_RX.findall(before or ""))
++    after_n = len(_ASSERT_CALL_RX.findall(after or ""))
++    if after_n < before_n:
++        return f"dropped assertions ({before_n} -> {after_n})"
++    return None
++
++
+ def _git_real_files(project_dir: str) -> set[str] | None:
+     """The repo's own answer to "what is real code here": tracked plus
+     untracked-but-not-ignored paths (forward-slash rel). Returns None when the
+@@ -14357,6 +14387,15 @@ def _fix_files(author, cross, project_dir: str, file_findings: dict, stack: dict
+                         print(f"  [edit-keep] {rel}: {apply_err} — excerpt is "
+                               "already absent, not regenerating the whole file")
+                         break
++                    elif _is_test_path(rel) or _TEST_FILE_RE.search(rel):
++                        # Live option 4 2026-09-01: whole-file regen of
++                        # tests/test_hello.py hung the 3b author for 7+ min
++                        # after cycle 1 had already deleted test_greet.
++                        outcome = ("noop",
++                                   "refusing whole-file fallback on a test file")
++                        print(f"  [edit-keep] {rel}: {apply_err or 'edits were a no-op'} "
++                              "— not regenerating a test file")
++                        break
+                     else:
+                         edit_mode = False
+                         print(f"  [edit-fallback] {rel}: {apply_err or 'edits were a no-op'}"
+@@ -14436,6 +14475,16 @@ def _fix_files(author, cross, project_dir: str, file_findings: dict, stack: dict
+             if _replace_contained(project_dir, rel, patch["contents"]) is None:
+                 outcome = ("skip", "contained write refused (path escape/symlink)")
+                 break
++            weaken = _weakened_test_file(rel, original, patch["contents"])
++            if weaken:
++                if _replace_contained(project_dir, rel, original) is None:
++                    dirty_files.append(rel)
++                    outcome = ("skip", "contained rollback refused after a weakened test")
++                    break
++                print(f"  [weaken-revert] {rel}: {weaken}")
++                outcome = ("reject", weaken)
++                notes.append(f"{rel}: REJECTED weakened test: {weaken}")
++                break
+             ok, log = _gate_file(project_dir, rel, stack, baseline_ok)
+             if ok is False:
+                 if _replace_contained(project_dir, rel, original) is None:  # rollback REFUSED
+diff --git a/flexfactor_tests.py b/flexfactor_tests.py
+index bd199f7..e85301d 100644
+--- a/flexfactor_tests.py
++++ b/flexfactor_tests.py
+@@ -4457,6 +4457,80 @@ class RelComponentsTests(unittest.TestCase):
+         self.assertIsNone(ff._apply_named_return_statement(
+             src, [{"source_excerpt": "return a - b"}]))
+ 
++    def test_weakened_test_file_detects_deleted_test_greet(self):
++        before = (
++            "class T(unittest.TestCase):\n"
++            "    def test_add(self):\n"
++            "        self.assertEqual(add(2, 3), 5)\n"
++            "    def test_greet(self):\n"
++            "        self.assertEqual(greet('x'), 'hello x')\n"
++        )
++        after = (
++            "class T(unittest.TestCase):\n"
++            "    def test_add(self):\n"
++            "        self.assertEqual(add(2, 3), 5)\n"
++        )
++        reason = ff._weakened_test_file("tests/test_hello.py", before, after)
++        self.assertIsNotNone(reason)
++        self.assertIn("test_greet", reason)
++        self.assertIsNone(ff._weakened_test_file("hello.py", before, after))
++        self.assertIsNone(ff._weakened_test_file("tests/test_hello.py", before, before))
++
++    def test_fix_files_rolls_back_a_deleted_test_method(self):
++        import tempfile
++        import types
++        src = (
++            "import unittest\nfrom hello import add, greet\n"
++            "class T(unittest.TestCase):\n"
++            "    def test_add(self):\n"
++            "        self.assertEqual(add(2, 3), 5)\n"
++            "    def test_greet(self):\n"
++            "        self.assertEqual(greet(\"x\"), \"hello x\")\n"
++        )
++        finding = {
++            "severity": "high", "line": 8, "title": "Unreachable Code",
++            "problem": "test_greet is unreachable",
++            "fix": "remove it",
++            "source_excerpt": "def test_greet",
++            "trigger": "review", "failure": "style",
++        }
++        with tempfile.TemporaryDirectory() as tmp:
++            os.makedirs(os.path.join(tmp, "tests"))
++            path = os.path.join(tmp, "tests", "test_hello.py")
++            with open(path, "w", encoding="utf-8") as fh:
++                fh.write(src)
++
++            def fake_edits(*_a, **_k):
++                return {"changed": True, "edits": [{
++                    "search": (
++                        "    def test_greet(self):\n"
++                        "        self.assertEqual(greet(\"x\"), \"hello x\")\n"
++                    ),
++                    "replace": "",
++                }], "fixed_titles": ["Unreachable Code"]}
++
++            real_edits = ff.generate_edits_shrinking
++            real_whole = ff.generate_file_fix
++            ff.generate_edits_shrinking = fake_edits
++            ff.generate_file_fix = lambda *_a, **_k: (_ for _ in ()).throw(
++                AssertionError("whole-file must not run on a weakened test"))
++            args = types.SimpleNamespace(
++                fix_severity="medium", whole_file_fixes=False, fix_prefetch=0,
++                structural_fixes=False, adversarial=False)
++            try:
++                applied, _unver, notes = ff._fix_files(
++                    object(), None, tmp, {"tests/test_hello.py": [finding]},
++                    {"is_node": False, "is_python": True}, True, args)
++            finally:
++                ff.generate_edits_shrinking = real_edits
++                ff.generate_file_fix = real_whole
++            self.assertEqual(applied, [])
++            self.assertTrue(any("weakened" in n.lower() or "test_greet" in n
++                                for n in notes))
++            with open(path, encoding="utf-8") as fh:
++                text = fh.read()
++            self.assertIn("def test_greet", text)
++
+     def test_named_return_refuses_when_desired_return_is_already_in_file(self):
+         """Live option 4 2026-09-01: phase 0 wrote ``return a + b``; the
+         same finding text then swapped it back to ``return a - b``."""
 -- 
 2.43.0
 

@@ -69,10 +69,11 @@ Do not `git add flexfactor` (symlink to `/home/ubuntu/src/flexfactor`).
 | `4d6c2b2` | recover `source_excerpt`/`trigger`/`observable_failure` from prose that already cites an in-file line, so a 3b review can complete |
 | `a877a47` | **phase-0 honesty** — name `return a - b` → `return a + b` from `AssertionError: -1 != 5` + `add(2, 3)` + the in-file return; keep implementations first so the model cannot weaken the test |
 | `f3bfa29` | refuse named-return when the replacement is already in the file (purpose-bridge was reverting `a + b` → `a - b`) |
+| `084af84` | roll back test-file writes that delete `def test_*` or drop asserts; refuse whole-file fallback on tests |
 
 Portable patch (also copied into this GrantFlow tree):
 `docs/agent-sync/flexfactor-pr110-landing.patch`
-(`git format-patch --stdout 634250c..HEAD`, 12 commits).
+(`git format-patch --stdout 634250c..HEAD`, 13 commits).
 Same bytes on this host at `/tmp/flexfactor-pr110-landing.patch`.
 One-shot apply from a writable token: `scripts/land-flexfactor-pr110.sh`.
 
@@ -185,9 +186,15 @@ VERIFIED this run:
   whole-file. `hello.py` still `return a + b`.
 - Competitors: 1 covered (target 1); Jest rejected / not bridged.
 - Cycle 1 review: hello.py clean; 3b then "fixed" `tests/test_hello.py`
-  by deleting `test_greet` (suite still green). Cycle 2 is regenerating
-  that test file whole. Remaining EXIT 0 risks: purpose-fulfilled
-  (greet criterion), independent-final-review, deleted `test_greet`.
+  by deleting `test_greet` (suite still green). Cycle 2 hung 7+ min on
+  whole-file regen. Killed. `084af84` rolls that delete back and
+  refuses whole-file fallback on tests.
+
+### Option 4 on `084af84` / fixture `/tmp/ff-option4-keep`
+
+Restart after the test-weaken rollback. Log: `/tmp/ff-option4-keep.log`.
+Do not treat mid-run as EXIT 0. Prove `hello.py` is `return a + b`,
+`test_greet` is still present, AND factory EXIT 0.
 
 ### Option 4 on `f335a7b` / fixture `/tmp/ff-option4-ready` (2026-09-01T21:27–21:35Z)
 
@@ -216,7 +223,7 @@ rubric could close.
 
 1. Check out `fix/autoclean-verifies-what-it-commits` at `634250c`.
 2. Apply `docs/agent-sync/flexfactor-pr110-landing.patch` from GrantFlow
-   PR #1442 **or** cherry-pick `06c7d10..f3bfa29` from
+   PR #1442 **or** cherry-pick `06c7d10..084af84` from
    `/home/ubuntu/flexfactor` if the same VM.
 3. Minimum to unblock merge: land `06c7d10` alone, then wait for exact-head
    production-readiness green. The other eleven commits make option 4 able

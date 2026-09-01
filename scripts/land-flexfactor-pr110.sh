@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Land the FlexFactor PR #110 CI-wire + option-4 apply-path commits
-# (12 commits: 06c7d10..f3bfa29).
+# (13 commits: 06c7d10..084af84).
 # Run this ONLY from a session with write to buckeye7066/flexfactor.
 # GrantFlow-scoped tokens will 403 — that is expected; do not retry.
 set -euo pipefail
