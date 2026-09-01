@@ -13,9 +13,10 @@ import { Link } from 'react-router-dom'
 import client from '@/api/client'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
-import { createPageUrl } from '@/utils'
-import { useAuthStore } from '@/stores/authStore'
 import { hasFullAdminWorkspace } from '@/lib/workspaceAccess'
+import { useAuthStore } from '@/stores/authStore'
+import { createPageUrl } from '@/utils'
+import { computeClientPipelineDollar } from '@/utils/pipelineDollarClient'
 
 const statusOrder = [
   { key: 'discovered', label: 'Discovery', icon: Target, color: 'bg-blue-500/15 text-blue-700 dark:bg-blue-500/20 dark:text-blue-200' },
@@ -44,14 +45,7 @@ function resolveCount(stats, key) {
 }
 
 function grantValue(grant) {
-  const candidates = grant?.status === 'awarded'
-    ? [grant?.amount_awarded, grant?.amount_requested, grant?.amount_max, grant?.amount_min, grant?.amount]
-    : [grant?.amount_requested, grant?.amount_max, grant?.amount_min, grant?.amount, grant?.amount_awarded]
-  for (const raw of candidates) {
-    const value = Number(raw)
-    if (Number.isFinite(value) && value > 0) return value
-  }
-  return 0
+  return computeClientPipelineDollar(grant)
 }
 
 export default function PipelineStatusCard({ stats = {}, isLoading, hasError = false }) {
