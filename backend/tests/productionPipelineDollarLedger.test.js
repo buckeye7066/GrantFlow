@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   PIPELINE_LEDGER_SQL,
   parseProfileIds,
+  requireExplicitProfileScope,
   summarizePipelineDollarRows,
 } from '../../scripts/production-audit/pipeline-dollar-ledger.mjs'
 import {
@@ -14,7 +15,8 @@ describe('protected production pipeline-dollar ledger', () => {
   it('is import-safe, parameterized, read-only SQL using the canonical contract', () => {
     expect(Array.isArray(PIPELINE_ACTIVE_STATUSES)).toBe(true)
     expect(PIPELINE_LEDGER_SQL).toContain('g.status = ANY($1::text[])')
-    expect(PIPELINE_LEDGER_SQL).toContain('$2::text[] IS NULL')
+    expect(PIPELINE_LEDGER_SQL).toContain('p.id = ANY($2::text[])')
+    expect(PIPELINE_LEDGER_SQL).toContain("LOWER(COALESCE(p.status, '')) <> 'deleted'")
     expect(PIPELINE_LEDGER_SQL).toContain(`g.amount_min * ${WIDE_AWARD_RANGE_RATIO}`)
     for (const kind of NO_PER_AWARD_FIGURE_KINDS) {
       expect(PIPELINE_LEDGER_SQL).toContain(String(kind))
@@ -22,9 +24,10 @@ describe('protected production pipeline-dollar ledger', () => {
     expect(PIPELINE_LEDGER_SQL).not.toMatch(/\b(?:INSERT|UPDATE|DELETE|DROP|ALTER|CREATE|TRUNCATE|GRANT|REVOKE|COPY)\b/i)
   })
 
-  it('treats an empty profile scope as all profiles and validates explicit ids', () => {
+  it('refuses an unscoped export and validates explicit bounded ids', () => {
     expect(parseProfileIds('')).toEqual([])
-    expect(parseProfileIds('profile-1, profile_2,profile-1')).toEqual(['profile-1', 'profile_2'])
+    expect(() => requireExplicitProfileScope('')).toThrow(/explicit bounded --profiles scope is required/i)
+    expect(requireExplicitProfileScope('profile-1, profile_2,profile-1')).toEqual(['profile-1', 'profile_2'])
     expect(() => parseProfileIds('bad profile id')).toThrow(/Invalid profile id/)
   })
 
