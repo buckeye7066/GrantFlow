@@ -217,6 +217,67 @@ blocker (no Java/Gradle here); `android-client` CI was green on
 Do not treat FlexFactor as production-ready for an unattended
 model-backed apply, and do not treat AI-factory as having run.
 
+## Follow-up 2026-09-01T19:57–20:00Z — CTA is dest-specific, not landing_url
+
+Live SHA still `b68d809`. Arm unchanged. Queue still **0**.
+Owner bio `/b/ellie-williams` restored to original Your First Grant.
+
+### Picker is item-based
+
+Disabling `your-first-grant` (only enabled Ellie item) then
+`POST /api/post-now` on Ellie Bluesky → **409 `no_enabled_app`**.
+The approved brand campaign `campaign-ellie-williams-always-on`
+(`product_id: null`, landing `/b/ellie-williams`, bluesky allowed)
+does **not** generate a draft by itself.
+
+### A campaign whose landing_url already IS `/r/…` still 409s
+
+Created disposable item `your-first-grant-tracked` with the bio
+tracked URL. That minted
+
+`campaign-your-first-grant-tracked-always-on`
+- `product_id`: `your-first-grant-tracked`
+- `landing_url`: the `/r/your-first-grant?destination_id=360c9fd4…` URL
+- `allowed_platforms` includes `bluesky`
+- approved revision 1
+
+Enabled only that item. `POST /api/post-now` Ellie Bluesky → still
+**409 `canonical_cta_mismatch`**. Updating the item URL to the
+product’s own bio `/r/your-first-grant-tracked?destination_id=ec1fe773…`
+(bio reminted a new dest hash when the listed product changed) and
+re-approving revision 2 → **same 409**. Extra post-now fields
+(`mode`, `dry_run`, `preview`, `generate_only`, `campaign_id`,
+`tracked_url`) are still ignored.
+
+So the generator does **not** insert the dest-specific minted URL.
+CTA wants `/r/<this productId>?destination_id=<this dest’s hash>&utm_…`
+exactly once. Bio dest hashes (`360c9fd4…`, `ec1fe773…`) are **not**
+SHA-256 of dest-* ids or of `brand:platform:account:product` (brute
+failed). Bluesky dest hash is not in `/api/control-plane`. Chicken
+and egg: no draft ⇒ cannot observe the minted URL ⇒ cannot set
+`landing_url` to it.
+
+Experimental items `your-first-grant-tracked` and `ellie-titles-hub`
+were **deleted**. Their leftover campaigns were **paused**. Original
+YFG item re-enabled; campaign still **approved revision 4**; bio
+again lists `/r/your-first-grant?destination_id=360c9fd4…`.
+`csv-sanity` / `grant-application-readiness-pack` remain disabled
+so the picker can reach YFG.
+
+`gh repo list` still only GrantFlow (private) + flexfactor (public).
+PromoPilot source remains unreachable. The generator/CTA insert
+must land in `buckeye7066/promopilot`.
+
+### FlexFactor this pass
+
+Ollama now also has **`qwen2.5-coder:1.5b`** (free local pull).
+Follow-up agent launched to retry option 4 with that model and
+retry origin write paths:
+[FlexFactor option 4 qwen](bc-5a7ee16b-c6da-5bbe-9645-e54cae715073).
+Fixture `/tmp/ff-option4-qwen` @ `3493fa30` (planted `add()`).
+Do not treat option 4 as complete until that agent’s evidence
+file is updated.
+
 ## Follow-up 2026-09-01T19:50Z (`bc-b97b5389-e742-5895-8193-8e35f10fa427`)
 
 Re-tried every write path. All still **403** to `cursor[bot]`:
