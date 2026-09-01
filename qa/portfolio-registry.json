@@ -17,24 +17,24 @@
     {
       "app_id": "flexfactor",
       "display_name": "FlexFactor",
-      "repo": "local-only",
+      "repo": "buckeye7066/flexfactor",
       "local_path": "~/flexfactor",
       "runtime_type": "python-cli",
       "runtime_status": "available",
       "concurrency_class": "default",
-      "notes": "CORRECTED 2026-07-21 (repo read): a single-file Python CLI (python flexfactor.py), NOT a web app. Three launchers select a subcommand/mode (default, scout, audit). Safety: EDIT-BLOCK default; never adopt/execute untrusted third-party code."
+      "notes": "CORRECTED 2026-09-01 (public GitHub): repo is buckeye7066/flexfactor, not local-only. Python CLI (python flexfactor.py); launchers 1 refactor / 2 scout / 3 audit / 4 prodready. Safety: EDIT-BLOCK default; never adopt/execute untrusted third-party code. EVA isolates against that origin when ~/flexfactor is a git clone."
     },
     {
       "app_id": "scout-a-program",
       "display_name": "Scout a Program",
-      "repo": "local-only",
+      "repo": "buckeye7066/flexfactor",
       "local_path": "~/flexfactor",
       "runtime_type": "python-cli",
       "runtime_status": "available",
       "concurrency_class": "default",
       "surface_of": "flexfactor",
       "launch_mode": "scout",
-      "notes": "CORRECTED 2026-07-21 (repo read): SAME codebase as FlexFactor, launched via the argparse SUBCOMMAND `python flexfactor.py scout` (NOT a FLEXFACTOR_MODE env var). Distinct product surface, shared repo. Safety: never adopt/execute untrusted third-party code."
+      "notes": "CORRECTED 2026-09-01: SAME public repo as FlexFactor (buckeye7066/flexfactor), launched via `python flexfactor.py scout` (NOT a FLEXFACTOR_MODE env var). Distinct product surface, shared repo. Safety: never adopt/execute untrusted third-party code."
     },
     {
       "app_id": "sermonsmith",
