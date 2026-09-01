@@ -179,7 +179,7 @@ rubric could close.
    PR #1442 **or** cherry-pick `06c7d10..f335a7b` from
    `/home/ubuntu/flexfactor` if the same VM.
 3. Minimum to unblock merge: land `06c7d10` alone, then wait for exact-head
-   production-readiness green. The other six commits make option 4 able
+   production-readiness green. The other seven commits make option 4 able
    to apply a finding-named return on Debian/`python3`-only hosts and
    refuse a vandalizing whole-file fallback — land them on the same PR
    so “production-ready” includes the apply path.
