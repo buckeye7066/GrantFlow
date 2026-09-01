@@ -2207,7 +2207,7 @@ router.get('/:id/pipeline-potential', async (req, res) => {
         eligibility_status: g.eligibility_status ?? null,
         match_decision: g.match_decision ?? null,
         opportunity_kind: g.opportunity_kind ?? null,
-        pipeline_dollar_value: g.pipeline_dollar_value != null ? Number(g.pipeline_dollar_value) : null,
+        pipeline_dollar_value: (g.pipeline_dollar_value !== null && g.pipeline_dollar_value !== undefined) ? Number(g.pipeline_dollar_value) : null,
         // A fuller description for the printable packet (still capped).
         description: desc ? String(desc).slice(0, 600) : null,
         // Contact + how-to-apply, so the printout stands on its own.
