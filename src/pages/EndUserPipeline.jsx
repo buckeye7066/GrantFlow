@@ -22,6 +22,7 @@ import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { parseLocalDate } from '@/components/shared/dateUtils'
 import { useAuthStore } from '@/stores/authStore'
+import { computeClientPipelineDollar } from '@/utils/pipelineDollarClient'
 
 const HIDDEN_GRANT_STATUSES = new Set(['rejected', 'withdrawn', 'deleted', 'archived', 'expired'])
 const TERMINAL_TASK_STATUSES = new Set(['submitted', 'draft_completed', 'completed', 'cancelled', 'failed'])
@@ -33,14 +34,7 @@ const currency = new Intl.NumberFormat('en-US', {
 })
 
 function grantValue(grant) {
-  const candidates = grant?.status === 'awarded'
-    ? [grant?.amount_awarded, grant?.amount_requested, grant?.amount_max, grant?.amount_min, grant?.amount]
-    : [grant?.amount_requested, grant?.amount_max, grant?.amount_min, grant?.amount, grant?.amount_awarded]
-  for (const raw of candidates) {
-    const value = Number(raw)
-    if (Number.isFinite(value) && value > 0) return value
-  }
-  return 0
+  return computeClientPipelineDollar(grant)
 }
 
 function grantUrl(grant) {
