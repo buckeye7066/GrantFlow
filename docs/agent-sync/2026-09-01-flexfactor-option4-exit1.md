@@ -26,73 +26,67 @@ Do **not** re-open #110. Do **not** re-diagnose that CI failure.
 
 ## What is still NOT on origin/main
 
-`origin/main` does **not** contain the option-4 apply-path:
-
-- no `_apply_named_return_statement`
-- no `_publication_return_pair`
-- no `_independent_finding_is_style_nit`
-- no purpose-fit flip of an unmapped competitor ACCEPT
-
-Those live only on this VM: `/home/ubuntu/flexfactor` branch
-`cursor/pr110-ci-wire-a427` tip **`e8685f7`**.
+`origin/main` does **not** contain the option-4 apply-path
+(`_apply_named_return_statement`, purpose-fit reject flip, stale/style
+certifier drops, already-satisfied ledger + fix-stream drops). Those live
+only on this VM: `/home/ubuntu/flexfactor` branch
+`cursor/pr110-ci-wire-a427` tip **`462fb37`**.
 
 GrantFlow-scoped `gh` still has `permissions.push=false` on
 `buckeye7066/flexfactor`. Do not loop Contents PUT / fork / push.
 
-## Local option-4 apply-path (14 commits on top of `634250c`)
+## Local option-4 apply-path
 
-Portable patch: `docs/agent-sync/flexfactor-pr110-landing.patch`
-(now 14 commits, includes `e8685f7`). One-shot apply from a writable
-token should target a **new** branch off `origin/main`, not #110.
+Portable patch: `docs/agent-sync/flexfactor-pr110-landing.patch`.
+One-shot: `scripts/land-flexfactor-pr110.sh` (exits 3 if no write).
+Target a **new** branch off `origin/main`, not #110.
 
 | SHA | What |
 |---|---|
 | `06c7d10` | CI wire (already on main via #110) |
 | `7aab5ec`…`084af84` | apply-path / phase-0 honesty / test-weaken rollback |
-| **`e8685f7`** | **EXIT 1 closer** — unmapped competitor ACCEPT becomes an explicit purpose-fit reject; independent final review drops `reproduction`-only stale return claims and quote/consistency nits |
+| `e8685f7` | unmapped competitor ACCEPT → purpose-fit reject; stale certifier drop |
+| `596b4a8` | drop SyntaxError + baseline-checkout claims on a compiling file |
+| `478205b` | drop already-satisfied findings from the unresolved ledger |
+| **`462fb37`** | **same drop BEFORE `_fix_files` generation** — change X to X no longer enters `[edit-fallback]` / 15-min whole-file regen |
 
-## Option 4 in flight
+Cherry-pick `7aab5ec^..462fb37` (skip `06c7d10` if it conflicts as already landed).
 
-Fixture `/tmp/ff-option4-close` planted with `add() = a - b`, both tests,
-owner-authored `docs/purpose-contract.md`. Log `/tmp/ff-option4-close.log`.
-Engine: `/home/ubuntu/flexfactor/flexfactor.py` at `e8685f7`.
+## Option 4 in flight (do not restart these)
 
-Phase 0 already applied `[named-return]` → `return a + b`, suite GREEN,
-`test_greet` still present (verified on disk mid-run). Do not treat
-mid-run as EXIT 0. Prove `hello.py` is `a + b`, `test_greet` present,
-**and** factory EXIT 0.
+| Fixture | Engine | Result |
+|---|---|---|
+| `/tmp/ff-option4-keep` | `084af84` | EXIT 1 — pandas ACCEPT + stale `a - b` in reproduction |
+| `/tmp/ff-option4-close` | `e8685f7` | EXIT 1 — invented SyntaxError + baseline checkout |
+| `/tmp/ff-option4-cert` | `596b4a8` | EXIT 1 — ledger kept change X to X |
+| `/tmp/ff-option4-done` | `478205b` | **killed** — hung 15 min on whole-file regen of already-correct `hello.py` after `[edit-fallback]` |
+
+**Current run:** `/tmp/ff-option4-skip` log `/tmp/ff-option4-skip.log`
+engine **`462fb37`**. Planted `add() = a - b`, both tests, owner-authored
+`docs/purpose-contract.md`. Do not treat mid-run as EXIT 0. Prove
+`hello.py` is `a + b`, `test_greet` present, **and** factory `EXIT:0`.
 
 Ollama: `qwen2.5-coder:3b` (free). Do not spend money on paid models.
 
-## PromoPilot (remeasured 2026-09-01T23:02Z)
+Closed classes (do not re-diagnose): pandas unmapped ACCEPT, stale `a - b`
+in reproduction, SyntaxError+baseline-checkout, change X to X in the
+ledger, change X to X entering whole-file regen.
+
+## PromoPilot (remeasured 2026-09-01T23:51Z)
 
 Live SHA still `b68d809`. `/healthz` live; scheduler+publishing enabled.
 `/readyz` ready. Portfolio **ARMED** / live / daily cap 2.
 `armed_at` 2026-09-01T12:52:39Z. `killed_at` 2026-08-06T15:42:36Z.
-Calendar days **0**. `buckeye7066/promopilot` still 404.
+Calendar days **0**. Open drafts **0**. Newest recent post still
+2026-08-06T20:21:12Z Mastodon **failed** (`login is currently disabled`).
+`buckeye7066/promopilot` still 404. This token cannot write it.
 Do not dest-approve Mastodon. Do not publish.
 
 ## What the next FlexFactor-writable agent must do
 
 1. Branch from `origin/main` (`3b6760d`), **not** from #110.
-2. Cherry-pick `7aab5ec..e8685f7` (skip `06c7d10` — already on main)
-   from `/home/ubuntu/flexfactor` if the same VM, or apply the patch
-   and drop the already-landed CI-wire commit.
+2. Cherry-pick `7aab5ec^..462fb37` from `/home/ubuntu/flexfactor`
+   (skip `06c7d10` — already on main) or apply the patch.
 3. Open a new PR. Wait for exact-head production-readiness green on
    both OS, then merge.
 4. Do not force-push `main`.
-
-## Follow-up `596b4a8` (2026-09-01T23:14Z)
-
-`/tmp/ff-option4-close` EXIT 1 only on independent-final-review:
-3b cited `SyntaxError` + `git checkout` of the planted baseline after
-`add()` was already `a + b` and the suite was GREEN. Product invariants
-PASS. `596b4a8` drops baseline-checkout reproductions and SyntaxError
-claims on a compiling file. New run: `/tmp/ff-option4-cert`.
-
-## Follow-up `478205b` (2026-09-01T23:29Z)
-
-`/tmp/ff-option4-cert` independent-final-review **closed**
-(stale math claim dropped). EXIT 1 moved to unresolved no-op findings
-(`change return a + b to return a + b`). `478205b` drops those from the
-unresolved ledger. New run: `/tmp/ff-option4-done`.
