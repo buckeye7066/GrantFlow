@@ -5,9 +5,9 @@ import {
   getAccessibleOrganizationIds,
 } from '../utils/accessControl.js'
 import { standardRateLimiter } from '../middleware/rateLimiting.js'
-// Choke point for pipeline-$ semantics: status list + per-grant value fallback
-// (amount_requested → amount_max → amount_min). Do not re-inline either here.
-import { PIPELINE_ACTIVE_STATUSES, pipelineValueSql, pipelineDollarSql, unvaluedCountSql } from '../config/pipelineValue.js'
+// Choke point for pipeline-$ semantics: status list + canonical per-grant value contract.
+// Do not re-inline either here.
+import { PIPELINE_ACTIVE_STATUSES, pipelineDollarSql, unvaluedCountSql } from '../config/pipelineValue.js'
 
 import { createLogger } from '../utils/logger.js'
 const routeLogger = createLogger('route:stats')
@@ -63,19 +63,19 @@ async function computeDashboardStats(db, scope) {
     activeProfiles = profileIds.length
     // A grant belongs to the user if it is tied to one of their organizations
     // OR one of their profiles.
-    const orgClause = inClause('organization_id', orgIds)
-    const profileClause = inClause('profile_id', profileIds)
+    const orgClause = inClause('g.organization_id', orgIds)
+    const profileClause = inClause('g.profile_id', profileIds)
     grantScopeSql = `(${orgClause.sql} OR ${profileClause.sql})`
     grantScopeParams = [...orgClause.params, ...profileClause.params]
   }
 
   const grantsTotal = (await db
-    .prepare(`SELECT COUNT(*) as count FROM grants WHERE ${grantScopeSql}`)
+    .prepare(`SELECT COUNT(*) as count FROM grants g WHERE ${grantScopeSql}`)
     .get(...grantScopeParams))?.count ?? 0
 
   const fundsSecured = (await db
-    .prepare(`SELECT COALESCE(SUM(amount_awarded), 0) as total FROM grants
-              WHERE ${grantScopeSql} AND status = 'awarded' AND amount_awarded > 0`)
+    .prepare(`SELECT COALESCE(SUM(g.amount_awarded), 0) as total FROM grants g
+              WHERE ${grantScopeSql} AND g.status = 'awarded' AND g.amount_awarded > 0`)
     .get(...grantScopeParams))?.total ?? 0
 
   const pipelineStatusClause = `status IN (${PIPELINE_ACTIVE_STATUSES.map(() => '?').join(', ')})`

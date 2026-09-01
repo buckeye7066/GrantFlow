@@ -56,6 +56,8 @@ export const PIPELINE_ACTIVE_STATUSES = Object.freeze([
  */
 export const WIDE_AWARD_RANGE_RATIO = 10
 
+import { NO_PER_AWARD_FIGURE_KINDS } from './opportunityKindClasses.js'
+
 /**
  * SQL expression for one grant row's pipeline dollar value.
  * Compile-time literal (no user input), safe to inline in SQL; works on both
@@ -87,26 +89,34 @@ export function pipelineValueSql(alias = 'g') {
  */
 export function pipelineDollarSql(gAlias = 'g', foAlias = null) {
   const g = gAlias ? `${gAlias}.` : ''
+  const KIND_LIST = NO_PER_AWARD_FIGURE_KINDS.map((k) => `'${k}'`).join(', ')
   if (foAlias) {
     // Join-aware variant — rely on the existing JOIN to inspect kind
     return [
       'CASE',
-      `  WHEN ${g}eligibility_status = 'ineligible' THEN 0`,
-      `  WHEN ${g}match_decision = 'REJECT' THEN 0`,
+      `  WHEN LOWER(COALESCE(${g}eligibility_status, '')) = 'ineligible' THEN 0`,
+      `  WHEN LOWER(COALESCE(${g}match_decision, '')) = 'reject' THEN 0`,
       // LOWER/COALESCE to match registry semantics in opportunityKindClasses
-      `  WHEN LOWER(COALESCE(${foAlias}.opportunity_kind, '')) IN ('directory','past_award_intel','school_portal','referral','benefit') THEN 0`,
+      `  WHEN LOWER(COALESCE(${foAlias}.opportunity_kind, '')) IN (${KIND_LIST}) THEN 0`,
+      // Wide-range safeguard: requested equals ceiling AND range > 10× → use floor
+      `  WHEN COALESCE(${g}amount_min,0) > 0 AND COALESCE(${g}amount_max,0) > 0` +
+      `       AND NULLIF(${g}amount_requested,0) = NULLIF(${g}amount_max,0)` +
+      `       AND ${g}amount_max > ${g}amount_min * ${Number(WIDE_AWARD_RANGE_RATIO)} THEN ${g}amount_min`,
       `  ELSE ${pipelineValueSql(gAlias)}`,
       'END',
     ].join(' ')
   }
   // Correlated-subquery fallback — used when queries have not joined FO.
   // Efficient enough for aggregates and preserves a single choke point.
-  const existsPointerKind = `EXISTS (SELECT 1 FROM funding_opportunities fo WHERE fo.id = ${g}funding_opportunity_id AND LOWER(COALESCE(fo.opportunity_kind, '')) IN ('directory','past_award_intel','school_portal','referral','benefit'))`
+  const existsPointerKind = `EXISTS (SELECT 1 FROM funding_opportunities fo WHERE fo.id = ${g}funding_opportunity_id AND LOWER(COALESCE(fo.opportunity_kind, '')) IN (${KIND_LIST}))`
   return [
     'CASE',
-    `  WHEN ${g}eligibility_status = 'ineligible' THEN 0`,
-    `  WHEN ${g}match_decision = 'REJECT' THEN 0`,
+    `  WHEN LOWER(COALESCE(${g}eligibility_status, '')) = 'ineligible' THEN 0`,
+    `  WHEN LOWER(COALESCE(${g}match_decision, '')) = 'reject' THEN 0`,
     `  WHEN ${existsPointerKind} THEN 0`,
+    `  WHEN COALESCE(${g}amount_min,0) > 0 AND COALESCE(${g}amount_max,0) > 0` +
+    `       AND NULLIF(${g}amount_requested,0) = NULLIF(${g}amount_max,0)` +
+    `       AND ${g}amount_max > ${g}amount_min * ${Number(WIDE_AWARD_RANGE_RATIO)} THEN ${g}amount_min`,
     `  ELSE ${pipelineValueSql(gAlias)}`,
     'END',
   ].join(' ')
@@ -165,7 +175,16 @@ export function grantPipelineDollarValue(grant) {
   const decision = String(grant?.match_decision || '').toUpperCase()
   if (decision === 'REJECT') return 0
   const kind = String(grant?.opportunity_kind ?? '').trim().toLowerCase()
-  if (['directory', 'past_award_intel', 'school_portal', 'referral', 'benefit'].includes(kind)) return 0
+  if (NO_PER_AWARD_FIGURE_KINDS.includes(kind)) return 0
+  const req = Number(grant?.amount_requested)
+  const min = Number(grant?.amount_min)
+  const max = Number(grant?.amount_max)
+  const hasReq = Number.isFinite(req) && req > 0
+  const hasMin = Number.isFinite(min) && min > 0
+  const hasMax = Number.isFinite(max) && max > 0
+  if (hasReq && hasMin && hasMax && req === max && max > min * Number(WIDE_AWARD_RANGE_RATIO)) {
+    return min
+  }
   return grantPipelineValue(grant)
 }
 
@@ -197,4 +216,25 @@ export default {
   grantPipelineDollarValue,
   unvaluedCountSql,
   isUnvaluedGrant,
+}
+
+/**
+ * Canonical writer default for amount_requested at insert time.
+ * Distinct explicit requests stay; envelope ceilings fall back to floor.
+ */
+export function defaultPipelineRequestedAmount(input = {}) {
+  const req = Number(input?.amount_requested ?? input?.requested ?? null)
+  const min = Number(input?.amount_min ?? input?.min ?? null)
+  const max = Number(input?.amount_max ?? input?.max ?? null)
+  const hasReq = Number.isFinite(req) && req > 0
+  const hasMin = Number.isFinite(min) && min > 0
+  const hasMax = Number.isFinite(max) && max > 0
+  if (hasReq) {
+    if (hasMin && hasMax && req === max && max > min * Number(WIDE_AWARD_RANGE_RATIO)) return min
+    return req
+  }
+  if (hasMin && hasMax && max > min * Number(WIDE_AWARD_RANGE_RATIO)) return min
+  if (hasMax) return max
+  if (hasMin) return min
+  return null
 }

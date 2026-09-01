@@ -789,9 +789,13 @@ export async function saveToProfilePipeline(
     }
     const amountMinValue = toPositiveMoney(opportunity.amount_min ?? opportunity.amountMin)
     const amountMaxValue = toPositiveMoney(opportunity.amount_max ?? opportunity.amountMax)
-    const amountRequestedValue =
-      toPositiveMoney(opportunity.amount_requested ?? opportunity.requestedAmount) ??
-      amountMaxValue ?? amountMinValue
+    // Canonical writer default for requested amount (wide-range safeguard).
+    const { defaultPipelineRequestedAmount } = await import('../config/pipelineValue.js')
+    const amountRequestedValue = defaultPipelineRequestedAmount({
+      amount_requested: toPositiveMoney(opportunity.amount_requested ?? opportunity.requestedAmount),
+      amount_min: amountMinValue,
+      amount_max: amountMaxValue,
+    })
 
     if (grantCols.decision) {
       const cols = [

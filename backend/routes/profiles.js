@@ -39,9 +39,9 @@ import { normalizeSchedule } from '../services/hamilton/portalAccessSchedule.js'
 import { normalizeAutomationToggles, AUTOMATION_TOGGLES } from '../../shared/automationPreferences.js'
 import { normalizeLanguageCode, isSupportedLanguage } from '../../shared/languages.js'
 // Choke point for pipeline-$ semantics: canonical active-status list + the
-// per-grant value fallback (amount_requested → amount_max → amount_min).
+// per-grant value fallback/contract (pipelineDollarSql) and JS twin.
 // Never re-inline a status list or a SUM(amount_requested) here.
-import { PIPELINE_ACTIVE_STATUSES, pipelineValueSql, grantPipelineValue, unvaluedCountSql } from '../config/pipelineValue.js'
+import { PIPELINE_ACTIVE_STATUSES, pipelineValueSql, pipelineDollarSql, grantPipelineDollarValue, unvaluedCountSql } from '../config/pipelineValue.js'
 import { buildAwardSummary } from '../services/awardSummary.js'
 import { redactProfileMemoryForProfile } from '../services/profileMemoryRepository.js'
 import { resolveCommittedCollege } from '../services/college/committedCollege.js'
@@ -538,11 +538,12 @@ async function enrichProfileWithSummary(db, profile) {
     const row = await db
       .prepare(
         `
-        SELECT COALESCE(SUM(${pipelineValueSql('g')}), 0) as total,
+        SELECT COALESCE(SUM(${pipelineDollarSql('g','fo')}), 0) as total,
                COALESCE(${unvaluedCountSql('g')}, 0) as unvalued
-        FROM grants g
-        WHERE g.profile_id = ?
-          AND g.status IN (${placeholders})
+          FROM grants g
+     LEFT JOIN funding_opportunities fo ON fo.id = g.funding_opportunity_id
+         WHERE g.profile_id = ?
+           AND g.status IN (${placeholders})
       `,
       )
       .get(profile.id, ...activeStatuses)
@@ -559,11 +560,12 @@ async function enrichProfileWithSummary(db, profile) {
       const row = await db
         .prepare(
           `
-          SELECT COALESCE(SUM(${pipelineValueSql('g')}), 0) as total,
+          SELECT COALESCE(SUM(${pipelineDollarSql('g','fo')}), 0) as total,
                  COALESCE(${unvaluedCountSql('g')}, 0) as unvalued
-          FROM grants g
-          WHERE g.organization_id = ?
-            AND g.status IN (${placeholders})
+            FROM grants g
+       LEFT JOIN funding_opportunities fo ON fo.id = g.funding_opportunity_id
+           WHERE g.organization_id = ?
+             AND g.status IN (${placeholders})
         `,
         )
         .get(profile.organization_id, ...activeStatuses)
@@ -2201,6 +2203,9 @@ router.get('/:id/pipeline-potential', async (req, res) => {
         amount_requested: g.amount_requested ?? null,
         amount_min: g.amount_min ?? null,
         amount_max: g.amount_max ?? null,
+        eligibility_status: g.eligibility_status ?? null,
+        match_decision: g.match_decision ?? null,
+        opportunity_kind: g.opportunity_kind ?? null,
         // A fuller description for the printable packet (still capped).
         description: desc ? String(desc).slice(0, 600) : null,
         // Contact + how-to-apply, so the printout stands on its own.
@@ -2224,7 +2229,7 @@ router.get('/:id/pipeline-potential', async (req, res) => {
 
   // Same value fallback as the headline total and the frontend's
   // estimatedValue(), so the breakdown reconciles with the card.
-  const total = items.reduce((sum, g) => sum + grantPipelineValue(g), 0)
+  const total = items.reduce((sum, g) => sum + grantPipelineDollarValue(g), 0)
   return res.json({ profile_id: id, total, count: items.length, items })
 })
 
