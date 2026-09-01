@@ -175,11 +175,19 @@ text and swapped `+` back to `-`. Publication gate REJECTED the bridge
 and restored the tree (EXIT 143 after this agent killed the run).
 `f3bfa29` refuses that invert.
 
-### Option 4 on `f3bfa29` / fixture `/tmp/ff-option4-named2`
+### Option 4 on `f3bfa29` / fixture `/tmp/ff-option4-named2` (in flight)
 
-Restart after the invert refuse. Log: `/tmp/ff-option4-named2.log`.
-Do not treat mid-run as EXIT 0. Prove by `hello.py` (`return a + b`)
-AND factory EXIT 0.
+Log: `/tmp/ff-option4-named2.log`. Do not treat mid-run as EXIT 0.
+
+VERIFIED this run:
+- Phase 0 `[named-return]` wrote `return a + b`; suite GREEN; committed.
+- Purpose bridge did **not** revert (`f3bfa29`). `[edit-keep]` refused
+  whole-file. `hello.py` still `return a + b`.
+- Competitors: 1 covered (target 1); Jest rejected / not bridged.
+- Cycle 1 review: hello.py clean; 3b then "fixed" `tests/test_hello.py`
+  by deleting `test_greet` (suite still green). Cycle 2 is regenerating
+  that test file whole. Remaining EXIT 0 risks: purpose-fulfilled
+  (greet criterion), independent-final-review, deleted `test_greet`.
 
 ### Option 4 on `f335a7b` / fixture `/tmp/ff-option4-ready` (2026-09-01T21:27–21:35Z)
 
@@ -211,7 +219,7 @@ rubric could close.
    PR #1442 **or** cherry-pick `06c7d10..f3bfa29` from
    `/home/ubuntu/flexfactor` if the same VM.
 3. Minimum to unblock merge: land `06c7d10` alone, then wait for exact-head
-   production-readiness green. The other ten commits make option 4 able
+   production-readiness green. The other eleven commits make option 4 able
    to apply a finding-named return on Debian/`python3`-only hosts,
    refuse a vandalizing whole-file fallback, and fix phase 0 from the
    publication traceback without weakening tests — land them on the same
