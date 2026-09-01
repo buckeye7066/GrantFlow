@@ -5599,7 +5599,16 @@ export async function enforceOrphanedApplicationTasks(db) {
     // Identify non-terminal tasks whose backing grant row no longer exists.
     let rows = []
     try {
-      const ph = TERMINAL_TASK_STATUSES.map(() => '?').join(', ')
+      // ponytail: Treat submission-boundary statuses as "quarantined" for this
+      // orphan sweep so a clean re-run converges to zero and does not refresh
+      // updated_at or append duplicate events every boot.
+      const ORPHAN_IGNORE_STATUSES = [
+        ...TERMINAL_TASK_STATUSES,
+        'submission_verification_required',
+        'submit_attempt_started',
+        'submit_evidence_pending',
+      ]
+      const ph = ORPHAN_IGNORE_STATUSES.map(() => '?').join(', ')
       rows = await db
         .prepare(
           `SELECT t.id
@@ -5610,7 +5619,7 @@ export async function enforceOrphanedApplicationTasks(db) {
               AND (t.status IS NULL OR t.status NOT IN (${ph}))
           `,
         )
-        .all(...TERMINAL_TASK_STATUSES)
+        .all(...ORPHAN_IGNORE_STATUSES)
     } catch {
       rows = []
     }
