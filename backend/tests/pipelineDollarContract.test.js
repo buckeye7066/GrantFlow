@@ -96,13 +96,23 @@ describe('pipeline dollar contract', () => {
   })
 
   it('uses one conservative writer default for both automatic and manual opportunity promotion', () => {
+    // ordinary no ask -> ceiling
     expect(defaultPipelineRequestedAmount({ amount_min: 1_000, amount_max: 5_000 })).toBe(5_000)
+    // wide no ask -> floor
     expect(defaultPipelineRequestedAmount({ amount_min: 1_000_000, amount_max: 42_000_000 })).toBe(1_000_000)
+    // wide requested == ceiling -> floor
+    expect(defaultPipelineRequestedAmount({
+      amount_requested: 42_000_000,
+      amount_min: 1_000_000,
+      amount_max: 42_000_000,
+    })).toBe(1_000_000)
+    // wide distinct ask -> ask
     expect(defaultPipelineRequestedAmount({
       amount_requested: 2_500_000,
       amount_min: 1_000_000,
       amount_max: 42_000_000,
     })).toBe(2_500_000)
+    // nulls -> null
     expect(defaultPipelineRequestedAmount({})).toBeNull()
     expect(WIDE_AWARD_RANGE_RATIO).toBe(10)
   })
@@ -111,17 +121,6 @@ describe('pipeline dollar contract', () => {
     expect(grantPipelineValue({ amount_requested: 6500 })).toBe(6500)
     expect(grantPipelineValue({ amount_max: 5000 })).toBe(5000)
     expect(grantPipelineValue({ amount_min: 1000 })).toBe(1000)
-  it('defaultPipelineRequestedAmount picks floor for wide-range envelopes', async () => {
-    const mod = await import('../config/pipelineValue.js')
-    const f = mod.defaultPipelineRequestedAmount
-    expect(f({ amount_requested: 42000000, amount_min: 1000000, amount_max: 42000000 })).toBe(1_000_000)
-    expect(f({ amount_requested: 25000, amount_min: 10000, amount_max: 50000 })).toBe(25000)
-    expect(f({ amount_min: 10000, amount_max: 50000 })).toBe(50000)
-    expect(f({ amount_min: 1000000, amount_max: 42000000 })).toBe(1_000_000)
-    expect(f({})).toBe(null)
-  })
-
-  it('grantPipelineValue fallback holds (requested → max → min), wide-range noted by constant', () => {
     const a = { amount_requested: 6500 }
     const b = { amount_max: 5000 }
     const c = { amount_min: 1000 }

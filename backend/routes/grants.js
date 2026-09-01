@@ -39,6 +39,7 @@ import { recordBehaviorEvent } from '../services/behaviorLearning.js'
 
 import { createLogger } from '../utils/logger.js'
 const routeLogger = createLogger('route:grants')
+import { pipelineDollarSql, defaultPipelineRequestedAmount } from '../config/pipelineValue.js'
 
 const router = express.Router();
 
@@ -2435,7 +2436,6 @@ router.post('/from-opportunity', async (req, res, next) => {
         [...baseReasons, ...trustReasonLines.filter((r) => !baseReasons.includes(r))],
       )
       // Canonical writer default for requested amount (wide-range safeguard)
-      const { defaultPipelineRequestedAmount } = await import('../config/pipelineValue.js')
       const amountRequested = defaultPipelineRequestedAmount({
         amount_requested: normalizeMoney(opportunity.amount_requested ?? null),
         amount_min: normalizeMoney(opportunity.amount_min ?? null),
