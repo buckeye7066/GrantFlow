@@ -624,7 +624,9 @@ function normalizePayloadForDb(payload, db) {
 router.get('/', async (req, res) => {
   try {
     const {
-      search,
+      search: searchParam,
+      q: qParam,
+      query: queryParam,
       state,
       source,
       geo_run_id: geoRunIdParam,
@@ -638,6 +640,24 @@ router.get('/', async (req, res) => {
       offset = 0,
       compliance,
     } = req.query;
+
+    // `q` and `query` are ALIASES for `search`, because an unrecognised filter
+    // is worse than a rejected one.
+    //
+    // Express drops a query param this handler does not destructure, so a
+    // caller that sent the most obvious name for a search box - `q` - got a
+    // 200, a plausible payload, and the ENTIRE corpus. Measured against
+    // production on 2026-09-01: `?q=scholarship` answered total 10,587 while
+    // `?search=scholarship` answered 889. Nothing in the response
+    // distinguished the two, so the caller could not tell its filter had never
+    // run. That is a silent no-op, and it had a real victim: an agent building
+    // a curated scholarship list off this endpoint would have shipped the whole
+    // corpus labelled "scholarships".
+    //
+    // The response now also ECHOES what was actually searched
+    // (`search_applied`), so the next caller that gets this wrong finds out
+    // from the payload instead of from a bad product.
+    const search = String(searchParam ?? qParam ?? queryParam ?? '').trim() || undefined;
 
     // Hard cap on limit to prevent accidental DoS; override via MAX_LIMIT env var.
     const MAX_LIMIT = Math.max(1, Number.parseInt(process.env.MAX_LIMIT || '200', 10) || 200);
@@ -1129,6 +1149,7 @@ router.get('/', async (req, res) => {
               total: responseTotal,
               total_found: responseTotal,
               included: profilePage.page.length,
+              search_applied: search ?? null,
               trust_dropped: fbTrust.dropped,
               trust_dropped_reasons: fbTrust.droppedReasons,
               limit: parsedLimit,
@@ -1224,6 +1245,7 @@ router.get('/', async (req, res) => {
             total: responseTotal,
             total_found: responseTotal,
             included: profilePage.page.length,
+            search_applied: search ?? null,
             trust_dropped: fallbackTrust.dropped,
             trust_dropped_reasons: fallbackTrust.droppedReasons,
             limit: parsedLimit,
@@ -1283,6 +1305,7 @@ router.get('/', async (req, res) => {
       total: responseTotal,
       total_found: responseTotal,
       included: profilePage.page.length,
+      search_applied: search ?? null,
       trust_dropped: finalDropped,
       trust_dropped_reasons: finalDroppedReasons,
       trust_relaxed: trustRelaxed,
