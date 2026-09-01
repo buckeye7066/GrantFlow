@@ -52,8 +52,15 @@ const usdCompact = new Intl.NumberFormat("en-US", {
 
 // Best-estimate dollar value for a grant card (requested → max → min → amount).
 function grantValue(grant) {
-  const server = Number(grant?.pipeline_dollar_value)
-  if (Number.isFinite(server)) return server
+  // Awarded rows must prefer the recorded awarded amount.
+  const status = String(grant?.status || "").toLowerCase();
+  if (status === "awarded") {
+    const awarded = Number(grant?.amount_awarded);
+    if (Number.isFinite(awarded) && awarded > 0) return awarded;
+  }
+  const server = Number(grant?.pipeline_dollar_value);
+  // Treat server-side pipeline dollars as authoritative only when positive.
+  if (Number.isFinite(server) && server > 0) return server;
   // Zeroize non-dollar / ineligible rows so stage rollups reconcile with backend totals
   const decision = String(grant?.match_decision || '').toUpperCase();
   if (decision === 'REJECT') return 0;
