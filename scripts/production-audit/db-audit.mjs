@@ -51,8 +51,8 @@ const SENSITIVE_TABLES = [
 /** Pipeline bar on the data-point scale (backend/config/matchThresholds.js). */
 const PIPELINE_BAR = 8;
 
-/** Amy's synthetic training profiles skew every count. */
-const NON_SYNTHETIC = `(p.created_by IS DISTINCT FROM 'agent:amy')`;
+/** Amy's synthetic training profiles skew every count, and soft-deleted profiles are excluded. */
+const NON_SYNTHETIC = `(p.created_by IS DISTINCT FROM 'agent:amy') AND (LOWER(COALESCE(p.status,'')) <> 'deleted')`;
 
 /** `$1` is a text[] of profile ids, or NULL for "every real profile". */
 const SCOPE = `($1::text[] IS NULL OR p.id = ANY($1))`;

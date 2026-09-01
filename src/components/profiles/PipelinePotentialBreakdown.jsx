@@ -130,7 +130,14 @@ const PHASE_ORDER = ["Preparing", "Applied", "Approved"]
 // Best-estimate dollar value for a source (used for per-phase subtotals so each
 // section sums to something meaningful even when a source has a range, not a
 // single requested figure).
+import { computeClientPipelineDollar } from '../../utils/pipelineDollarClient'
+
 function estimatedValue(item) {
+  // Preserve awarded first; then prefer server; else client fallback
+  const awarded = Number(item?.amount_awarded)
+  if (String(item?.status || '').toLowerCase() === 'awarded' && Number.isFinite(awarded) && awarded > 0) {
+    return awarded
+  }
   const server = Number(item?.pipeline_dollar_value)
   if (Number.isFinite(server)) return server
   // Zeroize rows that should not contribute dollars
@@ -140,14 +147,7 @@ function estimatedValue(item) {
   if (elig === 'ineligible') return 0
   const kind = String(item?.opportunity_kind || '').toLowerCase()
   if (['directory','referral','school_portal','past_award_intel','benefit'].includes(kind)) return 0
-  // Requested → max → min
-  const req = Number(item?.amount_requested)
-  if (Number.isFinite(req) && req > 0) return req
-  const max = Number(item?.amount_max)
-  if (Number.isFinite(max) && max > 0) return max
-  const min = Number(item?.amount_min)
-  if (Number.isFinite(min) && min > 0) return min
-  return 0
+  return computeClientPipelineDollar(item)
 }
 
 // Human contact + how-to-apply lines for a source, present-fields only.

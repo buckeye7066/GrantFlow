@@ -51,6 +51,8 @@ const usdCompact = new Intl.NumberFormat("en-US", {
 });
 
 // Best-estimate dollar value for a grant card (requested → max → min → amount).
+import { computeClientPipelineDollar } from '../utils/pipelineDollarClient'
+
 function grantValue(grant) {
   // Awarded rows must prefer the recorded awarded amount.
   const status = String(grant?.status || "").toLowerCase();
@@ -68,12 +70,7 @@ function grantValue(grant) {
   if (elig === 'ineligible') return 0;
   const kind = String(grant?.opportunity_kind || '').toLowerCase();
   if (['directory','referral','school_portal','past_award_intel','benefit'].includes(kind)) return 0;
-  const candidates = [grant?.amount_requested, grant?.amount_awarded, grant?.amount_max, grant?.amount_min, grant?.amount];
-  for (const raw of candidates) {
-    const n = Number(raw);
-    if (Number.isFinite(n) && n > 0) return n;
-  }
-  return 0;
+  return computeClientPipelineDollar(grant)
 }
 
 export default function Pipeline() {

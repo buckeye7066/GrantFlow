@@ -95,6 +95,20 @@ describe('pipeline dollar contract', () => {
     }
   })
 
+  it('SQL wide-range branch ignores negative floors (uses ceiling instead)', () => {
+    const db = setupDb()
+    db.prepare('INSERT INTO funding_opportunities (id, opportunity_kind) VALUES (?,?)').run('neg', 'direct')
+    // amount_min negative, amount_max positive, no requested → should pick max (5), not -1
+    db.prepare('INSERT INTO grants (id, profile_id, status, amount_min, amount_max, funding_opportunity_id) VALUES (?,?,?,?,?,?)')
+      .run('gneg', 'p1', 'submitted', -1, 5, 'neg')
+    const sqlSum = db.prepare(`SELECT SUM(${pipelineDollarSql('g','fo')}) AS t
+                                 FROM grants g LEFT JOIN funding_opportunities fo ON fo.id=g.funding_opportunity_id
+                                WHERE g.status='submitted'`).get().t
+    expect(sqlSum).toBe(5)
+    const row = db.prepare('SELECT g.*, fo.opportunity_kind FROM grants g LEFT JOIN funding_opportunities fo ON fo.id=g.funding_opportunity_id WHERE g.id=?').get('gneg')
+    expect(grantPipelineDollarValue(row)).toBe(5)
+  })
+
   it('uses one conservative writer default for both automatic and manual opportunity promotion', () => {
     // ordinary no ask -> ceiling
     expect(defaultPipelineRequestedAmount({ amount_min: 1_000, amount_max: 5_000 })).toBe(5_000)

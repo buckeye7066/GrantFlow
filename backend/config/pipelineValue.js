@@ -57,8 +57,8 @@ function conservativeDollarSql(prefix) {
   const rawValue = pipelineValueSql(prefix ? prefix.slice(0, -1) : '')
   return `(
     CASE
-      WHEN NULLIF(${prefix}amount_min, 0) IS NOT NULL
-       AND NULLIF(${prefix}amount_max, 0) IS NOT NULL
+      WHEN ${prefix}amount_min > 0
+       AND ${prefix}amount_max > 0
        AND ${prefix}amount_max > ${prefix}amount_min * ${WIDE_AWARD_RANGE_RATIO}
       THEN CASE
         WHEN NULLIF(${prefix}amount_requested, 0) IS NOT NULL
