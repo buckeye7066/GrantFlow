@@ -68,10 +68,11 @@ Do not `git add flexfactor` (symlink to `/home/ubuntu/src/flexfactor`).
 | `8d0bb28` | retry incomplete reviews on remaining cycles; drop stale purpose/final findings whose excerpt is already gone from HEAD |
 | `4d6c2b2` | recover `source_excerpt`/`trigger`/`observable_failure` from prose that already cites an in-file line, so a 3b review can complete |
 | `a877a47` | **phase-0 honesty** — name `return a - b` → `return a + b` from `AssertionError: -1 != 5` + `add(2, 3)` + the in-file return; keep implementations first so the model cannot weaken the test |
+| `f3bfa29` | refuse named-return when the replacement is already in the file (purpose-bridge was reverting `a + b` → `a - b`) |
 
 Portable patch (also copied into this GrantFlow tree):
 `docs/agent-sync/flexfactor-pr110-landing.patch`
-(`git format-patch --stdout 634250c..HEAD`, 11 commits).
+(`git format-patch --stdout 634250c..HEAD`, 12 commits).
 Same bytes on this host at `/tmp/flexfactor-pr110-landing.patch`.
 One-shot apply from a writable token: `scripts/land-flexfactor-pr110.sh`.
 
@@ -166,12 +167,19 @@ Root cause: unittest reprints only the TEST line, so named-return had
 no `return a + b` in the finding; `min(attempts)` then switched to the
 test. `a877a47` closes that door.
 
-### Option 4 on `a877a47` / fixture `/tmp/ff-option4-named` (started 2026-09-01T22:xxZ)
+### Option 4 on `a877a47` / fixture `/tmp/ff-option4-named` (killed after revert)
 
-Command: `prodready --provider ollama --model qwen2.5-coder:3b --competitor-count 1`
-(competitors ON). Log: `/tmp/ff-option4-named.log`. Do not treat mid-run
-as EXIT 0. Prove completion by reading `hello.py` (`return a + b`) AND
-factory EXIT 0.
+Phase 0 `[named-return]` wrote `return a + b`, suite GREEN, committed.
+Purpose assessor then 2/4 UNSTABLE; named-return applied the SAME finding
+text and swapped `+` back to `-`. Publication gate REJECTED the bridge
+and restored the tree (EXIT 143 after this agent killed the run).
+`f3bfa29` refuses that invert.
+
+### Option 4 on `f3bfa29` / fixture `/tmp/ff-option4-named2`
+
+Restart after the invert refuse. Log: `/tmp/ff-option4-named2.log`.
+Do not treat mid-run as EXIT 0. Prove by `hello.py` (`return a + b`)
+AND factory EXIT 0.
 
 ### Option 4 on `f335a7b` / fixture `/tmp/ff-option4-ready` (2026-09-01T21:27–21:35Z)
 
@@ -200,7 +208,7 @@ rubric could close.
 
 1. Check out `fix/autoclean-verifies-what-it-commits` at `634250c`.
 2. Apply `docs/agent-sync/flexfactor-pr110-landing.patch` from GrantFlow
-   PR #1442 **or** cherry-pick `06c7d10..a877a47` from
+   PR #1442 **or** cherry-pick `06c7d10..f3bfa29` from
    `/home/ubuntu/flexfactor` if the same VM.
 3. Minimum to unblock merge: land `06c7d10` alone, then wait for exact-head
    production-readiness green. The other ten commits make option 4 able

@@ -1,7 +1,7 @@
 From 06c7d10b61b59047a6cd86018ca5662f6a4e3a5c Mon Sep 17 00:00:00 2001
 From: Cursor Agent <cursoragent@cursor.com>
 Date: Tue, 1 Sep 2026 19:17:46 +0000
-Subject: [PATCH 01/11] fix(ci): run autoclean preverify tests in
+Subject: [PATCH 01/12] fix(ci): run autoclean preverify tests in
  production-readiness
 
 The new flexfactor_autoclean_preverify_tests.py module existed on the
@@ -34,7 +34,7 @@ index 77610ad..ad86ef9 100644
 From 7aab5ec6d9a4846ff3bbd5373c9052bc60078a7a Mon Sep 17 00:00:00 2001
 From: Cursor Agent <cursoragent@cursor.com>
 Date: Tue, 1 Sep 2026 20:33:10 +0000
-Subject: [PATCH 02/11] fix(apply): classify Cross-file dependency as no-fix
+Subject: [PATCH 02/12] fix(apply): classify Cross-file dependency as no-fix
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
 Content-Transfer-Encoding: 8bit
@@ -248,7 +248,7 @@ index 5a051a1..485250a 100644
 From 745255550e22813c8a343b4dbe885e55fd30ef05 Mon Sep 17 00:00:00 2001
 From: Cursor Agent <cursoragent@cursor.com>
 Date: Tue, 1 Sep 2026 20:36:59 +0000
-Subject: [PATCH 03/11] fix(apply): retry silent in-file no-ops and escalate
+Subject: [PATCH 03/12] fix(apply): retry silent in-file no-ops and escalate
 
 A second option-4 run classified Cross-file dependency correctly
 but the author then returned changed=false with notes=None, which
@@ -387,7 +387,7 @@ index 485250a..4b7c974 100644
 From b15f048f9174dde33162b35101a68020f5c2c651 Mon Sep 17 00:00:00 2001
 From: Cursor Agent <cursoragent@cursor.com>
 Date: Tue, 1 Sep 2026 20:42:51 +0000
-Subject: [PATCH 04/11] fix(stack): detect unpacked Python fixtures via tests/
+Subject: [PATCH 04/12] fix(stack): detect unpacked Python fixtures via tests/
 
 Option 4's hello.py fixture has no pyproject/requirements, so
 _detect_stack left is_python=False and test_cmd empty. The author
@@ -457,7 +457,7 @@ index 4b7c974..f692711 100644
 From 426193e4b3dab7950299347104c1a78e1c0b7424 Mon Sep 17 00:00:00 2001
 From: Cursor Agent <cursoragent@cursor.com>
 Date: Tue, 1 Sep 2026 20:54:34 +0000
-Subject: [PATCH 05/11] fix(apply): apply a finding-named return when the model
+Subject: [PATCH 05/12] fix(apply): apply a finding-named return when the model
  cannot
 
 Free local authors kept reverting syntax-invalid hello.py patches on
@@ -742,7 +742,7 @@ index f692711..622570f 100644
 From e1d22d7be766d138ad4395fcd32fbd0d3e79c357 Mon Sep 17 00:00:00 2001
 From: Cursor Agent <cursoragent@cursor.com>
 Date: Tue, 1 Sep 2026 21:04:28 +0000
-Subject: [PATCH 06/11] fix(apply): compile Python fixes with this interpreter
+Subject: [PATCH 06/12] fix(apply): compile Python fixes with this interpreter
 
 Bare `python` is missing on Debian/cloud images, so the per-file
 py_compile gate rolled back every correct named-return write with
@@ -836,7 +836,7 @@ index 622570f..f725f37 100644
 From f335a7b59569c2e80f3b05e4a7394633ecb53073 Mon Sep 17 00:00:00 2001
 From: Cursor Agent <cursoragent@cursor.com>
 Date: Tue, 1 Sep 2026 21:20:57 +0000
-Subject: [PATCH 07/11] fix(apply): refuse whole-file fallback when the defect
+Subject: [PATCH 07/12] fix(apply): refuse whole-file fallback when the defect
  anchor is already gone
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
@@ -919,7 +919,7 @@ index f725f37..f6dfe60 100644
 From ac16a5bed3dc02cbd43ee8ca1d020e63a0ad5532 Mon Sep 17 00:00:00 2001
 From: Cursor Agent <cursoragent@cursor.com>
 Date: Tue, 1 Sep 2026 21:38:27 +0000
-Subject: [PATCH 08/11] fix(apply): refuse whole-file fallback when the defect
+Subject: [PATCH 08/12] fix(apply): refuse whole-file fallback when the defect
  excerpt is already gone
 
 The first missing-anchor retry then a silent no-op (apply_err empty)
@@ -977,7 +977,7 @@ index f6dfe60..606868b 100644
 From 8d0bb28f780006adccbfcf72d5ee7d509d0f060b Mon Sep 17 00:00:00 2001
 From: Cursor Agent <cursoragent@cursor.com>
 Date: Tue, 1 Sep 2026 21:47:14 +0000
-Subject: [PATCH 09/11] fix(apply): retry incomplete reviews and drop stale
+Subject: [PATCH 09/12] fix(apply): retry incomplete reviews and drop stale
  certifier claims
 
 qwen 3b option-4 runs aborted after cycle 1 when every finding failed the
@@ -1261,7 +1261,7 @@ index 606868b..6bd15e3 100644
 From 4d6c2b27d065fb33b4c53dba9cd0e35a3d9fc09c Mon Sep 17 00:00:00 2001
 From: Cursor Agent <cursoragent@cursor.com>
 Date: Tue, 1 Sep 2026 21:59:12 +0000
-Subject: [PATCH 10/11] fix(review): recover excerpts the 3b named in prose
+Subject: [PATCH 10/12] fix(review): recover excerpts the 3b named in prose
 
 qwen 3b titles a real defect (duplicate return) and leaves
 source_excerpt/trigger/observable_failure empty, so the evidence gate
@@ -1383,7 +1383,7 @@ index 6bd15e3..b36485a 100644
 From a877a4745981f447699998bc73101f30059a3026 Mon Sep 17 00:00:00 2001
 From: Cursor Agent <cursoragent@cursor.com>
 Date: Tue, 1 Sep 2026 22:09:10 +0000
-Subject: [PATCH 11/11] fix(baseline): name the publication return pair so
+Subject: [PATCH 11/12] fix(baseline): name the publication return pair so
  phase 0 cannot weaken tests
 
 Unittest reprints only the test line (assertEqual(add(2, 3), 5) / -1 != 5),
@@ -1756,6 +1756,121 @@ index b36485a..d8d98f2 100644
      def test_default_repair_budget_follows_progress_beyond_four_failures(self):
          with _tempfile.TemporaryDirectory() as td:
              src = os.path.join(td, "src")
+-- 
+2.43.0
+
+
+From f3bfa29b5ab13af7456ec1e43c114617b0b70bbb Mon Sep 17 00:00:00 2001
+From: Cursor Agent <cursoragent@cursor.com>
+Date: Tue, 1 Sep 2026 22:14:12 +0000
+Subject: [PATCH 12/12] fix(apply): refuse named-return when the replacement is
+ already in the file
+
+After phase 0 writes return a + b, the same finding text
+(change return a - b to return a + b) would swap it back. Honor
+"instead of" / "to return" as the desired side and treat a gone
+defect return as a stale finding.
+---
+ flexfactor.py       | 39 +++++++++++++++++++++++++++++++++++++++
+ flexfactor_tests.py | 21 +++++++++++++++++++++
+ 2 files changed, 60 insertions(+)
+
+diff --git a/flexfactor.py b/flexfactor.py
+index 5b1670c..2481e23 100644
+--- a/flexfactor.py
++++ b/flexfactor.py
+@@ -9278,6 +9278,14 @@ def _stale_review_finding(finding: dict, haystack: str) -> bool:
+         cited = m.group(1).strip()
+         if len(cited) >= 8 and cited not in haystack:
+             return True
++    # "returns DEFECT instead of DESIRED" is closed once DEFECT is gone.
++    for match in re.finditer(
++            r"return(?:s|ing)?\s+(" + _RETURN_EXPR + r")\s+instead of",
++            blob, re.IGNORECASE):
++        defect = _normalize_return_stmt(
++            "return " + _normalize_return_stmt(match.group(1)))
++        if defect and defect not in haystack:
++            return True
+     return False
+ 
+ 
+@@ -9427,6 +9435,27 @@ def _finding_text_blob(findings: list) -> str:
+     return "\n".join(parts)
+ 
+ 
++def _named_return_desired(blob: str) -> list[str]:
++    """Return statements the finding names as the replacement, not the defect."""
++    out: list[str] = []
++
++    def _add(stmt: str) -> None:
++        stmt = _normalize_return_stmt(stmt)
++        if stmt and stmt != "return" and stmt not in out:
++            out.append(stmt)
++
++    for match in _INSTEAD_EXPR_RX.finditer(str(blob or "")):
++        expr = _normalize_return_stmt(
++            re.sub(r"(?i)^instead of\s+", "", match.group(0)))
++        if expr:
++            _add(expr if expr.lower().startswith("return ") else "return " + expr)
++    for match in re.finditer(
++            r"\bto\s+`?(return(?:s|ing)?\s+" + _RETURN_EXPR + r")`?",
++            str(blob or ""), re.IGNORECASE):
++        _add(re.sub(r"(?i)^return(?:s|ing)?\b", "return", match.group(1), count=1))
++    return out
++
++
+ def _apply_named_return_statement(current: str, findings: list) -> str | None:
+     """Last-resort PURPOSE apply: swap the defect return the finding named
+     for the replacement return the finding also named.
+@@ -9484,6 +9513,16 @@ def _apply_named_return_statement(current: str, findings: list) -> str | None:
+     old, new = in_file[0], not_in_file[0]
+     if old == new:
+         return None
++    # Direction: "X instead of Y" / "change X to Y" names Y as the
++    # replacement. After phase 0 the file already has Y, so the same
++    # finding text would swap Y back to X (live option 4 2026-09-01
++    # purpose-bridge reverted ``return a + b`` → ``return a - b``).
++    desired = _named_return_desired(blob)
++    if desired:
++        if old in desired:
++            return None
++        if new not in desired:
++            return None
+     replaced, n = re.subn(
+         r"(?m)^([ \t]*)" + re.escape(old) + r"([ \t]*(#.*)?)?$",
+         lambda m: m.group(1) + new + (m.group(2) or ""),
+diff --git a/flexfactor_tests.py b/flexfactor_tests.py
+index d8d98f2..bd199f7 100644
+--- a/flexfactor_tests.py
++++ b/flexfactor_tests.py
+@@ -4457,6 +4457,27 @@ class RelComponentsTests(unittest.TestCase):
+         self.assertIsNone(ff._apply_named_return_statement(
+             src, [{"source_excerpt": "return a - b"}]))
+ 
++    def test_named_return_refuses_when_desired_return_is_already_in_file(self):
++        """Live option 4 2026-09-01: phase 0 wrote ``return a + b``; the
++        same finding text then swapped it back to ``return a - b``."""
++        src = (
++            "def add(a, b):\n"
++            "    return a + b\n"
++            "\n"
++            "def greet(name):\n"
++            "    return f\"hello {name}\"\n"
++        )
++        finding = {
++            "problem": "Named return pair from this output: return a - b instead of return a + b",
++            "fix": "change `return a - b` to `return a + b`.",
++            "source_excerpt": "return a - b",
++        }
++        self.assertIsNone(ff._apply_named_return_statement(src, [finding]))
++        self.assertTrue(ff._stale_review_finding(
++            {"problem": "add returns a - b instead of a + b",
++             "source_excerpt": "return a - b"},
++            src))
++
+     def test_publication_finding_names_return_pair_from_assertion_and_file(self):
+         """Live option 4 2026-09-01: unittest reprints only the TEST line.
+ 
 -- 
 2.43.0
 
