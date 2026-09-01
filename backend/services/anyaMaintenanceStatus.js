@@ -3,6 +3,7 @@ import { getMaintenanceStatus } from './maintenance/maintenanceMode.js'
 /**
  * Read-only tool used by Anya chat to answer live maintenance/banner questions.
  * The underlying state is the same database-backed source polled by the UI.
+ * It intentionally reads live database state rather than a build-time flag.
  */
 export async function getAnyaMaintenanceStatus(_params = {}, context = {}) {
   if (!context?.db) throw new Error('Database connection unavailable')
