@@ -1,7 +1,7 @@
 From 06c7d10b61b59047a6cd86018ca5662f6a4e3a5c Mon Sep 17 00:00:00 2001
 From: Cursor Agent <cursoragent@cursor.com>
 Date: Tue, 1 Sep 2026 19:17:46 +0000
-Subject: [PATCH 01/15] fix(ci): run autoclean preverify tests in
+Subject: [PATCH 01/16] fix(ci): run autoclean preverify tests in
  production-readiness
 
 The new flexfactor_autoclean_preverify_tests.py module existed on the
@@ -34,7 +34,7 @@ index 77610ad..ad86ef9 100644
 From 7aab5ec6d9a4846ff3bbd5373c9052bc60078a7a Mon Sep 17 00:00:00 2001
 From: Cursor Agent <cursoragent@cursor.com>
 Date: Tue, 1 Sep 2026 20:33:10 +0000
-Subject: [PATCH 02/15] fix(apply): classify Cross-file dependency as no-fix
+Subject: [PATCH 02/16] fix(apply): classify Cross-file dependency as no-fix
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
 Content-Transfer-Encoding: 8bit
@@ -248,7 +248,7 @@ index 5a051a1..485250a 100644
 From 745255550e22813c8a343b4dbe885e55fd30ef05 Mon Sep 17 00:00:00 2001
 From: Cursor Agent <cursoragent@cursor.com>
 Date: Tue, 1 Sep 2026 20:36:59 +0000
-Subject: [PATCH 03/15] fix(apply): retry silent in-file no-ops and escalate
+Subject: [PATCH 03/16] fix(apply): retry silent in-file no-ops and escalate
 
 A second option-4 run classified Cross-file dependency correctly
 but the author then returned changed=false with notes=None, which
@@ -387,7 +387,7 @@ index 485250a..4b7c974 100644
 From b15f048f9174dde33162b35101a68020f5c2c651 Mon Sep 17 00:00:00 2001
 From: Cursor Agent <cursoragent@cursor.com>
 Date: Tue, 1 Sep 2026 20:42:51 +0000
-Subject: [PATCH 04/15] fix(stack): detect unpacked Python fixtures via tests/
+Subject: [PATCH 04/16] fix(stack): detect unpacked Python fixtures via tests/
 
 Option 4's hello.py fixture has no pyproject/requirements, so
 _detect_stack left is_python=False and test_cmd empty. The author
@@ -457,7 +457,7 @@ index 4b7c974..f692711 100644
 From 426193e4b3dab7950299347104c1a78e1c0b7424 Mon Sep 17 00:00:00 2001
 From: Cursor Agent <cursoragent@cursor.com>
 Date: Tue, 1 Sep 2026 20:54:34 +0000
-Subject: [PATCH 05/15] fix(apply): apply a finding-named return when the model
+Subject: [PATCH 05/16] fix(apply): apply a finding-named return when the model
  cannot
 
 Free local authors kept reverting syntax-invalid hello.py patches on
@@ -742,7 +742,7 @@ index f692711..622570f 100644
 From e1d22d7be766d138ad4395fcd32fbd0d3e79c357 Mon Sep 17 00:00:00 2001
 From: Cursor Agent <cursoragent@cursor.com>
 Date: Tue, 1 Sep 2026 21:04:28 +0000
-Subject: [PATCH 06/15] fix(apply): compile Python fixes with this interpreter
+Subject: [PATCH 06/16] fix(apply): compile Python fixes with this interpreter
 
 Bare `python` is missing on Debian/cloud images, so the per-file
 py_compile gate rolled back every correct named-return write with
@@ -836,7 +836,7 @@ index 622570f..f725f37 100644
 From f335a7b59569c2e80f3b05e4a7394633ecb53073 Mon Sep 17 00:00:00 2001
 From: Cursor Agent <cursoragent@cursor.com>
 Date: Tue, 1 Sep 2026 21:20:57 +0000
-Subject: [PATCH 07/15] fix(apply): refuse whole-file fallback when the defect
+Subject: [PATCH 07/16] fix(apply): refuse whole-file fallback when the defect
  anchor is already gone
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
@@ -919,7 +919,7 @@ index f725f37..f6dfe60 100644
 From ac16a5bed3dc02cbd43ee8ca1d020e63a0ad5532 Mon Sep 17 00:00:00 2001
 From: Cursor Agent <cursoragent@cursor.com>
 Date: Tue, 1 Sep 2026 21:38:27 +0000
-Subject: [PATCH 08/15] fix(apply): refuse whole-file fallback when the defect
+Subject: [PATCH 08/16] fix(apply): refuse whole-file fallback when the defect
  excerpt is already gone
 
 The first missing-anchor retry then a silent no-op (apply_err empty)
@@ -977,7 +977,7 @@ index f6dfe60..606868b 100644
 From 8d0bb28f780006adccbfcf72d5ee7d509d0f060b Mon Sep 17 00:00:00 2001
 From: Cursor Agent <cursoragent@cursor.com>
 Date: Tue, 1 Sep 2026 21:47:14 +0000
-Subject: [PATCH 09/15] fix(apply): retry incomplete reviews and drop stale
+Subject: [PATCH 09/16] fix(apply): retry incomplete reviews and drop stale
  certifier claims
 
 qwen 3b option-4 runs aborted after cycle 1 when every finding failed the
@@ -1261,7 +1261,7 @@ index 606868b..6bd15e3 100644
 From 4d6c2b27d065fb33b4c53dba9cd0e35a3d9fc09c Mon Sep 17 00:00:00 2001
 From: Cursor Agent <cursoragent@cursor.com>
 Date: Tue, 1 Sep 2026 21:59:12 +0000
-Subject: [PATCH 10/15] fix(review): recover excerpts the 3b named in prose
+Subject: [PATCH 10/16] fix(review): recover excerpts the 3b named in prose
 
 qwen 3b titles a real defect (duplicate return) and leaves
 source_excerpt/trigger/observable_failure empty, so the evidence gate
@@ -1383,7 +1383,7 @@ index 6bd15e3..b36485a 100644
 From a877a4745981f447699998bc73101f30059a3026 Mon Sep 17 00:00:00 2001
 From: Cursor Agent <cursoragent@cursor.com>
 Date: Tue, 1 Sep 2026 22:09:10 +0000
-Subject: [PATCH 11/15] fix(baseline): name the publication return pair so
+Subject: [PATCH 11/16] fix(baseline): name the publication return pair so
  phase 0 cannot weaken tests
 
 Unittest reprints only the test line (assertEqual(add(2, 3), 5) / -1 != 5),
@@ -1763,7 +1763,7 @@ index b36485a..d8d98f2 100644
 From f3bfa29b5ab13af7456ec1e43c114617b0b70bbb Mon Sep 17 00:00:00 2001
 From: Cursor Agent <cursoragent@cursor.com>
 Date: Tue, 1 Sep 2026 22:14:12 +0000
-Subject: [PATCH 12/15] fix(apply): refuse named-return when the replacement is
+Subject: [PATCH 12/16] fix(apply): refuse named-return when the replacement is
  already in the file
 
 After phase 0 writes return a + b, the same finding text
@@ -1878,7 +1878,7 @@ index d8d98f2..bd199f7 100644
 From 084af8409a7402da85df0020b93b58c92d0967a3 Mon Sep 17 00:00:00 2001
 From: Cursor Agent <cursoragent@cursor.com>
 Date: Tue, 1 Sep 2026 22:41:17 +0000
-Subject: [PATCH 13/15] fix(apply): roll back test-file writes that delete test
+Subject: [PATCH 13/16] fix(apply): roll back test-file writes that delete test
  methods
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
@@ -2059,7 +2059,7 @@ index bd199f7..e85301d 100644
 From e8685f7fcf607cf2865d3c2eec1502f539a48639 Mon Sep 17 00:00:00 2001
 From: Cursor Agent <cursoragent@cursor.com>
 Date: Tue, 1 Sep 2026 23:01:22 +0000
-Subject: [PATCH 14/15] fix(prodready): close option-4 EXIT 1 on purpose-fit
+Subject: [PATCH 14/16] fix(prodready): close option-4 EXIT 1 on purpose-fit
  reject and stale certifier
 
 A competitor ACCEPT that cannot map onto an owner acceptance criterion is now
@@ -2332,7 +2332,7 @@ index e85301d..f2b1aac 100644
 From 596b4a82f7de62163c189435e7b4312b79da8288 Mon Sep 17 00:00:00 2001
 From: Cursor Agent <cursoragent@cursor.com>
 Date: Tue, 1 Sep 2026 23:14:39 +0000
-Subject: [PATCH 15/15] fix(review): drop certifier SyntaxError claims that
+Subject: [PATCH 15/16] fix(review): drop certifier SyntaxError claims that
  checkout the baseline
 
 Independent final review still failed after stale/style grounding because
@@ -2484,6 +2484,151 @@ index f2b1aac..0e87818 100644
      def test_asks_to_remove_tested_symbol(self):
          tests = "from hello import add, greet\n\ndef test_greet(self):\n    greet('x')\n"
          self.assertTrue(ff._asks_to_remove_tested_symbol(
+-- 
+2.43.0
+
+
+From 478205b348a29330b2f3bf652beb2c6ce7a4a094 Mon Sep 17 00:00:00 2001
+From: Cursor Agent <cursoragent@cursor.com>
+Date: Tue, 1 Sep 2026 23:29:42 +0000
+Subject: [PATCH 16/16] fix(review): drop already-satisfied findings from the
+ unresolved ledger
+
+Cycle 2 of option 4 filed criticals whose prescribed fix was already the
+file (change return a + b to return a + b; expected result already 5).
+Those no-ops kept unresolved_fix_findings open after independent review
+and the suite were already green. Do not count a same-to-same change as
+an open defect.
+---
+ flexfactor.py       | 53 +++++++++++++++++++++++++++++++++++++++++----
+ flexfactor_tests.py | 34 +++++++++++++++++++++++++++++
+ 2 files changed, 83 insertions(+), 4 deletions(-)
+
+diff --git a/flexfactor.py b/flexfactor.py
+index e85bd0e..38383f1 100644
+--- a/flexfactor.py
++++ b/flexfactor.py
+@@ -10976,9 +10976,41 @@ def _update_incomplete_review_ledger(pending: set[str], *, completed,
+     pending.update(str(rel) for rel in incomplete)
+ 
+ 
++_CHANGE_TO_RX = re.compile(
++    r"change\s+`([^`]+)`\s+to\s+`([^`]+)`", re.I)
++_EXPECTED_TO_RX = re.compile(
++    r"expected result[^\n]{0,120}to\s+['\"]?([^'\"\n.]+)['\"]?", re.I)
++
++
++def _finding_already_satisfied(finding: dict, file_text: str) -> bool:
++    """True when the finding's own prescribed change is already the file.
++
++    Live option 4 2026-09-01 cert run: 3b filed two criticals whose fix was
++    ``Change `return a + b` to `return a + b``` plus test expected-value
++    nits that already matched the asserts. Those are not open defects; they
++    must not keep unresolved_fix_findings from converging.
++    """
++    if not file_text:
++        return False
++    blob = "\n".join(str((finding or {}).get(k) or "") for k in
++                     ("title", "problem", "fix", "reproduction", "reason"))
++    for match in _CHANGE_TO_RX.finditer(blob):
++        left, right = match.group(1).strip(), match.group(2).strip()
++        if left == right:
++            return True
++        if right and right in file_text and left not in file_text:
++            return True
++    for match in _EXPECTED_TO_RX.finditer(blob):
++        desired = match.group(1).strip()
++        if desired and desired in file_text:
++            return True
++    return False
++
++
+ def _update_unresolved_fix_ledger(pending: dict[str, list[dict]], *,
+                                   findings: dict[str, list[dict]], clean,
+-                                  min_severity: str) -> None:
++                                  min_severity: str,
++                                  project_dir: str = "") -> None:
+     """Keep serious findings until a later semantic review proves them gone.
+ 
+     Follow-up cycles deliberately review only the files changed by the immediately
+@@ -10992,8 +11024,20 @@ def _update_unresolved_fix_ledger(pending: dict[str, list[dict]], *,
+         pending.pop(str(rel), None)
+     for rel, rows in findings.items():
+         key = str(rel)
+-        serious = [dict(row) for row in rows
+-                   if should_fix_finding(row, min_severity)]
++        file_text = ""
++        if project_dir:
++            got = _read_text_and_sha(project_dir, key)
++            file_text = got[0] if got else ""
++        serious = []
++        for row in rows:
++            if not should_fix_finding(row, min_severity):
++                continue
++            if file_text and _finding_already_satisfied(row, file_text):
++                title = str((row or {}).get("title") or "?")[:60]
++                print(f"  [evidence] unresolved: dropped already-satisfied "
++                      f"'{title}' in {key}")
++                continue
++            serious.append(dict(row))
+         if serious:
+             pending[key] = serious
+         else:
+@@ -16779,7 +16823,8 @@ def audit_one_program(program_arg, args, index: int, total: int, e2e_port: int)
+                     unresolved_fix_findings,
+                     findings=b_findings,
+                     clean=b_clean,
+-                    min_severity=args.fix_severity)
++                    min_severity=args.fix_severity,
++                    project_dir=project_dir)
+                 if failed_review_batches >= 3:
+                     # NAME THE ACTUAL FAILURE. Until 2026-08-21 this said
+                     # "provider outage" unconditionally, and the owner's 8-hour
+diff --git a/flexfactor_tests.py b/flexfactor_tests.py
+index 0e87818..2c73fae 100644
+--- a/flexfactor_tests.py
++++ b/flexfactor_tests.py
+@@ -3485,6 +3485,40 @@ class IncompleteReviewLedgerTests(unittest.TestCase):
+             ff._flatten_unresolved_fix_ledger(pending)[0]["title"],
+             "still broken")
+ 
++    def test_already_satisfied_finding_does_not_block_convergence(self):
++        """Live option 4 2026-09-01: 3b's criticals were change X to X."""
++        import tempfile
++        pending = {}
++        with tempfile.TemporaryDirectory() as tmp:
++            with open(os.path.join(tmp, "hello.py"), "w", encoding="utf-8") as fh:
++                fh.write('def add(a, b):\n    return a + b\n\n'
++                         'def greet(name):\n    return f"hello {name}"\n')
++            os.makedirs(os.path.join(tmp, "tests"), exist_ok=True)
++            with open(os.path.join(tmp, "tests", "test_hello.py"), "w",
++                      encoding="utf-8") as fh:
++                fh.write("self.assertEqual(add(2, 3), 5)\n"
++                         "self.assertEqual(greet('x'), 'hello x')\n")
++            ff._update_unresolved_fix_ledger(
++                pending,
++                findings={
++                    "hello.py": [{
++                        "severity": "critical",
++                        "title": "Logic Error in add Function",
++                        "fix": "Change `return a + b` to `return a + b`.",
++                    }],
++                    "tests/test_hello.py": [{
++                        "severity": "high",
++                        "title": "Mismatched Test Case for test_add",
++                        "problem": "expected result is 5, but comparing to hello x",
++                        "fix": "Change the expected result of the test case for "
++                               "test_add to 5.",
++                    }],
++                },
++                clean={},
++                min_severity="high",
++                project_dir=tmp)
++        self.assertEqual(pending, {})
++
+     def test_completed_below_floor_verdict_clears_an_old_serious_finding(self):
+         pending = {"src/a.py": [self._finding("src/a.py")]}
+         ff._update_unresolved_fix_ledger(
 -- 
 2.43.0
 

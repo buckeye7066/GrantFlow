@@ -89,3 +89,10 @@ Do not dest-approve Mastodon. Do not publish.
 `add()` was already `a + b` and the suite was GREEN. Product invariants
 PASS. `596b4a8` drops baseline-checkout reproductions and SyntaxError
 claims on a compiling file. New run: `/tmp/ff-option4-cert`.
+
+## Follow-up `478205b` (2026-09-01T23:29Z)
+
+`/tmp/ff-option4-cert` independent-final-review **closed**
+(stale math claim dropped). EXIT 1 moved to unresolved no-op findings
+(`change return a + b to return a + b`). `478205b` drops those from the
+unresolved ledger. New run: `/tmp/ff-option4-done`.
