@@ -4,8 +4,11 @@ Audience: whoever next touches PromoPilot publishing or FlexFactor prodready.
 
 ## PromoPilot — why nothing published since 2026-08-06
 
-Live production (`https://promopilot-production-6370.up.railway.app`),
-revision `0a0d8fcc255e512a439837b6611fd1acfeb6bc00`, measured 2026-09-01T19:14Z.
+Live production (`https://promopilot-production-6370.up.railway.app`).
+First measured 2026-09-01T19:14Z at revision
+`0a0d8fcc255e512a439837b6611fd1acfeb6bc00`. Re-measured 2026-09-01T19:25Z
+after a Railway deploy to `b68d809cab2969a33a2cae8e96787d01adfb7b04`.
+The deadlock is **unchanged** on the new SHA.
 
 The process is up. The scheduler is not “dead.”
 
@@ -44,8 +47,9 @@ Approved campaigns (ready to promote, no dest they can use):
 
 UI copy: “Generate draft prepares copy for review; it never publishes by itself.”
 
-Live `POST /api/post-now` on the ready Mastodon channel, dest still needing
-re-approval:
+Live `POST /api/post-now` on the ready Mastodon channel (first SHA) and
+again on verified Axiom Bluesky after the `b68d809` deploy, dest still
+needing re-approval:
 
 ```json
 {"status":"skipped","reason":"needs_approval",
