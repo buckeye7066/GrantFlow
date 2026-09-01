@@ -21,6 +21,7 @@ import {
   PIPELINE_ALLOWED_SOURCES,
   PIPELINE_DENIED_SOURCES,
 } from '../config/pipelineAllowedSources.js'
+import { defaultPipelineRequestedAmount } from '../config/pipelineValue.js'
 import { extractHostname } from '../config/urlRules.js'
 import {
   RELEVANCE_FLOOR,
@@ -789,9 +790,11 @@ export async function saveToProfilePipeline(
     }
     const amountMinValue = toPositiveMoney(opportunity.amount_min ?? opportunity.amountMin)
     const amountMaxValue = toPositiveMoney(opportunity.amount_max ?? opportunity.amountMax)
-    const amountRequestedValue =
-      toPositiveMoney(opportunity.amount_requested ?? opportunity.requestedAmount) ??
-      amountMaxValue ?? amountMinValue
+    const amountRequestedValue = defaultPipelineRequestedAmount({
+      amount_requested: opportunity.amount_requested ?? opportunity.requestedAmount,
+      amount_min: opportunity.amount_min ?? opportunity.amountMin,
+      amount_max: opportunity.amount_max ?? opportunity.amountMax,
+    })
 
     if (grantCols.decision) {
       const cols = [
