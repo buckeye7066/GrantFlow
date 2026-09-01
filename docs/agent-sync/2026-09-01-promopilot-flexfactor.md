@@ -216,3 +216,27 @@ blocker (no Java/Gradle here); `android-client` CI was green on
 
 Do not treat FlexFactor as production-ready for an unattended
 model-backed apply, and do not treat AI-factory as having run.
+
+## Follow-up 2026-09-01T19:50Z (`bc-b97b5389-e742-5895-8193-8e35f10fa427`)
+
+Re-tried every write path. All still **403** to `cursor[bot]`:
+PR branch, `cursor/flexfactor-ci-wire-preverify-2a4f`,
+`cursor/linux-dashboard-no-tk-5d68`, new `cursor/pr110-ci-wire-a427`,
+GrantFlow token, Contents API PUT, fork create, `workflow_dispatch`.
+Self-apply workflow is already on PR #110 and failed at 19:01Z
+(`33547030041`) on a `flexfactor.py` 3-way apply conflict.
+
+Local cherry-pick ready, **not on origin**:
+`06c7d10b61b59047a6cd86018ca5662f6a4e3a5c` on
+`cursor/pr110-ci-wire-a427` (abb7619 onto 634250c). PR head still
+`634250cffd34298412cdc50fbdc3a9e96b518e35`.
+
+Free model **now exists on this host** (this session installed it):
+Ollama 0.33.2 @ `:11434`, `llama3.2:1b`. Option 4 was run to
+**process completion** on `/tmp/ff-option4-followup` @ `fdb26ea`
+(planted `add()` bug). **EXIT 1**. $0.00. 0 files fixed. The 1B
+model named the planted defect; FlexFactor dropped it as ungrounded.
+Readiness: NOT PRODUCTION READY. No verified apply.
+
+Evidence: `/tmp/flexfactor-aifactory-status.md`.
+Factory still 404; :5179/:5190 still closed.
