@@ -1,240 +1,222 @@
+import { NO_PER_AWARD_FIGURE_KINDS } from './opportunityKindClasses.js'
+
 /**
  * CHOKE POINT: pipeline dollar-value semantics.
  *
- * Every surface that shows "Pipeline $X" / "Pipeline Potential" (dashboard
- * stats, ProfileCard, profile detail, /:id/pipeline-potential breakdown) MUST
- * derive a grant's dollar value and the set of "active pipeline" statuses from
- * THIS module. Do not re-inline a status list or a SUM(amount_requested)
- * expression at a call site — that is exactly the drift class this closes.
- *
- * THE BUG THIS CLOSES (2026-07-05)
- * --------------------------------
- * Pipeline totals were computed as SUM(amount_requested) in four separately
- * maintained copies (routes/stats.js, routes/profiles.js ×2, scripts). But the
- * canonical auto-add saver (opportunityMatcher.saveToProfilePipeline) only set
- * amount_requested when the OPPORTUNITY carried one — and catalog opportunities
- * carry amount_min/amount_max, essentially never amount_requested (that is a
- * pipeline-side concept the manual /from-opportunity path defaults from
- * amount_max ?? amount_min). Result fleet-wide: 15 of 489 active pipeline
- * grants had amount_requested, so a student with 118 active sources showed
- * "$6,500 in pipeline" while the same rows carried ~$1.8M of award ceilings in
- * amount_max/amount_min the display never read.
- *
- * THE RULE
- * --------
- * A grant's displayed pipeline value = amount_requested when the user (or the
- * promote-time default) set one, else the award ceiling (amount_max), else the
- * award floor (amount_min), else 0. This is the SAME fallback the frontend
- * breakdown (PipelinePotentialBreakdown.estimatedValue) and the Pipeline page
- * already use — the backend totals had to reconcile with it.
- *
- * Defense in depth (each layer independently correct):
- *   1. READ  — the SQL/JS helpers here coalesce at display time.
- *   2. WRITE — saveToProfilePipeline defaults amount_requested from max/min.
- *   3. NET   — enforceGrantAmountBackfill (startup/enforceInvariants.js)
- *              re-derives missing amounts against the live DB on every boot.
+ * Every surface that shows "Pipeline $X" or "Pipeline Potential" must derive
+ * both the active status set and each row's dollar contribution here. Keep the
+ * raw amount-presence helpers separate: crawler/enrichment checks need to know
+ * whether a source contains an amount even when that row is ineligible or is a
+ * directory that intentionally contributes no fixed per-applicant dollars.
  */
 
-/**
- * Pipeline stages whose dollar values count toward "in-pipeline" totals.
- * Terminal stages (awarded/declined/closed/deadline_passed/archived) are
- * excluded — awarded money is "funds secured", not pipeline potential.
- */
+/** Active stages included in pipeline-potential totals. */
 export const PIPELINE_ACTIVE_STATUSES = Object.freeze([
   'discovery', 'discovered', 'interested', 'auto_applied', 'drafting',
   'application_prep', 'app_prep', 'revision', 'portal', 'submitted',
   'pending_review', 'under_review', 'follow_up', 'report',
 ])
 
-/**
- * When a grant carries BOTH an award floor and ceiling and the ceiling is more
- * than this many times the floor, the range is a program ENVELOPE ("$1M–$42M"),
- * not a realistic single-award figure — defaulting amount_requested to the
- * ceiling would overstate the pipeline by construction (the HUD Section 4
- * class: one such row fabricated ~$84M across two org pipelines). Defaulting
- * uses the FLOOR for wide ranges; the ceiling stays visible in amount_max.
- */
+/** A larger spread is treated as a program envelope, not one applicant's award. */
 export const WIDE_AWARD_RANGE_RATIO = 10
 
-import { NO_PER_AWARD_FIGURE_KINDS } from './opportunityKindClasses.js'
+const NO_PER_AWARD_KIND_SQL = NO_PER_AWARD_FIGURE_KINDS
+  .map((kind) => `'${String(kind).replaceAll("'", "''")}'`)
+  .join(', ')
+
+function positiveMoney(value) {
+  const numeric = Number(value)
+  return Number.isFinite(numeric) && numeric > 0 ? numeric : null
+}
+
+function sqlPrefix(alias) {
+  return alias ? `${alias}.` : ''
+}
+
+function explicitRejectionSql(prefix) {
+  return `(
+    LOWER(COALESCE(CAST(${prefix}eligibility_status AS TEXT), '')) = 'ineligible'
+    OR LOWER(COALESCE(CAST(${prefix}match_decision AS TEXT), '')) = 'reject'
+  )`
+}
+
+function noPerAwardSql(prefix, foAlias = null) {
+  if (foAlias) {
+    return `LOWER(COALESCE(CAST(${foAlias}.opportunity_kind AS TEXT), '')) IN (${NO_PER_AWARD_KIND_SQL})`
+  }
+  return `EXISTS (
+    SELECT 1
+      FROM funding_opportunities pipeline_value_fo
+     WHERE pipeline_value_fo.id = ${prefix}funding_opportunity_id
+       AND LOWER(COALESCE(CAST(pipeline_value_fo.opportunity_kind AS TEXT), ''))
+           IN (${NO_PER_AWARD_KIND_SQL})
+  )`
+}
+
+function conservativeDollarSql(prefix) {
+  const rawValue = pipelineValueSql(prefix ? prefix.slice(0, -1) : '')
+  return `(
+    CASE
+      WHEN NULLIF(${prefix}amount_min, 0) IS NOT NULL
+       AND NULLIF(${prefix}amount_max, 0) IS NOT NULL
+       AND ${prefix}amount_max > ${prefix}amount_min * ${WIDE_AWARD_RANGE_RATIO}
+      THEN CASE
+        WHEN NULLIF(${prefix}amount_requested, 0) IS NOT NULL
+         AND ABS(${prefix}amount_requested - ${prefix}amount_max) > 0.01
+        THEN ${prefix}amount_requested
+        ELSE ${prefix}amount_min
+      END
+      ELSE ${rawValue}
+    END
+  )`
+}
 
 /**
- * SQL expression for one grant row's pipeline dollar value.
- * Compile-time literal (no user input), safe to inline in SQL; works on both
- * SQLite and Postgres (NULLIF/COALESCE are common dialect).
+ * Raw amount-presence/value fallback.
  *
- * @param {string} [alias='g'] table alias; pass '' for un-aliased queries.
+ * This intentionally does NOT apply eligibility or opportunity-kind filters.
+ * Amount coverage, enrichment, and dead-link repair use it to answer whether a
+ * row already carries a figure. Dollar surfaces must use pipelineDollarSql().
  */
 export function pipelineValueSql(alias = 'g') {
-  const p = alias ? `${alias}.` : ''
-  return `COALESCE(NULLIF(${p}amount_requested, 0), NULLIF(${p}amount_max, 0), NULLIF(${p}amount_min, 0), 0)`
+  const prefix = sqlPrefix(alias)
+  return `COALESCE(
+    NULLIF(${prefix}amount_requested, 0),
+    NULLIF(${prefix}amount_max, 0),
+    NULLIF(${prefix}amount_min, 0),
+    0
+  )`
 }
 
 /**
- * Canonical pipeline-dollar contract for SURFACES (stats/profile totals).
+ * Honest dollar contribution for one grant row.
  *
- * Rules:
- * - Only active pipeline rows are selected by callers (status filter).
- * - Rows explicitly marked ineligible or with a stored REJECT decision
- *   contribute $0 but remain visible historically.
- * - Kinds that cannot publish a per-award figure by design (directory/referral/
- *   school_portal/past_award_intel/benefit) contribute $0 even when a numeric
- *   column is present. Unknown/unlinked legacy kinds remain eligible.
- *
- * Use this in SELECT SUM(...) for totals. Prefer passing both grant and
- * funding-opportunity aliases so kind checks avoid correlated subqueries.
- *
- * @param {string} [gAlias='g'] grants table alias
- * @param {string|null} [foAlias=null] funding_opportunities alias when already joined
+ * Callers select active statuses. This expression additionally contributes $0
+ * for explicitly ineligible/rejected rows and for source kinds that publish no
+ * fixed per-applicant award. Unknown or unlinked legacy kinds remain eligible.
+ * A >10x floor/ceiling range uses the floor unless a distinct requested amount
+ * proves that a separate ask was entered.
  */
 export function pipelineDollarSql(gAlias = 'g', foAlias = null) {
-  const g = gAlias ? `${gAlias}.` : ''
-  const KIND_LIST = NO_PER_AWARD_FIGURE_KINDS.map((k) => `'${k}'`).join(', ')
-  if (foAlias) {
-    // Join-aware variant — rely on the existing JOIN to inspect kind
-    return [
-      'CASE',
-      `  WHEN LOWER(COALESCE(${g}eligibility_status, '')) = 'ineligible' THEN 0`,
-      `  WHEN LOWER(COALESCE(${g}match_decision, '')) = 'reject' THEN 0`,
-      // LOWER/COALESCE to match registry semantics in opportunityKindClasses
-      `  WHEN LOWER(COALESCE(${foAlias}.opportunity_kind, '')) IN (${KIND_LIST}) THEN 0`,
-      // Wide-range safeguard: requested equals ceiling AND range > 10× → use floor
-      `  WHEN COALESCE(${g}amount_min,0) > 0 AND COALESCE(${g}amount_max,0) > 0` +
-      `       AND NULLIF(${g}amount_requested,0) = NULLIF(${g}amount_max,0)` +
-      `       AND ${g}amount_max > ${g}amount_min * ${Number(WIDE_AWARD_RANGE_RATIO)} THEN ${g}amount_min`,
-      `  ELSE ${pipelineValueSql(gAlias)}`,
-      'END',
-    ].join(' ')
-  }
-  // Correlated-subquery fallback — used when queries have not joined FO.
-  // Efficient enough for aggregates and preserves a single choke point.
-  const existsPointerKind = `EXISTS (SELECT 1 FROM funding_opportunities fo WHERE fo.id = ${g}funding_opportunity_id AND LOWER(COALESCE(fo.opportunity_kind, '')) IN (${KIND_LIST}))`
-  return [
-    'CASE',
-    `  WHEN LOWER(COALESCE(${g}eligibility_status, '')) = 'ineligible' THEN 0`,
-    `  WHEN LOWER(COALESCE(${g}match_decision, '')) = 'reject' THEN 0`,
-    `  WHEN ${existsPointerKind} THEN 0`,
-    `  WHEN COALESCE(${g}amount_min,0) > 0 AND COALESCE(${g}amount_max,0) > 0` +
-    `       AND NULLIF(${g}amount_requested,0) = NULLIF(${g}amount_max,0)` +
-    `       AND ${g}amount_max > ${g}amount_min * ${Number(WIDE_AWARD_RANGE_RATIO)} THEN ${g}amount_min`,
-    `  ELSE ${pipelineValueSql(gAlias)}`,
-    'END',
-  ].join(' ')
+  const prefix = sqlPrefix(gAlias)
+  return `CASE
+    WHEN ${explicitRejectionSql(prefix)} THEN 0
+    WHEN ${noPerAwardSql(prefix, foAlias)} THEN 0
+    ELSE ${conservativeDollarSql(prefix)}
+  END`
 }
 
 /**
- * SQL expression for a grant row's pipeline dollar value INCLUDING the value
- * its linked catalog row already carries (the ANSWER-census variant).
+ * Raw amount coverage including a linked catalog figure.
  *
- * WHY THIS EXISTS (2026-08-15, the "grants.gov ×38 need an API adapter" false
- * alarm): the amountCoverage census documents that "the predicates read an
- * answer off EITHER the grant itself OR its linked catalog row" — but its
- * value predicate was `pipelineValueSql('g')`, which reads ONLY the grant's own
- * columns. A nightly-crawl grant linked to a catalog row whose figure the
- * grants.gov API adapter had ALREADY fetched (measured in prod: 52 rows incl.
- * a $2,500 scholarship and a $629,042 award, catalog `amount_status`
- * 'known'/'range', `amount_enrich_last_reason` 'grants_gov_api') therefore
- * counted as `unanswered_unreadable` — the one bucket that reds the owner's
- * report and NAMES ADAPTER WORK — for work the adapter had already done. The
- * inheritance sweep (`enforceGrantAmountBackfill` step 1) copies the figure
- * onto the grant a boot later; until then the row HAS an answer and the census
- * must say so.
- *
- * Grant-side values keep precedence (a user-entered ask outranks a catalog
- * ceiling). This is a CENSUS/answer predicate — "Pipeline $" dollar SURFACES
- * keep reading `pipelineValueSql`, because a dollar card must never display a
- * value the grant row itself does not yet carry.
+ * This is an answer-presence predicate, not a user-facing dollar contribution.
  */
 export function pipelineValueWithCatalogSql(alias = 'g', foAlias = 'fo') {
-  const p = alias ? `${alias}.` : ''
-  const f = foAlias ? `${foAlias}.` : ''
-  return (
-    `COALESCE(NULLIF(${p}amount_requested, 0), NULLIF(${p}amount_max, 0), NULLIF(${p}amount_min, 0), ` +
-    `NULLIF(${f}amount_max, 0), NULLIF(${f}amount_min, 0), 0)`
-  )
+  const prefix = sqlPrefix(alias)
+  const foPrefix = sqlPrefix(foAlias)
+  return `COALESCE(
+    NULLIF(${prefix}amount_requested, 0),
+    NULLIF(${prefix}amount_max, 0),
+    NULLIF(${prefix}amount_min, 0),
+    NULLIF(${foPrefix}amount_max, 0),
+    NULLIF(${foPrefix}amount_min, 0),
+    0
+  )`
 }
 
-/** JS twin of pipelineValueSql for rows already in memory. */
+/** JS twin of pipelineValueSql: raw amount presence/value only. */
 export function grantPipelineValue(grant) {
-  for (const key of ['amount_requested', 'amount_max', 'amount_min']) {
-    const v = Number(grant?.[key])
-    if (Number.isFinite(v) && v > 0) return v
-  }
-  return 0
+  return positiveMoney(grant?.amount_requested)
+    ?? positiveMoney(grant?.amount_max)
+    ?? positiveMoney(grant?.amount_min)
+    ?? 0
 }
 
-/**
- * JS twin of pipelineDollarSql for rows already in memory. Mirrors the SQL
- * contract above. Safe default for legacy rows lacking kind/eligibility:
- * missing signals are neutral; explicit ineligibility or REJECT zeroize.
- */
+export function grantCountsTowardPipelineDollars(grant) {
+  if (!grant) return false
+  if (String(grant.eligibility_status ?? '').trim().toLowerCase() === 'ineligible') return false
+  if (String(grant.match_decision ?? '').trim().toLowerCase() === 'reject') return false
+  const kind = String(
+    grant.opportunity_kind ?? grant.funding_opportunity_kind ?? grant.kind ?? '',
+  ).trim().toLowerCase()
+  return !kind || !NO_PER_AWARD_FIGURE_KINDS.includes(kind)
+}
+
+/** JS twin of pipelineDollarSql. */
 export function grantPipelineDollarValue(grant) {
-  if (!grant) return 0
-  const status = String(grant?.eligibility_status || '').toLowerCase()
-  if (status === 'ineligible') return 0
-  const decision = String(grant?.match_decision || '').toUpperCase()
-  if (decision === 'REJECT') return 0
-  const kind = String(grant?.opportunity_kind ?? '').trim().toLowerCase()
-  if (NO_PER_AWARD_FIGURE_KINDS.includes(kind)) return 0
-  const req = Number(grant?.amount_requested)
-  const min = Number(grant?.amount_min)
-  const max = Number(grant?.amount_max)
-  const hasReq = Number.isFinite(req) && req > 0
-  const hasMin = Number.isFinite(min) && min > 0
-  const hasMax = Number.isFinite(max) && max > 0
-  if (hasReq && hasMin && hasMax && req === max && max > min * Number(WIDE_AWARD_RANGE_RATIO)) {
-    return min
+  if (!grantCountsTowardPipelineDollars(grant)) return 0
+
+  const requested = positiveMoney(grant?.amount_requested)
+  const floor = positiveMoney(grant?.amount_min)
+  const ceiling = positiveMoney(grant?.amount_max)
+
+  if (floor && ceiling && ceiling > floor * WIDE_AWARD_RANGE_RATIO) {
+    // Historic automatic/manual promotion copied the ceiling into requested.
+    // With no provenance column on legacy rows, a missing request or an exact
+    // copy of that wide ceiling is conservatively treated as the old default.
+    if (requested && Math.abs(requested - ceiling) > 0.01) return requested
+    return floor
   }
-  return grantPipelineValue(grant)
+
+  return requested ?? ceiling ?? floor ?? 0
 }
 
 /**
- * SQL expression counting active-pipeline rows with NO derivable dollar value.
- * "$0" and "no amount stated" are DIFFERENT facts: benefit programs (SSI,
- * SNAP, LIHEAP) and directories have real value to the profile but no
- * per-award figure, so a card that silently sums them as $0 reads as
- * "qualifies for nothing". Surfaces MUST show this count alongside the total
- * (e.g. "$32,250 + 51 sources without stated amounts").
+ * Count useful active sources that have no fixed dollar contribution.
  *
- * @param {string} [alias='g'] table alias; pass '' for un-aliased queries.
+ * Direct rows without an amount and no-per-award resources are included.
+ * Explicitly ineligible/rejected history rows are excluded from both the dollar
+ * total and this useful-unvalued count.
  */
-export function unvaluedCountSql(alias = 'g') {
-  return `SUM(CASE WHEN ${pipelineValueSql(alias)} = 0 THEN 1 ELSE 0 END)`
+export function unvaluedCountSql(alias = 'g', foAlias = null) {
+  const prefix = sqlPrefix(alias)
+  return `SUM(CASE
+    WHEN ${explicitRejectionSql(prefix)} THEN 0
+    WHEN ${pipelineDollarSql(alias, foAlias)} = 0 THEN 1
+    ELSE 0
+  END)`
 }
 
-/** JS twin of unvaluedCountSql for rows already in memory. */
 export function isUnvaluedGrant(grant) {
-  return grantPipelineValue(grant) === 0
+  if (!grantCountsTowardPipelineDollars(grant)) {
+    const kind = String(
+      grant?.opportunity_kind ?? grant?.funding_opportunity_kind ?? grant?.kind ?? '',
+    ).trim().toLowerCase()
+    // No-per-award resources are useful unvalued sources; rejected rows are not.
+    const rejected =
+      String(grant?.eligibility_status ?? '').trim().toLowerCase() === 'ineligible'
+      || String(grant?.match_decision ?? '').trim().toLowerCase() === 'reject'
+    return !rejected && NO_PER_AWARD_FIGURE_KINDS.includes(kind)
+  }
+  return grantPipelineDollarValue(grant) === 0
+}
+
+/**
+ * Canonical insert-time default for amount_requested.
+ *
+ * A supplied positive requested amount is preserved. Without one, ordinary
+ * ranges use their ceiling and >10x program envelopes use their floor.
+ */
+export function defaultPipelineRequestedAmount(input = {}) {
+  const requested = positiveMoney(input.amount_requested ?? input.requestedAmount ?? input.requested)
+  if (requested) return requested
+
+  const floor = positiveMoney(input.amount_min ?? input.amountMin ?? input.min)
+  const ceiling = positiveMoney(input.amount_max ?? input.amountMax ?? input.max)
+  if (floor && ceiling && ceiling > floor * WIDE_AWARD_RANGE_RATIO) return floor
+  return ceiling ?? floor ?? null
 }
 
 export default {
   PIPELINE_ACTIVE_STATUSES,
+  WIDE_AWARD_RANGE_RATIO,
   pipelineValueSql,
   pipelineDollarSql,
   pipelineValueWithCatalogSql,
   grantPipelineValue,
+  grantCountsTowardPipelineDollars,
   grantPipelineDollarValue,
   unvaluedCountSql,
   isUnvaluedGrant,
-}
-
-/**
- * Canonical writer default for amount_requested at insert time.
- * Distinct explicit requests stay; envelope ceilings fall back to floor.
- */
-export function defaultPipelineRequestedAmount(input = {}) {
-  const req = Number(input?.amount_requested ?? input?.requested ?? null)
-  const min = Number(input?.amount_min ?? input?.min ?? null)
-  const max = Number(input?.amount_max ?? input?.max ?? null)
-  const hasReq = Number.isFinite(req) && req > 0
-  const hasMin = Number.isFinite(min) && min > 0
-  const hasMax = Number.isFinite(max) && max > 0
-  if (hasReq) {
-    if (hasMin && hasMax && req === max && max > min * Number(WIDE_AWARD_RANGE_RATIO)) return min
-    return req
-  }
-  if (hasMin && hasMax && max > min * Number(WIDE_AWARD_RANGE_RATIO)) return min
-  if (hasMax) return max
-  if (hasMin) return min
-  return null
+  defaultPipelineRequestedAmount,
 }
