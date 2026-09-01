@@ -24,9 +24,11 @@ Robert's auto-add path.
 - Individual-root admission and the boot sweep require a **positive** need
   overlap. Fail-open silence stays for org/business removal so an
   unreadable row is counted, not deleted.
-- Title-stated inference only (scholarship / Pell / FAFSA / SNAP / LIHEAP)
-  fills empty opportunity vocabulary so unlabeled HOPE/Pell still match.
+- Title-stated inference only (scholarship / Pell / FAFSA / SNAP / LIHEAP /
+  veteran / emergency assistance) fills empty opportunity vocabulary so
+  unlabeled HOPE/Pell and VA emergency rows still match.
   `opportunity_kind: scholarship` does **not** mint a need.
+  Bare `VA` and bare `emergency` do not mint a need.
 - RELATABLE no longer treats `no_fundable_signal` as a directory. A named
   award with only title+URL is relatable; pointer/search/aggregator
   reasons still fail.

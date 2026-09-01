@@ -251,6 +251,17 @@ describe('pipelinePrecision — the shared declared-need predicate', () => {
     expect(opportunityNeedVocabulary({ title: 'Generic Community Opportunity', categories: [] })).toEqual([])
   })
 
+  it('infers veteran + emergency from a title that STATES those phrases (Discover add fixture)', () => {
+    expect(opportunityNeedVocabulary({
+      title: 'Tennessee Veterans Emergency Assistance',
+      categories: [],
+    })).toEqual(['veteran', 'emergency'])
+    expect(opportunityNeedVocabulary({ title: 'Generic Community Opportunity', categories: [] })).toEqual([])
+    // Bare "VA" / "emergency" without the assistance phrase must not mint a need
+    expect(opportunityNeedVocabulary({ title: 'VA Medical Center Notice', categories: [] })).toEqual([])
+    expect(opportunityNeedVocabulary({ title: 'Emergency Medical Technician Program', categories: [] })).toEqual([])
+  })
+
   it('an empty schema section KEY is not a declared need', () => {
     const needs = declaredNeedsFrom({ primary_type: 'individual' }, { housing: {}, education: {}, health_medical: {} })
     expect(needs).toEqual([])

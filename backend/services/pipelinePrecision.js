@@ -230,6 +230,11 @@ const TITLE_STATED_NEED_PATTERNS = Object.freeze([
   [/\b(?:snap|food pantry|food bank|nutrition assistance)\b/i, 'food'],
   [/\b(?:liheap|rental assistance|rent assistance|section 8)\b/i, 'housing'],
   [/\b(?:small business grant|business grant)\b/i, 'business'],
+  // Phrase-only: a title that NAMES the population/need. Bare "va" is
+  // refused (Virginia / VA). "financial assistance" is refused (too
+  // broad; financial aid already maps to education).
+  [/\bveterans?\b/i, 'veteran'],
+  [/\b(?:emergency (?:assistance|relief|aid|grant|fund)|disaster (?:relief|assistance)|crisis (?:assistance|relief))\b/i, 'emergency'],
 ])
 
 export function opportunityNeedVocabulary(row) {

@@ -125,6 +125,27 @@ describe('saveToProfilePipeline — NEED_COVERAGE gate', () => {
     expect(countGrants(db)).toBe(1)
   })
 
+  it('ADMITS a title-stated VA emergency row for a veteran-need individual (CI Discover add)', async () => {
+    const veteranContext = {
+      profile: {
+        id: 'p1',
+        primary_type: 'individual_need',
+        state: 'TN',
+        tags: JSON.stringify(['veteran', 'emergency assistance', 'financial assistance']),
+      },
+      sections: { military_service: { veteran: true, needs_emergency_assistance: true } },
+    }
+    const opp = {
+      id: 'opp-va-emergency',
+      title: 'Tennessee Veterans Emergency Assistance',
+      sponsor: 'U.S. Department of Veterans Affairs',
+      source: 'grants_gov',
+      application_url: 'https://www.va.gov/resources/',
+    }
+    const result = await saveToProfilePipeline(db, opp, 'p1', veteranContext, 88, 55)
+    expect(result.saved).toBe(true)
+  })
+
   it('ADMITS a title-stated scholarship that has no structured need vocabulary (inferred education)', async () => {
     const opp = {
       id: 'opp-silent',
