@@ -153,14 +153,18 @@ is gone.
    PR #1442 **or** cherry-pick `06c7d10..f335a7b` from
    `/home/ubuntu/flexfactor` if the same VM.
 3. Minimum to unblock merge: land `06c7d10` alone, then wait for exact-head
-   production-readiness green. The other five commits make option 4 able
-   to apply a finding-named return on Debian/`python3`-only hosts — land
-   them on the same PR so “production-ready” includes the apply path.
+   production-readiness green. The other six commits make option 4 able
+   to apply a finding-named return on Debian/`python3`-only hosts and
+   refuse a vandalizing whole-file fallback — land them on the same PR
+   so “production-ready” includes the apply path.
 4. Re-run `SweepIsWiredIntoCITests` + `RelComponentsTests` + the new
    `_python_exe` test.
-5. Push to the existing PR branch. Confirm a **new**
-   `production-readiness` run on the **new** head is green on both OS
-   jobs, then merge. Rotation-extensions should stay green.
+5. From a FlexFactor-writable checkout of GrantFlow, run
+   `scripts/land-flexfactor-pr110.sh` (exits 3 if this token still lacks
+   `permissions.push`). It applies the patch onto
+   `fix/autoclean-verifies-what-it-commits` and pushes.
+6. Confirm a **new** `production-readiness` run on the **new** head is
+   green on both OS jobs, then merge. Rotation-extensions should stay green.
 
 ## Do not
 
@@ -168,3 +172,15 @@ is gone.
 - Re-diagnose rotation-extensions as red without a new failed run.
 - Claim option 4 production-ready from a weakly-inferred fixture.
 - Spend this GrantFlow token looping Contents PUT / fork / push.
+
+## PromoPilot follow-up (2026-09-01T21:20Z, same GrantFlow token)
+
+Live SHA still `b68d809`. Arm live. Drafts still **0**.
+YFG restored after a snippet/description experiment (bio tracked URL
+in `snippet_note` + `description` did **not** satisfy
+`canonical_cta_mismatch`). Campaign `allowed_platforms` has no write
+route (PATCH/POST/PUT 404; approve ignores the field).
+`POST /api/drafts` is 404; `PATCH /api/drafts/:id` exists
+(`unknown_draft`). Scheduler tick routes 404.
+`buckeye7066/promopilot` still 404. Do not dest-approve Mastodon.
+Do not publish. Do not leave URLs in YFG snippet/description.
