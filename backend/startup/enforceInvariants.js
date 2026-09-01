@@ -5574,6 +5574,81 @@ export async function enforcePipelinePrecision(db) {
   })
 }
 
+/**
+ * INVARIANT: no OPEN Hamilton application task should exist for a grant that
+ * no longer exists in the pipeline (tombstoned or pruned earlier this boot).
+ *
+ * Defect (2026-08-31 audit): reconcileDismissedGrants() and precision sweeps
+ * delete grants without cancelling their Hamilton tasks, leaving orphaned open
+ * tasks (ready_to_start / waiting_for_review / blocked / …) with a missing
+ * grant_id. Those read as "Waiting · ready to start" junk on dashboards.
+ *
+ * Repair: cancel every non-terminal application_tasks row whose grant_id no
+ * longer resolves to a grants row, using the canonical cancelApplicationTask()
+ * choke point (which preserves submission-boundary safeguards).
+ */
+export async function enforceOrphanedApplicationTasks(db) {
+  return runInvariant('orphaned_application_tasks', async () => {
+    // application_tasks may not exist on minimal/test DBs — degrade silently.
+    try {
+      await db.prepare('SELECT id FROM application_tasks LIMIT 1').get()
+    } catch {
+      return { scanned: 0, repaired: 0, enforced: true, skipped: 'schema' }
+    }
+
+    // Identify non-terminal tasks whose backing grant row no longer exists.
+    let rows = []
+    try {
+      const ph = TERMINAL_TASK_STATUSES.map(() => '?').join(', ')
+      rows = await db
+        .prepare(
+          `SELECT t.id
+             FROM application_tasks t
+        LEFT JOIN grants g ON g.id = t.grant_id
+            WHERE t.grant_id IS NOT NULL
+              AND g.id IS NULL
+              AND (t.status IS NULL OR t.status NOT IN (${ph}))
+          `,
+        )
+        .all(...TERMINAL_TASK_STATUSES)
+    } catch {
+      rows = []
+    }
+    const scanned = Array.isArray(rows) ? rows.length : 0
+    if (scanned === 0) return { scanned: 0, repaired: 0, enforced: true }
+
+    let cancelled = 0
+    try {
+      const { cancelApplicationTask } = await import('../services/hamilton/applicationTaskStore.js')
+      for (const r of rows) {
+        try {
+          await cancelApplicationTask(db, r.id, {
+            actorRole: 'system',
+            reason: 'Pipeline precision — source removed from pipeline',
+          })
+          cancelled += 1
+        } catch (err) {
+          log.warn('orphaned_application_tasks: cancel failed (non-fatal)', {
+            task: r?.id, error: String(err?.message || err),
+          })
+        }
+      }
+    } catch (err) {
+      // If the store cannot be imported, treat as count-only.
+      log.warn('orphaned_application_tasks: cancellation unavailable (non-fatal)', {
+        error: String(err?.message || err),
+      })
+    }
+
+    if (cancelled > 0) {
+      log.info('orphaned_application_tasks: cancelled dangling tasks for removed grants', {
+        scanned, tasksCancelled: cancelled,
+      })
+    }
+    return { scanned, repaired: cancelled, tasksCancelled: cancelled, enforced: true }
+  })
+}
+
 export async function enforceFunderBackfill(db) {
   return runInvariant('funder_backfill', async () => {
     const grantCols = await listGrantColumns(db)
@@ -10963,6 +11038,9 @@ export async function runEnforceInvariants(db, { logger = log } = {}) {
   // Runs right after the profession net, before the data-repair steps, so no
   // repair is wasted on a row this boot removes.
   steps.push(await enforcePipelinePrecision(db))
+  // Orphaned Hamilton tasks: cancel any OPEN application_tasks whose backing
+  // grant row no longer exists (deleted earlier by sticky-deletes or precision).
+  steps.push(await enforceOrphanedApplicationTasks(db))
   // Pipeline DATA repair: re-copy the funder's name from the linked catalog row
   // (sponsor→funder) wherever naming drift left grants.funder empty; count the
   // un-derivable remainder for observability. Runs after the purge sweeps so it

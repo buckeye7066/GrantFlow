@@ -1219,7 +1219,7 @@ describe('enforceInvariants — runner', () => {
     // + pipeline_precision (2026-08-22, owner order 2026-08-21).
     // + mission_lane_match_scope (2026-08-22, the four-profile measurement).
     // + shared_listing_application_targets (2026-08-23, Coolidge/Live Más).
-    expect(summary.ran).toBe(66)
+    expect(summary.ran).toBe(67)
     expect(summary.failed).toBe(0)
     expect(summary.steps.map((s) => s.name)).toEqual([
       'sticky_deletes',
@@ -1322,6 +1322,7 @@ describe('enforceInvariants — runner', () => {
       // verifier as a boot net — declared need + real/relatable + qualifies;
       // early rows tombstoned, protected rows re-labeled.
       'pipeline_precision',
+      'orphaned_application_tasks',
       'funder_backfill',
       'profile_display_name_not_doubled',
       'profile_income_reconciliation',
