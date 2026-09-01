@@ -63,10 +63,11 @@ Do not `git add flexfactor` (symlink to `/home/ubuntu/src/flexfactor`).
 | `b15f048` | `tests/test_*.py` without packaging → `is_python=True`, unittest discover |
 | `426193e` | `_apply_named_return_statement` before the model |
 | `e1d22d7` | `_python_exe()` = `sys.executable`; py_compile + fixture tests use it |
+| `f335a7b` | refuse whole-file fallback when the defect anchor/excerpt is already gone |
 
 Portable patch (also copied into this GrantFlow tree):
 `docs/agent-sync/flexfactor-pr110-landing.patch`
-(`git format-patch --stdout 634250c..HEAD`, 6 commits).
+(`git format-patch --stdout 634250c..HEAD`, 7 commits).
 Same bytes on this host at `/tmp/flexfactor-pr110-landing.patch`.
 
 Verified locally this session (`python3 -m unittest … -q`):
@@ -148,8 +149,9 @@ is gone.
 ## What the next FlexFactor-scoped agent must do
 
 1. Check out `fix/autoclean-verifies-what-it-commits` at `634250c`.
-2. Apply `/tmp/flexfactor-pr110-landing.patch` **or** cherry-pick
-   `06c7d10..e1d22d7` from `/home/ubuntu/flexfactor` if the same VM.
+2. Apply `docs/agent-sync/flexfactor-pr110-landing.patch` from GrantFlow
+   PR #1442 **or** cherry-pick `06c7d10..f335a7b` from
+   `/home/ubuntu/flexfactor` if the same VM.
 3. Minimum to unblock merge: land `06c7d10` alone, then wait for exact-head
    production-readiness green. The other five commits make option 4 able
    to apply a finding-named return on Debian/`python3`-only hosts — land
