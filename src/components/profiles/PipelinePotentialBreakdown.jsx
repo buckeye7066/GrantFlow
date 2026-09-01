@@ -37,6 +37,7 @@ import { safeHttpUrl } from "@/lib/safeUrl"
 import { Money } from "@/components/ui/Money"
 import { openWithHamiltonWatching } from "@/components/hamilton/hamiltonWatchedOpen"
 import { useToast } from "@/components/ui/use-toast"
+import { computeClientPipelineDollar } from "@/utils/pipelineDollarClient"
 
 // Stage label + tone, mirroring the pipeline board (KanbanBoard STATUSES) and
 // covering the legacy status names the backend still tracks. Anything unmapped
@@ -93,31 +94,44 @@ const usd = new Intl.NumberFormat("en-US", {
 })
 
 function formatAmount(item) {
-  const contribution = estimatedValue(item)
-  if (Number.isFinite(contribution) && contribution > 0) {
-    return usd.format(Math.round(contribution))
+  // Canonical amount being totaled (server-preferred, conservative client fallback)
+  const canonical = (() => {
+    // Awarded rows preserve awarded amount
+    const awarded = Number(item?.amount_awarded)
+    if (String(item?.status || '').toLowerCase() === 'awarded' && Number.isFinite(awarded) && awarded > 0) {
+      return awarded
+    }
+    // Prefer server-provided field; else conservative client helper
+    const server = Number(item?.pipeline_dollar_value)
+    if (Number.isFinite(server)) return server
+    return computeClientPipelineDollar(item)
+  })()
+
+  // Produce a clearly-labeled published range/figure for secondary display
+  const req = Number(item?.amount_requested)
+  const min = Number(item?.amount_min)
+  const max = Number(item?.amount_max)
+  const hasMin = Number.isFinite(min) && min > 0
+  const hasMax = Number.isFinite(max) && max > 0
+  const rawPublished =
+    Number.isFinite(req) && req > 0
+      ? usd.format(Math.round(req))
+      : hasMin && hasMax
+        ? (min === max ? usd.format(Math.round(min)) : `${usd.format(Math.round(min))} – ${usd.format(Math.round(max))}`)
+        : hasMin
+          ? `From ${usd.format(Math.round(min))}`
+          : hasMax
+            ? `Up to ${usd.format(Math.round(max))}`
+            : (amountTextFallback(item) || null)
+
+  if (!Number.isFinite(canonical) || canonical <= 0) {
+    // Zero-contribution rows
+    return rawPublished ? `No fixed award amount (Published: ${rawPublished})` : 'No fixed award amount'
   }
-
-  const decision = String(item?.match_decision || "").trim().toLowerCase()
-  const eligibility = String(item?.eligibility_status || "").trim().toLowerCase()
-  if (decision === "reject" || eligibility === "ineligible") return "Not counted"
-
-  const kind = String(item?.opportunity_kind || "").trim().toLowerCase()
-  if (["directory", "referral", "school_portal", "past_award_intel", "benefit"].includes(kind)) {
-    return "No fixed award amount"
-  }
-
-  const rawCandidates = [item?.amount_requested, item?.amount_max, item?.amount_min]
-  const hasRawPositiveAmount = rawCandidates.some((value) => {
-    const numeric = Number(value)
-    return Number.isFinite(numeric) && numeric > 0
-  })
-  const serverValue = Number(item?.pipeline_dollar_value)
-  if (Number.isFinite(serverValue) && serverValue === 0 && hasRawPositiveAmount) {
-    return "No fixed award amount"
-  }
-
-  return amountTextFallback(item) || "Amount not listed"
+  const main = usd.format(Math.round(canonical))
+  // If canonical differs from raw published, include it as secondary info
+  if (rawPublished && rawPublished !== main) return `${main} (Published: ${rawPublished})`
+  return main
 }
 
 function formatDeadline(deadline) {
@@ -143,7 +157,6 @@ const PHASE_ORDER = ["Preparing", "Applied", "Approved"]
 // Best-estimate dollar value for a source (used for per-phase subtotals so each
 // section sums to something meaningful even when a source has a range, not a
 // single requested figure).
-import { computeClientPipelineDollar } from '../../utils/pipelineDollarClient'
 
 function estimatedValue(item) {
   // Preserve awarded first; then prefer server; else client fallback

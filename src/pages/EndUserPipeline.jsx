@@ -165,7 +165,7 @@ export default function EndUserPipeline() {
 
   const selectedGrant = grants.find((grant) => String(grant.id) === String(selectedGrantId)) || null
   const selectedUrl = grantUrl(selectedGrant)
-  const potentialTotal = grants.reduce((sum, grant) => sum + grantValue(grant), 0)
+  const potentialTotal = grants.reduce((sum, grant) => sum + computeClientPipelineDollar(grant), 0)
 
   const selectedSources = selectedGrant
     ? [{
@@ -282,7 +282,9 @@ export default function EndUserPipeline() {
                       </div>
                       <div className="w-full rounded-xl border border-border bg-background px-4 py-3 text-left sm:w-auto sm:text-right">
                         <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Potential amount</p>
-                        <p className="mt-1 text-xl font-bold text-foreground">{grantValue(selectedGrant) ? currency.format(grantValue(selectedGrant)) : 'Not listed'}</p>
+                        <p className="mt-1 text-xl font-bold text-foreground">
+                          {computeClientPipelineDollar(selectedGrant) ? currency.format(computeClientPipelineDollar(selectedGrant)) : 'No fixed award amount'}
+                        </p>
                       </div>
                     </div>
                   </CardHeader>
@@ -383,7 +385,7 @@ export default function EndUserPipeline() {
                         <span className="capitalize">{statusLabel(grant.status)}</span>
                         <span>·</span>
                         <span>{formatPipelineDeadline(grant)}</span>
-                        {grantValue(grant) ? <><span>·</span><span>{currency.format(grantValue(grant))}</span></> : null}
+                        {computeClientPipelineDollar(grant) ? <><span>·</span><span>{currency.format(computeClientPipelineDollar(grant))}</span></> : null}
                       </div>
                     </button>
                   )

@@ -41,7 +41,6 @@ describe('computeClientPipelineDollar (client fallback)', () => {
     const g = { status: 'submitted', amount_min: 1000, amount_max: 5000 }
     expect(computeClientPipelineDollar(g)).toBe(5000)
   })
-
   it('ignores non-positive client fallback amounts', () => {
     expect(computeClientPipelineDollar({ amount_requested: -10, amount_max: 5000 })).toBe(5000)
     expect(computeClientPipelineDollar({ amount_min: -1, amount_max: 5 })).toBe(5)

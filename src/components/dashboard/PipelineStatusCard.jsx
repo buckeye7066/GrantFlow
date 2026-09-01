@@ -69,7 +69,7 @@ export default function PipelineStatusCard({ stats = {}, isLoading, hasError = f
     )
     return {
       count: active.length,
-      amount: active.reduce((sum, grant) => sum + grantValue(grant), 0),
+      amount: active.reduce((sum, grant) => sum + computeClientPipelineDollar(grant), 0),
     }
   }, [grantsQuery.data, isAdmin])
 

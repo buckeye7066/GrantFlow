@@ -42,6 +42,16 @@ export function computeClientPipelineDollar(grant) {
   // Stale/offline clients must still honor the same exclusion contract.
   if (!fallbackCountsTowardPipelineDollars(grant)) return 0
 
+  // Zeroize explicit ineligible/reject and no-per-award kinds on fallback
+  const elig = String(grant?.eligibility_status || '').trim().toLowerCase()
+  if (elig === 'ineligible') return 0
+  const decision = String(grant?.match_decision || '').trim().toUpperCase()
+  if (decision === 'REJECT') return 0
+  const kind = String(
+    grant?.opportunity_kind ?? grant?.funding_opportunity_kind ?? grant?.kind ?? '',
+  ).trim().toLowerCase()
+  if (['directory', 'referral', 'school_portal', 'benefit', 'past_award_intel'].includes(kind)) return 0
+
   const requested = positive(grant.amount_requested)
   const min = positive(grant.amount_min)
   const max = positive(grant.amount_max)

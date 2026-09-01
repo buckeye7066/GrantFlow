@@ -59,6 +59,17 @@ export function validatePipelineDollarLedgerObject(ledger) {
   assertObject(ledger.safety, 'safety')
   assertObject(ledger.summary, 'summary')
   if (!Array.isArray(ledger.profiles)) throw new Error('profiles must be an array')
+  // Scope must be an explicit, bounded, unique list of profile ids
+  if (!Array.isArray(ledger.scope) || ledger.scope.length === 0) {
+    throw new Error('scope must be a non-empty profile-id array')
+  }
+  if (ledger.scope.length > MAX_SCOPED_PROFILES) {
+    throw new Error(`scope exceeds ${MAX_SCOPED_PROFILES} profile ids`)
+  }
+  const uniqueScope = new Set(ledger.scope.map((v) => String(v || '').trim()))
+  for (const id of uniqueScope) {
+    if (!PROFILE_ID_RE.test(id)) throw new Error(`invalid profile id in scope: ${String(id)}`)
+  }
   if (ledger.safety.database_role !== 'grantflow_auditor') throw new Error('wrong database role')
   if (ledger.safety.non_superuser !== true) throw new Error('non-superuser proof missing')
   if (ledger.safety.transaction_read_only !== true) throw new Error('read-only proof missing')
@@ -73,7 +84,6 @@ export function validatePipelineDollarLedgerObject(ledger) {
     if (!scopedProfileIds.has(profileId)) throw new Error(`reported profile is outside scope: ${profileId}`)
     if (reportedProfileIds.has(profileId)) throw new Error(`duplicate reported profile: ${profileId}`)
     reportedProfileIds.add(profileId)
-
     for (const key of ['old_total', 'corrected_total', 'overstatement']) {
       const value = Number(profile[key])
       if (!Number.isFinite(value) || value < 0) throw new Error(`${key} is invalid`)
