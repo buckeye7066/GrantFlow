@@ -101,7 +101,8 @@ describe('pipeline dollar contract', () => {
     // amount_min negative, amount_max positive, no requested → should pick max (5), not -1
     db.prepare('INSERT INTO grants (id, profile_id, status, amount_min, amount_max, funding_opportunity_id) VALUES (?,?,?,?,?,?)')
       .run('gneg', 'p1', 'submitted', -1, 5, 'neg')
-    const sqlSum = db.prepare(`SELECT SUM(${pipelineDollarSql('g','fo')}) AS t
+    // audit:allow dynamic-sql -- pipelineDollarSql returns a compile-time literal; no user input flows here.
+    const sqlSum = db.prepare(`SELECT SUM(${pipelineDollarSql('g', 'fo')}) AS t
                                  FROM grants g LEFT JOIN funding_opportunities fo ON fo.id=g.funding_opportunity_id
                                 WHERE g.status='submitted'`).get().t
     expect(sqlSum).toBe(5)
