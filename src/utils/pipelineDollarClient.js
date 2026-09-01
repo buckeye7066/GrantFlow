@@ -24,7 +24,7 @@ export function computeClientPipelineDollar(grant) {
   const max = positive(grant.amount_max)
   const isWide = Boolean(min && max && max > min * WIDE_AWARD_RANGE_RATIO)
 
-  if (requested != null) {
+  if (requested !== null && requested !== undefined) {
     if (isWide && Math.abs(requested - max) <= 0.01) return min ?? requested
     return requested
   }
@@ -33,4 +33,3 @@ export function computeClientPipelineDollar(grant) {
 }
 
 export default { computeClientPipelineDollar, WIDE_AWARD_RANGE_RATIO }
-
