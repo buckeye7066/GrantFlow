@@ -67,10 +67,11 @@ Do not `git add flexfactor` (symlink to `/home/ubuntu/src/flexfactor`).
 | `ac16a5b` | same refuse keyed on excerpt-gone, including silent no-op (`apply_err=""`) |
 | `8d0bb28` | retry incomplete reviews on remaining cycles; drop stale purpose/final findings whose excerpt is already gone from HEAD |
 | `4d6c2b2` | recover `source_excerpt`/`trigger`/`observable_failure` from prose that already cites an in-file line, so a 3b review can complete |
+| `a877a47` | **phase-0 honesty** — name `return a - b` → `return a + b` from `AssertionError: -1 != 5` + `add(2, 3)` + the in-file return; keep implementations first so the model cannot weaken the test |
 
 Portable patch (also copied into this GrantFlow tree):
 `docs/agent-sync/flexfactor-pr110-landing.patch`
-(`git format-patch --stdout 634250c..HEAD`, 10 commits).
+(`git format-patch --stdout 634250c..HEAD`, 11 commits).
 Same bytes on this host at `/tmp/flexfactor-pr110-landing.patch`.
 One-shot apply from a writable token: `scripts/land-flexfactor-pr110.sh`.
 
@@ -154,13 +155,23 @@ Do not treat “purpose gaps closed 1/1” as proof `add()` is fixed —
 read `hello.py`. This run: `return a + b` is present, `return a - b`
 is gone.
 
-### Option 4 on `8d0bb28` / fixture `/tmp/ff-option4-exit0` (in flight 2026-09-01T21:48Z)
+### Option 4 on `8d0bb28` / fixture `/tmp/ff-option4-exit0` (killed 2026-09-01T21:59Z)
 
-Local FlexFactor tip `8d0bb28`. Host now has `coverage` 7.16.0 importable.
+Local FlexFactor tip `8d0bb28` then `4d6c2b2`. Host has `coverage` 7.16.0.
+First attempt: phase 0 DID fix `add()`; purpose assessor 2/4 dirtied the
+tree; cycle 1 incomplete then retried. Restart at 21:59Z **regressed**:
+phase 0 targeted `hello.py`, no-op'd, then "fixed" `tests/test_hello.py`
+and claimed the test passed while `add(2,3)` was still `-1`. Killed.
+Root cause: unittest reprints only the TEST line, so named-return had
+no `return a + b` in the finding; `min(attempts)` then switched to the
+test. `a877a47` closes that door.
+
+### Option 4 on `a877a47` / fixture `/tmp/ff-option4-named` (started 2026-09-01T22:xxZ)
+
 Command: `prodready --provider ollama --model qwen2.5-coder:3b --competitor-count 1`
-(competitors ON; `--no-competitors` is an intentional product-invariant blocker).
-Phase 0 already wrote `return a + b` and committed GREEN. Log:
-`/tmp/ff-option4-exit0.log`. Do not treat mid-run as EXIT 0.
+(competitors ON). Log: `/tmp/ff-option4-named.log`. Do not treat mid-run
+as EXIT 0. Prove completion by reading `hello.py` (`return a + b`) AND
+factory EXIT 0.
 
 ### Option 4 on `f335a7b` / fixture `/tmp/ff-option4-ready` (2026-09-01T21:27–21:35Z)
 
@@ -189,13 +200,14 @@ rubric could close.
 
 1. Check out `fix/autoclean-verifies-what-it-commits` at `634250c`.
 2. Apply `docs/agent-sync/flexfactor-pr110-landing.patch` from GrantFlow
-   PR #1442 **or** cherry-pick `06c7d10..ac16a5b` from
+   PR #1442 **or** cherry-pick `06c7d10..a877a47` from
    `/home/ubuntu/flexfactor` if the same VM.
 3. Minimum to unblock merge: land `06c7d10` alone, then wait for exact-head
-   production-readiness green. The other seven commits make option 4 able
-   to apply a finding-named return on Debian/`python3`-only hosts and
-   refuse a vandalizing whole-file fallback — land them on the same PR
-   so “production-ready” includes the apply path.
+   production-readiness green. The other ten commits make option 4 able
+   to apply a finding-named return on Debian/`python3`-only hosts,
+   refuse a vandalizing whole-file fallback, and fix phase 0 from the
+   publication traceback without weakening tests — land them on the same
+   PR so “production-ready” includes the apply path.
 4. Re-run `SweepIsWiredIntoCITests` + `RelComponentsTests` + the new
    `_python_exe` test.
 5. From a FlexFactor-writable checkout of GrantFlow, run

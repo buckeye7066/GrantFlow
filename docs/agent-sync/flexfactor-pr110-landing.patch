@@ -1,7 +1,7 @@
 From 06c7d10b61b59047a6cd86018ca5662f6a4e3a5c Mon Sep 17 00:00:00 2001
 From: Cursor Agent <cursoragent@cursor.com>
 Date: Tue, 1 Sep 2026 19:17:46 +0000
-Subject: [PATCH 01/10] fix(ci): run autoclean preverify tests in
+Subject: [PATCH 01/11] fix(ci): run autoclean preverify tests in
  production-readiness
 
 The new flexfactor_autoclean_preverify_tests.py module existed on the
@@ -34,7 +34,7 @@ index 77610ad..ad86ef9 100644
 From 7aab5ec6d9a4846ff3bbd5373c9052bc60078a7a Mon Sep 17 00:00:00 2001
 From: Cursor Agent <cursoragent@cursor.com>
 Date: Tue, 1 Sep 2026 20:33:10 +0000
-Subject: [PATCH 02/10] fix(apply): classify Cross-file dependency as no-fix
+Subject: [PATCH 02/11] fix(apply): classify Cross-file dependency as no-fix
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
 Content-Transfer-Encoding: 8bit
@@ -248,7 +248,7 @@ index 5a051a1..485250a 100644
 From 745255550e22813c8a343b4dbe885e55fd30ef05 Mon Sep 17 00:00:00 2001
 From: Cursor Agent <cursoragent@cursor.com>
 Date: Tue, 1 Sep 2026 20:36:59 +0000
-Subject: [PATCH 03/10] fix(apply): retry silent in-file no-ops and escalate
+Subject: [PATCH 03/11] fix(apply): retry silent in-file no-ops and escalate
 
 A second option-4 run classified Cross-file dependency correctly
 but the author then returned changed=false with notes=None, which
@@ -387,7 +387,7 @@ index 485250a..4b7c974 100644
 From b15f048f9174dde33162b35101a68020f5c2c651 Mon Sep 17 00:00:00 2001
 From: Cursor Agent <cursoragent@cursor.com>
 Date: Tue, 1 Sep 2026 20:42:51 +0000
-Subject: [PATCH 04/10] fix(stack): detect unpacked Python fixtures via tests/
+Subject: [PATCH 04/11] fix(stack): detect unpacked Python fixtures via tests/
 
 Option 4's hello.py fixture has no pyproject/requirements, so
 _detect_stack left is_python=False and test_cmd empty. The author
@@ -457,7 +457,7 @@ index 4b7c974..f692711 100644
 From 426193e4b3dab7950299347104c1a78e1c0b7424 Mon Sep 17 00:00:00 2001
 From: Cursor Agent <cursoragent@cursor.com>
 Date: Tue, 1 Sep 2026 20:54:34 +0000
-Subject: [PATCH 05/10] fix(apply): apply a finding-named return when the model
+Subject: [PATCH 05/11] fix(apply): apply a finding-named return when the model
  cannot
 
 Free local authors kept reverting syntax-invalid hello.py patches on
@@ -742,7 +742,7 @@ index f692711..622570f 100644
 From e1d22d7be766d138ad4395fcd32fbd0d3e79c357 Mon Sep 17 00:00:00 2001
 From: Cursor Agent <cursoragent@cursor.com>
 Date: Tue, 1 Sep 2026 21:04:28 +0000
-Subject: [PATCH 06/10] fix(apply): compile Python fixes with this interpreter
+Subject: [PATCH 06/11] fix(apply): compile Python fixes with this interpreter
 
 Bare `python` is missing on Debian/cloud images, so the per-file
 py_compile gate rolled back every correct named-return write with
@@ -836,7 +836,7 @@ index 622570f..f725f37 100644
 From f335a7b59569c2e80f3b05e4a7394633ecb53073 Mon Sep 17 00:00:00 2001
 From: Cursor Agent <cursoragent@cursor.com>
 Date: Tue, 1 Sep 2026 21:20:57 +0000
-Subject: [PATCH 07/10] fix(apply): refuse whole-file fallback when the defect
+Subject: [PATCH 07/11] fix(apply): refuse whole-file fallback when the defect
  anchor is already gone
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
@@ -919,7 +919,7 @@ index f725f37..f6dfe60 100644
 From ac16a5bed3dc02cbd43ee8ca1d020e63a0ad5532 Mon Sep 17 00:00:00 2001
 From: Cursor Agent <cursoragent@cursor.com>
 Date: Tue, 1 Sep 2026 21:38:27 +0000
-Subject: [PATCH 08/10] fix(apply): refuse whole-file fallback when the defect
+Subject: [PATCH 08/11] fix(apply): refuse whole-file fallback when the defect
  excerpt is already gone
 
 The first missing-anchor retry then a silent no-op (apply_err empty)
@@ -977,7 +977,7 @@ index f6dfe60..606868b 100644
 From 8d0bb28f780006adccbfcf72d5ee7d509d0f060b Mon Sep 17 00:00:00 2001
 From: Cursor Agent <cursoragent@cursor.com>
 Date: Tue, 1 Sep 2026 21:47:14 +0000
-Subject: [PATCH 09/10] fix(apply): retry incomplete reviews and drop stale
+Subject: [PATCH 09/11] fix(apply): retry incomplete reviews and drop stale
  certifier claims
 
 qwen 3b option-4 runs aborted after cycle 1 when every finding failed the
@@ -1261,7 +1261,7 @@ index 606868b..6bd15e3 100644
 From 4d6c2b27d065fb33b4c53dba9cd0e35a3d9fc09c Mon Sep 17 00:00:00 2001
 From: Cursor Agent <cursoragent@cursor.com>
 Date: Tue, 1 Sep 2026 21:59:12 +0000
-Subject: [PATCH 10/10] fix(review): recover excerpts the 3b named in prose
+Subject: [PATCH 10/11] fix(review): recover excerpts the 3b named in prose
 
 qwen 3b titles a real defect (duplicate return) and leaves
 source_excerpt/trigger/observable_failure empty, so the evidence gate
@@ -1376,6 +1376,386 @@ index 6bd15e3..b36485a 100644
      def test_stale_review_finding_is_gone_from_current_tree_not_the_patch(self):
          haystack = "def add(a, b):\n    return a + b\n"
          self.assertTrue(ff._stale_review_finding(
+-- 
+2.43.0
+
+
+From a877a4745981f447699998bc73101f30059a3026 Mon Sep 17 00:00:00 2001
+From: Cursor Agent <cursoragent@cursor.com>
+Date: Tue, 1 Sep 2026 22:09:10 +0000
+Subject: [PATCH 11/11] fix(baseline): name the publication return pair so
+ phase 0 cannot weaken tests
+
+Unittest reprints only the test line (assertEqual(add(2, 3), 5) / -1 != 5),
+not return a - b. Derive both sides from those numbers plus the in-file
+return, apply named-return before the model, and keep implementations first
+while they remain eligible. Also parse Python from/import so a unittest-only
+traceback still reaches hello.py.
+---
+ flexfactor.py       | 179 ++++++++++++++++++++++++++++++++++++++------
+ flexfactor_tests.py | 101 +++++++++++++++++++++++++
+ 2 files changed, 257 insertions(+), 23 deletions(-)
+
+diff --git a/flexfactor.py b/flexfactor.py
+index bcde9a2..5b1670c 100644
+--- a/flexfactor.py
++++ b/flexfactor.py
+@@ -12228,8 +12228,26 @@ def _test_import_candidates(project_dir: str, test_rel: str) -> list[str]:
+     refs = re.findall(
+         r"(?:\bfrom\s+|\brequire\s*\(\s*)['\"](\.{1,2}/[^'\"]+)['\"]",
+         text)
++    # Python: `from hello import add` / `import hello`. The JS relative
++    # matcher above never sees these, so a unittest-only traceback used to
++    # name only the test and phase 0 "fixed" the assertion.
++    py_mods = [
++        m.group(1) or m.group(2)
++        for m in re.finditer(
++            r"(?m)^\s*(?:from\s+([A-Za-z_][\w.]*)\s+import|import\s+([A-Za-z_][\w.]*))",
++            text)
++        if (m.group(1) or m.group(2))
++    ]
+     out: list[str] = []
+     base_dir = os.path.dirname(test_rel)
++
++    def _consider(rel: str) -> None:
++        rel = _canon_rel(rel)
++        if (_TEST_FILE_RE.search(rel) is None
++                and _read_text_and_sha(project_dir, rel) is not None
++                and rel not in out):
++            out.append(rel)
++
+     for ref in refs:
+         stem = _canon_rel(os.path.normpath(os.path.join(base_dir, ref)))
+         choices = [stem] if os.path.splitext(stem)[1] else []
+@@ -12237,10 +12255,14 @@ def _test_import_candidates(project_dir: str, test_rel: str) -> list[str]:
+         choices += [_canon_rel(os.path.join(stem, "index" + ext))
+                     for ext in _SOURCE_EXTENSIONS]
+         for rel in choices:
+-            if (_TEST_FILE_RE.search(rel) is None
+-                    and _read_text_and_sha(project_dir, rel) is not None
+-                    and rel not in out):
+-                out.append(rel)
++            _consider(rel)
++    for mod in py_mods:
++        stem = mod.replace(".", "/")
++        for prefix in (stem, _canon_rel(os.path.join(base_dir, stem))):
++            _consider(prefix)
++            for ext in _SOURCE_EXTENSIONS:
++                _consider(prefix + ext)
++            _consider(os.path.join(prefix, "__init__.py"))
+     return out
+ 
+ 
+@@ -12265,9 +12287,9 @@ def _publication_failure_paths(project_dir: str, gate_log: str) -> list[str]:
+                 if impl not in implementations:
+                     implementations.append(impl)
+             # Conventional sibling fallback when a test has no parseable import.
+-            # `_test_import_candidates` only understands JS relative imports, so
+-            # for Python this fallback is the ONLY route to the implementation:
+-            # `test_motionsync.py` -> `motionsync.py`, `foo_test.py` -> `foo.py`.
++            # Python `from hello import` is now parsed; this remains the route
++            # for `test_motionsync.py` -> `motionsync.py` when the test does
++            # not import the implementation by name.
+             for pattern, repl in (
+                     (r"\.(?:test|spec)(?=\.[^.]+$)", ""),        # foo.test.js
+                     (r"(^|/)test_(?=[^/]+\.(?:py)$)", r"\1"),    # test_foo.py
+@@ -12289,28 +12311,137 @@ def _publication_failure_paths(project_dir: str, gate_log: str) -> list[str]:
+     return implementations + tests
+ 
+ 
+-def _publication_failure_finding(rel: str, gate_log: str) -> dict:
++_ASSERTION_NE_RX = re.compile(
++    r"AssertionError:\s*(-?\d+(?:\.\d+)?)\s*!=\s*(-?\d+(?:\.\d+)?)")
++_CALL_TWO_NUMS_RX = re.compile(
++    r"\b[A-Za-z_][A-Za-z0-9_]*\(\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)\s*\)")
++
++
++def _publication_return_stmts(text: str) -> list[str]:
++    out: list[str] = []
++    for match in _RETURN_STMT_RX.finditer(str(text or "")):
++        stmt = _normalize_return_stmt(
++            re.sub(r"(?i)^return(?:s|ing)?\b", "return", match.group(0), count=1))
++        if stmt and stmt != "return" and stmt not in out:
++            out.append(stmt)
++    return out
++
++
++def _publication_return_pair(gate_log: str, file_text: str = ""
++                             ) -> tuple[str, str] | None:
++    """Name the in-file defect return and the replacement the assertion requires.
++
++    A unittest AssertionError traceback names the TEST line
++    (``assertEqual(add(2, 3), 5)`` / ``-1 != 5``) and often does NOT reprint
++    the implementation (``return a - b``). Phase 0 must still apply the
++    named-return without asking the model to "fix" the test. Both sides are
++    determined by the log's numbers plus a return that is actually in the
++    targeted file — nothing is invented.
++    """
++    ae = _ASSERTION_NE_RX.search(str(gate_log or ""))
++    call = _CALL_TWO_NUMS_RX.search(str(gate_log or ""))
++    if not ae or not call:
++        return None
++    try:
++        actual = float(ae.group(1))
++        expected = float(ae.group(2))
++        left = float(call.group(1))
++        right = float(call.group(2))
++    except ValueError:
++        return None
++
++    def _close(u: float, v: float) -> bool:
++        return abs(u - v) < 1e-9
++
++    ops = (
++        ("+", lambda a, b: a + b),
++        ("-", lambda a, b: a - b),
++        ("*", lambda a, b: a * b),
++    )
++    src = str(file_text or "")
++    haystack = src + "\n" + str(gate_log or "")
++    for stmt in _publication_return_stmts(haystack):
++        if src:
++            line_rx = re.compile(
++                r"(?m)^[ \t]*" + re.escape(stmt) + r"[ \t]*(#.*)?$")
++            if not line_rx.search(src):
++                continue
++        ids = [i for i in re.findall(r"[A-Za-z_][A-Za-z0-9_]*", stmt)
++               if i != "return"]
++        if len(ids) != 2:
++            continue
++        actual_op = None
++        expect_op = None
++        for op, fn in ops:
++            try:
++                val = fn(left, right)
++            except Exception:
++                continue
++            if _close(val, actual):
++                actual_op = op
++            if _close(val, expected):
++                expect_op = op
++        if expect_op is None or actual_op is None or expect_op == actual_op:
++            continue
++        cur = re.search(r"[\+\-\*/%]", stmt)
++        if not cur or cur.group(0) != actual_op:
++            continue
++        replacement = f"return {ids[0]} {expect_op} {ids[1]}"
++        if replacement != stmt:
++            return stmt, replacement
++    return None
++
++
++def _publication_repair_pool(eligible: list[str]) -> list[str]:
++    """Keep implementations first while any remain eligible.
++
++    ``min(attempts)`` otherwise switches to the test after one failed
++    implementation attempt — live option 4 2026-09-01 then "fixed" the
++    test and left ``return a - b`` in place.
++    """
++    impls = [p for p in eligible if not _TEST_FILE_RE.search(p)]
++    return impls or list(eligible)
++
++
++def _publication_failure_finding(rel: str, gate_log: str,
++                                 file_text: str = "") -> dict:
+     log = _tail(str(gate_log or ""), 80)
+     is_test = bool(_TEST_FILE_RE.search(rel))
+-    instruction = (
+-        "Diagnose why this exact required publication test fails and correct the "
+-        "underlying product behavior. Preserve and satisfy the test; do not weaken, "
+-        "delete, skip, or loosen its assertions."
+-        if not is_test else
+-        "Correct this test only if its timing/setup is demonstrably wrong or "
+-        "nondeterministic. Do not delete, skip, or weaken the assertion; retain the "
+-        "same behavioral contract and make it test the real product behavior reliably."
+-    )
++    pair = None if is_test else _publication_return_pair(log, file_text)
++    if pair:
++        instruction = (
++            f"change `{pair[0]}` to `{pair[1]}`. "
++            "Preserve and satisfy the test; do not weaken, "
++            "delete, skip, or loosen its assertions."
++        )
++        excerpt = pair[0]
++    else:
++        instruction = (
++            "Diagnose why this exact required publication test fails and correct the "
++            "underlying product behavior. Preserve and satisfy the test; do not weaken, "
++            "delete, skip, or loosen its assertions."
++            if not is_test else
++            "Correct this test only if its timing/setup is demonstrably wrong or "
++            "nondeterministic. Do not delete, skip, or weaken the assertion; retain the "
++            "same behavioral contract and make it test the real product behavior reliably."
++        )
++        excerpt = ""
++    problem = ("The repository's required publication command fails before any "
++               "FlexFactor changes can be safely published. Exact failure output:\n"
++               + log)
++    if pair:
++        problem += (
++            f"\nNamed return pair from this output: {pair[0]} instead of {pair[1]}")
+     return {
+         "severity": "critical",
+         "line": 1,
+         "title": "Required publication suite is red",
+-        "problem": ("The repository's required publication command fails before any "
+-                    "FlexFactor changes can be safely published. Exact failure output:\n"
+-                    + log),
++        "problem": problem,
+         "fix": instruction,
++        "source_excerpt": excerpt,
+         "trigger": "Run the repository's configured publication test suite.",
+         "failure": "The suite exits non-zero, so every otherwise-valid repair is rejected.",
++        "observable_failure": log[:400],
+     }
+ 
+ 
+@@ -12369,13 +12500,14 @@ def _repair_publication_failure(author, cross, project_dir: str, stack: dict,
+             if (state_attempts.get((p, failure_fingerprint), 0) < 2
+                 and attempts.get(p, 0) < target_attempt_cap)
+         ]
+-        if not eligible:
++        pool = _publication_repair_pool(eligible)
++        if not pool:
+             notes.append(
+                 "publication failure made no progress and did not name another repairable source file"
+             )
+             break
+         rel = min(
+-            eligible,
++            pool,
+             key=lambda p: (attempts.get(p, 0),
+                            state_attempts.get((p, failure_fingerprint), 0),
+                            paths.index(p)),
+@@ -12389,7 +12521,8 @@ def _repair_publication_failure(author, cross, project_dir: str, stack: dict,
+                 notes.append(f"{rel}: contained baseline read refused")
+                 continue
+             snapshots[rel] = before
+-        finding = _publication_failure_finding(rel, current_log)
++        finding = _publication_failure_finding(
++            rel, current_log, file_text=snapshots[rel])
+         print(f"  [baseline-repair] round {round_no}/{round_cap}: targeting {rel} "
+               "from the exact failing publication output")
+         try:
+diff --git a/flexfactor_tests.py b/flexfactor_tests.py
+index b36485a..d8d98f2 100644
+--- a/flexfactor_tests.py
++++ b/flexfactor_tests.py
+@@ -4457,6 +4457,58 @@ class RelComponentsTests(unittest.TestCase):
+         self.assertIsNone(ff._apply_named_return_statement(
+             src, [{"source_excerpt": "return a - b"}]))
+ 
++    def test_publication_finding_names_return_pair_from_assertion_and_file(self):
++        """Live option 4 2026-09-01: unittest reprints only the TEST line.
++
++        ``AssertionError: -1 != 5`` + ``add(2, 3)`` plus ``return a - b`` in
++        hello.py is enough to name both sides so named-return fires before
++        the model can weaken the test.
++        """
++        log = (
++            "FAIL: test_add (test_hello.TestHello.test_add)\n"
++            "  File \"/tmp/ff/tests/test_hello.py\", line 9, in test_add\n"
++            "    self.assertEqual(add(2, 3), 5)\n"
++            "AssertionError: -1 != 5\n"
++        )
++        src = "def add(a, b):\n    return a - b\n\ndef greet(name):\n    return f\"hello {name}\"\n"
++        finding = ff._publication_failure_finding("hello.py", log, file_text=src)
++        self.assertEqual(finding["source_excerpt"], "return a - b")
++        self.assertIn("return a + b", finding["fix"])
++        self.assertIn("do not weaken", finding["fix"].lower())
++        out = ff._apply_named_return_statement(src, [finding])
++        self.assertIsNotNone(out)
++        self.assertIn("return a + b", out)
++        self.assertNotIn("return a - b", out)
++        self.assertIn("return f\"hello {name}\"", out)
++
++    def test_publication_repair_pool_keeps_implementation_while_eligible(self):
++        self.assertEqual(
++            ff._publication_repair_pool(["hello.py", "tests/test_hello.py"]),
++            ["hello.py"])
++        self.assertEqual(
++            ff._publication_repair_pool(["tests/test_hello.py"]),
++            ["tests/test_hello.py"])
++
++    def test_python_from_import_reaches_repo_root_implementation(self):
++        import tempfile
++        with tempfile.TemporaryDirectory() as tmp:
++            with open(os.path.join(tmp, "hello.py"), "w", encoding="utf-8") as fh:
++                fh.write("def add(a, b):\n    return a - b\n")
++            os.makedirs(os.path.join(tmp, "tests"))
++            with open(os.path.join(tmp, "tests", "test_hello.py"), "w",
++                      encoding="utf-8") as fh:
++                fh.write("from hello import add\n")
++            hits = ff._test_import_candidates(tmp, "tests/test_hello.py")
++            self.assertIn("hello.py", hits)
++            log = (
++                f'  File "{os.path.join(tmp, "tests", "test_hello.py")}", '
++                "line 2, in test_add\n"
++                "    self.assertEqual(add(2, 3), 5)\n"
++                "AssertionError: -1 != 5\n"
++            )
++            paths = ff._publication_failure_paths(tmp, log)
++            self.assertEqual(paths[0], "hello.py")
++
+     def test_gap_to_finding_copies_evidence_into_source_excerpt(self):
+         f = ff._gap_to_finding({
+             "title": "add subtracts",
+@@ -16653,6 +16705,55 @@ class RedPublicationBaselineRepairTests(unittest.TestCase):
+         self.assertIn("called 1 times", seen[0][1])
+         self.assertIn("do not weaken", seen[0][2].lower())
+ 
++    def test_publication_repair_does_not_target_test_after_one_impl_noop(self):
++        """After hello.py no-ops once, min(attempts) used to switch to the test."""
++        with _tempfile.TemporaryDirectory() as td:
++            with open(os.path.join(td, "hello.py"), "w", encoding="utf-8") as fh:
++                fh.write("def add(a, b):\n    return a - b\n")
++            os.makedirs(os.path.join(td, "tests"))
++            with open(os.path.join(td, "tests", "test_hello.py"), "w",
++                      encoding="utf-8") as fh:
++                fh.write(
++                    "import unittest\nfrom hello import add\n"
++                    "class T(unittest.TestCase):\n"
++                    "    def test_add(self):\n"
++                    "        self.assertEqual(add(2, 3), 5)\n"
++                )
++            log = (
++                "python3 -m py_compile hello.py tests/test_hello.py\n"
++                f'  File "{os.path.join(td, "tests", "test_hello.py")}", '
++                "line 5, in test_add\n"
++                "    self.assertEqual(add(2, 3), 5)\n"
++                "AssertionError: -1 != 5\n"
++            )
++            seen = []
++
++            def fake_fix(author, cross, project_dir, findings, *a, **k):
++                rel, rows = next(iter(findings.items()))
++                seen.append(rel)
++                if rel == "hello.py":
++                    path = os.path.join(project_dir, "hello.py")
++                    with open(path, "w", encoding="utf-8") as fh:
++                        fh.write("def add(a, b):\n    return a + b\n")
++                    return [rel], [], ["named-return apply from finding text"]
++                return [], [], [f"{rel}: should not have been targeted"]
++
++            originals = ff._fix_files, ff._publication_gate
++            ff._fix_files = fake_fix
++            ff._publication_gate = lambda pd, st: (True, "all green")
++            try:
++                result = ff._repair_publication_failure(
++                    object(), object(), td, {}, True,
++                    type("Args", (), {"adversarial": False,
++                                      "adversarial_rounds": 0,
++                                      "adversarial_materiality": "material"})(),
++                    log)
++            finally:
++                ff._fix_files, ff._publication_gate = originals
++        self.assertTrue(result["ok"])
++        self.assertEqual(seen, ["hello.py"])
++        self.assertNotIn("tests/test_hello.py", seen)
++
+     def test_default_repair_budget_follows_progress_beyond_four_failures(self):
+         with _tempfile.TemporaryDirectory() as td:
+             src = os.path.join(td, "src")
 -- 
 2.43.0
 
