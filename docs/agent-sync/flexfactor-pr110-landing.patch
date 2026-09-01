@@ -1,7 +1,7 @@
 From 06c7d10b61b59047a6cd86018ca5662f6a4e3a5c Mon Sep 17 00:00:00 2001
 From: Cursor Agent <cursoragent@cursor.com>
 Date: Tue, 1 Sep 2026 19:17:46 +0000
-Subject: [PATCH 01/13] fix(ci): run autoclean preverify tests in
+Subject: [PATCH 01/14] fix(ci): run autoclean preverify tests in
  production-readiness
 
 The new flexfactor_autoclean_preverify_tests.py module existed on the
@@ -34,7 +34,7 @@ index 77610ad..ad86ef9 100644
 From 7aab5ec6d9a4846ff3bbd5373c9052bc60078a7a Mon Sep 17 00:00:00 2001
 From: Cursor Agent <cursoragent@cursor.com>
 Date: Tue, 1 Sep 2026 20:33:10 +0000
-Subject: [PATCH 02/13] fix(apply): classify Cross-file dependency as no-fix
+Subject: [PATCH 02/14] fix(apply): classify Cross-file dependency as no-fix
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
 Content-Transfer-Encoding: 8bit
@@ -248,7 +248,7 @@ index 5a051a1..485250a 100644
 From 745255550e22813c8a343b4dbe885e55fd30ef05 Mon Sep 17 00:00:00 2001
 From: Cursor Agent <cursoragent@cursor.com>
 Date: Tue, 1 Sep 2026 20:36:59 +0000
-Subject: [PATCH 03/13] fix(apply): retry silent in-file no-ops and escalate
+Subject: [PATCH 03/14] fix(apply): retry silent in-file no-ops and escalate
 
 A second option-4 run classified Cross-file dependency correctly
 but the author then returned changed=false with notes=None, which
@@ -387,7 +387,7 @@ index 485250a..4b7c974 100644
 From b15f048f9174dde33162b35101a68020f5c2c651 Mon Sep 17 00:00:00 2001
 From: Cursor Agent <cursoragent@cursor.com>
 Date: Tue, 1 Sep 2026 20:42:51 +0000
-Subject: [PATCH 04/13] fix(stack): detect unpacked Python fixtures via tests/
+Subject: [PATCH 04/14] fix(stack): detect unpacked Python fixtures via tests/
 
 Option 4's hello.py fixture has no pyproject/requirements, so
 _detect_stack left is_python=False and test_cmd empty. The author
@@ -457,7 +457,7 @@ index 4b7c974..f692711 100644
 From 426193e4b3dab7950299347104c1a78e1c0b7424 Mon Sep 17 00:00:00 2001
 From: Cursor Agent <cursoragent@cursor.com>
 Date: Tue, 1 Sep 2026 20:54:34 +0000
-Subject: [PATCH 05/13] fix(apply): apply a finding-named return when the model
+Subject: [PATCH 05/14] fix(apply): apply a finding-named return when the model
  cannot
 
 Free local authors kept reverting syntax-invalid hello.py patches on
@@ -742,7 +742,7 @@ index f692711..622570f 100644
 From e1d22d7be766d138ad4395fcd32fbd0d3e79c357 Mon Sep 17 00:00:00 2001
 From: Cursor Agent <cursoragent@cursor.com>
 Date: Tue, 1 Sep 2026 21:04:28 +0000
-Subject: [PATCH 06/13] fix(apply): compile Python fixes with this interpreter
+Subject: [PATCH 06/14] fix(apply): compile Python fixes with this interpreter
 
 Bare `python` is missing on Debian/cloud images, so the per-file
 py_compile gate rolled back every correct named-return write with
@@ -836,7 +836,7 @@ index 622570f..f725f37 100644
 From f335a7b59569c2e80f3b05e4a7394633ecb53073 Mon Sep 17 00:00:00 2001
 From: Cursor Agent <cursoragent@cursor.com>
 Date: Tue, 1 Sep 2026 21:20:57 +0000
-Subject: [PATCH 07/13] fix(apply): refuse whole-file fallback when the defect
+Subject: [PATCH 07/14] fix(apply): refuse whole-file fallback when the defect
  anchor is already gone
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
@@ -919,7 +919,7 @@ index f725f37..f6dfe60 100644
 From ac16a5bed3dc02cbd43ee8ca1d020e63a0ad5532 Mon Sep 17 00:00:00 2001
 From: Cursor Agent <cursoragent@cursor.com>
 Date: Tue, 1 Sep 2026 21:38:27 +0000
-Subject: [PATCH 08/13] fix(apply): refuse whole-file fallback when the defect
+Subject: [PATCH 08/14] fix(apply): refuse whole-file fallback when the defect
  excerpt is already gone
 
 The first missing-anchor retry then a silent no-op (apply_err empty)
@@ -977,7 +977,7 @@ index f6dfe60..606868b 100644
 From 8d0bb28f780006adccbfcf72d5ee7d509d0f060b Mon Sep 17 00:00:00 2001
 From: Cursor Agent <cursoragent@cursor.com>
 Date: Tue, 1 Sep 2026 21:47:14 +0000
-Subject: [PATCH 09/13] fix(apply): retry incomplete reviews and drop stale
+Subject: [PATCH 09/14] fix(apply): retry incomplete reviews and drop stale
  certifier claims
 
 qwen 3b option-4 runs aborted after cycle 1 when every finding failed the
@@ -1261,7 +1261,7 @@ index 606868b..6bd15e3 100644
 From 4d6c2b27d065fb33b4c53dba9cd0e35a3d9fc09c Mon Sep 17 00:00:00 2001
 From: Cursor Agent <cursoragent@cursor.com>
 Date: Tue, 1 Sep 2026 21:59:12 +0000
-Subject: [PATCH 10/13] fix(review): recover excerpts the 3b named in prose
+Subject: [PATCH 10/14] fix(review): recover excerpts the 3b named in prose
 
 qwen 3b titles a real defect (duplicate return) and leaves
 source_excerpt/trigger/observable_failure empty, so the evidence gate
@@ -1383,7 +1383,7 @@ index 6bd15e3..b36485a 100644
 From a877a4745981f447699998bc73101f30059a3026 Mon Sep 17 00:00:00 2001
 From: Cursor Agent <cursoragent@cursor.com>
 Date: Tue, 1 Sep 2026 22:09:10 +0000
-Subject: [PATCH 11/13] fix(baseline): name the publication return pair so
+Subject: [PATCH 11/14] fix(baseline): name the publication return pair so
  phase 0 cannot weaken tests
 
 Unittest reprints only the test line (assertEqual(add(2, 3), 5) / -1 != 5),
@@ -1763,7 +1763,7 @@ index b36485a..d8d98f2 100644
 From f3bfa29b5ab13af7456ec1e43c114617b0b70bbb Mon Sep 17 00:00:00 2001
 From: Cursor Agent <cursoragent@cursor.com>
 Date: Tue, 1 Sep 2026 22:14:12 +0000
-Subject: [PATCH 12/13] fix(apply): refuse named-return when the replacement is
+Subject: [PATCH 12/14] fix(apply): refuse named-return when the replacement is
  already in the file
 
 After phase 0 writes return a + b, the same finding text
@@ -1878,7 +1878,7 @@ index d8d98f2..bd199f7 100644
 From 084af8409a7402da85df0020b93b58c92d0967a3 Mon Sep 17 00:00:00 2001
 From: Cursor Agent <cursoragent@cursor.com>
 Date: Tue, 1 Sep 2026 22:41:17 +0000
-Subject: [PATCH 13/13] fix(apply): roll back test-file writes that delete test
+Subject: [PATCH 13/14] fix(apply): roll back test-file writes that delete test
  methods
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
@@ -2052,6 +2052,279 @@ index bd199f7..e85301d 100644
      def test_named_return_refuses_when_desired_return_is_already_in_file(self):
          """Live option 4 2026-09-01: phase 0 wrote ``return a + b``; the
          same finding text then swapped it back to ``return a - b``."""
+-- 
+2.43.0
+
+
+From e8685f7fcf607cf2865d3c2eec1502f539a48639 Mon Sep 17 00:00:00 2001
+From: Cursor Agent <cursoragent@cursor.com>
+Date: Tue, 1 Sep 2026 23:01:22 +0000
+Subject: [PATCH 14/14] fix(prodready): close option-4 EXIT 1 on purpose-fit
+ reject and stale certifier
+
+A competitor ACCEPT that cannot map onto an owner acceptance criterion is now
+an explicit purpose-fit reject, so selected-capabilities-delivered no longer
+blocks on pandas Automated Testing for a unittest fixture.
+
+Independent final review drops reproduction-only stale return claims and
+quote/consistency nits, so a 3b reject of an already-correct add() closes the
+exact-commit gate instead of failing structurally.
+---
+ flexfactor.py                          | 42 ++++++++++++-
+ flexfactor_competitors.py              | 17 ++++++
+ flexfactor_product_invariants_tests.py | 31 ++++++++++
+ flexfactor_tests.py                    | 83 ++++++++++++++++++++++++++
+ 4 files changed, 172 insertions(+), 1 deletion(-)
+
+diff --git a/flexfactor.py b/flexfactor.py
+index 46d37f4..2f52835 100644
+--- a/flexfactor.py
++++ b/flexfactor.py
+@@ -9272,8 +9272,12 @@ def _stale_review_finding(finding: dict, haystack: str) -> bool:
+     excerpt = str((finding or {}).get("source_excerpt") or "").strip()
+     if excerpt and excerpt not in haystack:
+         return True
++    # Independent certifier schema uses `reproduction`, not `problem`.
++    # Live option 4 2026-09-01: 3b put ``currently returns `a - b``` only
++    # there, so scanning problem/fix left the stale reject alive.
+     blob = "\n".join(str((finding or {}).get(k) or "") for k in
+-                     ("title", "problem", "fix", "evidence", "reason"))
++                     ("title", "problem", "fix", "evidence", "reason",
++                      "reproduction"))
+     for m in re.finditer(r"`([^`]+)`", blob):
+         cited = m.group(1).strip()
+         if len(cited) >= 8 and cited not in haystack:
+@@ -9286,9 +9290,42 @@ def _stale_review_finding(finding: dict, haystack: str) -> bool:
+             "return " + _normalize_return_stmt(match.group(1)))
+         if defect and defect not in haystack:
+             return True
++    # "should return X, but it currently returns Y" — Y gone ⇒ stale.
++    for match in re.finditer(
++            r"(?:currently\s+)?return(?:s|ing)?\s+`?(" + _RETURN_EXPR + r")`?",
++            blob, re.IGNORECASE):
++        cited = _normalize_return_stmt(
++            "return " + _normalize_return_stmt(match.group(1)))
++        if cited and cited not in haystack:
++            return True
+     return False
+ 
+ 
++_INDEPENDENT_STYLE_RX = re.compile(
++    r"(single quotes?|double quotes?|for consistency|string formatting|"
++    r"whitespace|indentation|trailing comma)",
++    re.I,
++)
++_INDEPENDENT_FUNCTIONAL_RX = re.compile(
++    r"\b(crash|security|wrong result|fails?\s+test|assertionerror)\b",
++    re.I,
++)
++
++
++def _independent_finding_is_style_nit(finding: dict) -> bool:
++    """True for quote/consistency nits the 3b certifier invents on a green tree.
++
++    FINAL_REVIEW_SYSTEM rejects security, regressions, omitted files, and
++    evidence mismatch — not 'use single quotes for consistency'. Live option 4
++    2026-09-01: after the stale ``a - b`` claim was the only functional reject,
++    this leftover nit still failed independent-final-review."""
++    blob = " ".join(str((finding or {}).get(k) or "") for k in
++                    ("title", "problem", "reproduction", "reason", "fix"))
++    if not _INDEPENDENT_STYLE_RX.search(blob):
++        return False
++    return not _INDEPENDENT_FUNCTIONAL_RX.search(blob)
++
++
+ def _asks_to_remove_tested_symbol(finding: dict, haystack: str) -> bool:
+     """True when the finding wants to delete a symbol the tree still uses."""
+     blob = " ".join(str((finding or {}).get(k) or "") for k in
+@@ -9318,6 +9355,9 @@ def _ground_independent_findings(findings: list, haystack: str) -> list:
+             print(f"  [evidence] independent-final: dropped remove-tested-symbol "
+                   f"'{title}'")
+             continue
++        if _independent_finding_is_style_nit(finding):
++            print(f"  [evidence] independent-final: dropped style nit '{title}'")
++            continue
+         kept.append(finding)
+     return kept
+ 
+diff --git a/flexfactor_competitors.py b/flexfactor_competitors.py
+index 98e207f..55061c5 100644
+--- a/flexfactor_competitors.py
++++ b/flexfactor_competitors.py
+@@ -1011,6 +1011,20 @@ def competitor_findings(research: dict, max_findings: int = DEFAULT_FIX_STREAM_C
+ 
+     def _drop(reason: str, c: dict) -> None:
+         _mark(c, "rejected", reason)
++        idea = c.get("idea")
++        # selected-capabilities-delivered requires implement+test OR an
++        # explicit purpose-fit reject. An ACCEPT that cannot map onto an
++        # owner criterion is the latter — leaving accept=True made pandas
++        # "Automated Testing" a permanent blocker on a unittest fixture
++        # (live option 4 2026-09-01, acceptance_ref='test_greet').
++        if (isinstance(idea, dict) and idea.get("accept")
++                and "did not map to a valid acceptance criterion" in reason):
++            idea["accept"] = False
++            prior = str(idea.get("purpose_reason") or "").strip()
++            idea["purpose_reason"] = (
++                (prior + " " if prior else "")
++                + f"explicit reject: {reason}"
++            ).strip()
+         dropped.setdefault(reason, []).append(str(c.get("name") or "(unnamed)"))
+ 
+     def _seal() -> None:
+@@ -1025,6 +1039,9 @@ def competitor_findings(research: dict, max_findings: int = DEFAULT_FIX_STREAM_C
+             # so - the exact defect this ledger exists to make impossible.
+             "accounted": len(candidates) == len(out) + n_dropped,
+         }
++        research["accepted"] = sum(
++            1 for c in candidates if (c.get("idea") or {}).get("accept"))
++        research["rejected"] = len(candidates) - research["accepted"]
+ 
+     if max_findings <= 0:
+         # The cap is checked BEFORE the append, not after: a post-append check
+diff --git a/flexfactor_product_invariants_tests.py b/flexfactor_product_invariants_tests.py
+index 8271369..f5eb766 100644
+--- a/flexfactor_product_invariants_tests.py
++++ b/flexfactor_product_invariants_tests.py
+@@ -433,6 +433,37 @@ class ProductInvariantTests(unittest.TestCase):
+                 {gate["id"] for gate in result["blockers"]},
+             )
+ 
++    def test_unmapped_acceptance_is_an_explicit_purpose_fit_reject(self):
++        """Live option 4 2026-09-01: pandas ACCEPT + acceptance_ref='test_greet'
++        was dropped as 'did not map' but left accept=True, so
++        selected-capabilities-delivered stayed open forever."""
++        from flexfactor_competitors import competitor_findings
++
++        item = competitor(accept=True, applied=False)
++        item["name"] = "pandas"
++        item["idea"]["idea_title"] = "Automated Testing"
++        item["idea"]["acceptance_ref"] = "test_greet"
++        item["idea"]["file"] = "tests/test_hello.py"
++        item["evidence_urls"] = ["https://github.com/pandas-dev/pandas"]
++        ledger = research(item)
++        self.assertEqual(
++            competitor_findings(ledger, file_exists=lambda r: True, acceptance_total=4),
++            [],
++        )
++        result = evaluate(
++            competitor_research=ledger,
++            applied_files=[],
++            test_files=[],
++            verification_passed=True,
++        )
++        self.assertTrue(result["ready"], result["blockers"])
++        self.assertEqual(result["selected_capabilities"], [])
++        self.assertTrue(
++            any("explicit reject" in str(r.get("reason") or "")
++                for r in result["rejected_capabilities"]),
++            result["rejected_capabilities"],
++        )
++
+     def test_all_candidates_may_be_rejected_when_the_rejection_is_reviewed(self):
+         item = competitor(accept=False, applied=False)
+         item["bridge_status"] = "rejected"
+diff --git a/flexfactor_tests.py b/flexfactor_tests.py
+index e85301d..f2b1aac 100644
+--- a/flexfactor_tests.py
++++ b/flexfactor_tests.py
+@@ -4682,6 +4682,83 @@ class RelComponentsTests(unittest.TestCase):
+             {"source_excerpt": "return a + b"}, haystack))
+         self.assertTrue(ff._stale_review_finding(
+             {"problem": "still has `return a - b`"}, haystack))
++        # Live option 4 2026-09-01: certifier schema uses `reproduction`.
++        self.assertTrue(ff._stale_review_finding({
++            "title": "Function Definition Error",
++            "reproduction": (
++                "Line 1: `def add(a, b):` - The function should return "
++                "`a + b`, but it currently returns `a - b`."
++            ),
++        }, haystack))
++        self.assertTrue(ff._independent_finding_is_style_nit({
++            "title": "String Formatting Error",
++            "reproduction": (
++                "Line 4: `return f'hello {name}'` - The string should be "
++                "in single quotes for consistency."
++            ),
++        }))
++        grounded = ff._ground_independent_findings([
++            {"title": "Function Definition Error", "severity": "incorrect",
++             "reproduction": "currently returns `a - b`"},
++            {"title": "String Formatting Error", "severity": "incorrect",
++             "reproduction": "use single quotes for consistency"},
++        ], haystack)
++        self.assertEqual(grounded, [])
++
++    def test_independent_final_review_approves_stale_and_style_reject(self):
++        """Live option 4 2026-09-01: 3b rejected the exact final SHA citing
++        ``return a - b`` from the patch plus a quote nit. After grounding,
++        that must close the gate — otherwise EXIT 1 is structural."""
++        import subprocess
++        import tempfile
++        with tempfile.TemporaryDirectory() as tmp:
++            subprocess.run(["git", "init", "-q", "-b", "main"], cwd=tmp, check=True)
++            with open(os.path.join(tmp, "hello.py"), "w", encoding="utf-8") as fh:
++                fh.write(
++                    "def add(a, b):\n"
++                    "    return a + b\n"
++                    "\n"
++                    "def greet(name):\n"
++                    "    return f'hello {name}'\n"
++                )
++            subprocess.run(["git", "add", "-A"], cwd=tmp, check=True)
++            subprocess.run(
++                ["git", "-c", "user.email=t@t", "-c", "user.name=t",
++                 "commit", "-q", "-m", "fix add"],
++                cwd=tmp, check=True)
++            sha = subprocess.run(
++                ["git", "rev-parse", "HEAD"], cwd=tmp,
++                capture_output=True, text=True).stdout.strip()
++
++            class _StaleStyleReviewer:
++                judge_model = "qwen2.5-coder:3b"
++
++                def structured(self, system, prompt, schema, **_kw):
++                    return {
++                        "verdict": "reject",
++                        "commit": sha,
++                        "findings": [
++                            {"severity": "incorrect", "file": "hello.py",
++                             "line": 1, "title": "Function Definition Error",
++                             "reproduction": (
++                                 "The function should return `a + b`, but it "
++                                 "currently returns `a - b`."
++                             )},
++                            {"severity": "incorrect", "file": "hello.py",
++                             "line": 4, "title": "String Formatting Error",
++                             "reproduction": (
++                                 "The string should be in single quotes "
++                                 "for consistency."
++                             )},
++                        ],
++                        "evidence_consistent": False,
++                        "reason": "add still subtracts",
++                    }
++
++            data = ff._independent_final_review(
++                _StaleStyleReviewer(), tmp, None, sha, {"x": 1})
++        self.assertEqual(data["verdict"], "approve", data)
++        self.assertEqual(data["findings"], [])
+ 
+     def test_asks_to_remove_tested_symbol(self):
+         tests = "from hello import add, greet\n\ndef test_greet(self):\n    greet('x')\n"
+@@ -15000,6 +15077,12 @@ class CompetitorBridgeLedgerTests(unittest.TestCase):
+         ledger = research["bridge_ledger"]
+         self.assertEqual(ledger["bridged"], 0)
+         self.assertTrue(any("valid acceptance criterion" in r for r in ledger["dropped"]))
++        idea = research["competitors"][0]["idea"]
++        self.assertFalse(idea["accept"],
++                         "unmapped ACCEPT must become an explicit purpose-fit reject")
++        self.assertIn("explicit reject", idea["purpose_reason"])
++        self.assertEqual(research["accepted"], 0)
++        self.assertEqual(research["rejected"], 1)
+ 
+     def test_report_renders_the_ledger_with_reasons(self):
+         research = {"competitors": [self._comp("ok"),
 -- 
 2.43.0
 

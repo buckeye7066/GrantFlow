@@ -1,21 +1,21 @@
 #!/usr/bin/env bash
-# Land the FlexFactor PR #110 CI-wire + option-4 apply-path commits
-# (13 commits: 06c7d10..084af84).
+# Land the FlexFactor option-4 apply-path that is still missing from
+# origin/main after PR #110 merged (CI wire only).
+#
+# Local source of truth: /home/ubuntu/flexfactor tip e8685f7
+# (14 commits on 634250c; skip 06c7d10 — already on main).
+#
 # Run this ONLY from a session with write to buckeye7066/flexfactor.
 # GrantFlow-scoped tokens will 403 — that is expected; do not retry.
 set -euo pipefail
 
 REPO="${FLEXFACTOR_REPO:-buckeye7066/flexfactor}"
-BRANCH="${FLEXFACTOR_PR_BRANCH:-fix/autoclean-verifies-what-it-commits}"
-BASE_SHA="${FLEXFACTOR_PR_BASE_SHA:-634250cffd34298412cdc50fbdc3a9e96b518e35}"
+BRANCH="${FLEXFACTOR_PR_BRANCH:-fix/option4-apply-path}"
+BASE_REF="${FLEXFACTOR_PR_BASE_REF:-main}"
 HERE="$(cd "$(dirname "$0")/.." && pwd)"
 PATCH="${FLEXFACTOR_PATCH:-$HERE/docs/agent-sync/flexfactor-pr110-landing.patch}"
-WORKDIR="${FLEXFACTOR_WORKDIR:-/tmp/flexfactor-pr110-land}"
-
-if [[ ! -f "$PATCH" ]]; then
-  echo "missing patch: $PATCH" >&2
-  exit 2
-fi
+WORKDIR="${FLEXFACTOR_WORKDIR:-/tmp/flexfactor-option4-land}"
+LOCAL_SRC="${FLEXFACTOR_LOCAL:-/home/ubuntu/flexfactor}"
 
 echo "checking write on $REPO ..."
 if ! gh api "repos/$REPO" --jq '.permissions.push' | grep -qx true; then
@@ -25,32 +25,40 @@ if ! gh api "repos/$REPO" --jq '.permissions.push' | grep -qx true; then
 fi
 
 rm -rf "$WORKDIR"
-gh repo clone "$REPO" "$WORKDIR" -- --branch "$BRANCH"
+gh repo clone "$REPO" "$WORKDIR" -- --branch "$BASE_REF"
 cd "$WORKDIR"
-git fetch origin "$BRANCH"
-git checkout "$BRANCH"
-git reset --hard "origin/$BRANCH"
+git fetch origin "$BASE_REF"
+git checkout -B "$BRANCH" "origin/$BASE_REF"
+echo "branch $BRANCH at $(git rev-parse --short HEAD)"
 
-HEAD="$(git rev-parse HEAD)"
-echo "current HEAD=$HEAD"
-if [[ "$HEAD" != "$BASE_SHA" && "$HEAD" != "$(git rev-parse --verify "$BASE_SHA" 2>/dev/null || true)" ]]; then
-  echo "HEAD is not $BASE_SHA. Applying patch only if the CI wire is still missing."
-fi
-
-if ! grep -q 'flexfactor_autoclean_preverify_tests.py' .github/workflows/production-readiness.yml; then
-  echo "applying $PATCH"
-  git am --3way "$PATCH"
+if [[ -d "$LOCAL_SRC/.git" ]]; then
+  echo "cherry-picking 7aab5ec..e8685f7 from $LOCAL_SRC (skip already-landed CI wire)"
+  git fetch "$LOCAL_SRC" cursor/pr110-ci-wire-a427
+  # 06c7d10 is the CI wire already on main; start AFTER it.
+  if ! git cherry-pick 7aab5ec^..e8685f7; then
+    echo "cherry-pick conflicted against current main. Resolve, then:" >&2
+    echo "  git cherry-pick --continue && git push -u origin $BRANCH" >&2
+    exit 4
+  fi
+elif [[ -f "$PATCH" ]]; then
+  echo "applying $PATCH (first commit is the already-landed CI wire)"
+  if ! git am --3way "$PATCH"; then
+    echo "skipping already-landed first commit if it is the CI wire"
+    git am --skip
+  fi
 else
-  echo "CI wire already present; skipping git am"
+  echo "need $LOCAL_SRC or $PATCH" >&2
+  exit 2
 fi
 
-echo "running totality + named-return guards ..."
+echo "running named-return + purpose-fit + stale-certifier guards ..."
 python3 -m unittest \
-  flexfactor_invariant_sweep_tests.SweepIsWiredIntoCITests \
+  flexfactor_tests.RelComponentsTests.test_independent_final_review_approves_stale_and_style_reject \
+  flexfactor_tests.CompetitorBridgeLedgerTests.test_invalid_acceptance_mapping_is_rejected_and_accounted \
   -q
 
-git push origin "HEAD:$BRANCH"
+git push -u origin "$BRANCH"
 NEW_HEAD="$(git rev-parse HEAD)"
 echo "pushed $NEW_HEAD to $BRANCH"
-echo "watch: gh run list --repo $REPO --branch $BRANCH --limit 5"
+echo "open a NEW PR against main (do not reopen #110)."
 echo "merge only after a NEW production-readiness run on $NEW_HEAD is green on both OS jobs"
