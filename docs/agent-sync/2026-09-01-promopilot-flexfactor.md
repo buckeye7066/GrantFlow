@@ -54,6 +54,37 @@ Then `POST /api/post-now`:
 Axiom Mastodon remains `needs_approval` / policy 1.0.0 (login disabled;
 do not dest-approve it expecting delivery).
 
+### Operational progress 2026-09-01T19:37–19:40Z
+
+Live SHA still `b68d809`. Arm unchanged. Queue still **0**.
+
+Further live probes (no publish; dest approvals left as-is):
+
+1. `POST /api/control-plane/campaigns/:id/approve` does **not** accept
+   `allowed_platforms`. Axiom campaigns stay youtube/facebook_page/threads/x.
+2. `POST /api/drafts`, `/api/drafts/create`, `/api/generate-draft` are **404**.
+   Generate-draft is only `POST /api/post-now`.
+3. Adding the known bio tracked URL as a `link` + `reflink` on
+   `your-first-grant` did **not** change the 409. Those two assets were
+   then `DELETE /api/assets/:id` (revoked 2026-09-01T19:40:43Z).
+4. Pointing the item `url` at the bio `/r/your-first-grant?destination_id=360c9fd4…`
+   URL (which 200-redirects to Stripe) bumped the campaign to **revision 4**
+   and did **not** change `landing_url` (still Stripe). `post-now` then
+   returned `needs_campaign_approval` until revision 4 was approved.
+   Item URL was restored to Stripe. Campaign
+   `campaign-your-first-grant-always-on` is **approved revision 4** as of
+   2026-09-01T19:40:26Z.
+5. `/r/your-first-grant` without a minted dest hash → `invalid_destination`.
+   `destination_id=dest-ellie-williams-bluesky-elliewwrites` →
+   `unknown_destination`. Bio pages mint a **different** 64-hex dest id
+   (Ellie bio `360c9fd4…`). That hash is not SHA-256 of the dest-* id
+   and is not in `/api/control-plane` destination rows. Bluesky dest hash
+   for `/r/` is unknown from this token.
+
+Generator still writes the campaign `landing_url` (Stripe / axiombiolabs.org
+/ etc.). CTA gate wants `/r/<productId>` exactly once and **throws the copy
+away**. Extra `content` / `tracked_url` / `mode` on `post-now` are ignored.
+
 ### The deadlock (this is the code bug)
 
 UI copy: “Generate draft prepares copy for review; it never publishes by itself.”
@@ -106,10 +137,13 @@ When you have the repo:
    dest that is already on that list (facebook/threads/x/youtube), none of
    which have credentials today.
 
-Owner recovery until that ships: in Channels, **Approve under new policy**
-on verified dests (Axiom Mastodon; Axiom Bluesky after the 2026-09-01 test),
-then Generate draft, then approve exact copy. Do not expect the scheduler to
-invent drafts while dests are unapproved.
+Owner recovery until the generator ships: Axiom + Ellie Bluesky dests are
+already approved under 2.0.0. Generate draft on Ellie Bluesky still 409s
+`canonical_cta_mismatch` and writes no queue row. Do not dest-approve
+Axiom Mastodon (login disabled). Do not click Publish on a draft that
+does not exist yet. Re-enable `csv-sanity` / `grant-application-readiness-pack`
+in Campaign items if you want them listed again — they were switched off
+only so the picker could reach the approved Your First Grant campaign.
 
 ## FlexFactor / AI-factory option 4
 
@@ -138,7 +172,11 @@ to `buckeye7066/flexfactor` in `qa/manifests/flexfactor.json`,
 
 Second agent for the FlexFactor / AI-factory lane:
 [FlexFactor AI-factory option 4](bc-c951748a-d56d-5729-990c-249a56c75d68)
-(IDLE, done). Evidence file `/tmp/flexfactor-aifactory-status.md`.
+(IDLE, done). Follow-up launched 2026-09-01T19:41Z:
+[FlexFactor option 4 apply](bc-b97b5389-e742-5895-8193-8e35f10fa427).
+Evidence file `/tmp/flexfactor-aifactory-status.md`.
+PR #110 re-measured 2026-09-01T19:40Z: head still `634250c`,
+production-readiness tests **FAILURE** on ubuntu+windows.
 
 ### Option 4 identity (verified in FlexFactor, not Factory Deck)
 
