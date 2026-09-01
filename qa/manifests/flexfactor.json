@@ -1,7 +1,7 @@
 {
   "app_id": "flexfactor",
   "display_name": "FlexFactor",
-  "repo": "local-only",
+  "repo": "buckeye7066/flexfactor",
   "local_path": "~/flexfactor",
   "runtime_type": "python-cli",
   "start_command": "python flexfactor.py --help",

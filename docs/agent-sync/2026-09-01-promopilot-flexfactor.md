@@ -89,18 +89,65 @@ invent drafts while dests are unapproved.
 Launcher option **4** is `prodready` (`flexfactor_launch.ps1`).
 Portfolio option 4 in `PORTFOLIO_CHATGPT_PRODUCTION_READINESS.md` is PromoPilot.
 
-- FlexFactor clone: `/home/ubuntu/flexfactor` @ `25dd1d7` (`main`).
-- `main` `production-readiness` CI is **green**.
+- FlexFactor clone: `/home/ubuntu/src/flexfactor` @ `25dd1d7` (`main`);
+  `/home/ubuntu/flexfactor` is a symlink to that clone.
+- `main` `production-readiness` CI is **green** at
+  `25dd1d74e50ef71e4e1e749d4bbe435665822001`.
 - Open PR #110 `fix/autoclean-verifies-what-it-commits` is **red**:
   `flexfactor_autoclean_preverify_tests.py` exists but is missing from
   `.github/workflows/production-readiness.yml`. Totality test
   `test_EVERY_test_module_is_in_the_workflow_test_list` fails.
-- Local fix committed on `cursor/flexfactor-ci-wire-preverify-2a4f`
-  (`abb7619`): add that module next to `flexfactor_autoclean_tests.py`.
-  Tests pass locally. **Push to `buckeye7066/flexfactor` 403** from this
-  GrantFlow integration token (`denied to cursor[bot]`).
+- Local CI wire on `cursor/flexfactor-ci-wire-preverify-2a4f` (`abb7619`):
+  add that module next to `flexfactor_autoclean_tests.py`. Tests pass
+  locally. **Push to `buckeye7066/flexfactor` 403** (`denied to cursor[bot]`).
 - `buckeye7066/local-ai-factory` is also Not Found to this token, so an
-  AI-factory option-4 run could not be started here.
+  AI-factory option-4 run could not be started here. Ports 5179 / 5190
+  were not listening.
 
-Second agent launched for the FlexFactor / AI-factory lane:
-`bc-c951748a-d56d-5729-990c-249a56c75d68`.
+GrantFlow EVA used to list FlexFactor / Scout as `repo: "local-only"`.
+That is stale: the GitHub repo is public. Corrected in this same change
+to `buckeye7066/flexfactor` in `qa/manifests/flexfactor.json`,
+`qa/manifests/scout-a-program.json`, and `qa/portfolio-registry.json`.
+
+Second agent for the FlexFactor / AI-factory lane:
+[FlexFactor AI-factory option 4](bc-c951748a-d56d-5729-990c-249a56c75d68)
+(IDLE, done). Evidence file `/tmp/flexfactor-aifactory-status.md`.
+
+### Option 4 identity (verified in FlexFactor, not Factory Deck)
+
+Launcher option **4** is `prodready` (`flexfactor_launch.ps1`:
+`1) refactor  2) scout  3) audit  4) prodready`).
+Portfolio-board item 4 is PromoPilot — a different list.
+
+Factory Deck New Run numbering is **UNKNOWN** (factory repo 404).
+
+### Option 4 runs (disposable `/tmp/ff-option4-fixture`, no spend)
+
+| Run | Outcome |
+|---|---|
+| First | EXIT 1 fail-closed (no free model). **Crash:** Tk child `ModuleNotFoundError: No module named 'tkinter'` while parent printed “Live dashboard launched”. |
+| Second (after local fix) | EXIT 1, same honest preflight. **No traceback.** Printed `Live Tk dashboard skipped (tkinter is not installed)`. |
+
+Local Tk-skip fix (not on GitHub): branch
+`cursor/linux-dashboard-no-tk-5d68` @
+`6076cd6ba0f8b9efb4e2bdbfc43d551507394f3f`.
+`flexfactor_dashboard.tk_unavailable_reason()` + probe-before-Popen.
+Push 403, same token limit.
+
+Help / audit / prodready `--help`, compileall, and targeted suites
+**PASS** on this host. Android `build_verifiable` is a named host
+blocker (no Java/Gradle here); `android-client` CI was green on
+`25dd1d7`. No Anthropic/OpenAI keys; Ollama down.
+
+### FlexFactor verdict (2026-09-01)
+
+| Requirement | Result |
+|---|---|
+| CLI start / help / audit entry | **PASS** locally |
+| Option 4 identified as `prodready` | **PASS** |
+| Option 4 apply to production-ready | **FAIL / fail-closed** — no model |
+| AI-factory option 4 completion | **FAIL / BLOCKED** — factory 404 |
+| Land Tk skip + CI wire on origin | **FAIL** 403 |
+
+Do not treat FlexFactor as production-ready for an unattended
+model-backed apply, and do not treat AI-factory as having run.
