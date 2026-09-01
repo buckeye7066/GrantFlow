@@ -19,29 +19,40 @@ The process is up. The scheduler is not “dead.”
 | Portfolio arm | `operation_mode: live`, `killed: 0`, `daily_cap: 2` |
 | `armed_at` | **2026-09-01T12:52:39Z** (re-armed today) |
 | `killed_at` | **2026-08-06T15:42:36Z** (same minute as the last recent-post) |
-| Open drafts | **0** |
+| Open drafts | **0** (still, after dest re-approval) |
 | Last recent post | 2026-08-06T20:21:12Z Mastodon **failed** (`login is currently disabled`) |
 
-Kill on Aug 6 is why the month went silent. Re-arm today did **not** resume
-delivery because every publishable channel still has `needs_approval: true`.
+Kill on Aug 6 is why the month went silent. Dest re-approval on 2026-09-01
+cleared the policy-2.0 gate on two Bluesky dests and still produced **no
+draft** — the next gates are campaign/platform matching and a generator
+CTA check that refuses to persist a draft.
 
-Approval reasons (live `/api/overview` channels):
+### Operational progress 2026-09-01T19:27–19:31Z (this session)
 
-- Axiom dests: `policy_version_changed` — dest was approved under policy
-  **1.0.0**, current is **2.0.0**.
-- Ellie dests: `unreviewed_legacy_channel`.
-- Ellie Bluesky/Mastodon: `verification_state=verified` but `verified_at=null`
-  (UI prints that as **12/31/1969**).
+Dest-approved under policy **2.0.0** (exact receipts; did **not** publish):
 
-Only one channel is `connector_ready`: Axiom Mastodon (verified
-2026-08-30T04:42:05Z). It still needs “Approve under new policy.”
+| Dest | Channel | `approved_at` |
+|---|---|---|
+| `@axiombiolabs.bsky.social` | `c372f29b-7f4f-443f-8410-64a571361b9d` | 2026-09-01T19:27:46Z |
+| Ellie Williams bluesky (`@elliewwrites.bsky.social`) | `1781120c-593c-4978-acca-eb70bb2f647d` | 2026-09-01T19:29:38Z |
 
-Approved campaigns (ready to promote, no dest they can use):
+Then `POST /api/post-now`:
 
-- GrantFlow funding workflow education
-- SermonSmith preparation workflow
-- The Covenant Veil reader discovery
-- Ellie Williams titles and tools
+1. Axiom Bluesky → 409 `needs_campaign_approval`. Approved Axiom campaigns
+   (`grantflow` / `sermonsmith` / `the-covenant-veil`) list
+   `allowed_platforms: [youtube, facebook_page, threads, x]` only — **not
+   bluesky**, which is the only Axiom dest that is verified + approved.
+2. Ellie Bluesky → 409 `needs_campaign_approval` while paused Ellie items
+   (`grant-application-readiness-pack`, `csv-sanity`) were still enabled.
+   Re-approved `campaign-your-first-grant-always-on` (was paused). Disabled
+   those two paused items so the picker can reach Your First Grant.
+3. Ellie Bluesky after that → 409 `canonical_cta_mismatch`
+   (`promo copy must contain the approved tracked URL exactly once`).
+   Retried 3+ times and with explicit `content`/`tracked_url` bodies —
+   extra fields are ignored. **No draft row is written.** Queue still 0.
+
+Axiom Mastodon remains `needs_approval` / policy 1.0.0 (login disabled;
+do not dest-approve it expecting delivery).
 
 ### The deadlock (this is the code bug)
 
@@ -82,6 +93,18 @@ When you have the repo:
 3. After `control-plane/arm`, if approved campaigns exist and dests only fail
    `policy_version_changed`, surface one re-approve action — do not leave
    generate-draft as a dead button.
+4. **A skipped generate must still persist a draft.** `canonical_cta_mismatch`
+   currently 409s and writes nothing. The UI already edits drafts; the
+   generator must either insert the `/r/<productId>` tracked URL once or
+   leave the copy in the queue for that edit. Extra `content` on `post-now`
+   is ignored.
+5. **Picker must skip paused campaigns and honor `allowed_platforms`.**
+   Enabled items whose campaign is `paused` or whose allowlist excludes the
+   dest currently 409 the whole `post-now` as `needs_campaign_approval`.
+   Axiom always-on campaigns need `bluesky` on the allowlist if Bluesky is
+   the dest that actually passes the connection test — or dest-approve a
+   dest that is already on that list (facebook/threads/x/youtube), none of
+   which have credentials today.
 
 Owner recovery until that ships: in Channels, **Approve under new policy**
 on verified dests (Axiom Mastodon; Axiom Bluesky after the 2026-09-01 test),
