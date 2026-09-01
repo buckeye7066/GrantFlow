@@ -28,6 +28,10 @@ import {
   TRUSTED_RECORD_ORIGINS,
   isTrustedRecordOrigin,
 } from '../config/relevanceFloor.js'
+import {
+  isClearlyExpiredProgram,
+  isPastDeadline,
+} from '../config/fundingResultFilters.js'
 import { evaluateExclusion } from './exclusionEngine.js'
 import {
   grantFingerprintFromOpportunity,
@@ -249,6 +253,10 @@ async function admitToPipeline(db, profileContext, opportunity, ctx = {}) {
   const minMatchThreshold = ctx.minMatchThreshold ?? null
   const failClosedTombstone = ctx.failClosedTombstone === true
   const quiet = ctx.quiet === true
+  // Positive-proof mode: require explicit YES across all four gates. Defaults ON for automated paths.
+  const requirePositiveNeed =
+    ctx.requirePositiveNeed === true ||
+    (process.env.REQUIRE_POSITIVE_NEED_FOR_AUTOMATED || '1') !== '0'
   const fingerprints = pipelineAdmissionFingerprints(profileContext, opportunity)
   const denied = (reason, result, score = result?.matchPercentage ?? null) => ({
     admitted: false,
@@ -379,6 +387,45 @@ async function admitToPipeline(db, profileContext, opportunity, ctx = {}) {
       }, decision?.score ?? null)
     }
 
+    // Gate 1.8: REAL (offline half). Fail closed on clearly-ended programs, past deadlines with concrete dates, and missing URLs.
+    {
+      const expired = isClearlyExpiredProgram(opportunity, new Date())
+      if (expired) {
+        if (!quiet) log.info(`[opportunityMatcher] Gate:REAL suppressed "${opportunity?.title}" — ${expired}`)
+        return denied('expired_deadline', {
+          saved: false,
+          reason: `Expired: ${expired}`,
+          gate: 'REAL',
+          matchPercentage: null,
+          threshold,
+          decision: 'REJECT',
+        }, decision?.score ?? null)
+      }
+      if (isPastDeadline(opportunity, new Date())) {
+        if (!quiet) log.info(`[opportunityMatcher] Gate:REAL suppressed "${opportunity?.title}" — deadline_passed`)
+        return denied('expired_deadline', {
+          saved: false,
+          reason: 'Deadline has passed',
+          gate: 'REAL',
+          matchPercentage: null,
+          threshold,
+          decision: 'REJECT',
+        }, decision?.score ?? null)
+      }
+      const realUrl = opportunity?.application_url || opportunity?.source_url || opportunity?.url || null
+      if (!realUrl) {
+        if (!quiet) log.info(`[opportunityMatcher] Gate:REAL suppressed "${opportunity?.title}" — no_url_to_verify`)
+        return denied('no_real_url', {
+          saved: false,
+          reason: 'No real URL to verify',
+          gate: 'REAL',
+          matchPercentage: null,
+          threshold,
+          decision: 'REJECT',
+        }, decision?.score ?? null)
+      }
+    }
+
     // Gate 1.9: DECLARED-NEED coverage (services/pipelinePrecision.js).
     // Owner order 2026-08-21: a source reaches a pipeline only if it MEETS A
     // NEED THE PROFILE DECLARED. The decision engine below deliberately scores
@@ -393,9 +440,11 @@ async function admitToPipeline(db, profileContext, opportunity, ctx = {}) {
     {
       const declaredNeeds = declaredNeedsFrom(rawProfile, profileSections)
       const needCoverage = evaluateDeclaredNeedCoverage(opportunity, declaredNeeds)
-      if (!needCoverage.pass) {
+      // Positive-proof requirement: either explicit overlap or fail closed.
+      const isPositiveMatch = Array.isArray(needCoverage.matched) && needCoverage.matched.length > 0
+      if (!needCoverage.pass || (requirePositiveNeed && !isPositiveMatch)) {
         if (!quiet) log.info(
-          `[opportunityMatcher] Gate:NEED_COVERAGE suppressed "${opportunity?.title}" — profile declares [${needCoverage.profile_needs.join(', ')}], opportunity serves [${needCoverage.opportunity_needs.join(', ')}]`,
+          `[opportunityMatcher] Gate:NEED_COVERAGE suppressed "${opportunity?.title}" — profile declares [${needCoverage.profile_needs.join(', ')}], opportunity serves [${needCoverage.opportunity_needs.join(', ')}] (positive_required=${requirePositiveNeed})`,
         )
         return denied('live_reject', {
           saved: false,

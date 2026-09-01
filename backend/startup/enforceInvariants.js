@@ -5439,9 +5439,16 @@ export async function enforcePipelinePrecision(db) {
           }
           if (!failedGate) {
             verdict = gateCoversNeed(row, facts)
-            if (!verdict.pass) failedGate = GATES.COVERS_NEED
-            else if (profileDeclaresNoNeeds) counts.needNeutralProfile += 1
-            else if (verdict?.evidence?.detail === 'opportunity_states_no_need_vocabulary') counts.needNeutralRow += 1
+            // Positive-proof: treat neutral outcomes as failures for automated rows.
+            const detail = verdict?.evidence?.detail ?? null
+            const neutral =
+              detail === 'profile_declares_no_needs_gate_neutral' ||
+              detail === 'opportunity_states_no_need_vocabulary'
+            if (!verdict.pass || neutral) {
+              failedGate = GATES.COVERS_NEED
+              if (profileDeclaresNoNeeds) counts.needNeutralProfile += 1
+              else if (detail === 'opportunity_states_no_need_vocabulary') counts.needNeutralRow += 1
+            }
           }
           if (!failedGate) {
             const real = gateRealOffline(row, { now })
