@@ -39,6 +39,7 @@ import { recordBehaviorEvent } from '../services/behaviorLearning.js'
 
 import { createLogger } from '../utils/logger.js'
 const routeLogger = createLogger('route:grants')
+import { defaultPipelineRequestedAmount } from '../config/pipelineValue.js'
 
 const router = express.Router();
 
@@ -2432,7 +2433,13 @@ router.post('/from-opportunity', async (req, res, next) => {
       const insertMatchReasons = JSON.stringify(
         [...baseReasons, ...trustReasonLines.filter((r) => !baseReasons.includes(r))],
       )
-      const amountRequested = normalizeMoney(opportunity.amount_max ?? opportunity.amount_min ?? null)
+      const amountRequested = normalizeMoney(
+        defaultPipelineRequestedAmount({
+          amount_requested: opportunity.amount_requested ?? null,
+          amount_min: opportunity.amount_min ?? null,
+          amount_max: opportunity.amount_max ?? null,
+        })
+      )
       const notes = coerceString(opportunity.description, { maxLen: 500 })
       
       const contactInfo = parseOpportunityContact(opportunity)
