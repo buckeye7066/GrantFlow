@@ -93,6 +93,7 @@ import {
   completeApplicationStep,
   APPLICATION_STATES,
 } from './applicationWorkflow.js'
+import { getAnyaMaintenanceStatus } from './anyaMaintenanceStatus.js'
 
 const tools = new Map()
 
@@ -737,6 +738,17 @@ export function assertNoDuplicateToolIds() {
   }
   return tools.size
 }
+
+registerTool({
+  name: 'app.getMaintenanceStatus',
+  description: 'Read the current live GrantFlow maintenance state. Use this whenever a user asks whether the maintenance banner is on or off, whether GrantFlow is in maintenance, or when it will reopen.',
+  schema: {
+    type: 'object',
+    properties: {},
+    additionalProperties: false,
+  },
+  handler: getAnyaMaintenanceStatus,
+})
 
 export function listToolMetadata(ctx = null) {
   const isAdmin = Boolean(ctx?.isAdmin)

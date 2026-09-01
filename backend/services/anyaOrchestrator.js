@@ -91,6 +91,7 @@ export const CHAT_CALLABLE_TOOL_DOCS = [
   ['crawlers.planForProfile', 'Show what a profile-specific discovery ("deeper search") would look for, grounded in the profile\'s real facts.'],
   ['app.explainFeature', 'Explain what a GrantFlow page or feature does, its main actions, and how it relates to other features (routeName e.g. SmartMatcher, Pipeline, MyProfiles).'],
   ['app.explainField', 'Explain what a specific profile field does, why it matters for matching, and whether it affects crawlers (field key e.g. zip, state, health_conditions).'],
+  ['app.getMaintenanceStatus', 'Read the live maintenance state and report whether the banner is on or off. Use whenever asked about maintenance, the banner, downtime, or reopening.'],
   ['profile.thresholdReport', "Show what the profile qualifies for and ALMOST qualifies for — each source's explicit ACT/SAT/GPA/income/age requirement vs the profile's facts, the exact gap, and the application link."],
   ['profile.find', "Find a profile by (partial) NAME — e.g. 'Robert' — and get its id and type. ALWAYS use this instead of asking the user for a profile ID when they name a person or profile."],
   ['chat.setAppearance', "Change this chat panel's colors when the user says it is hard to read or asks for a different background / dark mode / higher contrast. preset: 'dark', 'high_contrast', or 'default' (restore normal), or background: '#hex'. Text stays readable automatically."],
@@ -106,7 +107,7 @@ const _CHAT_TOOL_PROMPT_LINES = [
   '',
   'You do NOT have a chat tool for anything else. In particular:',
   '- Writing an LOI, needs statement, or full grant/benefit application: there is NO tool — you write the document yourself, directly in your reply, using the user\'s real profile data. Producing the text IS the deliverable; never claim a tool "generated" or "saved" it.',
-  '- Submission details, letters of medical necessity, medical profile review, pipeline medical scans, codebase search, cross-session memory, and system-health checks run through GrantFlow\'s app panels, not this chat. If the user needs one, explain it and point them to the exact screen — do NOT claim you executed it.',
+  '- Submission details, letters of medical necessity, medical profile review, pipeline medical scans, codebase search, cross-session memory, and broad system-health checks run through GrantFlow\'s app panels, not this chat. The live maintenance state is the exception: call app.getMaintenanceStatus and report the result. For everything else, point the user to the exact screen — do NOT claim you executed it.',
 ]
 
 // OpenAI's tool/function naming spec only allows [a-zA-Z0-9_-], so the
@@ -147,6 +148,7 @@ const _STATIC_PROMPT_BASE = [
   'ANSWER WHAT WAS ACTUALLY ASKED:',
   '- Re-read the user\'s message before replying and address EVERY part of it — a message often carries both a task and a complaint (e.g. "the chat is hard to read AND tell me about Robert\'s documents"); handle both, the task first.',
   '- If you are about to ask the user for an identifier or a click (a profile ID, "open the profile card so I can see it"), STOP and check your tools first: profile.find resolves a NAME to a profile id, and the other profile tools take it from there. Asking the user for data a tool can fetch is a failure.',
+  '- When asked whether the maintenance banner is on or off, whether GrantFlow is in maintenance, or when it will reopen, call app.getMaintenanceStatus. Never send the user to Admin Tools for this public live status.',
   '',
   'CHAT APPEARANCE (you control it):',
   '- You CAN change this chat panel\'s colors yourself. When the user says the chat is hard to read, mentions contrast or visibility, or asks for a background color / dark mode: call chat.setAppearance (preset dark / high_contrast / default, or background "#hex" — convert color names to hex yourself). Never send the user hunting for a settings or appearance icon; you are the control.',
@@ -1496,6 +1498,7 @@ export async function generateAssistantResponse(db, user, sessionId, { content, 
           'crawlers.planForProfile': 'Planning the deeper search',
           'app.explainFeature': 'Looking up how this feature works',
           'app.explainField': 'Looking up what this field does',
+          'app.getMaintenanceStatus': 'Checking the live maintenance status',
           'profile.thresholdReport': 'Checking which thresholds you clear or almost clear',
           'profile.find': 'Looking up the profile by name',
           'chat.setAppearance': 'Updating the chat colors',
