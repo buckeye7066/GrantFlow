@@ -65,10 +65,11 @@ Do not `git add flexfactor` (symlink to `/home/ubuntu/src/flexfactor`).
 | `e1d22d7` | `_python_exe()` = `sys.executable`; py_compile + fixture tests use it |
 | `f335a7b` | refuse whole-file fallback when apply_err contains `anchor not found` |
 | `ac16a5b` | same refuse keyed on excerpt-gone, including silent no-op (`apply_err=""`) |
+| `8d0bb28` | retry incomplete reviews on remaining cycles; drop stale purpose/final findings whose excerpt is already gone from HEAD |
 
 Portable patch (also copied into this GrantFlow tree):
 `docs/agent-sync/flexfactor-pr110-landing.patch`
-(`git format-patch --stdout 634250c..HEAD`, 8 commits).
+(`git format-patch --stdout 634250c..HEAD`, 9 commits).
 Same bytes on this host at `/tmp/flexfactor-pr110-landing.patch`.
 One-shot apply from a writable token: `scripts/land-flexfactor-pr110.sh`.
 
@@ -78,6 +79,9 @@ Verified locally this session (`python3 -m unittest … -q`):
 - `RelComponentsTests.test_fix_files_applies_named_return_before_the_model`
 - `RelComponentsTests.test_python_exe_is_this_interpreter_not_bare_python`
 - `RelComponentsTests.test_missing_anchor_refuses_whole_file_when_excerpt_is_gone`
+- `RelComponentsTests.test_stale_review_finding_is_gone_from_current_tree_not_the_patch`
+- `RelComponentsTests.test_drop_stale_purpose_gaps_marks_criteria_met`
+- `RelComponentsTests.test_incomplete_review_retries_before_last_cycle`
 - `SweepIsWiredIntoCITests` (workflow list includes the preverify module)
 
 ## Write attempts this session (all refused)
@@ -149,6 +153,14 @@ Do not treat “purpose gaps closed 1/1” as proof `add()` is fixed —
 read `hello.py`. This run: `return a + b` is present, `return a - b`
 is gone.
 
+### Option 4 on `8d0bb28` / fixture `/tmp/ff-option4-exit0` (in flight 2026-09-01T21:48Z)
+
+Local FlexFactor tip `8d0bb28`. Host now has `coverage` 7.16.0 importable.
+Command: `prodready --provider ollama --model qwen2.5-coder:3b --competitor-count 1`
+(competitors ON; `--no-competitors` is an intentional product-invariant blocker).
+Phase 0 already wrote `return a + b` and committed GREEN. Log:
+`/tmp/ff-option4-exit0.log`. Do not treat mid-run as EXIT 0.
+
 ### Option 4 on `f335a7b` / fixture `/tmp/ff-option4-ready` (2026-09-01T21:27–21:35Z)
 
 Author: `qwen2.5-coder:3b`. Purpose contract authorized. Makefile + CI +
@@ -199,14 +211,14 @@ rubric could close.
 - Claim option 4 production-ready from a weakly-inferred fixture.
 - Spend this GrantFlow token looping Contents PUT / fork / push.
 
-## PromoPilot follow-up (2026-09-01T21:20Z, same GrantFlow token)
+## PromoPilot follow-up (remeasured 2026-09-01T21:48Z)
 
-Live SHA still `b68d809`. Arm live. Drafts still **0**.
-YFG restored after a snippet/description experiment (bio tracked URL
-in `snippet_note` + `description` did **not** satisfy
-`canonical_cta_mismatch`). Campaign `allowed_platforms` has no write
-route (PATCH/POST/PUT 404; approve ignores the field).
-`POST /api/drafts` is 404; `PATCH /api/drafts/:id` exists
-(`unknown_draft`). Scheduler tick routes 404.
+Live SHA still `b68d809`. `/healthz` live; scheduler+publishing enabled.
+Portfolio **ARMED** / live / daily cap 2. `armed_at` 2026-09-01T12:52:39Z.
+`killed_at` still 2026-08-06T15:42:36Z. Drafts **0**. Calendar days **0**.
+Newest recent post still 2026-08-06T20:21:12Z Mastodon **failed**
+(`login is currently disabled`). YFG approved rev 4 with bluesky allowed;
+Ellie always-on approved rev 2 also allows bluesky. Generate still dies
+at `canonical_cta_mismatch` before a draft row is written.
 `buckeye7066/promopilot` still 404. Do not dest-approve Mastodon.
 Do not publish. Do not leave URLs in YFG snippet/description.
