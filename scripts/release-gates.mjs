@@ -16,12 +16,11 @@ import path from 'node:path'
 import process from 'node:process'
 import { buildIsolatedTestEnv } from './test-environment.mjs'
 
-const REQUIRED_NODE_VERSION = '20.20.2'
-
-function assertNode20Runtime() {
-  if (process.versions.node !== REQUIRED_NODE_VERSION) {
+function assertNode22Runtime() {
+  const major = Number(String(process.versions.node).split('.')[0] || '0')
+  if (!(Number.isFinite(major) && major === 22)) {
     throw new Error(
-      `release gates require Node ${REQUIRED_NODE_VERSION}; received ${process.versions.node}`,
+      `release gates require Node 22.x; received ${process.versions.node}`,
     )
   }
   console.log(`[gate:node-runtime] ok (Node ${process.versions.node})`)
@@ -79,7 +78,7 @@ function runVitest(args, label) {
 }
 
 async function main() {
-  assertNode20Runtime()
+  assertNode22Runtime()
 
   // Gate 0: CI/workstation guard — ensure Rollup native optional dep is present (npm optional-deps can be flaky on Linux CI).
   await run('node', ['scripts/ensure-rollup-native.mjs'], { label: 'rollup-native' })
