@@ -275,8 +275,16 @@ Follow-up agent launched to retry option 4 with that model and
 retry origin write paths:
 [FlexFactor option 4 qwen](bc-5a7ee16b-c6da-5bbe-9645-e54cae715073).
 Fixture `/tmp/ff-option4-qwen` @ `3493fa30` (planted `add()`).
-Do not treat option 4 as complete until that agent’s evidence
-file is updated.
+
+That agent finished 2026-09-01T20:24Z. Evidence:
+`/tmp/flexfactor-aifactory-status.md`. Option 4 **EXIT 1**,
+**0 files fixed**, `hello.py` still `return a - b`. The 1.5b
+model **named** the planted defect and that finding **passed**
+the evidence gate; the fixer then no-op’d (`Cross-file
+dependency…`). A free 3b retry also EXIT 1 / 0 files fixed
+(batch review dropped the planted bug as ungrounded). Origin
+writes still **403**. PR #110 head still `634250c`.
+Do not treat FlexFactor as production-ready.
 
 ## Follow-up 2026-09-01T19:50Z (`bc-b97b5389-e742-5895-8193-8e35f10fa427`)
 
