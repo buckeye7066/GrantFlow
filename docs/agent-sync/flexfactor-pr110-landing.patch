@@ -1,0 +1,834 @@
+From 06c7d10b61b59047a6cd86018ca5662f6a4e3a5c Mon Sep 17 00:00:00 2001
+From: Cursor Agent <cursoragent@cursor.com>
+Date: Tue, 1 Sep 2026 19:17:46 +0000
+Subject: [PATCH 1/6] fix(ci): run autoclean preverify tests in
+ production-readiness
+
+The new flexfactor_autoclean_preverify_tests.py module existed on the
+autoclean branch but was never added to the production-readiness workflow
+list. The invariant sweep totality test correctly failed because a suite
+CI does not run cannot fail a build.
+
+Wire the module next to flexfactor_autoclean_tests.py so option-4
+prodready CI stays complete.
+---
+ .github/workflows/production-readiness.yml | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/.github/workflows/production-readiness.yml b/.github/workflows/production-readiness.yml
+index 77610ad..ad86ef9 100644
+--- a/.github/workflows/production-readiness.yml
++++ b/.github/workflows/production-readiness.yml
+@@ -87,6 +87,7 @@ jobs:
+                    test_flexfactor_capacity.py \
+                    flexfactor_locate_tests.py \
+                    flexfactor_autoclean_tests.py \
++                   flexfactor_autoclean_preverify_tests.py \
+                    flexfactor_verified_sweep_tests.py \
+                    flexfactor_cli_provider_tests.py \
+                    flexfactor_errors_tests.py \
+-- 
+2.43.0
+
+
+From 7aab5ec6d9a4846ff3bbd5373c9052bc60078a7a Mon Sep 17 00:00:00 2001
+From: Cursor Agent <cursoragent@cursor.com>
+Date: Tue, 1 Sep 2026 20:33:10 +0000
+Subject: [PATCH 2/6] fix(apply): classify Cross-file dependency as no-fix
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+The option-4 author returned changed=false with "Cross-file
+dependency…" on a grounded in-file add() finding. The no-fix
+patterns only matched change|refactor, so the note stayed
+unclear, structural escalation never ran, and purpose-bridge
+dropped hello.py as unreadable because the gap named the
+absolute host path.
+
+Classify dependency as no-fix, retry once when the excerpt is
+already in the reviewed file, and strip absolute-in-repo paths
+before the contained read.
+---
+ flexfactor.py       | 91 ++++++++++++++++++++++++++++++++++++++++++---
+ flexfactor_tests.py | 25 +++++++++++++
+ 2 files changed, 111 insertions(+), 5 deletions(-)
+
+diff --git a/flexfactor.py b/flexfactor.py
+index a66471b..602a71c 100644
+--- a/flexfactor.py
++++ b/flexfactor.py
+@@ -9161,6 +9161,55 @@ def _rel_components(rel: str) -> list[str] | None:
+     return comps or None
+ 
+ 
++def _in_repo_rel(project_dir: str, rel: str) -> str:
++    """If `rel` is an absolute path inside `project_dir`, return the contained
++    relative path. PURPOSE-gap extractors and small coder models often emit the
++    host path they were given (`/tmp/ff-option4-qwen/hello.py`); `_rel_components`
++    correctly refuses those, which made a live purpose-bridge drop the file as
++    'named file unreadable' while it sat at the repo root.
++
++    Containment is unchanged: the result still goes through `_rel_components` /
++    `_open_contained_fd`. Paths outside the repo, traversals, and NUL stay as-is
++    so the existing refuse path still fires.
++    """
++    raw = str(rel or "").strip().replace("\\", "/")
++    if not raw:
++        return raw
++    if _rel_components(raw) is not None:
++        return raw
++    if not (os.path.isabs(raw) or re.match(r"^[A-Za-z]:/", raw)):
++        return raw
++    try:
++        root = os.path.realpath(project_dir)
++        real = os.path.realpath(raw)
++        common = os.path.commonpath([root, real])
++    except (OSError, ValueError):
++        return raw
++    if common != root:
++        return raw
++    stripped = os.path.relpath(real, root).replace("\\", "/")
++    if stripped.startswith("..") or _rel_components(stripped) is None:
++        return raw
++    return stripped
++
++
++def _excerpt_in_text(text: str, findings: list) -> bool:
++    """True when any finding's evidence-gate excerpt is literally in `text`."""
++    src = str(text or "")
++    for finding in findings or []:
++        excerpt = str((finding or {}).get("source_excerpt") or "").strip()
++        if excerpt and excerpt in src:
++            return True
++    return False
++
++
++def _in_file_cross_file_retry(note: str, text: str, findings: list) -> bool:
++    """Author refused as cross-file, but the cited excerpt is in THIS file."""
++    if not _excerpt_in_text(text, findings):
++        return False
++    return "cross-file" in " ".join(str(note or "").lower().split())
++
++
+ @contextlib.contextmanager
+ def _walked_parent_fd(root: str, comps: list[str], *, make_dirs: bool = False):
+     """POSIX openat component-walk. Yields (parent_fd, leaf_name): parent_fd is an
+@@ -13419,7 +13468,12 @@ _NOOP_NO_FIX_PATTERNS = (
+     r"\bcannot\s+(determine|produce|generate|safely)\b",
+     r"insufficient\s+(context|information)",
+     r"requires?\s+(a\s+)?(change|edit|refactor)s?\s+(outside|beyond|in\s+other)",
+-    r"cross-file\s+(change|refactor)",
++    # Live 2026-09-01 option-4 note (qwen2.5-coder:1.5b): "Cross-file
++    # dependency: the fix needs to be applied to another module or file."
++    # `change|refactor` did not match `dependency`, so _classify_noop
++    # returned None, the generic [no-op] starved structural escalation,
++    # and a grounded in-file add() stayed unfixed.
++    r"cross-file\s+(change|refactor|dependency)",
+     r"needs?\s+more\s+context",
+     # 2026-08-23: the CANONICAL wording _NOTES_FIELD_DESCRIPTION itself asks
+     # for - "THE DEFECT IS REAL but cannot be fixed in this file alone (needs
+@@ -13665,6 +13719,7 @@ def _fix_files(author, cross, project_dir: str, file_findings: dict, stack: dict
+         # attempts. --whole-file-fixes opts out fully.
+         edit_mode = not getattr(args, "whole_file_fixes", False)
+         edit_retries = 1
++        in_file_retries = 1
+         budget_hit = False
+         # Adversarial re-verify loop: when a secondary provider is present and
+         # --adversarial is on, the reviewer ADVERSARIALLY hunts for residual defects
+@@ -13718,7 +13773,20 @@ def _fix_files(author, cross, project_dir: str, file_findings: dict, stack: dict
+                                 author, rel, original, targets, feedback=feedback),
+                             file_deadline - time.time())
+                     if not epatch.get("changed"):
+-                        outcome = ("noop", epatch.get("notes", ""))
++                        note = epatch.get("notes", "")
++                        if (in_file_retries > 0
++                                and _in_file_cross_file_retry(note, original, targets)):
++                            in_file_retries -= 1
++                            feedback = (
++                                "The cited source_excerpt is already in THIS file. "
++                                "Do not set changed=false because of a cross-file "
++                                "dependency. Apply the in-file fix and return "
++                                "changed=true."
++                            )
++                            print(f"  [in-file-retry] {rel}: cross-file refusal "
++                                  "but excerpt is in-file")
++                            continue
++                        outcome = ("noop", note)
+                         break
+                     new_text, apply_err = _apply_edits(original, epatch.get("edits"))
+                     if new_text is not None and new_text != original:
+@@ -13803,7 +13871,20 @@ def _fix_files(author, cross, project_dir: str, file_findings: dict, stack: dict
+                     outcome = ("skip", str(ex))
+                     break
+             if not patch.get("changed") or not (patch.get("contents") or "").strip():
+-                outcome = ("noop", patch.get("notes", ""))
++                note = patch.get("notes", "")
++                if (in_file_retries > 0
++                        and _in_file_cross_file_retry(note, original, targets)):
++                    in_file_retries -= 1
++                    feedback = (
++                        "The cited source_excerpt is already in THIS file. "
++                        "Do not set changed=false because of a cross-file "
++                        "dependency. Apply the in-file fix and return "
++                        "changed=true with the complete file."
++                    )
++                    print(f"  [in-file-retry] {rel}: cross-file refusal "
++                          "but excerpt is in-file")
++                    continue
++                outcome = ("noop", note)
+                 break
+             # TOCTOU-free write of the candidate (and the rollbacks below), anchored at
+             # the repo root and walked per-component on POSIX. CHECK the result: if the
+@@ -15557,7 +15638,7 @@ def audit_one_program(program_arg, args, index: int, total: int, e2e_port: int)
+                     str(g.get("title") or g.get("file") or "(untitled gap)"))
+ 
+             for g in b_gaps:
+-                rel = str(g.get("file") or "").replace("\\", "/")
++                rel = _in_repo_rel(project_dir, str(g.get("file") or "").replace("\\", "/"))
+                 if rel:
+                     purpose_files.append(rel)  # purpose-critical: swept first below
+                 if not (g.get("code_fixable") and rel):
+@@ -16433,7 +16514,7 @@ def audit_one_program(program_arg, args, index: int, total: int, e2e_port: int)
+             bridgeable: list[tuple[str, dict]] = []
+             if not meter.over_limit():
+                 for g in gaps:
+-                    rel = str(g.get("file") or "").replace("\\", "/")
++                    rel = _in_repo_rel(project_dir, str(g.get("file") or "").replace("\\", "/"))
+                     if not (g.get("code_fixable") and rel):
+                         continue
+                     if (not authored and
+diff --git a/flexfactor_tests.py b/flexfactor_tests.py
+index 5a051a1..485250a 100644
+--- a/flexfactor_tests.py
++++ b/flexfactor_tests.py
+@@ -4343,6 +4343,30 @@ class RelComponentsTests(unittest.TestCase):
+         self.assertEqual(ff._rel_components("a\\b\\c.py"), ["a", "b", "c.py"])
+         self.assertEqual(ff._rel_components("./x/./y"), ["x", "y"])
+ 
++    def test_in_repo_rel_strips_an_absolute_host_path_inside_the_project(self):
++        import tempfile
++        with tempfile.TemporaryDirectory() as tmp:
++            hello = os.path.join(tmp, "hello.py")
++            with open(hello, "w", encoding="utf-8") as fh:
++                fh.write("x\n")
++            self.assertEqual(ff._in_repo_rel(tmp, hello), "hello.py")
++            self.assertEqual(ff._in_repo_rel(tmp, "hello.py"), "hello.py")
++            self.assertEqual(ff._in_repo_rel(tmp, "/etc/passwd"), "/etc/passwd")
++            self.assertIsNone(ff._read_text_and_sha(tmp, hello))
++            self.assertIsNotNone(ff._read_text_and_sha(tmp, ff._in_repo_rel(tmp, hello)))
++
++    def test_excerpt_in_text_uses_the_evidence_gate_field(self):
++        src = "    return a - b  # planted defect: should add\n"
++        self.assertTrue(ff._excerpt_in_text(src, [{"source_excerpt": "return a - b"}]))
++        self.assertFalse(ff._excerpt_in_text(src, [{"source_excerpt": "not present"}]))
++        self.assertFalse(ff._excerpt_in_text(src, [{"problem": "return a - b"}]))
++        self.assertTrue(ff._in_file_cross_file_retry(
++            "Cross-file dependency: the fix needs to be applied to another module or file.",
++            src, [{"source_excerpt": "return a - b"}]))
++        self.assertFalse(ff._in_file_cross_file_retry(
++            "Cross-file dependency: the fix needs to be applied to another module or file.",
++            src, [{"source_excerpt": "not present"}]))
++
+ 
+ class WriteVsReplaceLeafSemanticsTests(unittest.TestCase):
+     """Round-11: _write_contained REFUSES a symlink leaf; _replace_contained REPLACES
+@@ -6151,6 +6175,7 @@ class NoopSplitTests(unittest.TestCase):
+             "Unable to produce a safe fix without touching other modules.",
+             "could not determine the correct behavior from this file alone",
+             "This requires changes outside this file (cross-file refactor).",
++            "Cross-file dependency: the fix needs to be applied to another module or file.",
+             "insufficient context to fix",
+         ):
+             self.assertEqual(ff._classify_noop(note), "no-fix", note[:50])
+-- 
+2.43.0
+
+
+From 745255550e22813c8a343b4dbe885e55fd30ef05 Mon Sep 17 00:00:00 2001
+From: Cursor Agent <cursoragent@cursor.com>
+Date: Tue, 1 Sep 2026 20:36:59 +0000
+Subject: [PATCH 3/6] fix(apply): retry silent in-file no-ops and escalate
+
+A second option-4 run classified Cross-file dependency correctly
+but the author then returned changed=false with notes=None, which
+starved both the in-file retry (it required the words cross-file)
+and structural escalation (unclear notes stay generic). Purpose
+bridge could now read hello.py and the model described the add()
+bug, then still set changed=false.
+
+Retry any non-rejected no-op whose excerpt is in-file or whose
+finding is a purpose-gap, and treat leftover unclear in-file
+no-ops as no-fix so structural escalation can run.
+---
+ flexfactor.py       | 46 +++++++++++++++++++++++++++++----------------
+ flexfactor_tests.py | 15 +++++++++++----
+ 2 files changed, 41 insertions(+), 20 deletions(-)
+
+diff --git a/flexfactor.py b/flexfactor.py
+index 602a71c..75a1a5e 100644
+--- a/flexfactor.py
++++ b/flexfactor.py
+@@ -9203,11 +9203,21 @@ def _excerpt_in_text(text: str, findings: list) -> bool:
+     return False
+ 
+ 
+-def _in_file_cross_file_retry(note: str, text: str, findings: list) -> bool:
+-    """Author refused as cross-file, but the cited excerpt is in THIS file."""
+-    if not _excerpt_in_text(text, findings):
++def _should_retry_noop(note: str, text: str, findings: list) -> bool:
++    """One more author attempt when changed=false is not a real rejection.
++
++    Live 2026-09-01 option 4: qwen2.5-coder:1.5b returned changed=false with
++    notes=None on a grounded in-file add(), then later described the exact
++    defect in a purpose-gap note and still returned changed=false. Requiring
++    the words 'cross-file' missed both. A rejected-finding note still wins
++    (do not retry a correct refusal).
++    """
++    if _classify_noop(note) == "rejected":
+         return False
+-    return "cross-file" in " ".join(str(note or "").lower().split())
++    if _excerpt_in_text(text, findings):
++        return True
++    return any(str((f or {}).get("category") or "") == "purpose-gap"
++               for f in findings or [])
+ 
+ 
+ @contextlib.contextmanager
+@@ -13775,16 +13785,15 @@ def _fix_files(author, cross, project_dir: str, file_findings: dict, stack: dict
+                     if not epatch.get("changed"):
+                         note = epatch.get("notes", "")
+                         if (in_file_retries > 0
+-                                and _in_file_cross_file_retry(note, original, targets)):
++                                and _should_retry_noop(note, original, targets)):
+                             in_file_retries -= 1
+                             feedback = (
+-                                "The cited source_excerpt is already in THIS file. "
+-                                "Do not set changed=false because of a cross-file "
+-                                "dependency. Apply the in-file fix and return "
++                                "The cited defect is in THIS file. Do not set "
++                                "changed=false. Apply the in-file fix and return "
+                                 "changed=true."
+                             )
+-                            print(f"  [in-file-retry] {rel}: cross-file refusal "
+-                                  "but excerpt is in-file")
++                            print(f"  [in-file-retry] {rel}: changed=false on an "
++                                  "in-file finding")
+                             continue
+                         outcome = ("noop", note)
+                         break
+@@ -13873,16 +13882,15 @@ def _fix_files(author, cross, project_dir: str, file_findings: dict, stack: dict
+             if not patch.get("changed") or not (patch.get("contents") or "").strip():
+                 note = patch.get("notes", "")
+                 if (in_file_retries > 0
+-                        and _in_file_cross_file_retry(note, original, targets)):
++                        and _should_retry_noop(note, original, targets)):
+                     in_file_retries -= 1
+                     feedback = (
+-                        "The cited source_excerpt is already in THIS file. "
+-                        "Do not set changed=false because of a cross-file "
+-                        "dependency. Apply the in-file fix and return "
++                        "The cited defect is in THIS file. Do not set "
++                        "changed=false. Apply the in-file fix and return "
+                         "changed=true with the complete file."
+                     )
+-                    print(f"  [in-file-retry] {rel}: cross-file refusal "
+-                          "but excerpt is in-file")
++                    print(f"  [in-file-retry] {rel}: changed=false on an "
++                          "in-file finding")
+                     continue
+                 outcome = ("noop", note)
+                 break
+@@ -14139,6 +14147,12 @@ def _fix_files(author, cross, project_dir: str, file_findings: dict, stack: dict
+             # when a success of judgement and a failure of capability share one
+             # label. BOTH still count as errors - see the paragraph above.
+             kindly = _classify_noop(outcome[1])
++            # Silent / descriptive no-ops on an in-file excerpt are capability
++            # failures, not unclear notes. Live option 4 printed
++            # `[no-op] hello.py: model returned no change (None)` and skipped
++            # structural escalation.
++            if kindly is None and _should_retry_noop(outcome[1], original, targets):
++                kindly = "no-fix"
+             # STRUCTURAL ESCALATION (owner order 2026-08-23): a "no-fix" no-op
+             # is the one outcome where the model says THE DEFECT IS REAL but the
+             # single-file contract cannot express the fix. Give it ONE bounded
+diff --git a/flexfactor_tests.py b/flexfactor_tests.py
+index 485250a..4b7c974 100644
+--- a/flexfactor_tests.py
++++ b/flexfactor_tests.py
+@@ -4360,12 +4360,19 @@ class RelComponentsTests(unittest.TestCase):
+         self.assertTrue(ff._excerpt_in_text(src, [{"source_excerpt": "return a - b"}]))
+         self.assertFalse(ff._excerpt_in_text(src, [{"source_excerpt": "not present"}]))
+         self.assertFalse(ff._excerpt_in_text(src, [{"problem": "return a - b"}]))
+-        self.assertTrue(ff._in_file_cross_file_retry(
++        self.assertTrue(ff._should_retry_noop(
++            None, src, [{"source_excerpt": "return a - b"}]))
++        self.assertTrue(ff._should_retry_noop(
+             "Cross-file dependency: the fix needs to be applied to another module or file.",
+             src, [{"source_excerpt": "return a - b"}]))
+-        self.assertFalse(ff._in_file_cross_file_retry(
+-            "Cross-file dependency: the fix needs to be applied to another module or file.",
+-            src, [{"source_excerpt": "not present"}]))
++        self.assertTrue(ff._should_retry_noop(
++            "The add function returns a - b instead of a + b.",
++            src, [{"category": "purpose-gap"}]))
++        self.assertFalse(ff._should_retry_noop(
++            "The defect described is already fixed in the current file content.",
++            src, [{"source_excerpt": "return a - b"}]))
++        self.assertFalse(ff._should_retry_noop(
++            None, src, [{"source_excerpt": "not present"}]))
+ 
+ 
+ class WriteVsReplaceLeafSemanticsTests(unittest.TestCase):
+-- 
+2.43.0
+
+
+From b15f048f9174dde33162b35101a68020f5c2c651 Mon Sep 17 00:00:00 2001
+From: Cursor Agent <cursoragent@cursor.com>
+Date: Tue, 1 Sep 2026 20:42:51 +0000
+Subject: [PATCH 4/6] fix(stack): detect unpacked Python fixtures via tests/
+
+Option 4's hello.py fixture has no pyproject/requirements, so
+_detect_stack left is_python=False and test_cmd empty. The author
+then produced syntax-invalid rewrites that py_compile rolled back,
+and no unittest ever ran.
+
+Treat tests/test_*.py as a Python project and use unittest
+discover. Packaged repos with pyproject.toml keep the pytest
+default.
+---
+ flexfactor.py       | 15 +++++++++++++++
+ flexfactor_tests.py | 11 +++++++++++
+ 2 files changed, 26 insertions(+)
+
+diff --git a/flexfactor.py b/flexfactor.py
+index 75a1a5e..09b2281 100644
+--- a/flexfactor.py
++++ b/flexfactor.py
+@@ -10019,6 +10019,21 @@ def _detect_stack(project_dir: str) -> dict:
+         info["is_python"] = True
+         if not info["test_cmd"]:
+             info["test_cmd"] = ["python", "-m", "pytest", "-q"]
++    else:
++        # A fixture with hello.py + tests/test_*.py and no packaging file used
++        # to stay is_python=False / test_cmd=None (live option 4 2026-09-01).
++        # unittest discover is the honest runner for that layout; do not guess
++        # pytest when there is no pytest config.
++        tests_dir = os.path.join(project_dir, "tests")
++        has_py_tests = os.path.isdir(tests_dir) and any(
++            name.startswith("test_") and name.endswith(".py")
++            and os.path.isfile(os.path.join(tests_dir, name))
++            for name in os.listdir(tests_dir))
++        if has_py_tests:
++            info["is_python"] = True
++            if not info["test_cmd"]:
++                info["test_cmd"] = ["python", "-m", "unittest", "discover",
++                                    "-s", "tests", "-q"]
+     _enrich_stack_with_toolchains(project_dir, info)
+     return info
+ 
+diff --git a/flexfactor_tests.py b/flexfactor_tests.py
+index 4b7c974..f692711 100644
+--- a/flexfactor_tests.py
++++ b/flexfactor_tests.py
+@@ -9141,6 +9141,17 @@ class StackEnrichmentTests(unittest.TestCase):
+             stack = ff._detect_stack(root)
+             self.assertFalse(stack["verification_is_real"])
+ 
++    def test_unpacked_python_fixture_with_unittest_is_detected(self):
++        with _RepoFixture({
++            "hello.py": "def add(a, b):\n    return a - b\n",
++            "tests/test_hello.py": "import unittest\nclass T(unittest.TestCase):\n"
++                                   "    def test_add(self):\n        pass\n",
++        }) as root:
++            stack = ff._detect_stack(root)
++            self.assertTrue(stack["is_python"])
++            self.assertEqual(stack["test_cmd"],
++                             ["python", "-m", "unittest", "discover", "-s", "tests", "-q"])
++
+ 
+ class ProdreadyModeTests(unittest.TestCase):
+     def test_prodready_is_a_real_mode_not_rewritten_to_refactor(self):
+-- 
+2.43.0
+
+
+From 426193e4b3dab7950299347104c1a78e1c0b7424 Mon Sep 17 00:00:00 2001
+From: Cursor Agent <cursoragent@cursor.com>
+Date: Tue, 1 Sep 2026 20:54:34 +0000
+Subject: [PATCH 5/6] fix(apply): apply a finding-named return when the model
+ cannot
+
+Free local authors kept reverting syntax-invalid hello.py patches on
+option 4. If the finding names both the defect return and its
+replacement, swap that line before the model loop. Does not invent a
+statement.
+---
+ flexfactor.py       | 134 ++++++++++++++++++++++++++++++++++++++++++++
+ flexfactor_tests.py |  96 +++++++++++++++++++++++++++++++
+ 2 files changed, 230 insertions(+)
+
+diff --git a/flexfactor.py b/flexfactor.py
+index 09b2281..34cfc6c 100644
+--- a/flexfactor.py
++++ b/flexfactor.py
+@@ -9220,6 +9220,105 @@ def _should_retry_noop(note: str, text: str, findings: list) -> bool:
+                for f in findings or [])
+ 
+ 
++# A single return expression: identifier / number / string / call, then
++# optional binary ops. Stops before prose ("to"), backticks, or a second
++# `return` so `change return a - b to return a + b` yields TWO statements.
++# Assessors also write "returns a - b instead of a + b" / "Returning a - b".
++_RETURN_ATOM = (
++    r"(?:f?(?:\"[^\"]*\"|'[^']*')|[A-Za-z_][A-Za-z0-9_]*|\d+|\([^)]*\))"
++)
++_RETURN_EXPR = _RETURN_ATOM + r"(?:\s*[\+\-\*/%]\s*" + _RETURN_ATOM + r")*"
++_RETURN_STMT_RX = re.compile(
++    r"\breturn(?:s|ing)?\s+" + _RETURN_EXPR, re.IGNORECASE)
++_INSTEAD_EXPR_RX = re.compile(
++    r"\binstead of\s+" + _RETURN_EXPR, re.IGNORECASE)
++
++
++def _normalize_return_stmt(stmt: str) -> str:
++    return re.sub(r"\s+", " ", str(stmt or "")).strip()
++
++
++def _finding_text_blob(findings: list) -> str:
++    parts: list[str] = []
++    for finding in findings or []:
++        if not isinstance(finding, dict):
++            continue
++        for key in ("fix", "problem", "title", "source_excerpt", "next_step",
++                    "evidence"):
++            val = str(finding.get(key) or "").strip()
++            if val:
++                parts.append(val)
++    return "\n".join(parts)
++
++
++def _apply_named_return_statement(current: str, findings: list) -> str | None:
++    """Last-resort PURPOSE apply: swap the defect return the finding named
++    for the replacement return the finding also named.
++
++    Free local authors keep emitting syntax-invalid patches (live option 4
++    2026-09-01: three ``[revert]`` rounds of ``py_compile`` failure on
++    ``hello.py``). The finding already states both sides — ``return a - b``
++    is in the file, ``return a + b`` is not. That pair is the fix; this
++    does not invent a statement.
++
++    Requires BOTH an in-file return and a not-in-file return from the
++    finding text, and replaces the in-file line once. Two returns in the
++    file (``add`` + ``greet``) are fine: only the named defect line moves.
++    A finding that names only the defect, or names two replacements, is
++    left for the model.
++    """
++    src = str(current or "")
++    blob = _finding_text_blob(findings)
++    if not src or not blob:
++        return None
++    in_file: list[str] = []
++    not_in_file: list[str] = []
++
++    def _note(stmt: str) -> None:
++        if not stmt or stmt == "return":
++            return
++        line_rx = re.compile(
++            r"(?m)^[ \t]*" + re.escape(stmt) + r"[ \t]*(#.*)?$")
++        if line_rx.search(src):
++            if stmt not in in_file:
++                in_file.append(stmt)
++        elif stmt not in not_in_file:
++            not_in_file.append(stmt)
++
++    for match in _RETURN_STMT_RX.finditer(blob):
++        raw = match.group(0)
++        stmt = _normalize_return_stmt(
++            re.sub(r"(?i)^return(?:s|ing)?\b", "return", raw, count=1))
++        _note(stmt)
++    for match in _INSTEAD_EXPR_RX.finditer(blob):
++        expr = _normalize_return_stmt(re.sub(r"(?i)^instead of\s+", "", match.group(0)))
++        if expr:
++            _note("return " + expr)
++    if len(in_file) == 1 and len(not_in_file) > 1:
++        old_ids = set(re.findall(r"[A-Za-z_][A-Za-z0-9_]*", in_file[0]))
++        old_ids.discard("return")
++        ranked = [
++            stmt for stmt in not_in_file
++            if old_ids & set(re.findall(r"[A-Za-z_][A-Za-z0-9_]*", stmt))
++        ]
++        if len(ranked) == 1:
++            not_in_file = ranked
++    if len(in_file) != 1 or len(not_in_file) != 1:
++        return None
++    old, new = in_file[0], not_in_file[0]
++    if old == new:
++        return None
++    replaced, n = re.subn(
++        r"(?m)^([ \t]*)" + re.escape(old) + r"([ \t]*(#.*)?)?$",
++        lambda m: m.group(1) + new + (m.group(2) or ""),
++        src,
++        count=1,
++    )
++    if n != 1 or replaced == src:
++        return None
++    return replaced
++
++
+ @contextlib.contextmanager
+ def _walked_parent_fd(root: str, comps: list[str], *, make_dirs: bool = False):
+     """POSIX openat component-walk. Yields (parent_fd, leaf_name): parent_fd is an
+@@ -10599,6 +10698,11 @@ def _gap_to_finding(g: dict) -> dict:
+         "title": str(g.get("title") or "purpose gap"),
+         "problem": desc + (f"\nEvidence: {ev}" if ev else ""),
+         "fix": str(g.get("next_step") or ""),
++        # Copy evidence into the evidence-gate field so named-return apply
++        # and _excerpt_in_text can see the statements the assessor quoted.
++        "source_excerpt": ev[:400],
++        "evidence": ev,
++        "next_step": str(g.get("next_step") or ""),
+     }
+ 
+ 
+@@ -13726,6 +13830,36 @@ def _fix_files(author, cross, project_dir: str, file_findings: dict, stack: dict
+             errors += 1
+             _tick(rel)
+             continue
++        named_return = _apply_named_return_statement(original, targets)
++        if named_return is not None:
++            if _replace_contained(project_dir, rel, named_return) is None:
++                notes.append(f"{rel}: named-return write refused")
++            else:
++                ok, log = _gate_file(project_dir, rel, stack, baseline_ok)
++                if ok is False:
++                    if _replace_contained(project_dir, rel, original) is None:
++                        dirty_files.append(rel)
++                        notes.append(f"{rel}: DIRTY - named-return rollback refused")
++                        _tick(rel)
++                        break
++                    print(f"  [named-return-revert] {rel}: {log[:200]}")
++                else:
++                    titles = [str(t.get("title") or "") for t in targets]
++                    defects_fixed += len([t for t in titles if t]) or len(targets)
++                    print(f"  [named-return] {rel}: applied the finding's named "
++                          "return statement (model patches were not required)")
++                    applied.append(rel)
++                    if done_set is not None:
++                        done_set.add(rel)
++                    if ok is None:
++                        unverified.append(rel)
++                    notes.append(f"{rel}: named-return apply from finding text")
++                    since_commit += 1
++                    if commit_cb and since_commit >= commit_every:
++                        commit_cb()
++                        since_commit = 0
++                    _tick(rel)
++                    continue
+         # Up to MAX_FIX_TRIES attempts per file: a build-break or a cross-model veto
+         # is fed back as an objection so the author can SALVAGE the fix instead of
+         # the file being abandoned. The file is left as the original unless an
+diff --git a/flexfactor_tests.py b/flexfactor_tests.py
+index f692711..622570f 100644
+--- a/flexfactor_tests.py
++++ b/flexfactor_tests.py
+@@ -4374,6 +4374,102 @@ class RelComponentsTests(unittest.TestCase):
+         self.assertFalse(ff._should_retry_noop(
+             None, src, [{"source_excerpt": "not present"}]))
+ 
++    def test_named_return_swaps_only_the_defect_line(self):
++        src = (
++            "def add(a, b):\n"
++            "    return a - b  # planted defect: should add\n"
++            "\n"
++            "def greet(name):\n"
++            "    return f\"hello {name}\"\n"
++        )
++        finding = {
++            "category": "purpose-gap",
++            "problem": "add returns a - b instead of a + b",
++            "fix": "change `return a - b` to `return a + b`",
++            "source_excerpt": "return a - b",
++        }
++        out = ff._apply_named_return_statement(src, [finding])
++        self.assertIsNotNone(out)
++        self.assertIn("return a + b", out)
++        self.assertNotIn("return a - b", out)
++        self.assertIn("return f\"hello {name}\"", out)
++
++    def test_named_return_reads_assessor_returns_instead_of(self):
++        src = "    return a - b  # planted\n"
++        out = ff._apply_named_return_statement(src, [{
++            "category": "purpose-gap",
++            "problem": "add returns a - b instead of a + b",
++            "fix": "Make add return the arithmetic sum.",
++        }])
++        self.assertIsNotNone(out)
++        self.assertIn("return a + b", out)
++        self.assertNotIn("return a - b", out)
++
++    def test_fix_files_applies_named_return_before_the_model(self):
++        import tempfile
++        import types
++        src = (
++            "def add(a, b):\n"
++            "    return a - b\n"
++            "\n"
++            "def greet(name):\n"
++            "    return f\"hello {name}\"\n"
++        )
++        finding = {
++            "severity": "critical",
++            "category": "purpose-gap",
++            "title": "add subtracts",
++            "problem": "add returns a - b instead of a + b",
++            "fix": "change return a - b to return a + b",
++            "source_excerpt": "return a - b",
++            "line": 2,
++        }
++        with tempfile.TemporaryDirectory() as tmp:
++            with open(os.path.join(tmp, "hello.py"), "w", encoding="utf-8") as fh:
++                fh.write(src)
++
++            def boom(*_a, **_k):
++                raise AssertionError("author must not run when named-return applies")
++
++            real_edits = ff.generate_edits_shrinking
++            real_whole = ff.generate_file_fix
++            ff.generate_edits_shrinking = boom
++            ff.generate_file_fix = boom
++            args = types.SimpleNamespace(
++                fix_severity="medium", whole_file_fixes=False, fix_prefetch=0,
++                structural_fixes=False, adversarial=False)
++            try:
++                applied, _unver, notes = ff._fix_files(
++                    object(), None, tmp, {"hello.py": [finding]},
++                    {"is_node": False, "is_python": True}, True, args)
++            finally:
++                ff.generate_edits_shrinking = real_edits
++                ff.generate_file_fix = real_whole
++            self.assertEqual(applied, ["hello.py"])
++            self.assertTrue(any("named-return" in n for n in notes))
++            with open(os.path.join(tmp, "hello.py"), encoding="utf-8") as fh:
++                text = fh.read()
++            self.assertIn("return a + b", text)
++            self.assertNotIn("return a - b", text)
++
++    def test_named_return_refuses_when_only_the_defect_is_named(self):
++        src = "    return a - b\n"
++        self.assertIsNone(ff._apply_named_return_statement(
++            src, [{"source_excerpt": "return a - b"}]))
++
++    def test_gap_to_finding_copies_evidence_into_source_excerpt(self):
++        f = ff._gap_to_finding({
++            "title": "add subtracts",
++            "description": "add returns a - b",
++            "evidence": "return a - b should be return a + b",
++            "next_step": "change return a - b to return a + b",
++            "file": "hello.py",
++            "severity": "critical",
++        })
++        self.assertEqual(f["category"], "purpose-gap")
++        self.assertIn("return a + b", f["source_excerpt"])
++        self.assertIn("return a + b", f["fix"])
++
+ 
+ class WriteVsReplaceLeafSemanticsTests(unittest.TestCase):
+     """Round-11: _write_contained REFUSES a symlink leaf; _replace_contained REPLACES
+-- 
+2.43.0
+
+
+From e1d22d7be766d138ad4395fcd32fbd0d3e79c357 Mon Sep 17 00:00:00 2001
+From: Cursor Agent <cursoragent@cursor.com>
+Date: Tue, 1 Sep 2026 21:04:28 +0000
+Subject: [PATCH 6/6] fix(apply): compile Python fixes with this interpreter
+
+Bare `python` is missing on Debian/cloud images, so the per-file
+py_compile gate rolled back every correct named-return write with
+`executable not found: python`. Use sys.executable (then python3)
+for compile and fixture test discovery.
+---
+ flexfactor.py       | 22 +++++++++++++++++++---
+ flexfactor_tests.py | 11 +++++++++++
+ 2 files changed, 30 insertions(+), 3 deletions(-)
+
+diff --git a/flexfactor.py b/flexfactor.py
+index 34cfc6c..1d80ccf 100644
+--- a/flexfactor.py
++++ b/flexfactor.py
+@@ -6070,6 +6070,22 @@ class ApplyResult:
+     manifest: dict | None = None  # before/after change manifest (files + deps + script policy)
+ 
+ 
++def _python_exe() -> str:
++    """The interpreter that is actually running this process.
++
++    Bare ``python`` is not on PATH on many Linux hosts (this cloud image,
++    Debian ``python3``-only boxes). ``_gate_file`` used to call ``python -m
++    py_compile`` and roll back every correct Python fix with
++    ``executable not found: python``. ``sys.executable`` is the one binary
++    we know can compile. Fall back to ``python3`` / ``python`` only when
++    the current executable is missing (embedded / frozen hosts).
++    """
++    exe = str(sys.executable or "").strip()
++    if exe and os.path.isfile(exe):
++        return exe
++    return shutil.which("python3") or shutil.which("python") or "python3"
++
++
+ def _winify(cmd: list[str]) -> list[str]:
+     """Resolve a bare command name to its real executable on Windows.
+ 
+@@ -10117,7 +10133,7 @@ def _detect_stack(project_dir: str) -> dict:
+            for f in ("pyproject.toml", "requirements.txt", "setup.py", "setup.cfg")):
+         info["is_python"] = True
+         if not info["test_cmd"]:
+-            info["test_cmd"] = ["python", "-m", "pytest", "-q"]
++            info["test_cmd"] = [_python_exe(), "-m", "pytest", "-q"]
+     else:
+         # A fixture with hello.py + tests/test_*.py and no packaging file used
+         # to stay is_python=False / test_cmd=None (live option 4 2026-09-01).
+@@ -10131,7 +10147,7 @@ def _detect_stack(project_dir: str) -> dict:
+         if has_py_tests:
+             info["is_python"] = True
+             if not info["test_cmd"]:
+-                info["test_cmd"] = ["python", "-m", "unittest", "discover",
++                info["test_cmd"] = [_python_exe(), "-m", "unittest", "discover",
+                                     "-s", "tests", "-q"]
+     _enrich_stack_with_toolchains(project_dir, info)
+     return info
+@@ -11758,7 +11774,7 @@ def _gate_file(project_dir: str, rel_path: str, stack: dict, baseline_ok: bool)
+     gate is still caught (and reported) at the cycle boundary."""
+     ext = os.path.splitext(rel_path)[1].lower()
+     if ext == ".py":
+-        r = _run(["python", "-m", "py_compile", rel_path], project_dir, timeout=60)
++        r = _run([_python_exe(), "-m", "py_compile", rel_path], project_dir, timeout=60)
+         return (r.returncode == 0, _tail(r.stderr) or "py_compile")
+     if stack.get("esbuild"):
+         eb = _esbuild_ok(project_dir, rel_path, stack["esbuild"])
+diff --git a/flexfactor_tests.py b/flexfactor_tests.py
+index 622570f..f725f37 100644
+--- a/flexfactor_tests.py
++++ b/flexfactor_tests.py
+@@ -4470,6 +4470,17 @@ class RelComponentsTests(unittest.TestCase):
+         self.assertIn("return a + b", f["source_excerpt"])
+         self.assertIn("return a + b", f["fix"])
+ 
++    def test_python_exe_is_this_interpreter_not_bare_python(self):
++        exe = ff._python_exe()
++        self.assertTrue(os.path.isfile(exe), exe)
++        # Bare ``python`` is missing on Debian/cloud images and used to
++        # roll back every correct named-return write via py_compile.
++        self.assertNotEqual(os.path.basename(exe), "python")
++        self.assertTrue(
++            exe == sys.executable or "python3" in exe,
++            exe,
++        )
++
+ 
+ class WriteVsReplaceLeafSemanticsTests(unittest.TestCase):
+     """Round-11: _write_contained REFUSES a symlink leaf; _replace_contained REPLACES
+-- 
+2.43.0
+
