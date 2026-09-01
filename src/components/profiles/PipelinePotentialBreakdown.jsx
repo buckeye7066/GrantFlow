@@ -131,6 +131,14 @@ const PHASE_ORDER = ["Preparing", "Applied", "Approved"]
 // section sums to something meaningful even when a source has a range, not a
 // single requested figure).
 function estimatedValue(item) {
+  // Zeroize rows that should not contribute dollars
+  const decision = String(item?.match_decision || '').toUpperCase()
+  if (decision === 'REJECT') return 0
+  const elig = String(item?.eligibility_status || '').toLowerCase()
+  if (elig === 'ineligible') return 0
+  const kind = String(item?.opportunity_kind || '').toLowerCase()
+  if (['directory','referral','school_portal','past_award_intel','benefit'].includes(kind)) return 0
+  // Requested → max → min
   const req = Number(item?.amount_requested)
   if (Number.isFinite(req) && req > 0) return req
   const max = Number(item?.amount_max)

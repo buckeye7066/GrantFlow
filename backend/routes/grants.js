@@ -529,11 +529,12 @@ router.get('/', async (req, res) => {
     // every grant fell into "Unknown".
     let query = `
       SELECT g.*, o.name as organization_name,
-             COALESCE(fo.state, o.state) AS state
-      FROM grants g
-      LEFT JOIN organizations o ON g.organization_id = o.id
-      LEFT JOIN funding_opportunities fo ON g.funding_opportunity_id = fo.id
-      WHERE 1=1
+             COALESCE(fo.state, o.state) AS state,
+             fo.opportunity_kind AS opportunity_kind
+        FROM grants g
+   LEFT JOIN organizations o ON g.organization_id = o.id
+   LEFT JOIN funding_opportunities fo ON g.funding_opportunity_id = fo.id
+       WHERE 1=1
     `;
     const params = [];
 

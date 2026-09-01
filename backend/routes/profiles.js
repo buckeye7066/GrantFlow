@@ -2034,7 +2034,11 @@ router.get('/:id', async (req, res) => {
   try {
     const pipelineRow = await req.db
       .prepare(
-        `SELECT COALESCE(SUM(${pipelineValueSql('g')}), 0) as total, COALESCE(${unvaluedCountSql('g')}, 0) as unvalued FROM grants g WHERE g.profile_id = ? AND g.status IN (${pipelinePlaceholders})`,
+        `SELECT COALESCE(SUM(${pipelineDollarSql('g','fo')}), 0) as total,
+                COALESCE(${unvaluedCountSql('g')}, 0) as unvalued
+           FROM grants g
+      LEFT JOIN funding_opportunities fo ON fo.id = g.funding_opportunity_id
+          WHERE g.profile_id = ? AND g.status IN (${pipelinePlaceholders})`,
       )
       .get(row.id, ...activeStatuses)
     pipelineTotal = pipelineRow?.total ?? 0
@@ -2048,7 +2052,11 @@ router.get('/:id', async (req, res) => {
     try {
       const pipelineRow = await req.db
         .prepare(
-          `SELECT COALESCE(SUM(${pipelineValueSql('g')}), 0) as total, COALESCE(${unvaluedCountSql('g')}, 0) as unvalued FROM grants g WHERE g.organization_id = ? AND g.status IN (${pipelinePlaceholders})`,
+          `SELECT COALESCE(SUM(${pipelineDollarSql('g','fo')}), 0) as total,
+                  COALESCE(${unvaluedCountSql('g')}, 0) as unvalued
+             FROM grants g
+        LEFT JOIN funding_opportunities fo ON fo.id = g.funding_opportunity_id
+            WHERE g.organization_id = ? AND g.status IN (${pipelinePlaceholders})`,
         )
         .get(row.organization_id, ...activeStatuses)
       pipelineTotal = pipelineRow?.total ?? 0
@@ -2165,6 +2173,8 @@ router.get('/:id/pipeline-potential', async (req, res) => {
                 g.amount_requested, g.amount_min, g.amount_max,
                 COALESCE(g.amount_text, fo.amount_text) AS amount_text,
                 COALESCE(g.amount_status, fo.amount_status) AS amount_status,
+                g.eligibility_status, g.match_decision,
+                fo.opportunity_kind AS opportunity_kind,
                 g.notes, fo.description AS opportunity_description,
                 g.contact_name, g.contact_email, g.contact_phone,
                 g.funder_fax, g.funder_address,

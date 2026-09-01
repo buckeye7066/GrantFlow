@@ -69,6 +69,50 @@ export function pipelineValueSql(alias = 'g') {
 }
 
 /**
+ * Canonical pipeline-dollar contract for SURFACES (stats/profile totals).
+ *
+ * Rules:
+ * - Only active pipeline rows are selected by callers (status filter).
+ * - Rows explicitly marked ineligible or with a stored REJECT decision
+ *   contribute $0 but remain visible historically.
+ * - Kinds that cannot publish a per-award figure by design (directory/referral/
+ *   school_portal/past_award_intel/benefit) contribute $0 even when a numeric
+ *   column is present. Unknown/unlinked legacy kinds remain eligible.
+ *
+ * Use this in SELECT SUM(...) for totals. Prefer passing both grant and
+ * funding-opportunity aliases so kind checks avoid correlated subqueries.
+ *
+ * @param {string} [gAlias='g'] grants table alias
+ * @param {string|null} [foAlias=null] funding_opportunities alias when already joined
+ */
+export function pipelineDollarSql(gAlias = 'g', foAlias = null) {
+  const g = gAlias ? `${gAlias}.` : ''
+  if (foAlias) {
+    // Join-aware variant — rely on the existing JOIN to inspect kind
+    return [
+      'CASE',
+      `  WHEN ${g}eligibility_status = 'ineligible' THEN 0`,
+      `  WHEN ${g}match_decision = 'REJECT' THEN 0`,
+      // LOWER/COALESCE to match registry semantics in opportunityKindClasses
+      `  WHEN LOWER(COALESCE(${foAlias}.opportunity_kind, '')) IN ('directory','past_award_intel','school_portal','referral','benefit') THEN 0`,
+      `  ELSE ${pipelineValueSql(gAlias)}`,
+      'END',
+    ].join(' ')
+  }
+  // Correlated-subquery fallback — used when queries have not joined FO.
+  // Efficient enough for aggregates and preserves a single choke point.
+  const existsPointerKind = `EXISTS (SELECT 1 FROM funding_opportunities fo WHERE fo.id = ${g}funding_opportunity_id AND LOWER(COALESCE(fo.opportunity_kind, '')) IN ('directory','past_award_intel','school_portal','referral','benefit'))`
+  return [
+    'CASE',
+    `  WHEN ${g}eligibility_status = 'ineligible' THEN 0`,
+    `  WHEN ${g}match_decision = 'REJECT' THEN 0`,
+    `  WHEN ${existsPointerKind} THEN 0`,
+    `  ELSE ${pipelineValueSql(gAlias)}`,
+    'END',
+  ].join(' ')
+}
+
+/**
  * SQL expression for a grant row's pipeline dollar value INCLUDING the value
  * its linked catalog row already carries (the ANSWER-census variant).
  *
@@ -110,6 +154,22 @@ export function grantPipelineValue(grant) {
 }
 
 /**
+ * JS twin of pipelineDollarSql for rows already in memory. Mirrors the SQL
+ * contract above. Safe default for legacy rows lacking kind/eligibility:
+ * missing signals are neutral; explicit ineligibility or REJECT zeroize.
+ */
+export function grantPipelineDollarValue(grant) {
+  if (!grant) return 0
+  const status = String(grant?.eligibility_status || '').toLowerCase()
+  if (status === 'ineligible') return 0
+  const decision = String(grant?.match_decision || '').toUpperCase()
+  if (decision === 'REJECT') return 0
+  const kind = String(grant?.opportunity_kind ?? '').trim().toLowerCase()
+  if (['directory', 'past_award_intel', 'school_portal', 'referral', 'benefit'].includes(kind)) return 0
+  return grantPipelineValue(grant)
+}
+
+/**
  * SQL expression counting active-pipeline rows with NO derivable dollar value.
  * "$0" and "no amount stated" are DIFFERENT facts: benefit programs (SSI,
  * SNAP, LIHEAP) and directories have real value to the profile but no
@@ -128,4 +188,13 @@ export function isUnvaluedGrant(grant) {
   return grantPipelineValue(grant) === 0
 }
 
-export default { PIPELINE_ACTIVE_STATUSES, pipelineValueSql, grantPipelineValue, unvaluedCountSql, isUnvaluedGrant }
+export default {
+  PIPELINE_ACTIVE_STATUSES,
+  pipelineValueSql,
+  pipelineDollarSql,
+  pipelineValueWithCatalogSql,
+  grantPipelineValue,
+  grantPipelineDollarValue,
+  unvaluedCountSql,
+  isUnvaluedGrant,
+}

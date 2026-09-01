@@ -52,6 +52,13 @@ const usdCompact = new Intl.NumberFormat("en-US", {
 
 // Best-estimate dollar value for a grant card (requested → max → min → amount).
 function grantValue(grant) {
+  // Zeroize non-dollar / ineligible rows so stage rollups reconcile with backend totals
+  const decision = String(grant?.match_decision || '').toUpperCase();
+  if (decision === 'REJECT') return 0;
+  const elig = String(grant?.eligibility_status || '').toLowerCase();
+  if (elig === 'ineligible') return 0;
+  const kind = String(grant?.opportunity_kind || '').toLowerCase();
+  if (['directory','referral','school_portal','past_award_intel','benefit'].includes(kind)) return 0;
   const candidates = [grant?.amount_requested, grant?.amount_awarded, grant?.amount_max, grant?.amount_min, grant?.amount];
   for (const raw of candidates) {
     const n = Number(raw);
