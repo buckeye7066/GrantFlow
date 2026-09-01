@@ -176,7 +176,7 @@ rubric could close.
 
 1. Check out `fix/autoclean-verifies-what-it-commits` at `634250c`.
 2. Apply `docs/agent-sync/flexfactor-pr110-landing.patch` from GrantFlow
-   PR #1442 **or** cherry-pick `06c7d10..f335a7b` from
+   PR #1442 **or** cherry-pick `06c7d10..ac16a5b` from
    `/home/ubuntu/flexfactor` if the same VM.
 3. Minimum to unblock merge: land `06c7d10` alone, then wait for exact-head
    production-readiness green. The other seven commits make option 4 able
