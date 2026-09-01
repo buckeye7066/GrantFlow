@@ -5,12 +5,12 @@
  * This module is import-safe. When executed directly it connects only through
  * GRANTFLOW_PROD_AUDIT_DATABASE_URL, demands the scoped non-superuser auditor
  * role, starts a READ ONLY transaction, and writes a redacted before/after
- * ledger. It never updates production data.
+ * ledger. It never updates production data and refuses unscoped exports.
  *
  * Usage:
  *   node scripts/production-audit/pipeline-dollar-ledger.mjs \
  *     --out audit-out/pipeline-dollar-ledger.json \
- *     --profiles "optional,comma,separated,ids"
+ *     --profiles "required,comma,separated,profile,ids"
  */
 
 import fs from 'node:fs'
@@ -53,6 +53,14 @@ export function parseProfileIds(raw) {
   return [...new Set(ids)]
 }
 
+export function requireExplicitProfileScope(raw) {
+  const ids = parseProfileIds(raw)
+  if (ids.length === 0) {
+    throw new Error('An explicit bounded --profiles scope is required; unscoped production ledger exports are forbidden')
+  }
+  return ids
+}
+
 function parseArgs(argv) {
   const valueAfter = (flag, fallback = '') => {
     const index = argv.indexOf(flag)
@@ -60,7 +68,7 @@ function parseArgs(argv) {
   }
   return {
     outFile: valueAfter('--out', path.join(process.cwd(), 'audit-out', 'pipeline-dollar-ledger.json')),
-    profileIds: parseProfileIds(valueAfter('--profiles', '')),
+    profileIds: requireExplicitProfileScope(valueAfter('--profiles', '')),
   }
 }
 
@@ -88,8 +96,8 @@ export const PIPELINE_LEDGER_SQL = `
         THEN 'reject'
       WHEN LOWER(COALESCE(CAST(fo.opportunity_kind AS TEXT), '')) IN (${NO_PER_AWARD_SQL})
         THEN 'no_per_award:' || LOWER(COALESCE(CAST(fo.opportunity_kind AS TEXT), 'unknown'))
-      WHEN NULLIF(g.amount_min, 0) IS NOT NULL
-       AND NULLIF(g.amount_max, 0) IS NOT NULL
+      WHEN g.amount_min > 0
+       AND g.amount_max > 0
        AND g.amount_max > g.amount_min * ${WIDE_AWARD_RANGE_RATIO}
        AND (
          NULLIF(g.amount_requested, 0) IS NULL
@@ -105,8 +113,9 @@ export const PIPELINE_LEDGER_SQL = `
   LEFT JOIN funding_opportunities fo ON fo.id = g.funding_opportunity_id
   WHERE p.created_by IS DISTINCT FROM 'agent:amy'
     AND p.deleted_at IS NULL
+    AND LOWER(COALESCE(p.status, '')) <> 'deleted'
     AND g.status = ANY($1::text[])
-    AND ($2::text[] IS NULL OR p.id = ANY($2))
+    AND p.id = ANY($2::text[])
   ORDER BY p.id, g.id
 `
 
@@ -305,10 +314,9 @@ async function main() {
       throw new Error('Production audit containment is not read-only/non-superuser')
     }
 
-    const scope = profileIds.length ? profileIds : null
-    const result = await client.query(PIPELINE_LEDGER_SQL, [PIPELINE_ACTIVE_STATUSES, scope])
+    const result = await client.query(PIPELINE_LEDGER_SQL, [PIPELINE_ACTIVE_STATUSES, profileIds])
     const ledger = summarizePipelineDollarRows(result.rows)
-    ledger.scope = profileIds.length ? profileIds : 'all_non_synthetic_active_profiles'
+    ledger.scope = profileIds
     ledger.safety = {
       database_role: safety.role,
       database: safety.database,
