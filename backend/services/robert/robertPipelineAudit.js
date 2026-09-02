@@ -969,9 +969,9 @@ export async function auditProfilePipeline(db, profileId, {
     const key = programIdentityKey(row)
     let matchedKey = survivors.has(key) ? key : null
     if (!matchedKey) {
-      const rowTitle = String(row.title || '').trim().replace(/\\s+/g, ' ').toLowerCase()
+      const rowTitle = String(row.title || '').trim().replace(/\s+/g, ' ').toLowerCase()
       for (const [existingKey, existingRow] of survivors.entries()) {
-        const existingTitle = String(existingRow.title || '').trim().replace(/\\s+/g, ' ').toLowerCase()
+        const existingTitle = String(existingRow.title || '').trim().replace(/\s+/g, ' ').toLowerCase()
         // Exact normalized titles are duplicate program rows even when two
         // ingestion lanes minted disagreeing canonical keys.
         if ((rowTitle && rowTitle === existingTitle) || sameProgram(existingRow, row)) {
