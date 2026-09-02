@@ -417,8 +417,7 @@ async function admitToPipeline(db, profileContext, opportunity, ctx = {}) {
       }
     }
 
-
-    // Gate 2: Canonical decision engine — automated persistence requires a
+    // Gate 2.5: Canonical decision engine — automated persistence requires a
     // positive ACCEPT. REVIEW/unknown is evidence still to be established, not
     // proof that the profile qualifies.
     if (decision?.decision !== 'ACCEPT') {

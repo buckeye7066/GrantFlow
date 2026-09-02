@@ -73,8 +73,19 @@ test('canonical writer fails closed when dismissal state cannot be checked', asy
 
 
 test('canonical writer refuses REVIEW when qualification is unknown', async () => {
+  // This case is about the qualification gate, so provide a readable, empty
+  // dismissal store instead of an object that cannot represent database state.
+  const db = {
+    prepare() {
+      return {
+        run: async () => ({ changes: 0 }),
+        get: async () => null,
+        all: async () => [],
+      }
+    },
+  }
   const result = await saveToProfilePipeline(
-    {},
+    db,
     {
       id: 'grant-review-1',
       title: 'Education Support Award',
