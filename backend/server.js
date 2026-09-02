@@ -3189,13 +3189,28 @@ if (process.env.NODE_ENV !== 'test') {
         if (failedMigrations.length === 0) return
 
         try {
-          const [migrationModule, retryModule] = await Promise.all([
+          const [migrationModule, retryModule, invariantModule, truthModule] = await Promise.all([
             import('./db/migrate.js'),
             import('./startup/retryFailedBootMigrations.js'),
+            import('./startup/enforceInvariants.js'),
+            import('./services/hamilton/hamiltonTaskTruthSnapshot.js'),
           ])
           await retryModule.retryFailedBootMigrationsAfterMaintenance({
             appLocals: app.locals,
             runPendingMigrationsOnBoot: migrationModule.runPendingMigrationsOnBoot,
+            verifyRecovery: async () => {
+              // Migration 1001 deliberately publishes migration_reconciled,
+              // which is not queue-readable. Re-run the independent boot
+              // census after the migration and read it back before readiness
+              // can reopen.
+              await invariantModule.enforcePipelinePrecision(db)
+              const truth = await truthModule.readHamiltonTaskTruthSnapshot(db)
+              if (!truth.healthy) {
+                throw new Error(
+                  `Hamilton task truth remained ${truth.status || 'unavailable'} after migration retry`,
+                )
+              }
+            },
             logger: console,
           })
         } catch (err) {

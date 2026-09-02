@@ -34,9 +34,18 @@ test('post-maintenance migration retry clears readiness failures after recovery'
     migrate_boot_error: null,
     migrate_boot_failed_migrations: ['1001_live_hamilton_task_truth.mjs'],
   }
+  let verificationCalls = 0
   const result = await retryFailedBootMigrationsAfterMaintenance({
     appLocals,
-    runPendingMigrationsOnBoot: async () => ({ ran: 1, failed: [] }),
+    runPendingMigrationsOnBoot: async () => {
+      assert.equal(appLocals.migrate_boot_error, 'boot_migration_retry_in_progress')
+      return { ran: 1, failed: [] }
+    },
+    verifyRecovery: async () => {
+      verificationCalls += 1
+      assert.equal(appLocals.migrate_boot_error, 'boot_migration_retry_in_progress')
+      assert.deepEqual(appLocals.migrate_boot_failed_migrations, [])
+    },
     logger: quietLogger(),
   })
 
@@ -46,6 +55,7 @@ test('post-maintenance migration retry clears readiness failures after recovery'
     ran: 1,
     failed: [],
   })
+  assert.equal(verificationCalls, 1)
   assert.equal(appLocals.migrate_boot_complete, true)
   assert.equal(appLocals.migrate_boot_error, null)
   assert.deepEqual(appLocals.migrate_boot_failed_migrations, [])
@@ -63,6 +73,9 @@ test('post-maintenance migration retry keeps readiness closed when a migration s
       ran: 0,
       failed: ['1001_live_hamilton_task_truth.mjs'],
     }),
+    verifyRecovery: async () => {
+      assert.fail('verification must not run while migrations remain failed')
+    },
     logger: quietLogger(),
   })
 
@@ -71,6 +84,36 @@ test('post-maintenance migration retry keeps readiness closed when a migration s
   assert.deepEqual(appLocals.migrate_boot_failed_migrations, [
     '1001_live_hamilton_task_truth.mjs',
   ])
+})
+
+test('post-maintenance migration retry keeps readiness closed when recovery verification fails', async () => {
+  const appLocals = {
+    migrate_boot_complete: true,
+    migrate_boot_error: null,
+    migrate_boot_failed_migrations: ['1001_live_hamilton_task_truth.mjs'],
+  }
+  const result = await retryFailedBootMigrationsAfterMaintenance({
+    appLocals,
+    runPendingMigrationsOnBoot: async () => ({ ran: 1, failed: [] }),
+    verifyRecovery: async () => {
+      throw new Error('task truth remained migration_reconciled')
+    },
+    logger: quietLogger(),
+  })
+
+  assert.deepEqual(result, {
+    attempted: true,
+    recovered: false,
+    ran: 1,
+    failed: [],
+    error: 'boot_migration_retry_verification_failed',
+  })
+  assert.equal(appLocals.migrate_boot_complete, true)
+  assert.equal(
+    appLocals.migrate_boot_error,
+    'boot_migration_retry_verification_failed',
+  )
+  assert.deepEqual(appLocals.migrate_boot_failed_migrations, [])
 })
 
 test('post-maintenance migration retry preserves the failed set when the runner throws', async () => {

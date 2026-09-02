@@ -15,6 +15,7 @@ function normalizeFailures(value) {
 export async function retryFailedBootMigrationsAfterMaintenance({
   appLocals,
   runPendingMigrationsOnBoot,
+  verifyRecovery,
   logger = console,
 } = {}) {
   if (!appLocals || typeof appLocals !== 'object') {
@@ -32,27 +33,54 @@ export async function retryFailedBootMigrationsAfterMaintenance({
   logger.warn?.(
     `[migrate:boot] retrying ${priorFailures.length} failed migration(s) after boot maintenance`,
   )
+  // Keep /readyz closed for the entire retry and read-back verification. The
+  // migration runner can clear its durable failed list before the repaired
+  // invariant has republished queue-readable task truth.
+  appLocals.migrate_boot_error = 'boot_migration_retry_in_progress'
 
   try {
     const result = await runPendingMigrationsOnBoot({ logger })
     const failed = normalizeFailures(result?.failed)
-    const recovered = failed.length === 0
 
     appLocals.migrate_boot_complete = true
     appLocals.migrate_boot_failed_migrations = failed
-    appLocals.migrate_boot_error = recovered ? null : 'boot_migration_retry_incomplete'
 
-    if (recovered) {
-      logger.info?.('[migrate:boot] post-maintenance retry recovered all failed migrations')
-    } else {
+    if (failed.length > 0) {
+      appLocals.migrate_boot_error = 'boot_migration_retry_incomplete'
       logger.error?.(
         `[migrate:boot] post-maintenance retry left ${failed.length} migration(s) unstamped`,
       )
+      return {
+        attempted: true,
+        recovered: false,
+        ran: Number.isFinite(Number(result?.ran)) ? Number(result.ran) : 0,
+        failed,
+      }
     }
 
+    try {
+      if (typeof verifyRecovery === 'function') {
+        await verifyRecovery()
+      }
+    } catch (error) {
+      appLocals.migrate_boot_error = 'boot_migration_retry_verification_failed'
+      logger.error?.(
+        `[migrate:boot] post-maintenance retry verification failed: ${error?.message || error}`,
+      )
+      return {
+        attempted: true,
+        recovered: false,
+        ran: Number.isFinite(Number(result?.ran)) ? Number(result.ran) : 0,
+        failed,
+        error: 'boot_migration_retry_verification_failed',
+      }
+    }
+
+    appLocals.migrate_boot_error = null
+    logger.info?.('[migrate:boot] post-maintenance retry recovered all failed migrations')
     return {
       attempted: true,
-      recovered,
+      recovered: true,
       ran: Number.isFinite(Number(result?.ran)) ? Number(result.ran) : 0,
       failed,
     }

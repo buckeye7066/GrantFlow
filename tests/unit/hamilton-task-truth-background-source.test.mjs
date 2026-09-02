@@ -27,12 +27,23 @@ test('failed boot migrations retry only after invariant maintenance settles', ()
     'retryFailedBootMigrationsAfterMaintenance({',
     maintenance,
   )
+  const recoveryVerification = serverSource.indexOf(
+    'verifyRecovery: async () =>',
+    retry,
+  )
+  const precisionReadback = serverSource.indexOf(
+    'readHamiltonTaskTruthSnapshot(db)',
+    recoveryVerification,
+  )
   const linkVerificationWait = serverSource.indexOf(
     'await app.locals.bootMaintenancePromise',
-    retry,
+    precisionReadback,
   )
 
   assert.ok(maintenance > 0)
   assert.ok(retry > maintenance)
-  assert.ok(linkVerificationWait > retry)
+  assert.ok(recoveryVerification > retry)
+  assert.ok(serverSource.indexOf('enforcePipelinePrecision(db)', recoveryVerification) > recoveryVerification)
+  assert.ok(precisionReadback > recoveryVerification)
+  assert.ok(linkVerificationWait > precisionReadback)
 })
