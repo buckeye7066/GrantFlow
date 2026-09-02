@@ -35,7 +35,6 @@ import { Sparkles, Trash2, Loader2, Filter, ExternalLink } from "lucide-react";
 import HamiltonAutopilotAuthorization from "@/components/hamilton/HamiltonAutopilotAuthorization";
 import HamiltonHardStopChecklist from "@/components/hamilton/HamiltonHardStopChecklist";
 import { isGrantExpired } from "@/components/shared/grantUtils";
-import { isRenderableUrl } from "@/lib/matchDisplayThresholds";
 import PortalLoginButton from "@/components/portal/PortalLoginButton";
 import {
   hamiltonProcessingBlockReason,
@@ -79,11 +78,10 @@ const ACTIONS = Object.freeze({ LEAVE: "leave", PROCESS: "process", DELETE: "del
  * authorized or submitted until the user clicks "Process … with Hamilton" and
  * clears the authorize/preflight gate, so this default never auto-acts.
  */
-function defaultActionFor(grant) {
-  const url = grantUrl(grant);
+function defaultActionFor(grant, autoSelectableGrantIds) {
   const ready = isHamiltonProcessableStage(grant?.status)
     && !isGrantExpired(grant)
-    && isRenderableUrl(url);
+    && autoSelectableGrantIds.has(String(grant?.id));
   return ready ? ACTIONS.PROCESS : ACTIONS.LEAVE;
 }
 
@@ -162,6 +160,24 @@ export default function HamiltonProcessing() {
       client.entities.Grant.list("-created_date", 2000, { profile_id: profileId }),
   });
 
+  // The backend owns applyability classification. Reuse the exact server set
+  // that "Select all" and full automation use instead of guessing from a
+  // generic source URL (an info page is a URL, but it is not an application).
+  const readySourcesQuery = useQuery({
+    queryKey: ["hamilton", "ready-sources", profileId],
+    enabled: Boolean(profileId),
+    queryFn: () =>
+      client.get(`/api/hamilton/automation/ready-sources?profile_id=${encodeURIComponent(profileId)}`),
+  });
+  const autoSelectableGrantIds = useMemo(
+    () => new Set(
+      (Array.isArray(readySourcesQuery.data?.sources) ? readySourcesQuery.data.sources : [])
+        .filter((source) => source?.is_applyable === true)
+        .map((source) => String(source.grant_id)),
+    ),
+    [readySourcesQuery.data],
+  );
+
   // Only ever show sources that truly belong to the selected profile — never
   // fall back to organization_id (mirrors the Pipeline page's guard against
   // cross-profile bleed).
@@ -173,17 +189,21 @@ export default function HamiltonProcessing() {
   // Initialise the action map whenever the source list changes, preserving any
   // choices the user already made for rows that still exist.
   useEffect(() => {
+    // Wait for the server-owned applyability set before assigning defaults.
+    // Otherwise the first grants response would freeze every row at Leave and
+    // the later readiness response could never initialize the real candidates.
+    if (!readySourcesQuery.isSuccess) return;
     setActions((prev) => {
       const next = {};
       for (const g of sources) {
         const previous = prev[g.id];
         next[g.id] = previous === ACTIONS.PROCESS && !isHamiltonProcessableStage(g.status)
           ? ACTIONS.LEAVE
-          : previous ?? defaultActionFor(g);
+          : previous ?? defaultActionFor(g, autoSelectableGrantIds);
       }
       return next;
     });
-  }, [sources]);
+  }, [sources, autoSelectableGrantIds, readySourcesQuery.isSuccess]);
 
   const counts = useMemo(() => {
     let process = 0;
@@ -223,7 +243,10 @@ export default function HamiltonProcessing() {
     setActions(() => {
       const next = {};
       for (const g of sources) {
-        next[g.id] = action === ACTIONS.PROCESS && !isHamiltonProcessableStage(g.status)
+        const canBulkProcess = isHamiltonProcessableStage(g.status)
+          && !isGrantExpired(g)
+          && autoSelectableGrantIds.has(String(g.id));
+        next[g.id] = action === ACTIONS.PROCESS && !canBulkProcess
           ? ACTIONS.LEAVE
           : action;
       }
@@ -279,7 +302,8 @@ export default function HamiltonProcessing() {
     setAuthOpen(true);
   }
 
-  const isLoading = grantsQuery.isLoading && Boolean(profileId);
+  const isLoading = Boolean(profileId)
+    && (grantsQuery.isLoading || readySourcesQuery.isLoading);
 
   return (
     <div className="p-6 md:p-8 space-y-6">
