@@ -385,6 +385,32 @@ export const RESOURCE_HUB_TITLES = Object.freeze(new Set([
   'united way worldwide',
 ]))
 
+/** Known locator/service hosts and titles that cannot be leaf funding awards. */
+export const NON_LEAF_HOSTS = Object.freeze([
+  'usgrants.org',
+  'bergenresourcenet.org',
+  'elpasogivingday.org',
+])
+
+export const NON_FUNDING_SERVICE_TITLE_RX =
+  /\b(?:national\s+)?(?:helpline|hotline)\b|\b(?:2-1-1|211)\b|\bstate health insurance assistance\b|\b(?:discount|savings)\s+(?:program|card)\b/i
+
+export function classifyKnownNonLeaf(row) {
+  const hosts = URL_FIELDS.map((field) => hostnameOf(row?.[field])).filter(Boolean)
+  const matchedHost = hosts.find((host) =>
+    NON_LEAF_HOSTS.some((blocked) => host === blocked || host.endsWith(`.${blocked}`)) ||
+    /(?:^|\.)[^.]*resourcenet\.org$/.test(host) ||
+    /(?:^|\.)[^.]*givingday\.org$/.test(host))
+  if (matchedHost) {
+    if (matchedHost.includes('givingday')) return { bucket: RESULT_BUCKETS.NOT_A_GRANT, reason: `donation_page_host:${matchedHost}` }
+    return { bucket: RESULT_BUCKETS.RESOURCE, reason: `directory_host:${matchedHost}` }
+  }
+  if (NON_FUNDING_SERVICE_TITLE_RX.test(String(row?.title ?? ''))) {
+    return { bucket: RESULT_BUCKETS.NOT_A_GRANT, reason: 'non_funding_service_title' }
+  }
+  return null
+}
+
 /**
  * The chain, in one place. Returns `{ bucket, reasons, stale }`:
  *   - not_a_grant : hidden bucket — regulatory/lead-gen/clearly-expired/
@@ -412,6 +438,10 @@ export function classifyFundingResult(row, { now = new Date() } = {}) {
   }
 
   const stale = isPastDeadline(row, now)
+  const knownNonLeaf = classifyKnownNonLeaf(row)
+  if (knownNonLeaf) {
+    return { bucket: knownNonLeaf.bucket, reasons: [knownNonLeaf.reason], stale }
+  }
   const kind = String(row.opportunity_kind ?? '').trim()
   if ((kind && isPointerKind(kind)) || row.is_directory === true || row.is_resource === true) {
     return { bucket: RESULT_BUCKETS.RESOURCE, reasons: ['pointer_kind'], stale }
@@ -669,6 +699,17 @@ export function isRelevantGeo(row, { states = null } = {}) {
       .map((state) => normalizeState(state))
       .filter(Boolean),
   )]
+  const persistedState = normalizeState(row?.state)
+  const isNational = row?.is_national === true || row?.is_national === 1 ||
+    String(row?.is_national ?? '').toLowerCase() === 'true'
+  if (persistedState && !isNational && profileStates.length > 0 && !profileStates.includes(persistedState)) {
+    return {
+      relevant: false,
+      reason: `persisted_state_out_of_state:${persistedState}`,
+      jurisdiction: { state: persistedState, source: 'persisted_state' },
+    }
+  }
+
   const jurisdiction = resolvedUsOpportunityJurisdiction(row)
   const restrictiveEvidence = jurisdiction.source === 'canonical_funder' ||
     jurisdiction.source === 'declared_title'
@@ -811,6 +852,7 @@ export default {
   individualIneligibleProgramConflict,
   passesEligibility,
   isRelevantGeo,
+  classifyKnownNonLeaf,
   nonGrantTitleLikePatterns,
   nonGrantTitleSqlPredicate,
 }

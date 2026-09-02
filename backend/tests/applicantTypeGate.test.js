@@ -299,3 +299,21 @@ describe('applicantTypeGate — entity_types_allowed is the column that is actua
     expect(evaluateApplicantTypeEligibility(row, 'college_student', ctx).decision).toBe('mismatch')
   })
 })
+
+
+describe('applicantTypeGate — untyped federal NOFO source prior', () => {
+  it('hard-mismatches an untyped grants.gov NOFO for an individual', () => {
+    const row = { title: 'Service Area Competition — Additional Areas', source: 'grants.gov', entity_types_allowed: '[]' }
+    expect(evaluateApplicantTypeEligibility(row, 'college_student').decision).toBe('mismatch')
+  })
+
+  it('does not block the same federal NOFO for an organization', () => {
+    const row = { title: 'Service Area Competition — Additional Areas', source: 'grants.gov', entity_types_allowed: '[]' }
+    expect(evaluateApplicantTypeEligibility(row, 'nonprofit').decision).not.toBe('mismatch')
+  })
+
+  it('preserves individual-assistance shapes from federal sources', () => {
+    const row = { title: 'Emergency Rental Assistance', source_url: 'https://grants.gov/example', entity_types_allowed: '[]' }
+    expect(evaluateApplicantTypeEligibility(row, 'individual').decision).not.toBe('mismatch')
+  })
+})
