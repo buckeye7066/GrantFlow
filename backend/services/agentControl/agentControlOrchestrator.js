@@ -208,6 +208,33 @@ export function authorizeControlCenterUser(user, context) {
 export function getCanonicalAdminEmail() { return ADMIN_EMAIL }
 
 /**
+ * Start the documented background full-agent cycle without manufacturing an
+ * HTTP request principal. This is the single internal entry point used by the
+ * scheduler; it still goes through startRun, schema checks, durable run rows,
+ * distributed locks, adapter consent gates, and the normal audit timeline.
+ */
+export async function startScheduledCycle(db, { options = {} } = {}) {
+  if (!ADMIN_EMAIL) {
+    return { skipped: true, reason: 'agent_control_admin_email_not_configured' }
+  }
+  return startRun(db, {
+    runType: 'scheduled_cycle',
+    options: {
+      scheduled: true,
+      skip_if_locked: true,
+      run_name: 'Scheduled background agent cycle',
+      ...options,
+    },
+    user: {
+      userId: 'system_agent_scheduler',
+      email: ADMIN_EMAIL,
+      primary_email: ADMIN_EMAIL,
+      controlCenterAuthorized: true,
+    },
+  })
+}
+
+/**
  * Build the ordered step plan for a run. Sam pre/postflight only fire
  * for full_cycle / selected_agents runs that include sam.
  */
@@ -288,8 +315,8 @@ export async function startRun(db, {
   // can't race past us.
   if (runType === 'full_cycle') {
     const active = await getActiveRun(db)
-    if (active && active.run_type === 'full_cycle') {
-      const e = new Error(`A full_cycle run is already in progress (id=${active.id}).`)
+    if (active && ['full_cycle', 'scheduled_cycle'].includes(active.run_type)) {
+      const e = new Error(`A full agent cycle is already in progress (id=${active.id}).`)
       e.status = 409
       e.runId = active.id
       throw e
@@ -322,7 +349,7 @@ export async function startRun(db, {
   // for other run types we lock the per-agent name so individual runs
   // can't overlap with each other (but they can overlap with a
   // full_cycle if explicitly allowed).
-  const lockName = runType === 'full_cycle'
+  const lockName = ['full_cycle', 'scheduled_cycle'].includes(runType)
     ? FULL_CYCLE_LOCK
     : (resolvedAgents.length === 1 ? agentLockName(resolvedAgents[0]) : null)
 
