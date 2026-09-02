@@ -10,7 +10,7 @@
     "minNativeVersion": ""
   },
   "engines": {
-    "node": ">=20.19.0 <21"
+    "node": "24.x"
   },
   "overrides": {
     "fast-xml-parser": "$fast-xml-parser",
