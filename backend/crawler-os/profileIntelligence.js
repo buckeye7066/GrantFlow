@@ -1123,8 +1123,15 @@ function deriveLocation(profile) {
   const loc = profile?.location ?? profile?.address ?? {};
   const zip = loc.zip ?? loc.postal_code ?? profile?.zip ?? null;
   const city = loc.city ?? profile?.city ?? null;
+  const state = normalizeState(loc.state ?? loc.region ?? profile?.state ?? null);
+  const states = [...new Set([
+    state,
+    ...(Array.isArray(loc.states) ? loc.states : []),
+    ...(Array.isArray(profile?.states) ? profile.states : []),
+  ].map(normalizeState).filter(Boolean))];
   return {
-    state: normalizeState(loc.state ?? loc.region ?? profile?.state ?? null),
+    state,
+    states,
     county: loc.county ?? profile?.county ?? null,
     zip,
     city,
@@ -1221,6 +1228,7 @@ export function buildThesis(profile = {}) {
 
   return {
     profile_id: profile?.id ?? profile?.profile_id ?? null,
+    profile_route: profile?.profile_route ?? null,
     applicant_types,
     needs,
     // TRUE when `needs` above was invented from the profile's TYPE because the
@@ -1229,7 +1237,7 @@ export function buildThesis(profile = {}) {
     // a profile that typed nothing gets scored as confidently as one that
     // filled itself in. An explicit boolean (never undefined) so a consumer can
     // tell "not defaulted" from "this thesis predates the field".
-    needs_defaulted: needs?.defaulted === true,
+    needs_defaulted: needs?.defaulted === true || profile?.profile_route?.needs_source === 'profile_type_default',
     location,
     loan_allowed,
     cost_share_allowed,
