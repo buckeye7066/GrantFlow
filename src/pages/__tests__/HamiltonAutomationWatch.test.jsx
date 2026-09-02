@@ -73,8 +73,8 @@ describe('HamiltonAutomationWatch', () => {
     })
     renderAt()
     await waitFor(() => expect(screen.getAllByRole('listitem')).toHaveLength(6))
-    // 1 working + 2 need you + 1 waiting + 2 finished = 6 total.
-    expect(screen.getByText(/1 working · 2 need you · 1 waiting · 2 finished · 6 in total/)).toBeTruthy()
+    // 1 working + 2 need you + 1 waiting = 4 unfinished; + 2 finished = 6 total.
+    expect(screen.getByText(/1 working · 2 need you · 1 waiting · 2 finished · 4 unfinished · 6 total/)).toBeTruthy()
   })
 
   it('says Hamilton IS working when a task is filling a portal', async () => {

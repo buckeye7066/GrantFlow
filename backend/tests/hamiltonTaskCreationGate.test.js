@@ -4,8 +4,8 @@
  * Pins the production contract at the point where an application task would
  * otherwise become an owner-visible "In Progress" card:
  *   1. REJECT, REVIEW, unknown, and missing canonical decisions create no task.
- *   2. A stored ACCEPT creates a task only when applicant type is explicitly
- *      supported by the source.
+ *   2. A live ACCEPT creates a task only after all four positive proofs pass;
+ *      the stored match is evidence history, never an authorization shortcut.
  *   3. Unresolvable and pointer-only sources create no task.
  */
 
@@ -65,7 +65,16 @@ function makeDb() {
       application_url TEXT,
       source_url TEXT,
       evidence_url TEXT,
-      entity_types_allowed TEXT
+      entity_types_allowed TEXT,
+      categories TEXT,
+      need_types_supported TEXT,
+      link_status TEXT,
+      last_verified_at DATETIME,
+      source TEXT,
+      record_origin TEXT,
+      source_trust_tier TEXT,
+      reality_status TEXT,
+      is_active INTEGER
     );
     CREATE TABLE grants (
       id TEXT PRIMARY KEY,
@@ -98,8 +107,24 @@ async function seedFixture(db) {
     .run(PROFILE, 'user-1', 'Robert Michael White', 'college_student')
   await db.prepare('INSERT INTO profile_sections (profile_id, section_key, data) VALUES (?, ?, ?)')
     .run(PROFILE, 'basic_information', JSON.stringify({ first_name: 'Robert', last_name: 'White', email: 'r@example.org' }))
-  await db.prepare('INSERT INTO funding_opportunities (id, title, description, application_url, entity_types_allowed) VALUES (?, ?, ?, ?, ?)')
-    .run('opp-restricted', 'UNCF Scholarship', 'Apply through the portal.', 'https://portal.uncf-fixture.org/apply', JSON.stringify(['student', 'individual']))
+  await db.prepare('INSERT INTO profile_sections (profile_id, section_key, data) VALUES (?, ?, ?)')
+    .run(PROFILE, 'financial_information', JSON.stringify({ needs: ['education'] }))
+  await db.prepare(`INSERT INTO funding_opportunities
+    (id, title, description, opportunity_kind, application_url, source_url,
+     entity_types_allowed, categories, need_types_supported, link_status,
+     last_verified_at, source, record_origin, source_trust_tier, reality_status, is_active)
+    VALUES (?, ?, ?, 'direct_grant', ?, ?, ?, ?, ?, 'ok', CURRENT_TIMESTAMP,
+            'curated_verified', 'curated_verified', 'official', 'real', 1)`)
+    .run(
+      'opp-restricted',
+      'College Tuition Scholarship',
+      'Tuition scholarship for undergraduate education.',
+      'https://portal.uncf-fixture.org/apply',
+      'https://portal.uncf-fixture.org/apply',
+      JSON.stringify(['student', 'individual']),
+      JSON.stringify(['education']),
+      JSON.stringify(['education']),
+    )
   await db.prepare('INSERT INTO grants (id, profile_id, funding_opportunity_id, title, application_url) VALUES (?, ?, ?, ?, ?)')
     .run('g-restricted', PROFILE, 'opp-restricted', 'UNCF Scholarship', 'https://portal.uncf-fixture.org/apply')
 }
@@ -130,6 +155,8 @@ describe('Hamilton task-creation eligibility gate', () => {
 
   it('refuses a canonical REJECT before a task row exists', async () => {
     await storeDecision(db, 'reject')
+    await db.prepare('UPDATE funding_opportunities SET entity_types_allowed = ? WHERE id = ?')
+      .run(JSON.stringify(['nonprofit']), 'opp-restricted')
     const result = await automateSingleSource(db, {
       profileId: PROFILE,
       userId: 'user-1',
@@ -144,6 +171,10 @@ describe('Hamilton task-creation eligibility gate', () => {
 
   it('refuses a REVIEW because uncertainty is not qualification', async () => {
     await storeDecision(db, 'review')
+    await db.prepare(`UPDATE funding_opportunities
+      SET title = 'Community Support Award', description = 'Apply through the portal.',
+          categories = '[]', need_types_supported = '[]'
+      WHERE id = ?`).run('opp-restricted')
     const result = await automateSingleSource(db, {
       profileId: PROFILE,
       userId: 'user-1',
@@ -156,6 +187,10 @@ describe('Hamilton task-creation eligibility gate', () => {
   })
 
   it('refuses a source with no stored or live ACCEPT', async () => {
+    await db.prepare(`UPDATE funding_opportunities
+      SET title = 'Community Support Award', description = 'Apply through the portal.',
+          categories = '[]', need_types_supported = '[]'
+      WHERE id = ?`).run('opp-restricted')
     const result = await automateSingleSource(db, {
       profileId: PROFILE,
       userId: 'user-1',
@@ -166,7 +201,7 @@ describe('Hamilton task-creation eligibility gate', () => {
     expect(await taskCount(db)).toBe(0)
   })
 
-  it('admits a stored ACCEPT when applicant type is positively supported', async () => {
+  it('admits a live ACCEPT only when applicant type, need, and reality proofs are positive', async () => {
     await storeDecision(db, 'accept')
     const result = await automateSingleSource(db, {
       profileId: PROFILE,

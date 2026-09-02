@@ -78,6 +78,10 @@ function seed(rows = ROWS, { declareNeeds = true } = {}) {
       eligibility_status TEXT, ineligibility_reasons TEXT,
       fingerprint TEXT, updated_at DATETIME
     );
+    CREATE TABLE application_tasks (
+      id TEXT PRIMARY KEY, profile_id TEXT, grant_id TEXT,
+      opportunity_id TEXT, status TEXT
+    );
     CREATE TABLE system_kv (key TEXT PRIMARY KEY, value TEXT, updated_at DATETIME);
   `)
   sqlite.prepare('INSERT INTO profiles (id, display_name, primary_type, status, tags) VALUES (?, ?, ?, ?, ?)')

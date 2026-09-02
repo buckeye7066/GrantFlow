@@ -50,6 +50,17 @@ vi.mock('../services/hamilton/hamiltonPreflight.js', async (importOriginal) => {
   }
 })
 
+// Funding-source truth is covered by hamiltonTaskCreationGate and the strict
+// reconciliation suites. This suite isolates the irreversible-submit rails;
+// otherwise a missing four-truth fixture stops before the behavior under test.
+vi.mock('../services/hamilton/hamiltonFundingSourcePolicy.js', async (importOriginal) => {
+  const mod = await importOriginal()
+  return {
+    ...mod,
+    assessHamiltonFundingSource: vi.fn(async () => ({ ok: true, reasons: [] })),
+  }
+})
+
 const { wrapSqlite } = await import('../../tests/helpers/sqliteTestDb.mjs')
 const { runAutopilot, _internal: engineInternal } = await import('../services/hamilton/hamiltonAutopilotEngine.js')
 const { automateSingleSource } = await import('../services/hamilton/hamiltonAutomationOrchestrator.js')

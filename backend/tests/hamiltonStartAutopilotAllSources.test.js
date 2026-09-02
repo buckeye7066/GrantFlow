@@ -29,6 +29,16 @@ vi.mock('../services/hamilton/hamiltonAutomationOrchestrator.js', async (orig) =
   return { ...actual, automateSelected: vi.fn(async () => ({ ok: true })) }
 })
 
+// These route tests isolate selection, identity, and applyability. Dedicated
+// policy suites exercise the four-truth evaluator with canonical evidence.
+vi.mock('../services/hamilton/hamiltonFundingSourcePolicy.js', async (orig) => {
+  const actual = await orig()
+  return {
+    ...actual,
+    assessHamiltonFundingSource: vi.fn(async () => ({ ok: true, reasons: [] })),
+  }
+})
+
 let router
 beforeEach(async () => {
   vi.resetModules()

@@ -50,6 +50,16 @@ vi.mock('../services/hamilton/hamiltonPreflight.js', async (importOriginal) => {
   }
 })
 
+// The bridge contract starts with an already-admitted source. Policy behavior
+// is exercised independently by the task-creation and reconciliation suites.
+vi.mock('../services/hamilton/hamiltonFundingSourcePolicy.js', async (importOriginal) => {
+  const mod = await importOriginal()
+  return {
+    ...mod,
+    assessHamiltonFundingSource: vi.fn(async () => ({ ok: true, reasons: [] })),
+  }
+})
+
 const { wrapSqlite } = await import('../../tests/helpers/sqliteTestDb.mjs')
 const {
   loadDraftPacketForTask,
