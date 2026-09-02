@@ -135,6 +135,28 @@ describe('listReadySources does not let the LIMIT starve applyable sources', () 
     expect(ready.slice(0, 2).every((r) => r.is_applyable === true)).toBe(true)
   })
 
+  it('excludes submitted, follow-up, outcome, legacy and evidence-hold rows', async () => {
+    db = await makeDb({ noise: 0, applyableCount: 0 })
+    const statuses = [
+      ['grant-saved', 'saved'],
+      ['grant-submitted', 'submitted'],
+      ['grant-follow-up', 'follow_up'],
+      ['grant-review', 'under_review'],
+      ['grant-awarded', 'awarded'],
+      ['grant-evidence', 'submission_verification_required'],
+      ['grant-complete', 'completed'],
+    ]
+    for (const [id, status] of statuses) {
+      await db.prepare(
+        `INSERT INTO grants (id, profile_id, title, status, application_url, pipeline_category, updated_at)
+         VALUES (?, ?, ?, ?, ?, NULL, '2026-08-30T00:00:00Z')`,
+      ).run(id, PROFILE, id, status, `https://apply.example.org/${id}`)
+    }
+
+    const ready = await listReadySources(db, PROFILE)
+    expect(ready.map((row) => row.grant_id)).toEqual(['grant-saved'])
+  })
+
   it('treats an UNKNOWN opportunity kind as neutral, not as a pointer', async () => {
     // A grant with no catalog twin still carries its own application_url.
     // Absence of a kind is not evidence that it is a directory.
