@@ -1773,7 +1773,26 @@ router.post('/from-opportunity', async (req, res, next) => {
           amount_min: amountMin,
           amount_max: amountMax,
           description: coerceString(opportunity_data.descriptionMd || opportunity_data.description, { maxLen: 50_000 }),
-          eligibility_bullets: JSON.stringify(coerceArray(opportunity_data.eligibilityBullets)),
+          eligibility_bullets: JSON.stringify(
+            coerceArray(opportunity_data.eligibilityBullets ?? opportunity_data.eligibility_bullets),
+          ),
+          // Preserve the structured facts consumed by the canonical admission
+          // gates. Dropping these at the request boundary turns a positively
+          // qualified direct opportunity into an evidence-free REVIEW /
+          // NEED_COVERAGE rejection even when the caller supplied the facts.
+          entity_types_allowed: coerceArray(
+            opportunity_data.entity_types_allowed ?? opportunity_data.applicant_types,
+          ),
+          need_types_supported: coerceArray(
+            opportunity_data.need_types_supported ?? opportunity_data.need_categories,
+          ),
+          categories: coerceArray(opportunity_data.categories),
+          keywords: coerceArray(opportunity_data.keywords),
+          opportunity_kind: coerceString(
+            opportunity_data.opportunity_kind ?? opportunity_data.kind,
+            { maxLen: 100 },
+          ) || null,
+          funding_category: coerceString(opportunity_data.funding_category, { maxLen: 100 }) || null,
           source: coerceString(opportunity_data.source, { maxLen: 200 }) || 'discovery',
           // Preserve provenance so the pipeline source gate and any profile-scoped
           // persistence below see the real origin (e.g. 'web_search' leads).

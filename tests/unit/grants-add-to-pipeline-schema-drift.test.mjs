@@ -186,7 +186,7 @@ test('DiscoverGrants: add-to-pipeline does not 500 when grants.profile_id is mis
       driftDb.close()
     }
 
-    const opportunityUrl = 'https://www.va.gov/resources/'
+    const opportunityUrl = 'https://www.va.gov/education/how-to-apply/'
 
     const add = await fetchJson(`http://127.0.0.1:${port}/api/grants/from-opportunity`, {
       method: 'POST',
@@ -201,11 +201,18 @@ test('DiscoverGrants: add-to-pipeline does not 500 when grants.profile_id is mis
         match_reasons: ['veteran assistance', 'emergency assistance', 'profile need'],
         opportunity_id: null,
         opportunity_data: {
-          title: 'Tennessee Veterans Emergency Assistance',
+          title: 'Tennessee Veterans Education Assistance',
           sponsor: 'U.S. Department of Veterans Affairs',
           url: opportunityUrl,
           deadline: 'rolling',
-          description: 'Financial and emergency assistance resources for veterans and military families in Tennessee.',
+          deadline_type: 'rolling',
+          amount_max: 2500,
+          description: 'Direct education and financial assistance for veterans and military families in Tennessee.',
+          eligibilityBullets: ['Open to individual veterans living in Tennessee.'],
+          opportunity_kind: 'direct',
+          entity_types_allowed: ['individual', 'veteran'],
+          need_types_supported: ['cash_assistance', 'emergency'],
+          categories: ['veteran', 'education', 'cash assistance'],
           state: 'TN',
           geographic_scope: 'Tennessee',
           source: 'grants_gov',

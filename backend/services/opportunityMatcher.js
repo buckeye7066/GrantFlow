@@ -308,46 +308,6 @@ async function admitToPipeline(db, profileContext, opportunity, ctx = {}) {
       }, decision?.score ?? null)
     }
 
-    // Gate 1.5: Pipeline dismissals (sticky deletes). The user's explicit
-    // decision to remove an opportunity from this profile's pipeline overrides
-    // every downstream matching/admission gate. We run this BEFORE
-    // the decision engine so the response correctly reports DISMISSED rather
-    // than being absorbed by DECISION_ENGINE or another admission policy, and
-    // so we don't pay the cost of running the matcher for a row we'll reject
-    // anyway. Manual re-add via POST /api/grants/from-opportunity clears the
-    // tombstone.
-    if (profileId) {
-      try {
-        const dismissed = await isPipelineDismissed(db, profileId, opportunity)
-        if (dismissed) {
-          if (!quiet) log.info(
-            `[opportunityMatcher] Gate:DISMISSED suppressed "${opportunity?.title}" — profile ${profileId} previously removed this opportunity`,
-          )
-          return denied('tombstoned', {
-            saved: false,
-            reason: 'Previously dismissed by user — re-add manually to bring it back',
-            gate: 'DISMISSED',
-            matchPercentage: null,
-            threshold,
-          }, decision?.score ?? null)
-        }
-      } catch (dismissErr) {
-        if (!quiet) console.warn(
-          '[opportunityMatcher] Gate:DISMISSED check failed for profile %s, opp "%s":',
-          profileId,
-          sanitizeLogValue(opportunity?.title),
-          dismissErr?.message || dismissErr,
-        )
-        return denied('error:transient', {
-          saved: false,
-          reason: `Dismissal lookup failed: ${dismissErr?.message || dismissErr}`,
-          gate: 'DISMISSED_ERROR',
-          matchPercentage: null,
-          threshold,
-        })
-      }
-    }
-
     // Gate 1.75: Funding-result junk chain (config/fundingResultFilters.js).
     // The 2026-08-03 owner QA chain classified regulatory notices, lead-gen
     // scholarships, clearly-expired programs, and anonymized-funder records —
@@ -433,6 +393,45 @@ async function admitToPipeline(db, profileContext, opportunity, ctx = {}) {
         threshold,
         decision: verdict,
       }, decision?.score ?? 0)
+    }
+
+    // Gate 2.5: Pipeline dismissals (sticky deletes). Run this only after
+    // deterministic source, fundability, declared-need, and qualification
+    // gates have rejected rows that can never enter a pipeline. For a row
+    // that is otherwise admissible, an unreadable dismissal store still
+    // fails closed, and a user's explicit dismissal still wins before any
+    // database-backed exclusion or persistence work. Manual re-add via
+    // POST /api/grants/from-opportunity clears the tombstone.
+    if (profileId) {
+      try {
+        const dismissed = await isPipelineDismissed(db, profileId, opportunity)
+        if (dismissed) {
+          if (!quiet) log.info(
+            `[opportunityMatcher] Gate:DISMISSED suppressed "${opportunity?.title}" — profile ${profileId} previously removed this opportunity`,
+          )
+          return denied('tombstoned', {
+            saved: false,
+            reason: 'Previously dismissed by user — re-add manually to bring it back',
+            gate: 'DISMISSED',
+            matchPercentage: null,
+            threshold,
+          }, decision?.score ?? null)
+        }
+      } catch (dismissErr) {
+        if (!quiet) console.warn(
+          '[opportunityMatcher] Gate:DISMISSED check failed for profile %s, opp "%s":',
+          profileId,
+          sanitizeLogValue(opportunity?.title),
+          dismissErr?.message || dismissErr,
+        )
+        return denied('error:transient', {
+          saved: false,
+          reason: `Dismissal lookup failed: ${dismissErr?.message || dismissErr}`,
+          gate: 'DISMISSED_ERROR',
+          matchPercentage: null,
+          threshold,
+        })
+      }
     }
 
     // Gate 3: Exclusion engine — custom suppression rules
