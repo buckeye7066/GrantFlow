@@ -71,6 +71,46 @@ describe('anya live-run controls', () => {
     expect(late.reason).toBe('not_running')
   })
 
+  it('retries the delivery marker when run completion hits transient contention', async () => {
+    const runId = await createAnyaRun(db, {
+      mode: 'copilot',
+      kind: 'assistant_message',
+      userId: 'u1',
+      request: {},
+    })
+    let attempts = 0
+    const retryingDb = {
+      prepare(sql) {
+        const stmt = db.prepare(sql)
+        return {
+          run(...args) {
+            if (/UPDATE anya_runs\s+SET status/i.test(sql)) {
+              attempts += 1
+              if (attempts < 3) throw new Error('database is locked')
+            }
+            return stmt.run(...args)
+          },
+          get(...args) { return stmt.get(...args) },
+          all(...args) { return stmt.all(...args) },
+        }
+      },
+    }
+
+    const completed = await completeAnyaRun(retryingDb, runId, {
+      status: 'completed',
+      response: { assistantText: 'durable answer', assistant_message_id: 'm-1' },
+    })
+
+    expect(completed).toBe(true)
+    expect(attempts).toBe(3)
+    const run = await getAnyaRun(db, runId, { userId: 'u1' })
+    expect(run).toMatchObject({
+      status: 'completed',
+      assistant_text: 'durable answer',
+      assistant_message_id: 'm-1',
+    })
+  })
+
   it('progress round-trips through getAnyaRun', async () => {
     const runId = await createAnyaRun(db, { mode: 'copilot', kind: 'assistant_message', userId: 'u1', request: {} })
     const steps = [
