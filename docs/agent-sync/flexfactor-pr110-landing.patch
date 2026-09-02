@@ -1,7 +1,7 @@
 From 7aab5ec6d9a4846ff3bbd5373c9052bc60078a7a Mon Sep 17 00:00:00 2001
 From: Cursor Agent <cursoragent@cursor.com>
 Date: Tue, 1 Sep 2026 20:33:10 +0000
-Subject: [PATCH 01/16] fix(apply): classify Cross-file dependency as no-fix
+Subject: [PATCH 01/17] fix(apply): classify Cross-file dependency as no-fix
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
 Content-Transfer-Encoding: 8bit
@@ -215,7 +215,7 @@ index 5a051a1..485250a 100644
 From 745255550e22813c8a343b4dbe885e55fd30ef05 Mon Sep 17 00:00:00 2001
 From: Cursor Agent <cursoragent@cursor.com>
 Date: Tue, 1 Sep 2026 20:36:59 +0000
-Subject: [PATCH 02/16] fix(apply): retry silent in-file no-ops and escalate
+Subject: [PATCH 02/17] fix(apply): retry silent in-file no-ops and escalate
 
 A second option-4 run classified Cross-file dependency correctly
 but the author then returned changed=false with notes=None, which
@@ -354,7 +354,7 @@ index 485250a..4b7c974 100644
 From b15f048f9174dde33162b35101a68020f5c2c651 Mon Sep 17 00:00:00 2001
 From: Cursor Agent <cursoragent@cursor.com>
 Date: Tue, 1 Sep 2026 20:42:51 +0000
-Subject: [PATCH 03/16] fix(stack): detect unpacked Python fixtures via tests/
+Subject: [PATCH 03/17] fix(stack): detect unpacked Python fixtures via tests/
 
 Option 4's hello.py fixture has no pyproject/requirements, so
 _detect_stack left is_python=False and test_cmd empty. The author
@@ -424,7 +424,7 @@ index 4b7c974..f692711 100644
 From 426193e4b3dab7950299347104c1a78e1c0b7424 Mon Sep 17 00:00:00 2001
 From: Cursor Agent <cursoragent@cursor.com>
 Date: Tue, 1 Sep 2026 20:54:34 +0000
-Subject: [PATCH 04/16] fix(apply): apply a finding-named return when the model
+Subject: [PATCH 04/17] fix(apply): apply a finding-named return when the model
  cannot
 
 Free local authors kept reverting syntax-invalid hello.py patches on
@@ -709,7 +709,7 @@ index f692711..622570f 100644
 From e1d22d7be766d138ad4395fcd32fbd0d3e79c357 Mon Sep 17 00:00:00 2001
 From: Cursor Agent <cursoragent@cursor.com>
 Date: Tue, 1 Sep 2026 21:04:28 +0000
-Subject: [PATCH 05/16] fix(apply): compile Python fixes with this interpreter
+Subject: [PATCH 05/17] fix(apply): compile Python fixes with this interpreter
 
 Bare `python` is missing on Debian/cloud images, so the per-file
 py_compile gate rolled back every correct named-return write with
@@ -803,7 +803,7 @@ index 622570f..f725f37 100644
 From f335a7b59569c2e80f3b05e4a7394633ecb53073 Mon Sep 17 00:00:00 2001
 From: Cursor Agent <cursoragent@cursor.com>
 Date: Tue, 1 Sep 2026 21:20:57 +0000
-Subject: [PATCH 06/16] fix(apply): refuse whole-file fallback when the defect
+Subject: [PATCH 06/17] fix(apply): refuse whole-file fallback when the defect
  anchor is already gone
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
@@ -886,7 +886,7 @@ index f725f37..f6dfe60 100644
 From ac16a5bed3dc02cbd43ee8ca1d020e63a0ad5532 Mon Sep 17 00:00:00 2001
 From: Cursor Agent <cursoragent@cursor.com>
 Date: Tue, 1 Sep 2026 21:38:27 +0000
-Subject: [PATCH 07/16] fix(apply): refuse whole-file fallback when the defect
+Subject: [PATCH 07/17] fix(apply): refuse whole-file fallback when the defect
  excerpt is already gone
 
 The first missing-anchor retry then a silent no-op (apply_err empty)
@@ -944,7 +944,7 @@ index f6dfe60..606868b 100644
 From 8d0bb28f780006adccbfcf72d5ee7d509d0f060b Mon Sep 17 00:00:00 2001
 From: Cursor Agent <cursoragent@cursor.com>
 Date: Tue, 1 Sep 2026 21:47:14 +0000
-Subject: [PATCH 08/16] fix(apply): retry incomplete reviews and drop stale
+Subject: [PATCH 08/17] fix(apply): retry incomplete reviews and drop stale
  certifier claims
 
 qwen 3b option-4 runs aborted after cycle 1 when every finding failed the
@@ -1228,7 +1228,7 @@ index 606868b..6bd15e3 100644
 From 4d6c2b27d065fb33b4c53dba9cd0e35a3d9fc09c Mon Sep 17 00:00:00 2001
 From: Cursor Agent <cursoragent@cursor.com>
 Date: Tue, 1 Sep 2026 21:59:12 +0000
-Subject: [PATCH 09/16] fix(review): recover excerpts the 3b named in prose
+Subject: [PATCH 09/17] fix(review): recover excerpts the 3b named in prose
 
 qwen 3b titles a real defect (duplicate return) and leaves
 source_excerpt/trigger/observable_failure empty, so the evidence gate
@@ -1350,7 +1350,7 @@ index 6bd15e3..b36485a 100644
 From a877a4745981f447699998bc73101f30059a3026 Mon Sep 17 00:00:00 2001
 From: Cursor Agent <cursoragent@cursor.com>
 Date: Tue, 1 Sep 2026 22:09:10 +0000
-Subject: [PATCH 10/16] fix(baseline): name the publication return pair so
+Subject: [PATCH 10/17] fix(baseline): name the publication return pair so
  phase 0 cannot weaken tests
 
 Unittest reprints only the test line (assertEqual(add(2, 3), 5) / -1 != 5),
@@ -1730,7 +1730,7 @@ index b36485a..d8d98f2 100644
 From f3bfa29b5ab13af7456ec1e43c114617b0b70bbb Mon Sep 17 00:00:00 2001
 From: Cursor Agent <cursoragent@cursor.com>
 Date: Tue, 1 Sep 2026 22:14:12 +0000
-Subject: [PATCH 11/16] fix(apply): refuse named-return when the replacement is
+Subject: [PATCH 11/17] fix(apply): refuse named-return when the replacement is
  already in the file
 
 After phase 0 writes return a + b, the same finding text
@@ -1845,7 +1845,7 @@ index d8d98f2..bd199f7 100644
 From 084af8409a7402da85df0020b93b58c92d0967a3 Mon Sep 17 00:00:00 2001
 From: Cursor Agent <cursoragent@cursor.com>
 Date: Tue, 1 Sep 2026 22:41:17 +0000
-Subject: [PATCH 12/16] fix(apply): roll back test-file writes that delete test
+Subject: [PATCH 12/17] fix(apply): roll back test-file writes that delete test
  methods
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
@@ -2026,7 +2026,7 @@ index bd199f7..e85301d 100644
 From e8685f7fcf607cf2865d3c2eec1502f539a48639 Mon Sep 17 00:00:00 2001
 From: Cursor Agent <cursoragent@cursor.com>
 Date: Tue, 1 Sep 2026 23:01:22 +0000
-Subject: [PATCH 13/16] fix(prodready): close option-4 EXIT 1 on purpose-fit
+Subject: [PATCH 13/17] fix(prodready): close option-4 EXIT 1 on purpose-fit
  reject and stale certifier
 
 A competitor ACCEPT that cannot map onto an owner acceptance criterion is now
@@ -2299,7 +2299,7 @@ index e85301d..f2b1aac 100644
 From 596b4a82f7de62163c189435e7b4312b79da8288 Mon Sep 17 00:00:00 2001
 From: Cursor Agent <cursoragent@cursor.com>
 Date: Tue, 1 Sep 2026 23:14:39 +0000
-Subject: [PATCH 14/16] fix(review): drop certifier SyntaxError claims that
+Subject: [PATCH 14/17] fix(review): drop certifier SyntaxError claims that
  checkout the baseline
 
 Independent final review still failed after stale/style grounding because
@@ -2458,7 +2458,7 @@ index f2b1aac..0e87818 100644
 From 478205b348a29330b2f3bf652beb2c6ce7a4a094 Mon Sep 17 00:00:00 2001
 From: Cursor Agent <cursoragent@cursor.com>
 Date: Tue, 1 Sep 2026 23:29:42 +0000
-Subject: [PATCH 15/16] fix(review): drop already-satisfied findings from the
+Subject: [PATCH 15/17] fix(review): drop already-satisfied findings from the
  unresolved ledger
 
 Cycle 2 of option 4 filed criticals whose prescribed fix was already the
@@ -2603,7 +2603,7 @@ index 0e87818..2c73fae 100644
 From 462fb370dc142dce86eee1cca453ef9b692d4a15 Mon Sep 17 00:00:00 2001
 From: Cursor Agent <cursoragent@cursor.com>
 Date: Tue, 1 Sep 2026 23:50:36 +0000
-Subject: [PATCH 16/16] fix(prodready): drop already-satisfied findings before
+Subject: [PATCH 16/17] fix(prodready): drop already-satisfied findings before
  whole-file regen
 
 Cycle 1 of the live option-4 done run queued Change `return a + b` to
@@ -2765,6 +2765,101 @@ index 2c73fae..c4a8e6f 100644
      def test_completed_below_floor_verdict_clears_an_old_serious_finding(self):
          pending = {"src/a.py": [self._finding("src/a.py")]}
          ff._update_unresolved_fix_ledger(
+-- 
+2.43.0
+
+
+From 3964f2ba3bcbaf5c05e96dad2f3aa680213957b2 Mon Sep 17 00:00:00 2001
+From: Cursor Agent <cursoragent@cursor.com>
+Date: Wed, 2 Sep 2026 00:12:09 +0000
+Subject: [PATCH 17/17] fix(review): drop greet-without-name certifier claims
+ on an interpolating file
+
+Option 4 skip run closed cycle 1 without the 15-minute hang, purpose 4/4,
+suite GREEN, product invariants PASS. Independent review then rejected the
+exact final commit: after dropping the stale a-b claim it kept "greet
+returns a greeting without the name" while hello.py is return f"hello {name}"
+and test_greet is GREEN. That excerpt is already gone; treat it as stale.
+---
+ flexfactor.py       |  5 +++++
+ flexfactor_tests.py | 48 +++++++++++++++++++++++++++++++++++++++++++++
+ 2 files changed, 53 insertions(+)
+
+diff --git a/flexfactor.py b/flexfactor.py
+index caa0673..bbdf866 100644
+--- a/flexfactor.py
++++ b/flexfactor.py
+@@ -9298,6 +9298,11 @@ def _stale_review_finding(finding: dict, haystack: str) -> bool:
+             "return " + _normalize_return_stmt(match.group(1)))
+         if cited and cited not in haystack:
+             return True
++    # Live option 4 skip run 2026-09-02: after the a-b claim was dropped,
++    # 3b kept "greet returns a greeting without the name" while
++    # ``return f"hello {name}"`` and a GREEN test_greet were on disk.
++    if re.search(r"without the name", blob, re.I) and "{name}" in haystack:
++        return True
+     return False
+ 
+ 
+diff --git a/flexfactor_tests.py b/flexfactor_tests.py
+index c4a8e6f..8afadf9 100644
+--- a/flexfactor_tests.py
++++ b/flexfactor_tests.py
+@@ -4819,6 +4819,54 @@ class RelComponentsTests(unittest.TestCase):
+         self.assertEqual(data["verdict"], "approve", data)
+         self.assertEqual(data["findings"], [])
+ 
++    def test_independent_final_review_drops_greet_without_name_on_interpolating_file(self):
++        """Live option 4 skip run: 3b kept greet-without-name after f-string."""
++        import subprocess
++        import tempfile
++        with tempfile.TemporaryDirectory() as tmp:
++            subprocess.run(["git", "init", "-q", "-b", "main"], cwd=tmp, check=True)
++            with open(os.path.join(tmp, "hello.py"), "w", encoding="utf-8") as fh:
++                fh.write(
++                    "def add(a, b):\n"
++                    "    return a + b\n"
++                    "\n"
++                    "def greet(name):\n"
++                    "    return f\"hello {name}\"\n"
++                )
++            subprocess.run(["git", "add", "-A"], cwd=tmp, check=True)
++            subprocess.run(
++                ["git", "-c", "user.email=t@t", "-c", "user.name=t",
++                 "commit", "-q", "-m", "fix add"],
++                cwd=tmp, check=True)
++            sha = subprocess.run(
++                ["git", "rev-parse", "HEAD"], cwd=tmp,
++                capture_output=True, text=True).stdout.strip()
++
++            class _GreetReviewer:
++                judge_model = "qwen2.5-coder:3b"
++
++                def structured(self, system, prompt, schema, **_kw):
++                    return {
++                        "verdict": "reject",
++                        "commit": sha,
++                        "findings": [
++                            {"severity": "mismatch", "file": "hello.py",
++                             "line": 2, "title": "Mismatch in function implementation",
++                             "reproduction": (
++                                 "Expected the function `greet` to return a "
++                                 "greeting message with the name, but it "
++                                 "returns a greeting message without the name."
++                             )},
++                        ],
++                        "evidence_consistent": False,
++                        "reason": "greet omits the name",
++                    }
++
++            data = ff._independent_final_review(
++                _GreetReviewer(), tmp, None, sha, {"x": 1})
++        self.assertEqual(data["verdict"], "approve", data)
++        self.assertEqual(data["findings"], [])
++
+     def test_independent_final_review_drops_syntaxerror_on_compiling_file(self):
+         """Live option 4 2026-09-01 close run: 3b rejected the exact final
+         SHA with ``SyntaxError: invalid syntax`` and ``git checkout`` of the
 -- 
 2.43.0
 

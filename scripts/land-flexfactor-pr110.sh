@@ -2,7 +2,7 @@
 # Land the FlexFactor option-4 apply-path that is still missing from
 # origin/main after PR #110 merged (CI wire only).
 #
-# Local source of truth: /home/ubuntu/flexfactor tip 462fb37
+# Local source of truth: /home/ubuntu/flexfactor tip 3964f2b
 # (skip 06c7d10 — already on main).
 #
 # Run this ONLY from a session with write to buckeye7066/flexfactor.
@@ -32,10 +32,10 @@ git checkout -B "$BRANCH" "origin/$BASE_REF"
 echo "branch $BRANCH at $(git rev-parse --short HEAD)"
 
 if [[ -d "$LOCAL_SRC/.git" ]]; then
-  echo "cherry-picking 7aab5ec..462fb37 from $LOCAL_SRC (skip already-landed CI wire)"
+  echo "cherry-picking 7aab5ec..3964f2b from $LOCAL_SRC (skip already-landed CI wire)"
   git fetch "$LOCAL_SRC" cursor/pr110-ci-wire-a427
   # 06c7d10 is the CI wire already on main; start AFTER it.
-  if ! git cherry-pick 7aab5ec^..462fb37; then
+  if ! git cherry-pick 7aab5ec^..3964f2b; then
     echo "cherry-pick conflicted against current main. Resolve, then:" >&2
     echo "  git cherry-pick --continue && git push -u origin $BRANCH" >&2
     exit 4
@@ -56,6 +56,7 @@ python3 -m unittest \
   flexfactor_tests.RelComponentsTests.test_independent_final_review_approves_stale_and_style_reject \
   flexfactor_tests.CompetitorBridgeLedgerTests.test_invalid_acceptance_mapping_is_rejected_and_accounted \
   flexfactor_tests.IncompleteReviewLedgerTests.test_already_satisfied_finding_never_enters_the_fix_stream \
+  flexfactor_tests.RelComponentsTests.test_independent_final_review_drops_greet_without_name_on_interpolating_file \
   -q
 
 git push -u origin "$BRANCH"

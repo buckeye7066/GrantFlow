@@ -30,7 +30,7 @@ Do **not** re-open #110. Do **not** re-diagnose that CI failure.
 (`_apply_named_return_statement`, purpose-fit reject flip, stale/style
 certifier drops, already-satisfied ledger + fix-stream drops). Those live
 only on this VM: `/home/ubuntu/flexfactor` branch
-`cursor/pr110-ci-wire-a427` tip **`462fb37`**.
+`cursor/pr110-ci-wire-a427` tip **`3964f2b`**.
 
 GrantFlow-scoped `gh` still has `permissions.push=false` on
 `buckeye7066/flexfactor`. Do not loop Contents PUT / fork / push.
@@ -48,9 +48,10 @@ Target a **new** branch off `origin/main`, not #110.
 | `e8685f7` | unmapped competitor ACCEPT → purpose-fit reject; stale certifier drop |
 | `596b4a8` | drop SyntaxError + baseline-checkout claims on a compiling file |
 | `478205b` | drop already-satisfied findings from the unresolved ledger |
-| **`462fb37`** | **same drop BEFORE `_fix_files` generation** — change X to X no longer enters `[edit-fallback]` / 15-min whole-file regen |
+| `462fb37` | same drop BEFORE `_fix_files` generation — no 15-min whole-file regen |
+| **`3964f2b`** | drop independent-review "greet returns without the name" when `{name}` is in the tree |
 
-Cherry-pick `7aab5ec^..462fb37` (skip `06c7d10` if it conflicts as already landed).
+Cherry-pick `7aab5ec^..3964f2b` (skip `06c7d10` if it conflicts as already landed).
 
 ## Option 4 in flight (do not restart these)
 
@@ -59,18 +60,22 @@ Cherry-pick `7aab5ec^..462fb37` (skip `06c7d10` if it conflicts as already lande
 | `/tmp/ff-option4-keep` | `084af84` | EXIT 1 — pandas ACCEPT + stale `a - b` in reproduction |
 | `/tmp/ff-option4-close` | `e8685f7` | EXIT 1 — invented SyntaxError + baseline checkout |
 | `/tmp/ff-option4-cert` | `596b4a8` | EXIT 1 — ledger kept change X to X |
-| `/tmp/ff-option4-done` | `478205b` | **killed** — hung 15 min on whole-file regen of already-correct `hello.py` after `[edit-fallback]` |
+| `/tmp/ff-option4-done` | `478205b` | **killed** — hung 15 min on whole-file regen of already-correct `hello.py` |
+| `/tmp/ff-option4-skip` | `462fb37` | EXIT 1 (do not trust `tee; echo $?` — that is tee). Cycle 1 CONVERGED, purpose 4/4, suite GREEN, invariants PASS. Independent review rejected exact final SHA: leftover "greet returns without the name" while `f"hello {name}"` is on disk. |
 
-**Current run:** `/tmp/ff-option4-skip` log `/tmp/ff-option4-skip.log`
-engine **`462fb37`**. Planted `add() = a - b`, both tests, owner-authored
-`docs/purpose-contract.md`. Do not treat mid-run as EXIT 0. Prove
-`hello.py` is `a + b`, `test_greet` present, **and** factory `EXIT:0`.
+**Current run:** `/tmp/ff-option4-name` log `/tmp/ff-option4-name.log`
+engine **`3964f2b`**. Planted `add() = a - b`, both tests, owner-authored
+`docs/purpose-contract.md`. Capture EXIT from python, not from `tee`.
+Do not treat mid-run as EXIT 0. Prove `hello.py` is `a + b`,
+`test_greet` present, **and** factory exit 0 **and**
+`independent-final-review` passed.
 
 Ollama: `qwen2.5-coder:3b` (free). Do not spend money on paid models.
 
 Closed classes (do not re-diagnose): pandas unmapped ACCEPT, stale `a - b`
 in reproduction, SyntaxError+baseline-checkout, change X to X in the
-ledger, change X to X entering whole-file regen.
+ledger, change X to X entering whole-file regen, greet-without-name
+when `{name}` is already interpolated.
 
 ## PromoPilot (remeasured 2026-09-01T23:51Z)
 
@@ -85,7 +90,7 @@ Do not dest-approve Mastodon. Do not publish.
 ## What the next FlexFactor-writable agent must do
 
 1. Branch from `origin/main` (`3b6760d`), **not** from #110.
-2. Cherry-pick `7aab5ec^..462fb37` from `/home/ubuntu/flexfactor`
+2. Cherry-pick `7aab5ec^..3964f2b` from `/home/ubuntu/flexfactor`
    (skip `06c7d10` — already on main) or apply the patch.
 3. Open a new PR. Wait for exact-head production-readiness green on
    both OS, then merge.
