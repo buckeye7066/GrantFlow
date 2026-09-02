@@ -55,3 +55,24 @@ test('canonical writer fails closed when dismissal state cannot be checked', asy
   assert.equal(result.saved, false)
   assert.match(String(result.reason), /dismissal lookup failed/i)
 })
+
+
+test('canonical writer refuses REVIEW when qualification is unknown', async () => {
+  const result = await saveToProfilePipeline(
+    {},
+    {
+      id: 'grant-review-1',
+      title: 'Education Support Award',
+      source: 'grants_gov',
+      opportunity_kind: 'GRANT',
+      need_types_supported: ['education'],
+      amount_max: 1000,
+      application_url: 'https://www.grants.gov/example-review',
+    },
+    null,
+    profileContext,
+  )
+
+  assert.equal(result.saved, false)
+  assert.match(String(result.reason), /review|qualification|eligibility/i)
+})
