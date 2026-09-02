@@ -259,7 +259,7 @@ describe('admitFunderLeads — admission gates', () => {
   it('repeated scans never manufacture a grant from the same research record', async () => {
     seedProfile('p1', { type: 'nonprofit', state: 'TN' })
     seedFunder('f1', '111111111')
-    for (const st of of ['CA', 'NY', 'TX', 'FL', 'WA']) seedTx('111111111', st)
+    for (const st of ['CA', 'NY', 'TX', 'FL', 'WA']) seedTx('111111111', st)
     expect((await admitFunderLeads(db)).catalogOnly).toBe(1)
     expect((await admitFunderLeads(db)).catalogOnly).toBe(1)
     expect(grantsFor('p1')).toHaveLength(0)
