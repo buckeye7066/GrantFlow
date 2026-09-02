@@ -139,6 +139,8 @@ test('live queue, readiness metric, watch, and triage share current-task truth',
   assert.match(policySource, /EVIDENCE_PROTECTED_TASK_STATUSES/)
   assert.match(serverSource, /post-link-verification refresh/)
   assert.match(serverSource, /enforcePipelinePrecision\(dbInstance\)/)
+  assert.match(serverSource, /await app\.locals\.bootMaintenancePromise/)
+  assert.match(serverSource, /Promise\.allSettled\(bootJobs\)/)
   assert.match(watchSource, /partitionHamiltonTasks\(res\)/)
   assert.match(queueSource, /partitionHamiltonTasks\(res\)/)
   assert.match(watchSource, /No unfinished Hamilton work\./)

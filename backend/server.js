@@ -3166,17 +3166,23 @@ if (process.env.NODE_ENV !== 'test') {
   server.on('listening', () => {
     const sweep = app.locals.runBootInvariantSweep
     setImmediate(() => {
+      const bootJobs = []
       if (typeof sweep === 'function') {
-        sweep().catch((err) => {
+        const sweepPromise = sweep()
+        bootJobs.push(sweepPromise)
+        sweepPromise.catch((err) => {
           console.warn('[enforce-invariants] deferred boot sweep failed (non-fatal):', err?.message || err);
         });
       }
       const promote = app.locals.runQualifiedPipelinePromotion
       if (typeof promote === 'function') {
-        promote().catch((err) => {
+        const promotePromise = promote()
+        bootJobs.push(promotePromise)
+        promotePromise.catch((err) => {
           console.warn('[pipeline-promotion] deferred post-listen run failed (non-fatal):', err?.message || err);
         })
       }
+      app.locals.bootMaintenancePromise = Promise.allSettled(bootJobs)
     });
   });
 
@@ -3953,6 +3959,12 @@ if (process.env.NODE_ENV !== 'test') {
     const limit = Math.max(10, Number(process.env.LINK_VERIFICATION_BATCH) || 200)
     const runOnce = async () => {
       try {
+        // The boot invariant sweep is post-listen and may still be mutating
+        // pipeline rows when this 30-second timer fires. Wait for it before
+        // refreshing links and publishing a new precision snapshot.
+        if (app.locals.bootMaintenancePromise) {
+          await app.locals.bootMaintenancePromise
+        }
         const stats = await runLinkVerification(dbInstance, {
           limit,
           verifiedBy: `recurring-verifier:pid=${process.pid}`,
