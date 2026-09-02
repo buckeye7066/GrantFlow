@@ -59,6 +59,10 @@ import {
   emitMissingInfoAlert,
 } from './hamiltonNotifications.js'
 import { canonicalStage } from '../../../shared/pipelineStages.js'
+import {
+  hamiltonProcessingBlockReason,
+  isHamiltonProtectedPipelineStage,
+} from '../../../shared/hamiltonProcessingPolicy.js'
 import { deriveNamePartsIntoBasicInfo } from '../../../shared/nameParsing.js'
 import { runAutopilot, sanitizeListingSnapshotForPersistence } from './hamiltonAutopilotEngine.js'
 import { decomposeListing } from './listingDecomposition.js'
@@ -622,6 +626,12 @@ export async function automateSingleSource(db, {
 
   const opportunity = await loadOpportunity(db, opportunityId)
   const grant = await loadGrant(db, grantId)
+  if (grantId && (!grant?.profile_id || String(grant.profile_id) !== String(resolvedProfileId))) {
+    const err = new Error('selected grant does not belong to the requested profile')
+    err.status = 403
+    err.code = 'source_profile_mismatch'
+    throw err
+  }
   const portalLink = await loadPortalLink(db, resolvedProfileId, { opportunityId, grantId })
 
   // A source id that resolves to NOTHING must not become a task: the task is
@@ -657,6 +667,29 @@ export async function automateSingleSource(db, {
     err.code = 'unresolvable_funding_source'
     err.closed_tasks = closedTasks
     throw err
+  }
+
+  // A grant at or beyond submission is historical evidence, not fresh work.
+  // Refuse before task creation and close only scheduler-pickable leftovers;
+  // drafted or submission-in-flight tasks remain untouched for reconciliation.
+  if (grant && isHamiltonProtectedPipelineStage(grant.status)) {
+    const message = hamiltonProcessingBlockReason(grant.status)
+      || 'Hamilton will not restart this post-submission funding source.'
+    const closedTasks = await closeExistingTasksForRefusedSource(db, {
+      profileId: resolvedProfileId,
+      opportunityId,
+      grantId,
+      reason: 'pipeline_stage_protected',
+      message,
+    })
+    return {
+      task: null,
+      skipped: true,
+      reason: 'pipeline_stage_protected',
+      pipeline_stage: grant.status,
+      message,
+      closed_tasks: closedTasks,
+    }
   }
 
   // 0. Eligibility gate (2026-08-03): a source the canonical engine REJECTS
