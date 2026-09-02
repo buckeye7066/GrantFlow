@@ -183,20 +183,24 @@ export class HamiltonAgentAdapter extends BaseAgentAdapter {
     // Tasks that returned without an autopilot run ever being created, and why.
     let noRun = 0
     const noRunReasons = new Map()
+    let attempted = 0
     let processed = 0
     let failed = 0
     let blocked = 0
     let stopped = false
+    let paused = false
 
     for (const task of tasks) {
       if (signal?.shouldStop?.()) { stopped = true; break }
-      if (signal?.shouldPause?.()) { stopped = true; break }
+      if (signal?.shouldPause?.()) { paused = true; break }
 
       await signal?.heartbeat?.({
         phase: 'processing',
         task_id: task.id,
+        attempted,
         processed,
-        remaining: tasks.length - processed,
+        failed,
+        remaining: tasks.length - attempted,
       })
 
       try {
@@ -252,6 +256,16 @@ export class HamiltonAgentAdapter extends BaseAgentAdapter {
           message: `Hamilton task ${task.id} failed: ${err?.message || err}`,
           data: { task_id: task.id, error: String(err?.message || err) },
         })
+      } finally {
+        attempted += 1
+        await signal?.heartbeat?.({
+          phase: 'processing',
+          task_id: task.id,
+          attempted,
+          processed,
+          failed,
+          remaining: Math.max(0, tasks.length - attempted),
+        })
       }
     }
 
@@ -261,10 +275,20 @@ export class HamiltonAgentAdapter extends BaseAgentAdapter {
     // An empty queue is a noop — and so is a FULL queue where not one task
     // opened a run. Both are "nothing happened"; only the second one used to
     // report itself as completed work.
-    const emptyQueue = !stopped && tasks.length === 0
-    const noneProducedRun = !stopped && tasks.length > 0 && noRun === tasks.length
+    const emptyQueue = !stopped && !paused && tasks.length === 0
+    const noneProducedRun = !stopped && !paused && processed > 0 && noRun === processed
     const isNoop = emptyQueue || noneProducedRun
-    const status = stopped ? 'stopped' : isNoop ? 'noop' : 'completed'
+    // Any thrown task is a real step failure, even when sibling tasks made
+    // progress. Never paint a partially or fully failed batch green.
+    const status = paused
+      ? 'paused'
+      : stopped
+        ? 'stopped'
+        : failed > 0
+          ? 'failed'
+          : isNoop
+            ? 'noop'
+            : 'completed'
     const noRunDetail = [...noRunReasons.entries()]
       .sort((a, b) => b[1] - a[1])
       .map(([why, n]) => `${why}×${n}`)
@@ -272,11 +296,13 @@ export class HamiltonAgentAdapter extends BaseAgentAdapter {
     const summary = {
       agent: 'hamilton',
       queue_depth: queueDepth,
-      attempted: tasks.length,
+      queue_selected: tasks.length,
+      attempted,
       processed,
       failed,
       blocked,
       stopped,
+      paused,
       no_run: noRun,
       no_run_reasons: noRunDetail || null,
       ...(isNoop
@@ -288,18 +314,35 @@ export class HamiltonAgentAdapter extends BaseAgentAdapter {
     }
 
     await signal?.recordEvent?.({
-      eventType: stopped ? 'agent.hamilton.stopped' : isNoop ? 'agent.hamilton.noop' : 'agent.hamilton.completed',
-      severity: failed > 0 ? 'high' : 'info',
-      message: stopped
-        ? `Hamilton stopped after processing ${processed} of ${tasks.length} task(s).`
-        : isNoop
-          ? (emptyQueue
-            ? 'Hamilton had no application tasks to process (empty queue).'
-            : `Hamilton attempted ${tasks.length} task(s) and NONE opened an autopilot run (${noRunDetail || 'no reason reported'}) — nothing advanced.`)
-          : `Hamilton processed ${processed} task(s) (${failed} failed, ${blocked} blocked).`,
+      eventType: paused
+        ? 'agent.hamilton.paused'
+        : stopped
+          ? 'agent.hamilton.stopped'
+          : failed > 0
+            ? 'agent.hamilton.failed'
+            : isNoop
+              ? 'agent.hamilton.noop'
+              : 'agent.hamilton.completed',
+      severity: failed > 0 ? 'high' : paused || stopped ? 'medium' : 'info',
+      message: paused
+        ? `Hamilton paused after attempting ${attempted} of ${tasks.length} task(s); remaining tasks stay durable.`
+        : stopped
+          ? `Hamilton stopped after attempting ${attempted} of ${tasks.length} task(s).`
+          : failed > 0
+            ? `Hamilton attempted ${attempted} task(s): ${processed} returned, ${failed} failed, ${blocked} blocked.`
+            : isNoop
+              ? (emptyQueue
+                ? 'Hamilton had no application tasks to process (empty queue).'
+                : `Hamilton attempted ${attempted} task(s) and NONE opened an autopilot run (${noRunDetail || 'no reason reported'}) — nothing advanced.`)
+              : `Hamilton processed ${processed} task(s) (${failed} failed, ${blocked} blocked).`,
       data: summary,
     })
 
-    return { ok: true, status, summary }
+    return {
+      ok: failed === 0,
+      status,
+      summary,
+      error: failed > 0 ? `${failed} Hamilton task(s) failed` : null,
+    }
   }
 }
