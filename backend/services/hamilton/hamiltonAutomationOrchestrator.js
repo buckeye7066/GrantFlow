@@ -355,7 +355,18 @@ export async function loadAuthoritativeGrantForSource(db, {
   opportunityId = null,
 } = {}) {
   if (!db || !profileId) return null
-  if (grantId) return loadGrant(db, grantId)
+  if (grantId) {
+    const grant = await loadGrant(db, grantId)
+    if (!grant || !opportunityId) return grant
+    const linkedOpportunityId = grant.funding_opportunity_id ?? grant.opportunity_id ?? null
+    if (!linkedOpportunityId || String(linkedOpportunityId) !== String(opportunityId)) {
+      const err = new Error('selected grant and opportunity identify different funding sources')
+      err.status = 409
+      err.code = 'source_identity_mismatch'
+      throw err
+    }
+    return grant
+  }
   if (!opportunityId) return null
 
   const rows = await db.prepare(
