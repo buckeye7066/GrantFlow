@@ -29,7 +29,7 @@ import {
   getLock,
 } from '../../backend/services/agentControl/agentControlStore.js'
 import { startRun } from '../../backend/services/agentControl/agentControlOrchestrator.js'
-import { agentLockName } from '../../backend/services/agentControl/agentControlTypes.js'
+import { agentLockName, FULL_CYCLE_LOCK } from '../../backend/services/agentControl/agentControlTypes.js'
 
 const ADMIN = { email: 'admin@grantflow.local', controlCenterAuthorized: true }
 const SAM_LOCK = agentLockName('sam')
@@ -241,6 +241,27 @@ test('graceful skip: a scheduled run whose agent lock is held is cancelled, not 
   // The original holder still owns the lock.
   const holder = await getLock(db, SAM_LOCK)
   assert.equal(holder.control_run_id, 'already-running')
+})
+
+test('scheduled_cycle shares the distributed full-cycle lock', async () => {
+  const db = await freshDb()
+  await acquireLock(db, {
+    lockName: FULL_CYCLE_LOCK,
+    controlRunId: 'existing-full-cycle',
+    ttlMs: 600_000,
+  })
+
+  const result = await startRun(db, {
+    runType: 'scheduled_cycle',
+    options: { lock_acquire_retries: 0 },
+    user: ADMIN,
+  })
+
+  assert.equal(result.skipped, true)
+  assert.equal(result.run.status, 'cancelled')
+  assert.deepEqual(result.steps, [])
+  const holder = await getLock(db, FULL_CYCLE_LOCK)
+  assert.equal(holder.control_run_id, 'existing-full-cycle')
 })
 
 test('manual start on a held lock surfaces 409 but is recorded as cancelled (not failed)', async () => {
