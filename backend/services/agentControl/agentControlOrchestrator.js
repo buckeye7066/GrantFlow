@@ -850,7 +850,7 @@ async function executeRunOnce({ db, runId } = {}) {
     await refreshStepControl()
     const controlPollTimer = setInterval(() => {
       void refreshStepControl().catch(() => {})
-    }, 250)
+    }, 50)
     controlPollTimer.unref?.()
 
     const signal = makeSignal({
