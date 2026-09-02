@@ -19,6 +19,7 @@ import { describe, it, expect, vi } from 'vitest'
 const automateSingleSource = vi.fn()
 vi.mock('../services/hamilton/hamiltonAutomationOrchestrator.js', () => ({
   automateSingleSource: (...a) => automateSingleSource(...a),
+  HAMILTON_INTERNAL_CALLER: Symbol('test.hamilton.internal-caller'),
   resolveAutopilotConcurrency: () => 1,
 }))
 
@@ -51,6 +52,10 @@ describe('hamilton tick: a task that never opened a run is not "processed work"'
     })
     const res = await new HamiltonAgentAdapter().start({ db: dbWithTasks(5) })
     expect(res.summary.attempted).toBe(5)
+    expect(automateSingleSource.mock.calls[0][1]).toMatchObject({
+      userId: null,
+      internalCaller: expect.any(Symbol),
+    })
     expect(res.summary.no_run).toBe(5)
     expect(res.status).toBe('noop')
     expect(res.summary.noop_reason).toMatch(/no_task_opened_a_run/)

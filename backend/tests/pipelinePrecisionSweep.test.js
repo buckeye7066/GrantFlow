@@ -225,12 +225,12 @@ describe('pipelinePrecision — the shared declared-need predicate', () => {
     expect(bad.opportunity_needs).toEqual(['legal'])
   })
 
-  it('is neutral — and SAYS so — when either side is silent', () => {
+  it('reports neutral silence without inventing positive admission proof', () => {
     const noProfile = evaluateDeclaredNeedCoverage({ categories: ['legal'] }, [])
-    expect(noProfile.pass).toBe(true)
+    expect(noProfile.pass).toBe(false)
     expect(noProfile.detail).toBe(NEED_COVERAGE_DETAIL.PROFILE_DECLARES_NO_NEEDS)
     const noRow = evaluateDeclaredNeedCoverage({ categories: [] }, ['education'])
-    expect(noRow.pass).toBe(true)
+    expect(noRow.pass).toBe(false)
     expect(noRow.detail).toBe(NEED_COVERAGE_DETAIL.OPPORTUNITY_STATES_NO_NEEDS)
   })
 })

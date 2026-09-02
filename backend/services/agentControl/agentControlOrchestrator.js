@@ -904,7 +904,18 @@ async function executeRunOnce({ db, runId } = {}) {
         db,
         controlRunId: runId,
         stepId: next.id,
-        options: run.options || {},
+        options: {
+          ...(run.options || {}),
+          // Adapter-facing actor metadata is built from the durable run row
+          // after user options are spread, so request JSON cannot impersonate
+          // another caller by supplying its own control_actor object.
+          control_actor: {
+            user_id: run.started_by_user_id || null,
+            email: run.started_by_email || null,
+            run_type: run.run_type || null,
+            run_id: run.id || runId,
+          },
+        },
         stage,
         signal,
       })

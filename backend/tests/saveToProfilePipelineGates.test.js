@@ -98,16 +98,16 @@ function makeDb() {
   return raw
 }
 
-// A profile context that produces a non-REJECT decision for the test opps
-// (the decision engine is the authority for Gate 2; these opps land as REVIEW,
-// which passes Gate 2 and lets us exercise the DUPLICATE + THRESHOLD gates).
+// A profile context with positive canonical need coverage. The focused engine
+// mock below supplies ACCEPT so these tests reach the DUPLICATE + THRESHOLD
+// gates they are intended to exercise.
 const profileContext = {
   profile: {
     id: 'p1',
     mission: 'Community programs',
     organization_type: 'nonprofit',
     state: 'TN',
-    needs: JSON.stringify(['community']),
+    needs: JSON.stringify(['business']),
   },
   sections: null,
 }
@@ -147,7 +147,7 @@ function admissionReady(opportunity) {
     opportunity_kind: opportunity.opportunity_kind ?? 'grant',
     amount_max: opportunity.amount_max ?? 10000,
     need_types_supported: opportunity.need_types_supported ??
-      JSON.stringify(['community', 'professional_development', 'business']),
+      JSON.stringify(['business', 'employment', 'agriculture']),
   }
 }
 
@@ -428,7 +428,7 @@ describe('saveToProfilePipeline — RELEVANCE FLOOR', () => {
         focus_areas: ['cancer', 'research'],
         organization_type: 'nonprofit',
         state: 'TN',
-        needs: JSON.stringify(['community']),
+        needs: JSON.stringify(['business']),
       },
       sections: null,
     }

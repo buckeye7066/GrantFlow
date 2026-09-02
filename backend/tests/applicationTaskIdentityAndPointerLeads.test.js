@@ -226,7 +226,7 @@ describe('the applicant-type gate runs for EVERY record_origin, not just the cra
   })
 
   it('refuses automation when applicant type cannot be positively verified', async () => {
-    await policyDb.prepare("UPDATE profiles SET primary_type = NULL WHERE id = ?").run(PROFILE)
+    await policyDb.prepare("UPDATE profiles SET primary_type = NULL, display_name = NULL WHERE id = ?").run(PROFILE)
     await seedOpp(policyDb, {
       id: 'opp-unknown',
       title: 'Developmental Sciences',

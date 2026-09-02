@@ -100,15 +100,31 @@ function makeDb() {
 }
 
 function insertOpp(sqlite, o) {
+  const entityTypes = o.ent ?? []
+  const needs = o.needs ?? []
+  const eligibility = o.eligibility ?? (
+    entityTypes.some((type) => ['student', 'individual', 'family'].includes(type))
+      ? 'Eligible applicants are individual college students and families.'
+      : entityTypes.some((type) => ['small_business', 'business'].includes(type))
+        ? 'Eligible applicants are small businesses.'
+        : entityTypes.some((type) => ['nonprofit', 'school', 'government'].includes(type))
+          ? 'Eligible applicants are nonprofit organizations and public institutions.'
+          : null
+  )
   sqlite.prepare(`INSERT INTO funding_opportunities
-    (id, title, sponsor, entity_types_allowed, need_types_supported, categories,
-     opportunity_kind, source, record_origin, source_url, application_url, is_active, created_at)
-    VALUES (@id, @title, @sponsor, @ent, @needs, @cats, @kind, @source, @origin, @url, @apply, 1, @created)`)
+    (id, title, sponsor, description, eligibility_text, entity_types_allowed,
+     need_types_supported, categories, opportunity_kind, source, record_origin,
+     source_url, application_url, amount_max, is_active, created_at)
+    VALUES (@id, @title, @sponsor, @description, @eligibility, @ent, @needs, @cats,
+            @kind, @source, @origin, @url, @apply, @amount, 1, @created)`)
     .run({
       id: o.id, title: o.title, sponsor: o.sponsor,
-      ent: JSON.stringify(o.ent ?? []), needs: JSON.stringify(o.needs ?? []), cats: JSON.stringify(o.cats ?? []),
+      description: o.description ?? `${o.title} provides ${needs.join(', ') || 'program'} funding.`,
+      eligibility,
+      ent: JSON.stringify(entityTypes), needs: JSON.stringify(needs), cats: JSON.stringify(o.cats ?? []),
       kind: o.kind ?? 'scholarship', source: o.source ?? 'curated_verified', origin: o.origin ?? 'curated_verified',
-      url: o.url, apply: o.apply ?? o.url, created: o.created ?? '2026-08-23T00:00:00Z',
+      url: o.url, apply: o.apply ?? o.url, amount: o.amount ?? 10000,
+      created: o.created ?? '2026-08-23T00:00:00Z',
     })
 }
 

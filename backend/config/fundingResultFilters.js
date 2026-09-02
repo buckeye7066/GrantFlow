@@ -679,9 +679,9 @@ export function passesEligibility(row, facts = {}) {
  * Owner-named predicate #3: geography. Foreign funders/jurisdictions are never
  * relevant to a U.S. profile. A row whose own title declares `Place, XX — ...`
  * or whose registered funder/institution carries a canonical state is relevant
- * only in that state. Missing evidence stays neutral; a bare stored `state`
- * remains insufficient because that column is the crawl-noise field being
- * repaired.
+ * only in that state. A persisted state is also restrictive when the row is
+ * explicitly non-national; explicit national scope wins over a stale crawl
+ * state. Missing evidence stays neutral.
  */
 export function isRelevantGeo(row, { states = null } = {}) {
   const foreign = detectForeignOpportunity(row)
@@ -699,9 +699,22 @@ export function isRelevantGeo(row, { states = null } = {}) {
       .map((state) => normalizeState(state))
       .filter(Boolean),
   )]
-  const jurisdiction = resolvedUsOpportunityJurisdiction(row)
+  const resolved = resolvedUsOpportunityJurisdiction(row)
+  const explicitlyNational = row?.is_national === true || row?.is_national === 1 ||
+    /^(?:1|true|yes)$/i.test(String(row?.is_national ?? '').trim())
+  const jurisdiction = explicitlyNational && resolved.source === 'stored_state'
+    ? {
+        ...resolved,
+        state: null,
+        is_national: true,
+        confirmed: true,
+        source: 'stored_national',
+        evidence: 'stored_national',
+      }
+    : resolved
   const restrictiveEvidence = jurisdiction.source === 'canonical_funder' ||
-    jurisdiction.source === 'declared_title'
+    jurisdiction.source === 'declared_title' ||
+    jurisdiction.source === 'stored_state'
   if (
     restrictiveEvidence &&
     jurisdiction.state &&
@@ -710,7 +723,9 @@ export function isRelevantGeo(row, { states = null } = {}) {
   ) {
     const prefix = jurisdiction.source === 'canonical_funder'
       ? `canonical_funder_out_of_state:${jurisdiction.rule_id}`
-      : 'declared_place_out_of_state'
+      : jurisdiction.source === 'declared_title'
+        ? 'declared_place_out_of_state'
+        : 'persisted_state_out_of_state'
     return {
       relevant: false,
       reason: `${prefix}:${jurisdiction.state}`,

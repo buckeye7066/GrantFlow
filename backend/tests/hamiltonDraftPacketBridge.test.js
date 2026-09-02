@@ -418,7 +418,7 @@ describe('autopilot pathway — draft packet is the fill source', () => {
       source: { opportunity_id: 'opp-1', grant_id: 'g-1' },
       options: {},
     })).rejects.toMatchObject({
-      code: 'application_task_source_scope_mismatch',
+      code: 'source_profile_mismatch',
       status: 403,
     })
 

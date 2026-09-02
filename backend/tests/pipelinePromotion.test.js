@@ -62,7 +62,8 @@ function makeDb() {
       id TEXT PRIMARY KEY, profile_id TEXT NOT NULL, opportunity_id TEXT NOT NULL,
       match_score REAL, match_confidence REAL, match_decision TEXT,
       match_explanation TEXT, match_reasons TEXT, match_explain_json TEXT,
-      matcher_version TEXT, computed_at TEXT, updated_at TEXT, evaluated_at TEXT
+      matcher_version TEXT, computed_at TEXT, updated_at TEXT, evaluated_at TEXT,
+      UNIQUE (profile_id, opportunity_id)
     );
     CREATE TABLE grants (
       id TEXT PRIMARY KEY, organization_id TEXT, profile_id TEXT,

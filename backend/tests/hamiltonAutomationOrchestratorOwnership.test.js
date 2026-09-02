@@ -34,7 +34,10 @@ vi.mock('../services/hamilton/hamiltonPreflight.js', async (importOriginal) => {
 })
 
 const { wrapSqlite } = await import('../../tests/helpers/sqliteTestDb.mjs')
-const { automateSingleSource } = await import('../services/hamilton/hamiltonAutomationOrchestrator.js')
+const {
+  automateSingleSource,
+  HAMILTON_INTERNAL_CALLER,
+} = await import('../services/hamilton/hamiltonAutomationOrchestrator.js')
 const { _resetSchemaCache } = await import('../services/hamilton/applicationTaskStore.js')
 const { _resetAuthSchemaCache } = await import('../services/hamilton/hamiltonAuthorizationStore.js')
 
@@ -154,12 +157,23 @@ describe('automateSingleSource — cross-tenant ownership gate', () => {
     expect(await taskCount(db)).toBe(1)
   })
 
-  it('trusts an internal/system caller that asserts no userId (MISSING = NEUTRAL)', async () => {
-    // e.g. hamiltonAgentAdapter.js re-processing an existing application_tasks
-    // row by its own already-scoped profile_id, with userId: null.
+  it('REFUSES a missing user without the in-process adapter capability', async () => {
+    await expect(automateSingleSource(db, {
+      profileId: PROFILE,
+      userId: null,
+      source: { grant_id: 'g-1' },
+    })).rejects.toMatchObject({
+      status: 403,
+      code: 'profile_access_denied',
+    })
+    expect(await taskCount(db)).toBe(0)
+  })
+
+  it('ADMITS the scheduler/adapter only with its unforgeable in-process capability', async () => {
     const r = await automateSingleSource(db, {
       profileId: PROFILE,
       userId: null,
+      internalCaller: HAMILTON_INTERNAL_CALLER,
       source: { grant_id: 'g-1' },
     })
     expect(r.skipped).not.toBe(true)

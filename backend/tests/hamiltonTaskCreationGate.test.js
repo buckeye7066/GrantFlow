@@ -132,6 +132,7 @@ describe('Hamilton task-creation eligibility gate', () => {
     await storeDecision(db, 'reject')
     const result = await automateSingleSource(db, {
       profileId: PROFILE,
+      userId: 'user-1',
       source: { grant_id: 'g-restricted' },
     })
     expect(result.skipped).toBe(true)
@@ -145,6 +146,7 @@ describe('Hamilton task-creation eligibility gate', () => {
     await storeDecision(db, 'review')
     const result = await automateSingleSource(db, {
       profileId: PROFILE,
+      userId: 'user-1',
       source: { grant_id: 'g-restricted' },
     })
     expect(result.skipped).toBe(true)
@@ -156,6 +158,7 @@ describe('Hamilton task-creation eligibility gate', () => {
   it('refuses a source with no stored or live ACCEPT', async () => {
     const result = await automateSingleSource(db, {
       profileId: PROFILE,
+      userId: 'user-1',
       source: { grant_id: 'g-restricted' },
     })
     expect(result.skipped).toBe(true)
@@ -167,6 +170,7 @@ describe('Hamilton task-creation eligibility gate', () => {
     await storeDecision(db, 'accept')
     const result = await automateSingleSource(db, {
       profileId: PROFILE,
+      userId: 'user-1',
       source: { grant_id: 'g-restricted' },
     })
     expect(result.skipped).not.toBe(true)
@@ -179,6 +183,7 @@ describe('Hamilton task-creation eligibility gate', () => {
     try {
       await automateSingleSource(db, {
         profileId: PROFILE,
+        userId: 'user-1',
         source: { grant_id: 'g-vanished', opportunity_id: 'opp-vanished' },
       })
     } catch (caught) { error = caught }
@@ -199,6 +204,7 @@ describe('Hamilton task-creation eligibility gate', () => {
 
     const result = await automateSingleSource(db, {
       profileId: PROFILE,
+      userId: 'user-1',
       source: { grant_id: 'g-pointer' },
     })
 

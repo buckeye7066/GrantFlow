@@ -560,22 +560,22 @@ async function maybeUpdateGrantStage(db, grantId, newStage) {
 }
 
 /**
- * Cross-tenant ownership gate for automateSingleSource. `userId` here is the
- * ACTOR who triggered this run (e.g. getAuthUserId(user) from a route); when
- * it is null the caller is an internal/system driver operating on an
- * already-scoped record (e.g. hamiltonAgentAdapter.js re-processing an
- * existing application_tasks row by its own profile_id) and is trusted, the
- * same "MISSING = NEUTRAL" posture the rest of this codebase uses for
- * internal callers. When a userId IS asserted, it must resolve to either a
- * DB-confirmed admin or one of the profile's owner/creator/allowlisted-email
- * accounts (getUserIdsWithProfileAccess — the same primitive
- * userMayAccessProfile's route-level checks are built on), mirroring the
- * ensureProfileAccess(ctx, profileId) pattern anyaToolRegistry.js's tool
- * handlers already use as a service-level (non-route) ownership gate.
+ * In-process capability for the Hamilton adapter and scheduler. This is a
+ * module-identity Symbol (not Symbol.for), so request JSON cannot construct or
+ * replay it. Missing actor identity is otherwise denied.
  */
-async function isUserAuthorizedForProfile(db, userId, profileId) {
-  if (!userId) return true
+export const HAMILTON_INTERNAL_CALLER = Symbol('grantflow.hamilton.internal-caller')
+
+/**
+ * Cross-tenant ownership gate for automateSingleSource. A real user must be a
+ * DB-confirmed admin or one of the profile's owner/creator/allowlisted-email
+ * accounts. Scheduler-driven work must present the in-process capability above;
+ * a bare null/undefined user is never authorization.
+ */
+async function isUserAuthorizedForProfile(db, userId, profileId, { internalCaller = null } = {}) {
   if (!db || !profileId) return false
+  if (internalCaller === HAMILTON_INTERNAL_CALLER) return true
+  if (!userId) return false
   try {
     const adminRow = await db.prepare('SELECT is_admin FROM users WHERE id = ?').get(String(userId))
     if (adminRow && (adminRow.is_admin === true || adminRow.is_admin === 1)) return true
@@ -653,7 +653,7 @@ async function closeExistingTasksForRefusedSource(db, {
  * `automateSelected`.
  */
 export async function automateSingleSource(db, {
-  profile, profileId, userId = null, source, options = {},
+  profile, profileId, userId = null, internalCaller = null, source, options = {},
 } = {}) {
   if (!profile && !profileId) throw new Error('profile or profileId required')
   const resolvedProfileId = profileId || profile.id
@@ -662,7 +662,12 @@ export async function automateSingleSource(db, {
   // packet generation. loadProfileBundle below is a bare `WHERE id = ?` with
   // no ownership check of its own — this is the ONE place that check must
   // hold regardless of which caller reaches this function.
-  if (!(await isUserAuthorizedForProfile(db, userId, resolvedProfileId))) {
+  if (!(await isUserAuthorizedForProfile(
+    db,
+    userId,
+    resolvedProfileId,
+    { internalCaller },
+  ))) {
     const err = new Error(`user ${userId} is not authorized for profile ${resolvedProfileId}`)
     err.status = 403
     err.code = 'profile_access_denied'
@@ -3112,6 +3117,7 @@ async function runAutopilotPathway(db, {
             profile,
             profileId: task.profile_id,
             userId,
+            internalCaller,
             source: { opportunity_id: opportunityId },
             options: { ...(options || {}), _listingChild: true, allow_auto_submit: true },
           }).catch((err) => ({ autopilot_result: { status: 'failed', blocker_kind: 'apply_error', detail: err?.message || String(err) } }))

@@ -111,8 +111,10 @@ export class HamiltonAgentAdapter extends BaseAgentAdapter {
     // orchestrator. Heartbeats are emitted between tasks so the UI shows
     // progress and stop requests get noticed promptly.
     let automateSingleSource
+    let HAMILTON_INTERNAL_CALLER
     try {
-      ({ automateSingleSource } = await import('../../hamilton/hamiltonAutomationOrchestrator.js'))
+      ({ automateSingleSource, HAMILTON_INTERNAL_CALLER } =
+        await import('../../hamilton/hamiltonAutomationOrchestrator.js'))
     } catch (err) {
       return {
         ok: false,
@@ -206,7 +208,11 @@ export class HamiltonAgentAdapter extends BaseAgentAdapter {
       try {
         const r = await automateSingleSource(db, {
           profileId: task.profile_id,
-          userId: null,
+          userId: options?.control_actor?.user_id || null,
+          // Only the in-process Hamilton adapter can hold this symbol. It keeps
+          // scheduler-driven durable tasks authorized without restoring the old
+          // unsafe "missing user means trusted" service behavior.
+          internalCaller: HAMILTON_INTERNAL_CALLER,
           // automateSingleSource keys off opportunity_id OR grant_id (it
           // throws "source must include opportunity_id or grant_id" if
           // neither is present). Pass them straight through from the task
