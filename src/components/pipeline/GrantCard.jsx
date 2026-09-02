@@ -87,6 +87,13 @@ function GrantCard({ grant, organization, organizationName, onStatusChange, onSt
 
   // Freshness badge — only show for stale or unverified
   const freshness = grant.freshness ?? null;
+  const isIneligible = String(grant.eligibility_status ?? '').trim().toLowerCase() === 'ineligible' ||
+    String(grant.match_decision ?? '').trim().toUpperCase() === 'REJECT';
+  const ineligibilityReasons = Array.isArray(grant.ineligibility_reasons)
+    ? grant.ineligibility_reasons
+    : (() => {
+        try { return JSON.parse(grant.ineligibility_reasons || '[]'); } catch { return []; }
+      })();
 
   // Normalize snake_case eligibility_bullets from backend to camelCase
   const eligibilityBullets = grant.eligibilityBullets ?? grant.eligibility_bullets ?? [];
@@ -154,7 +161,7 @@ function GrantCard({ grant, organization, organizationName, onStatusChange, onSt
     >
       <div className="flex items-center justify-between p-3 border-b border-slate-100">
         <div className="flex items-center gap-2 flex-wrap">
-          {hamiltonSelection?.enabled && (
+          {hamiltonSelection?.enabled && !isIneligible && (
             <label
               className={`inline-flex items-center gap-1 cursor-pointer select-none mr-1 rounded px-1.5 py-0.5 text-xs font-medium border transition-colors ${
                 hamiltonIsSelected
@@ -174,6 +181,14 @@ function GrantCard({ grant, organization, organizationName, onStatusChange, onSt
               <Sparkles className="w-3 h-3" />
               {hamiltonIsSelected ? 'Picked' : 'Hamilton'}
             </label>
+          )}
+          {isIneligible && (
+            <HelpTip text={`Ineligible/dismissed: ${ineligibilityReasons.length ? ineligibilityReasons.map(humanizeMatchReason).join('; ') : 'the current eligibility evaluation rejected this source'}. Kept for history; it is excluded from pipeline dollars and Hamilton automation.`}>
+              <Badge variant="destructive" className="text-xs gap-1 cursor-help">
+                <AlertCircle className="w-3 h-3" />
+                Ineligible
+              </Badge>
+            </HelpTip>
           )}
           {grant.starred && <Star className="w-4 h-4 text-yellow-400 fill-yellow-400" />}
           {isExpired && <Badge variant="destructive" className="text-xs">EXPIRED</Badge>}
@@ -291,7 +306,7 @@ function GrantCard({ grant, organization, organizationName, onStatusChange, onSt
             </Badge>
           )}
         </div>
-        {(onStarToggle || onDelete || hamiltonSelection?.enabled) && (
+        {(onStarToggle || onDelete || (hamiltonSelection?.enabled && !isIneligible)) && (
           <DropdownMenu open={showMenu} onOpenChange={setShowMenu}>
             <DropdownMenuTrigger asChild>
               <Button variant="ghost" size="icon" className="h-6 w-6" aria-label={`More options for ${grant?.title || 'this grant'}`}>
@@ -305,7 +320,7 @@ function GrantCard({ grant, organization, organizationName, onStatusChange, onSt
                   {grant.starred ? 'Unstar' : 'Star'}
                 </DropdownMenuItem>
               )}
-              {hamiltonSelection?.enabled && (
+              {hamiltonSelection?.enabled && !isIneligible && (
                 <DropdownMenuItem
                   onSelect={() => { hamiltonSelection?.toggle?.(hamiltonSelectionSource); setShowMenu(false); }}
                 >
