@@ -345,7 +345,12 @@ describe('Hamilton agent adapter — MTSU queue drain', () => {
     })
 
     assert.equal(result.ok, true, `Hamilton must run cleanly. result: ${JSON.stringify(result)}`)
-    assert.equal(result.status, 'completed')
+    // Packet/deferred pathways can advance their durable task without opening
+    // a browser autopilot run. The adapter must report that honestly as a noop,
+    // not claim end-to-end completion.
+    assert.equal(result.status, 'noop')
+    assert.equal(result.summary.no_run, 3)
+    assert.match(result.summary.noop_reason, /^no_task_opened_a_run:/)
     // Critically, this used to be 0 — the old SELECT referenced non-existent
     // columns and silently returned no rows, then the source mapping passed
     // `id: task.funding_source_id` which automateSingleSource rejected with

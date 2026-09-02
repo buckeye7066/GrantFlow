@@ -378,29 +378,12 @@ async function admitToPipeline(db, profileContext, opportunity, ctx = {}) {
       await persistFreshCanonicalDecision(db, profileId, opportunity?.id, decision)
     }
 
-    // Gate 2: Canonical decision engine — automated persistence requires a
-    // positive ACCEPT. REVIEW/unknown is evidence still to be established, not
-    // proof that the profile qualifies.
-    if (decision?.decision !== 'ACCEPT') {
-      const verdict = String(decision?.decision || 'UNKNOWN').toUpperCase()
-      const reasons = decision?.ineligibilityReasons ?? decision?.reasons ?? []
-      if (!quiet) log.info(`[opportunityMatcher] Gate:DECISION_ENGINE refused ${verdict} for "${opportunity.title}" — ${reasons.join('; ')}`)
-      return denied(verdict === 'REJECT' ? 'live_reject' : 'eligibility_unverified', {
-        saved: false,
-        reason: `${verdict} is not positive qualification evidence: ${reasons.join('; ') || 'eligibility must be verified'}`,
-        gate: 'DECISION_ENGINE',
-        matchPercentage: decision?.score ?? 0,
-        threshold,
-        decision: verdict,
-      }, decision?.score ?? 0)
-    }
-
-    // Gate 2.5: Pipeline dismissals (sticky deletes). Run this only after
-    // deterministic source, fundability, declared-need, and qualification
-    // gates have rejected rows that can never enter a pipeline. For a row
-    // that is otherwise admissible, an unreadable dismissal store still
-    // fails closed, and a user's explicit dismissal still wins before any
-    // database-backed exclusion or persistence work. Manual re-add via
+    // Gate 2: Pipeline dismissals (sticky deletes). The user's explicit
+    // dismissal wins after deterministic source/fundability/need checks and
+    // the canonical rescore, regardless of whether today's score is ACCEPT or
+    // REVIEW. Otherwise a later scoring-policy change can hide the tombstone
+    // behind DECISION_ENGINE and make sticky deletion appear broken. An
+    // unreadable dismissal store fails closed. Manual re-add via
     // POST /api/grants/from-opportunity clears the tombstone.
     if (profileId) {
       try {
@@ -432,6 +415,24 @@ async function admitToPipeline(db, profileContext, opportunity, ctx = {}) {
           threshold,
         })
       }
+    }
+
+
+    // Gate 2: Canonical decision engine — automated persistence requires a
+    // positive ACCEPT. REVIEW/unknown is evidence still to be established, not
+    // proof that the profile qualifies.
+    if (decision?.decision !== 'ACCEPT') {
+      const verdict = String(decision?.decision || 'UNKNOWN').toUpperCase()
+      const reasons = decision?.ineligibilityReasons ?? decision?.reasons ?? []
+      if (!quiet) log.info(`[opportunityMatcher] Gate:DECISION_ENGINE refused ${verdict} for "${opportunity.title}" — ${reasons.join('; ')}`)
+      return denied(verdict === 'REJECT' ? 'live_reject' : 'eligibility_unverified', {
+        saved: false,
+        reason: `${verdict} is not positive qualification evidence: ${reasons.join('; ') || 'eligibility must be verified'}`,
+        gate: 'DECISION_ENGINE',
+        matchPercentage: decision?.score ?? 0,
+        threshold,
+        decision: verdict,
+      }, decision?.score ?? 0)
     }
 
     // Gate 3: Exclusion engine — custom suppression rules
