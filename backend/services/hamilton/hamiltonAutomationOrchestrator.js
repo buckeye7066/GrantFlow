@@ -907,7 +907,7 @@ export async function automateSingleSource(db, {
 
   if (classification.automation_type === 'portal') {
     return await runPortalPathway(db, {
-      task, profile, opportunity, grant, classification, userId, options,
+      task, profile, opportunity, grant, classification, userId, internalCaller, options,
     })
   }
 
@@ -1680,7 +1680,7 @@ async function runActionPacketPathway(db, {
 }
 
 async function runPortalPathway(db, {
-  task, profile, opportunity, grant, classification, userId, options,
+  task, profile, opportunity, grant, classification, userId, internalCaller = null, options,
 }) {
   // A prior run that reached the irreversible boundary can never be resumed as
   // ordinary form filling. Startup recovery and cancellation both quarantine
