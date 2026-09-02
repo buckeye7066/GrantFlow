@@ -195,7 +195,10 @@ export class JohnAgentAdapter extends BaseAgentAdapter {
 
     return {
       ok: result?.ok !== false,
-      status: result?.ok === false ? 'failed' : producedNothing ? 'completed_no_drafts' : 'completed',
+      // Zero drafts is a valid completed/no-work result; the orchestrator's
+      // canonical work counter promotes the enclosing run to completed_noop.
+      // Never emit an adapter-only status outside STEP_STATUSES.
+      status: result?.ok === false ? 'failed' : 'completed',
       summary: {
         agent: 'john',
         john_run_id: result?.run_id || null,
