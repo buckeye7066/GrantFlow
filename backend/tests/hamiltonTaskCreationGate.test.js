@@ -74,7 +74,8 @@ function makeDb() {
       record_origin TEXT,
       source_trust_tier TEXT,
       reality_status TEXT,
-      is_active INTEGER
+      is_active INTEGER,
+      is_national INTEGER
     );
     CREATE TABLE grants (
       id TEXT PRIMARY KEY,
@@ -112,21 +113,22 @@ async function seedFixture(db) {
   await db.prepare(`INSERT INTO funding_opportunities
     (id, title, description, opportunity_kind, application_url, source_url,
      entity_types_allowed, categories, need_types_supported, link_status,
-     last_verified_at, source, record_origin, source_trust_tier, reality_status, is_active)
+     last_verified_at, source, record_origin, source_trust_tier, reality_status, is_active,
+     is_national)
     VALUES (?, ?, ?, 'direct_grant', ?, ?, ?, ?, ?, 'ok', CURRENT_TIMESTAMP,
-            'curated_verified', 'curated_verified', 'official', 'real', 1)`)
+            'curated', 'curated_verified', 'official', 'real', 1, 1)`)
     .run(
       'opp-restricted',
-      'College Tuition Scholarship',
-      'Tuition scholarship for undergraduate education.',
-      'https://portal.uncf-fixture.org/apply',
-      'https://portal.uncf-fixture.org/apply',
-      JSON.stringify(['student', 'individual']),
+      'Federal Pell Grant',
+      'Federal need-based education grant for eligible undergraduate students.',
+      'https://studentaid.gov/understand-aid/types/grants/pell',
+      'https://studentaid.gov/understand-aid/types/grants/pell',
+      JSON.stringify(['student', 'family']),
       JSON.stringify(['education']),
       JSON.stringify(['education']),
     )
   await db.prepare('INSERT INTO grants (id, profile_id, funding_opportunity_id, title, application_url) VALUES (?, ?, ?, ?, ?)')
-    .run('g-restricted', PROFILE, 'opp-restricted', 'UNCF Scholarship', 'https://portal.uncf-fixture.org/apply')
+    .run('g-restricted', PROFILE, 'opp-restricted', 'Federal Pell Grant', 'https://studentaid.gov/understand-aid/types/grants/pell')
 }
 
 async function taskCount(db) {
