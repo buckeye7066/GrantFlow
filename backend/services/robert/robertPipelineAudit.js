@@ -63,7 +63,7 @@
 
 import { canonicalOpportunityKey } from '../../crawler-os/contract.js'
 import { programIdentityKey, sameProgram, programTokens } from "../../config/programIdentity.js"
-import { isPointerKind } from '../../config/opportunityKindClasses.js'
+import { isPointerKind, pointerKindSql } from '../../config/opportunityKindClasses.js'
 import { classifyLocatorKindFromRow } from '../sources/locatorUrlKind.js'
 import {
   classifyFundingResult,
@@ -298,7 +298,12 @@ export async function buildPipelineRowSql(db) {
   // already decided on the funder-specific four gates at admission. So the
   // four-gate AUDIT and the pipeline-precision boot net never see them here.
   const funderLeadExclusion = grantCols.has('pipeline_category')
-    ? `\n    AND (g.pipeline_category IS NULL OR LOWER(g.pipeline_category) <> 'funder_lead')`
+    ? `\n    AND NOT (
+      LOWER(COALESCE(g.pipeline_category, '')) = 'funder_lead'
+      AND ${pointerKindSql('fo.opportunity_kind')}
+      AND ${oppCols.has('source') ? "LOWER(COALESCE(fo.source, '')) <> 'grants_gov'" : 'TRUE'}
+      AND ${oppCols.has('deadline') ? 'fo.deadline IS NULL' : 'TRUE'}
+    )`
     : ''
   return `
   SELECT
@@ -818,15 +823,20 @@ async function removeFromPipeline(db, { facts, row, gate, verdict, userId }) {
     profileId: facts.profileId,
     userId: userId || 'agent:robert',
     reason: `robert_pipeline_audit:${gate}:${verdict?.reason ?? 'failed'}`,
-    grantRow: {
-      id: row.grant_id,
-      title: row.title,
-      funder: row.sponsor,
-      deadline: row.deadline,
-      application_url: row.application_url,
-      source_url: row.source_url,
-      funding_opportunity_id: row.funding_opportunity_id,
-    },
+    // Duplicate removals are row-specific cleanup, not a user rejection of
+    // the program title. Persist only the losing opportunity id so the kept
+    // twin cannot be removed later by title/fingerprint reconciliation.
+    grantRow: gate === 'duplicate'
+      ? { id: row.grant_id, funding_opportunity_id: row.funding_opportunity_id }
+      : {
+          id: row.grant_id,
+          title: row.title,
+          funder: row.sponsor,
+          deadline: row.deadline,
+          application_url: row.application_url,
+          source_url: row.source_url,
+          funding_opportunity_id: row.funding_opportunity_id,
+        },
   })
 }
 
@@ -959,8 +969,15 @@ export async function auditProfilePipeline(db, profileId, {
     const key = programIdentityKey(row)
     let matchedKey = survivors.has(key) ? key : null
     if (!matchedKey) {
+      const rowTitle = String(row.title || '').trim().replace(/\\s+/g, ' ').toLowerCase()
       for (const [existingKey, existingRow] of survivors.entries()) {
-        if (sameProgram(existingRow, row)) { matchedKey = existingKey; break }
+        const existingTitle = String(existingRow.title || '').trim().replace(/\\s+/g, ' ').toLowerCase()
+        // Exact normalized titles are duplicate program rows even when two
+        // ingestion lanes minted disagreeing canonical keys.
+        if ((rowTitle && rowTitle === existingTitle) || sameProgram(existingRow, row)) {
+          matchedKey = existingKey
+          break
+        }
       }
     }
     if (!matchedKey) { survivors.set(key, row); continue }
