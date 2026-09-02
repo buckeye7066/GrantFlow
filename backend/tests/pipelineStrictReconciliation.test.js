@@ -4,7 +4,7 @@ import Database from 'better-sqlite3'
 process.env.RUNTIME_SECRETS_KEY = process.env.RUNTIME_SECRETS_KEY || 'e'.repeat(64)
 
 const { wrapSqlite } = await import('../../tests/helpers/sqliteTestDb.mjs')
-const { runStrictPipelineReconciliation } = await import('../services/pipelineStrictReconciliation.js')
+const { runStrictPipelineReconciliation, cancelInvalidActiveHamiltonTasks } = await import('../services/pipelineStrictReconciliation.js')
 const {
   ensureApplicationTask,
   updateApplicationTask,
@@ -239,4 +239,20 @@ describe('strict production pipeline reconciliation', () => {
     expect(summary.tasksCancelled).toBe(4)
     expect(summary.matchesRemoved).toBe(4)
   })
+
+  it('cancels active tasks whose grant disappeared in an earlier partial reconciliation', async () => {
+    const { sqlite, db } = await seed()
+    sqlite.prepare("DELETE FROM grants WHERE id = 'g-good'").run()
+
+    const cancelled = await cancelInvalidActiveHamiltonTasks(db)
+    expect(cancelled).toBe(1)
+
+    const task = sqlite.prepare(
+      "SELECT status, allow_auto_submit, auto_submit_enabled FROM application_tasks WHERE grant_id = 'g-good'",
+    ).get()
+    expect(task.status).toBe('cancelled')
+    expect(Boolean(task.allow_auto_submit)).toBe(false)
+    expect(Boolean(task.auto_submit_enabled)).toBe(false)
+  })
+
 })
