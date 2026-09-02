@@ -74,17 +74,49 @@ export class YanaAgentAdapter extends BaseAgentAdapter {
       : {}
 
     const yanaCfg = getYanaConfig()
-    const result = await runYanaDiscovery(db, {
-      trigger: 'admin-ui',
-      allowLeads,
-      createdByUserId: options?.user_id || null,
-      // Outbound prospect discovery + enrichment touch the live web; gated by
-      // YANA_ALLOW_LIVE_WEB (honest NOOP when off).
-      allowLiveWeb: yanaCfg.allowLiveWeb,
-      prospectLimit: yanaCfg.prospectLimit,
-      backlogEnrichLimit: yanaCfg.backlogEnrichLimit,
-      prospectDeps,
-    })
+    let result
+    try {
+      result = await runYanaDiscovery(db, {
+        trigger: 'admin-ui',
+        allowLeads,
+        createdByUserId: options?.user_id || null,
+        // Outbound prospect discovery + enrichment touch the live web; gated by
+        // YANA_ALLOW_LIVE_WEB (honest NOOP when off).
+        allowLiveWeb: yanaCfg.allowLiveWeb,
+        prospectLimit: yanaCfg.prospectLimit,
+        backlogEnrichLimit: yanaCfg.backlogEnrichLimit,
+        prospectDeps,
+      })
+    } catch (err) {
+      const message = err?.message || String(err)
+      await signal?.recordEvent?.({
+        eventType: 'agent.yana.failed',
+        severity: 'high',
+        message: `Yana client discovery failed: ${message}`,
+        data: { error: message },
+      })
+      return {
+        ok: false,
+        status: 'failed',
+        error: message,
+        summary: { agent: 'yana', error: message },
+      }
+    }
+
+    if (!result || typeof result !== 'object') {
+      const message = 'Yana discovery returned no result'
+      await signal?.recordEvent?.({
+        eventType: 'agent.yana.failed',
+        severity: 'high',
+        message,
+      })
+      return {
+        ok: false,
+        status: 'failed',
+        error: message,
+        summary: { agent: 'yana', error: message },
+      }
+    }
 
     if (signal?.shouldStop?.()) {
       await signal?.recordEvent?.({
