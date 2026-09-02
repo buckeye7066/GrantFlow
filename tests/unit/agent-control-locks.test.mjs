@@ -28,7 +28,7 @@ import {
   stopLockSweeper,
   getLock,
 } from '../../backend/services/agentControl/agentControlStore.js'
-import { startRun } from '../../backend/services/agentControl/agentControlOrchestrator.js'
+import { buildStepPlan, startRun } from '../../backend/services/agentControl/agentControlOrchestrator.js'
 import { agentLockName, FULL_CYCLE_LOCK } from '../../backend/services/agentControl/agentControlTypes.js'
 
 const ADMIN = { email: 'admin@grantflow.local', controlCenterAuthorized: true }
@@ -241,6 +241,19 @@ test('graceful skip: a scheduled run whose agent lock is held is cancelled, not 
   // The original holder still owns the lock.
   const holder = await getLock(db, SAM_LOCK)
   assert.equal(holder.control_run_id, 'already-running')
+})
+
+test('scheduled_cycle builds the canonical Sam-wrapped full-fleet order', () => {
+  const plan = buildStepPlan(
+    'scheduled_cycle',
+    ['sam', 'robert', 'yana', 'john', 'hamilton'],
+    { run_sam_preflight: true, run_sam_postflight: true },
+  )
+
+  assert.deepEqual(
+    plan.map((step) => step.step_name),
+    ['sam_preflight', 'robert_main', 'yana_main', 'john_main', 'hamilton_main', 'sam_postflight'],
+  )
 })
 
 test('scheduled_cycle shares the distributed full-cycle lock', async () => {
