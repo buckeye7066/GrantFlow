@@ -103,9 +103,13 @@ function servesDeclaredMission(source, thesis) {
 
 function servesGeo(source, thesis) {
   if (source.geography?.national) return true;
-  const st = thesis.location?.state;
-  if (!st) return true; // unknown location -> keep (matcher will down-weight)
-  return (source.geography?.states ?? []).includes(st);
+  const profileStates = new Set([
+    thesis.location?.state,
+    ...(Array.isArray(thesis.location?.states) ? thesis.location.states : []),
+  ].map((state) => String(state ?? '').trim().toUpperCase()).filter(Boolean));
+  if (profileStates.size === 0) return true; // unknown location -> keep (matcher will down-weight)
+  return (source.geography?.states ?? [])
+    .some((state) => profileStates.has(String(state ?? '').trim().toUpperCase()));
 }
 
 /**
@@ -258,6 +262,10 @@ export function plan(thesis = {}) {
         tier = LANE_TIER.DECLARED_STAGE;
         reasons.push('serves_declared_stage');
       }
+      const routedType = thesis?.profile_route?.canonical_profile_type;
+      if (routedType) reasons.push(`profile_type_route:${routedType}`);
+      const needsSource = thesis?.profile_route?.needs_source;
+      if (needsSource) reasons.push(`profile_needs_source:${needsSource}`);
       selected.push(source.source_id);
       reasons.unshift('selected');
     }
@@ -273,6 +281,7 @@ export function plan(thesis = {}) {
   return {
     selected_source_ids: selected,
     source_decisions: decisions,
+    profile_route: thesis?.profile_route ?? null,
     loan_allowed: Boolean(thesis.loan_allowed),
     cost_share_allowed: Boolean(thesis.cost_share_allowed),
   };

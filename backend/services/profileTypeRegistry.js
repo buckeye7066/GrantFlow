@@ -25,6 +25,12 @@
  * resolve through this registry instead of pattern-matching strings in
  * its own file.
  *
+ * The production Crawler OS route is exposed by buildCrawlerProfileRoute().
+ * It translates a canonical GrantFlow profile type into the applicant buckets
+ * used by backend/crawler-os/sourceRegistry.js. Source applicant/need/geo gates
+ * still decide which concrete sources fire; the profile route never forces an
+ * unrelated source through those gates.
+ *
  * Pure / data-driven: no DB, no network, no I/O. Safe to import anywhere.
  */
 
@@ -44,9 +50,9 @@ import { SOURCE_IDS } from './sourceRegistry.js'
  *   requiredProfileFields fields that must be present to plan a useful
  *                         crawl (used by Anya to ask the right next-step
  *                         question; never used to suppress results)
- *   recommendedSources    SOURCE_IDS values that should always survive
- *                         filtering for this type (mission rule: directory
- *                         and verticals must always survive)
+ *   recommendedSources    legacy coverage/reporting hints retained for
+ *                         compatibility; live source selection is owned by
+ *                         buildCrawlerProfileRoute + Crawler OS planner gates
  *   recommendedStrategy   strategyRegistry id the dispatcher should pick
  *                         when no other signal forces a different strategy
  *   anyaLabel             human-readable label Anya uses when narrating
@@ -918,6 +924,38 @@ export const PROFILE_TYPES = Object.freeze({
 })
 
 /**
+ * Canonical profile-type -> Crawler OS applicant-bucket bridge.
+ *
+ * This is intentionally keyed only by canonical PROFILE_TYPES ids. Aliases are
+ * resolved by resolveProfileType(), and parent routes are inherited through
+ * getParentChain(). That keeps one auditable answer for questions such as
+ * "why did a VFD run FEMA/grants.gov lanes?" or "why did a public school run
+ * school + government lanes?" without hard-coding concrete source ids here.
+ * Concrete source applicability remains owned by crawler-os/sourceRegistry.
+ */
+export const CRAWLER_APPLICANT_TYPES_BY_PROFILE_TYPE = Object.freeze({
+  individual: Object.freeze(['individual']),
+  family: Object.freeze(['family']),
+  senior: Object.freeze(['senior']),
+  veteran: Object.freeze(['veteran']),
+  disabled_adult: Object.freeze(['disabled']),
+  student: Object.freeze(['student']),
+  teacher: Object.freeze(['teacher', 'individual']),
+  educator: Object.freeze(['teacher', 'individual']),
+  business: Object.freeze(['business']),
+  nonprofit: Object.freeze(['nonprofit']),
+  church: Object.freeze(['church']),
+  ministry: Object.freeze(['ministry']),
+  volunteer_fire_department: Object.freeze(['vfd']),
+  public_agency: Object.freeze(['government']),
+  tribal_government: Object.freeze(['tribal']),
+  school: Object.freeze(['school']),
+  public_school: Object.freeze(['government']),
+  library: Object.freeze(['nonprofit']),
+  other: Object.freeze(['individual']),
+})
+
+/**
  * Build a one-shot lookup table from id + every alias to the canonical id.
  * Built lazily and frozen so consumers never mutate it.
  */
@@ -1013,6 +1051,11 @@ export function recommendStrategyFor(rawType) {
 /**
  * Recommended sources for a profile type, including everything its
  * ancestors recommend. De-duplicated, source-id strings only.
+ *
+ * Compatibility/reporting surface for the pre-Crawler-OS coverage dashboard.
+ * It is NOT a runtime authorization or source-selection path. Live discovery
+ * consumes buildCrawlerProfileRoute() and lets crawler-os/sourceRegistry plus
+ * planner gates select actual, current source ids with recorded reasons.
  */
 export function recommendedSourcesFor(rawType) {
   const entry = getProfileType(rawType)
@@ -1041,8 +1084,46 @@ export function defaultNeedsFor(rawType) {
   return Array.from(out)
 }
 
+/**
+ * Runtime applicant buckets for a canonical profile type, including parent
+ * implications. Unknown custom types return [] so Crawler OS can use its
+ * conservative structured/text fallback instead of misclassifying them.
+ */
+export function crawlerApplicantTypesFor(rawType) {
+  const id = resolveProfileType(rawType)
+  if (!id) return []
+  const out = new Set()
+  for (const routeId of [id, ...getParentChain(id)]) {
+    for (const applicantType of CRAWLER_APPLICANT_TYPES_BY_PROFILE_TYPE[routeId] ?? []) {
+      out.add(applicantType)
+    }
+  }
+  return Array.from(out)
+}
+
+/**
+ * The single profile-type routing record consumed by the live crawler bridge
+ * and exposed in crawl-plan evidence. It names what was resolved, the runtime
+ * applicant buckets, type-shaped fallback needs, and fields needed to improve
+ * the route. It deliberately does not claim which source will return a match.
+ */
+export function buildCrawlerProfileRoute(rawType) {
+  const entry = getProfileType(rawType)
+  return {
+    version: 'profile-type-route-v1',
+    input_profile_type: rawType === null || rawType === undefined ? null : String(rawType),
+    canonical_profile_type: entry?.id ?? null,
+    resolved: Boolean(entry),
+    applicant_types: crawlerApplicantTypesFor(rawType),
+    default_needs: entry ? defaultNeedsFor(entry.id) : [],
+    required_profile_fields: entry?.requiredProfileFields ?? [],
+    recommended_strategy: entry ? recommendStrategyFor(entry.id) : 'comprehensive',
+  }
+}
+
 export default {
   PROFILE_TYPES,
+  CRAWLER_APPLICANT_TYPES_BY_PROFILE_TYPE,
   resolveProfileType,
   getProfileType,
   listProfileTypes,
@@ -1050,4 +1131,6 @@ export default {
   recommendStrategyFor,
   recommendedSourcesFor,
   defaultNeedsFor,
+  crawlerApplicantTypesFor,
+  buildCrawlerProfileRoute,
 }

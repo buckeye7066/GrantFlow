@@ -226,6 +226,21 @@ function valueText(value) {
   return String(value);
 }
 
+function declaredNeedValues(profile) {
+  const values = []
+    .concat(profile?.needs ?? [])
+    .concat(profile?.need_categories ?? []);
+  if (profile?.profile_route?.needs_source !== 'profile_type_default') return values;
+  const routedDefaults = new Set(
+    [].concat(profile?.profile_route?.default_needs ?? []).map(key).filter(Boolean),
+  );
+  // The live bridge keeps type defaults in need_categories for search breadth.
+  // They are not declarations and must not enter either the explicit pass or
+  // the free-text blob. A genuine mention in a section/document is still
+  // scanned independently and can establish whole-profile inference.
+  return values.filter((value) => !routedDefaults.has(key(value)));
+}
+
 function gatherText(profile) {
   const parts = [];
   const push = (v) => {
@@ -239,7 +254,7 @@ function gatherText(profile) {
   // special-ed defaults because it contains "education".
   push(profile?.name);
   push(profile?.description); push(profile?.summary); push(profile?.mission);
-  push(profile?.needs); push(profile?.need_categories); push(profile?.tags);
+  push(declaredNeedValues(profile)); push(profile?.tags);
   for (const s of profile?.sections ?? []) { push(s?.title); push(s?.body); push(s?.value); push(s?.data); }
   for (const o of profile?.organizations ?? []) { push(o?.name); push(o?.type); push(o?.mission); }
   for (const d of profile?.documents ?? []) { push(d?.name); push(d?.extracted_text); push(d?.summary); }
@@ -1054,9 +1069,7 @@ function applyNeedImplications(found) {
 }
 
 function deriveNeeds(profile, blob) {
-  const explicit = []
-    .concat(profile?.needs ?? [])
-    .concat(profile?.need_categories ?? [])
+  const explicit = declaredNeedValues(profile)
     .map(lc)
     .filter(Boolean)
     // Bookkeeping tags mark HOW a profile is managed, not WHAT it needs —
@@ -1123,8 +1136,15 @@ function deriveLocation(profile) {
   const loc = profile?.location ?? profile?.address ?? {};
   const zip = loc.zip ?? loc.postal_code ?? profile?.zip ?? null;
   const city = loc.city ?? profile?.city ?? null;
+  const state = normalizeState(loc.state ?? loc.region ?? profile?.state ?? null);
+  const states = [...new Set([
+    state,
+    ...(Array.isArray(loc.states) ? loc.states : []),
+    ...(Array.isArray(profile?.states) ? profile.states : []),
+  ].map(normalizeState).filter(Boolean))];
   return {
-    state: normalizeState(loc.state ?? loc.region ?? profile?.state ?? null),
+    state,
+    states,
     county: loc.county ?? profile?.county ?? null,
     zip,
     city,
@@ -1146,6 +1166,17 @@ export function buildThesis(profile = {}) {
   const keywordTriggers = [];
   const applicant_types = deriveApplicantTypes(profile, blob, keywordTriggers);
   const needs = deriveNeeds(profile, blob);
+  const needsDefaulted = needs?.defaulted === true;
+  const resolvedProfileRoute = profile?.profile_route
+    ? {
+        ...profile.profile_route,
+        needs_source: needsDefaulted
+          ? (profile.profile_route.default_needs?.length ? 'profile_type_default' : (profile.profile_route.needs_source || 'unknown'))
+          : profile.profile_route.needs_source === 'profile_type_default'
+            ? 'whole_profile_inference'
+            : (profile.profile_route.needs_source || 'whole_profile_inference'),
+      }
+    : null;
   const location = deriveLocation(profile);
 
   // Loans and cost-share are OFF unless the profile explicitly opts in. This is
@@ -1221,6 +1252,7 @@ export function buildThesis(profile = {}) {
 
   return {
     profile_id: profile?.id ?? profile?.profile_id ?? null,
+    profile_route: resolvedProfileRoute,
     applicant_types,
     needs,
     // TRUE when `needs` above was invented from the profile's TYPE because the
@@ -1229,7 +1261,7 @@ export function buildThesis(profile = {}) {
     // a profile that typed nothing gets scored as confidently as one that
     // filled itself in. An explicit boolean (never undefined) so a consumer can
     // tell "not defaulted" from "this thesis predates the field".
-    needs_defaulted: needs?.defaulted === true,
+    needs_defaulted: needsDefaulted,
     location,
     loan_allowed,
     cost_share_allowed,
