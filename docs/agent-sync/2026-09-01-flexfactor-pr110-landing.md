@@ -221,24 +221,17 @@ rubric could close.
 
 ## What the next FlexFactor-scoped agent must do
 
-1. Check out `fix/autoclean-verifies-what-it-commits` at `634250c`.
-2. Apply `docs/agent-sync/flexfactor-pr110-landing.patch` from GrantFlow
-   PR #1442 **or** cherry-pick `06c7d10..084af84` from
-   `/home/ubuntu/flexfactor` if the same VM.
-3. Minimum to unblock merge: land `06c7d10` alone, then wait for exact-head
-   production-readiness green. The other eleven commits make option 4 able
-   to apply a finding-named return on Debian/`python3`-only hosts,
-   refuse a vandalizing whole-file fallback, and fix phase 0 from the
-   publication traceback without weakening tests — land them on the same
-   PR so “production-ready” includes the apply path.
-4. Re-run `SweepIsWiredIntoCITests` + `RelComponentsTests` + the new
-   `_python_exe` test.
-5. From a FlexFactor-writable checkout of GrantFlow, run
-   `scripts/land-flexfactor-pr110.sh` (exits 3 if this token still lacks
-   `permissions.push`). It applies the patch onto
-   `fix/autoclean-verifies-what-it-commits` and pushes.
-6. Confirm a **new** `production-readiness` run on the **new** head is
-   green on both OS jobs, then merge. Rotation-extensions should stay green.
+**PR #110 is MERGED.** Do not reopen it. `origin/main` is `3b6760d`
+(CI wire only). The option-4 apply-path is still missing.
+
+1. Branch **`fix/option4-apply-path` from `origin/main` (`3b6760d`)**.
+2. Cherry-pick **`7aab5ec^..ad29c9d`** from `/home/ubuntu/flexfactor`
+   (skip `06c7d10` — already on main) **or** apply
+   `docs/agent-sync/flexfactor-pr110-landing.patch` from GrantFlow PR #1442.
+3. One-shot: GrantFlow `scripts/land-flexfactor-pr110.sh` (exits 3 if
+   `permissions.push` is false).
+4. Open a **new** PR. Wait for exact-head production-readiness green on
+   **both OS**. Merge. Do not force-push `main`.
 
 ## Do not
 

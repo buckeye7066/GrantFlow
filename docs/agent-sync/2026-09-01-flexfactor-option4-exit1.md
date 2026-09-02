@@ -1,97 +1,75 @@
-# 2026-09-01 — FlexFactor #110 merged; option 4 EXIT 1 remaining
+# FlexFactor option-4 / PromoPilot — 2026-09-02T00:23Z
 
-Audience: next FlexFactor-writable agent, and this parent run
-https://cursor.com/agents/bc-1fa35bed-bf82-42ea-9ccb-086a05522a4f
+## FlexFactor — PR #110 MERGED; apply-path still not on main
 
-## Owner priority
+- Repo: `buckeye7066/flexfactor` (public). Write from this token: **403**.
+- PR: https://github.com/buckeye7066/flexfactor/pull/110 — **MERGED**. Merge SHA `edfc4744` (CI wire only). Do **not** reopen.
+- `origin/main` tip: **`3b6760d451fb5a2392a8d34a9c9f0603d18746b9`** ("Autoclean verifies exact candidates and prevents behavior weakening").
+- production-readiness at merge SHA: **SUCCESS** on ubuntu, windows, `package-artifact` (run 33565932180).
+- rotation-extensions: **SUCCESS**.
+- `.github/workflows/production-readiness.yml` on main includes `flexfactor_autoclean_preverify_tests.py`.
 
-FlexFactor production-ready so other apps can run through option 4
-(`prodready`). PromoPilot still stalled; this token cannot write its repo.
+`origin/main` still does **not** contain the option-4 apply-path. A FlexFactor-writable agent must:
 
-## FlexFactor PR #110 — DONE (re-measured 2026-09-01T23:02Z)
+1. Branch **`fix/option4-apply-path` from `origin/main` (`3b6760d`)**.
+2. Cherry-pick **`7aab5ec^..ad29c9d`** (skip `06c7d10` — already on main).
+3. Open a **new** PR. Wait for exact-head production-readiness green on **both OS**. Merge.
+4. One-shot: GrantFlow `scripts/land-flexfactor-pr110.sh` (exits 3 if no write).
 
-https://github.com/buckeye7066/flexfactor/pull/110 is **MERGED**.
+Do **not** force-push `main`. Do **not** loop Contents PUT / fork / push from a GrantFlow token.
 
-- Merge commit on the PR: `edfc4744a76839086f31064eebb37ff067538ddd`
-  (CI wire only, parent `634250c`)
-- `origin/main` now `3b6760d451fb5a2392a8d34a9c9f0603d18746b9`
-  ("Autoclean verifies exact candidates and prevents behavior weakening")
-- production-readiness on the merge SHA: **SUCCESS** on ubuntu, windows,
-  and `package-artifact` (run 33565932180)
-- rotation-extensions: **SUCCESS**
-- `.github/workflows/production-readiness.yml` on main includes
-  `flexfactor_autoclean_preverify_tests.py`
+## Local apply-path tip: `ad29c9d`
 
-Do **not** re-open #110. Do **not** re-diagnose that CI failure.
+`/home/ubuntu/flexfactor` on `cursor/pr110-ci-wire-a427`. Do **not** `git add flexfactor` (symlink).
 
-## What is still NOT on origin/main
-
-`origin/main` does **not** contain the option-4 apply-path
-(`_apply_named_return_statement`, purpose-fit reject flip, stale/style
-certifier drops, already-satisfied ledger + fix-stream drops). Those live
-only on this VM: `/home/ubuntu/flexfactor` branch
-`cursor/pr110-ci-wire-a427` tip **`3964f2b`**.
-
-GrantFlow-scoped `gh` still has `permissions.push=false` on
-`buckeye7066/flexfactor`. Do not loop Contents PUT / fork / push.
-
-## Local option-4 apply-path
-
-Portable patch: `docs/agent-sync/flexfactor-pr110-landing.patch`.
-One-shot: `scripts/land-flexfactor-pr110.sh` (exits 3 if no write).
-Target a **new** branch off `origin/main`, not #110.
+Commits after `634250c`:
 
 | SHA | What |
 |---|---|
-| `06c7d10` | CI wire (already on main via #110) |
-| `7aab5ec`…`084af84` | apply-path / phase-0 honesty / test-weaken rollback |
-| `e8685f7` | unmapped competitor ACCEPT → purpose-fit reject; stale certifier drop |
-| `596b4a8` | drop SyntaxError + baseline-checkout claims on a compiling file |
-| `478205b` | drop already-satisfied findings from the unresolved ledger |
-| `462fb37` | same drop BEFORE `_fix_files` generation — no 15-min whole-file regen |
-| **`3964f2b`** | drop independent-review "greet returns without the name" when `{name}` is in the tree |
+| `e8685f7` | Unmapped competitor ACCEPT → explicit purpose-fit reject |
+| `596b4a8` | Drop invented SyntaxError + baseline-checkout claims |
+| `478205b` | Drop already-satisfied findings from the ledger (`change X to X`) |
+| `462fb37` | Same drop **before** `_fix_files` + refuse whole-file when all targets already satisfied |
+| `3964f2b` | Drop “greet returns without the name” when `{name}` is in the tree |
+| **`ad29c9d`** | Flip remaining undeliverable ACCEPTs to explicit purpose-fit reject; drop “``add`` is not invoked” when `add(` exists |
 
-Cherry-pick `7aab5ec^..3964f2b` (skip `06c7d10` if it conflicts as already landed).
+Portable patch: `docs/agent-sync/flexfactor-pr110-landing.patch` (`7aab5ec^..ad29c9d`).
 
-## Option 4 in flight (do not restart these)
+## Option 4 — `/tmp/ff-option4-name` EXIT 1 (honest)
 
-| Fixture | Engine | Result |
-|---|---|---|
-| `/tmp/ff-option4-keep` | `084af84` | EXIT 1 — pandas ACCEPT + stale `a - b` in reproduction |
-| `/tmp/ff-option4-close` | `e8685f7` | EXIT 1 — invented SyntaxError + baseline checkout |
-| `/tmp/ff-option4-cert` | `596b4a8` | EXIT 1 — ledger kept change X to X |
-| `/tmp/ff-option4-done` | `478205b` | **killed** — hung 15 min on whole-file regen of already-correct `hello.py` |
-| `/tmp/ff-option4-skip` | `462fb37` | EXIT 1 (do not trust `tee; echo $?` — that is tee). Cycle 1 CONVERGED, purpose 4/4, suite GREEN, invariants PASS. Independent review rejected exact final SHA: leftover "greet returns without the name" while `f"hello {name}"` is on disk. |
+Engine `3964f2b`. Command: `python3 … > logfile 2>&1; echo EXIT:$? | tee -a logfile`.
 
-**Current run:** `/tmp/ff-option4-name` log `/tmp/ff-option4-name.log`
-engine **`3964f2b`**. Planted `add() = a - b`, both tests, owner-authored
-`docs/purpose-contract.md`. Capture EXIT from python, not from `tee`.
-Do not treat mid-run as EXIT 0. Prove `hello.py` is `a + b`,
-`test_greet` present, **and** factory exit 0 **and**
-`independent-final-review` passed.
+- Cycle 1: both files **clean**, purpose **4/4**, suite GREEN, readiness **13/13**.
+- Tree still `return a + b` + both tests.
+- Failed: `selected-capabilities-delivered` (Django ACCEPT `code_fixable=false` stayed selected) + leftover independent-review title `Missing function invocation` (`The \`add\` function is not invoked` while tests call `add(2, 3)`).
+- Manifest: `/tmp/ff-option4-name/ff-option4-name_run_manifest_20260902T002143019140.json`.
+- **Fixed in `ad29c9d`.** Next plant: `/tmp/ff-option4-cap`. Do not restart finished fixtures.
 
-Ollama: `qwen2.5-coder:3b` (free). Do not spend money on paid models.
+Prior closed classes: pandas ACCEPT, stale `a - b` in reproduction, SyntaxError+checkout, change X to X (ledger + whole-file), greet-without-name.
 
-Closed classes (do not re-diagnose): pandas unmapped ACCEPT, stale `a - b`
-in reproduction, SyntaxError+baseline-checkout, change X to X in the
-ledger, change X to X entering whole-file regen, greet-without-name
-when `{name}` is already interpolated.
+Success = `hello.py` is `a + b`, `test_greet` present, **EXIT:0**, `converged: true`, `independent-final-review` **passed**, `selected-capabilities-delivered` **passed**.
 
-## PromoPilot (remeasured 2026-09-01T23:51Z)
+`--no-competitors` is an **intentional blocker**. Do not n/a those gates.
 
-Live SHA still `b68d809`. `/healthz` live; scheduler+publishing enabled.
-`/readyz` ready. Portfolio **ARMED** / live / daily cap 2.
-`armed_at` 2026-09-01T12:52:39Z. `killed_at` 2026-08-06T15:42:36Z.
-Calendar days **0**. Open drafts **0**. Newest recent post still
-2026-08-06T20:21:12Z Mastodon **failed** (`login is currently disabled`).
-`buckeye7066/promopilot` still 404. This token cannot write it.
-Do not dest-approve Mastodon. Do not publish.
+## PromoPilot — live SHA changed; still no drafts
 
-## What the next FlexFactor-writable agent must do
+Production: `https://promopilot-production-6370.up.railway.app`
+Live SHA: **`d433fb6bf42ec8ff8b3fe7ce8691c29012632d85`** (was `b68d809`). Frontend `/app.js` still 99861 bytes.
 
-1. Branch from `origin/main` (`3b6760d`), **not** from #110.
-2. Cherry-pick `7aab5ec^..3964f2b` from `/home/ubuntu/flexfactor`
-   (skip `06c7d10` — already on main) or apply the patch.
-3. Open a new PR. Wait for exact-head production-readiness green on
-   both OS, then merge.
-4. Do not force-push `main`.
+- `/healthz` live; scheduler+publishing enabled. `/readyz` ready.
+- Portfolio **ARMED**. `killed_at` **2026-08-06T15:42:36Z** is why the month went silent.
+- Drafts **0**. Calendar days **0**. Newest post still **2026-08-06T20:21:12Z** Mastodon **failed** (`login is currently disabled`).
+- Verified dests: Axiom Bluesky (`dest-axiom-biolabs-bluesky-default`, 2026-09-01T19:19:15Z), Ellie Bluesky (`dest-ellie-williams-bluesky-elliewrites`, 2026-09-01T19:29:37Z).
+- Campaigns: `campaign-your-first-grant-always-on` approved rev 4 (includes bluesky); `campaign-ellie-williams-always-on` approved rev 2 (includes bluesky). Other Axiom campaigns still `[youtube, facebook_page, threads, x]`.
+- Generate-draft is only `POST /api/post-now`. Do **not** publish. Last generate probes (old SHA) died before a draft row: `canonical_cta_mismatch` / `needs_campaign_approval`.
+- `buckeye7066/promopilot` **404**. This token cannot write it.
+
+Do not dest-approve Axiom Mastodon. Do not publish. Do not leave URLs in YFG snippet/description.
+
+## Do not
+
+- Treat #110 as still open or still red.
+- Claim option 4 production-ready from 13/13 readiness or EXIT 1.
+- Spend this GrantFlow token looping FlexFactor write.
+- Recreate CreateGoal. Mark the goal complete.
+- Combine `pkill` of `flexfactor.py` in the same shell as `git commit`.
