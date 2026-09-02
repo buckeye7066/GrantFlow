@@ -37,6 +37,10 @@ import HamiltonHardStopChecklist from "@/components/hamilton/HamiltonHardStopChe
 import { isGrantExpired } from "@/components/shared/grantUtils";
 import { isRenderableUrl } from "@/lib/matchDisplayThresholds";
 import PortalLoginButton from "@/components/portal/PortalLoginButton";
+import {
+  hamiltonProcessingBlockReason,
+  isHamiltonProcessableStage,
+} from "../../shared/hamiltonProcessingPolicy.js";
 
 /**
  * HamiltonProcessing
@@ -77,7 +81,9 @@ const ACTIONS = Object.freeze({ LEAVE: "leave", PROCESS: "process", DELETE: "del
  */
 function defaultActionFor(grant) {
   const url = grantUrl(grant);
-  const ready = !isGrantExpired(grant) && isRenderableUrl(url);
+  const ready = isHamiltonProcessableStage(grant?.status)
+    && !isGrantExpired(grant)
+    && isRenderableUrl(url);
   return ready ? ACTIONS.PROCESS : ACTIONS.LEAVE;
 }
 
@@ -170,7 +176,10 @@ export default function HamiltonProcessing() {
     setActions((prev) => {
       const next = {};
       for (const g of sources) {
-        next[g.id] = prev[g.id] ?? defaultActionFor(g);
+        const previous = prev[g.id];
+        next[g.id] = previous === ACTIONS.PROCESS && !isHamiltonProcessableStage(g.status)
+          ? ACTIONS.LEAVE
+          : previous ?? defaultActionFor(g);
       }
       return next;
     });
@@ -181,7 +190,10 @@ export default function HamiltonProcessing() {
     let del = 0;
     let leave = 0;
     for (const g of sources) {
-      const a = actions[g.id] ?? ACTIONS.LEAVE;
+      const requested = actions[g.id] ?? ACTIONS.LEAVE;
+      const a = requested === ACTIONS.PROCESS && !isHamiltonProcessableStage(g.status)
+        ? ACTIONS.LEAVE
+        : requested;
       if (a === ACTIONS.PROCESS) process += 1;
       else if (a === ACTIONS.DELETE) del += 1;
       else leave += 1;
@@ -192,7 +204,7 @@ export default function HamiltonProcessing() {
   const selectedSources = useMemo(
     () =>
       sources
-        .filter((g) => actions[g.id] === ACTIONS.PROCESS)
+        .filter((g) => actions[g.id] === ACTIONS.PROCESS && isHamiltonProcessableStage(g.status))
         .map((g) => ({
           grant_id: g.id,
           opportunity_id: g.funding_opportunity_id || g.opportunity_id || null,
@@ -202,12 +214,19 @@ export default function HamiltonProcessing() {
     [sources, actions],
   );
 
-  const setAction = (id, action) => setActions((prev) => ({ ...prev, [id]: action }));
+  const setAction = (grant, action) => {
+    if (action === ACTIONS.PROCESS && !isHamiltonProcessableStage(grant?.status)) return;
+    setActions((prev) => ({ ...prev, [grant.id]: action }));
+  };
 
   const setAll = (action) => {
     setActions(() => {
       const next = {};
-      for (const g of sources) next[g.id] = action;
+      for (const g of sources) {
+        next[g.id] = action === ACTIONS.PROCESS && !isHamiltonProcessableStage(g.status)
+          ? ACTIONS.LEAVE
+          : action;
+      }
       return next;
     });
   };
@@ -326,7 +345,7 @@ export default function HamiltonProcessing() {
               <div className="flex items-center gap-2 text-sm">
                 <span className="text-slate-500">Set all:</span>
                 <Button size="sm" variant="outline" onClick={() => setAll(ACTIONS.PROCESS)}>
-                  Process
+                  Process eligible
                 </Button>
                 <Button size="sm" variant="outline" onClick={() => setAll(ACTIONS.LEAVE)}>
                   Leave
@@ -357,7 +376,11 @@ export default function HamiltonProcessing() {
                 </TableHeader>
                 <TableBody>
                   {sources.map((g) => {
-                    const action = actions[g.id] ?? ACTIONS.LEAVE;
+                    const requestedAction = actions[g.id] ?? ACTIONS.LEAVE;
+                    const processingBlockReason = hamiltonProcessingBlockReason(g.status);
+                    const action = requestedAction === ACTIONS.PROCESS && processingBlockReason
+                      ? ACTIONS.LEAVE
+                      : requestedAction;
                     const url = grantUrl(g);
                     return (
                       <TableRow
@@ -397,6 +420,11 @@ export default function HamiltonProcessing() {
                           <span className="text-xs capitalize text-slate-700">
                             {String(g.status || "—").replace(/_/g, " ")}
                           </span>
+                          {processingBlockReason ? (
+                            <div className="mt-1 max-w-[220px] text-[11px] leading-snug text-amber-700">
+                              {processingBlockReason}
+                            </div>
+                          ) : null}
                         </TableCell>
                         <TableCell className="text-sm text-slate-700">{formatDeadline(g)}</TableCell>
                         <TableCell>
@@ -405,7 +433,12 @@ export default function HamiltonProcessing() {
                           </Badge>
                         </TableCell>
                         <TableCell className="text-right">
-                          <SegmentedAction value={action} onChange={(a) => setAction(g.id, a)} />
+                          <SegmentedAction
+                            value={action}
+                            onChange={(a) => setAction(g, a)}
+                            processDisabled={Boolean(processingBlockReason)}
+                            processDisabledReason={processingBlockReason}
+                          />
                         </TableCell>
                       </TableRow>
                     );
@@ -503,7 +536,7 @@ export default function HamiltonProcessing() {
  * single row. Uses aria-pressed buttons rather than a radio group so the whole
  * control fits on one line and reads clearly at table density.
  */
-function SegmentedAction({ value, onChange }) {
+function SegmentedAction({ value, onChange, processDisabled = false, processDisabledReason = null }) {
   const base = "px-3 py-1.5 text-xs font-medium transition-colors focus:outline-none focus:ring-2 focus:ring-offset-1";
   const opts = [
     { key: ACTIONS.PROCESS, label: "Process", on: "bg-indigo-600 text-white", off: "text-slate-600 hover:bg-indigo-50", ring: "focus:ring-indigo-400" },
@@ -514,13 +547,19 @@ function SegmentedAction({ value, onChange }) {
     <div className="inline-flex rounded-md border border-slate-200 overflow-hidden divide-x divide-slate-200">
       {opts.map((o) => {
         const active = value === o.key;
+        const disabled = o.key === ACTIONS.PROCESS && processDisabled;
         return (
           <button
             key={o.key}
             type="button"
             aria-pressed={active}
+            aria-disabled={disabled}
+            disabled={disabled}
+            title={disabled ? processDisabledReason || "This source cannot be reprocessed." : undefined}
             onClick={() => onChange(o.key)}
-            className={`${base} ${o.ring} ${active ? o.on : `bg-white ${o.off}`}`}
+            className={`${base} ${o.ring} ${active ? o.on : `bg-white ${o.off}`} ${
+              disabled ? "cursor-not-allowed opacity-40 hover:bg-white" : ""
+            }`}
           >
             {o.label}
           </button>
