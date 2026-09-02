@@ -620,6 +620,7 @@ export async function startAgent(db, agentName, { user = null, options = {} } = 
 }
 
 export async function stopAgent(db, agentName, { user = null, reason = null } = {}) {
+  if (!isControlCenterAdmin(user)) { const e = new Error('admin only'); e.status = 403; throw e }
   const name = String(agentName || '').toLowerCase()
   if (!ALL_AGENTS.includes(name)) {
     const e = new Error(`invalid agent "${agentName}"`); e.status = 400; throw e
