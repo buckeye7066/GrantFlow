@@ -3182,7 +3182,30 @@ if (process.env.NODE_ENV !== 'test') {
           console.warn('[pipeline-promotion] deferred post-listen run failed (non-fatal):', err?.message || err);
         })
       }
-      app.locals.bootMaintenancePromise = Promise.allSettled(bootJobs)
+      app.locals.bootMaintenancePromise = Promise.allSettled(bootJobs).then(async () => {
+        const failedMigrations = Array.isArray(app.locals.migrate_boot_failed_migrations)
+          ? app.locals.migrate_boot_failed_migrations
+          : []
+        if (failedMigrations.length === 0) return
+
+        try {
+          const [migrationModule, retryModule] = await Promise.all([
+            import('./db/migrate.js'),
+            import('./startup/retryFailedBootMigrations.js'),
+          ])
+          await retryModule.retryFailedBootMigrationsAfterMaintenance({
+            appLocals: app.locals,
+            runPendingMigrationsOnBoot: migrationModule.runPendingMigrationsOnBoot,
+            logger: console,
+          })
+        } catch (err) {
+          app.locals.migrate_boot_error = 'boot_migration_retry_failed'
+          console.warn(
+            '[migrate:boot] post-maintenance retry could not start:',
+            err?.message || err,
+          )
+        }
+      })
     });
   });
 

@@ -20,3 +20,19 @@ test('recurring link verification refreshes the already-readable Hamilton truth 
   assert.match(reconciliationSource, /status: deferred > 0 \? 'pending_reverification' : 'verified'/)
   assert.match(reconciliationSource, /persistHamiltonTaskTruthSnapshot\(db, summary\)/)
 })
+
+test('failed boot migrations retry only after invariant maintenance settles', () => {
+  const maintenance = serverSource.indexOf('Promise.allSettled(bootJobs)')
+  const retry = serverSource.indexOf(
+    'retryFailedBootMigrationsAfterMaintenance({',
+    maintenance,
+  )
+  const linkVerificationWait = serverSource.indexOf(
+    'await app.locals.bootMaintenancePromise',
+    retry,
+  )
+
+  assert.ok(maintenance > 0)
+  assert.ok(retry > maintenance)
+  assert.ok(linkVerificationWait > retry)
+})
