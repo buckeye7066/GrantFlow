@@ -356,6 +356,27 @@ describe('stored auto-submit authorization reaches the submit step', () => {
     expect(runAutopilot).not.toHaveBeenCalled()
   })
 
+  it('rejects a grant paired with a different opportunity before task creation', async () => {
+    const db = makeDb()
+    await seedFixture(db)
+
+    await expect(automateSingleSource(db, {
+      profileId: PROFILE,
+      userId: 'user-1',
+      source: {
+        grant_id: 'g-1',
+        opportunity_id: 'opp-different',
+        current_stage: 'saved',
+      },
+      options: { allow_auto_submit: true },
+    })).rejects.toMatchObject({
+      code: 'source_identity_mismatch',
+      status: 409,
+    })
+
+    expect(runAutopilot).not.toHaveBeenCalled()
+  })
+
   it('binds an opportunity-only run to its grant and rechecks it at submit time', async () => {
     process.env.HAMILTON_TAILORED_APPROVAL_GATE = '0'
     const db = makeDb()
