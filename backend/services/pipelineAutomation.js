@@ -1,4 +1,4 @@
-import { buildPipelineAutomationPrompt, PIPELINE_ALLOWED_STATUSES } from '../prompts/pipelineAutomation.js'
+import { buildPipelineAutomationPrompt } from '../prompts/pipelineAutomation.js'
 import { extractCompletionText } from '../utils/openai.js'
 import { summarizeOpenAIError } from '../utils/openaiClient.js'
 import { isAutomationEnabled } from '../../shared/automationPreferences.js'
