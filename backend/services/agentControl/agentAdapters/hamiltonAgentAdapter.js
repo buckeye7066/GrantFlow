@@ -276,7 +276,7 @@ export class HamiltonAgentAdapter extends BaseAgentAdapter {
     // opened a run. Both are "nothing happened"; only the second one used to
     // report itself as completed work.
     const emptyQueue = !stopped && !paused && tasks.length === 0
-    const noneProducedRun = !stopped && !paused && processed > 0 && noRun === processed
+    const noneProducedRun = !stopped && !paused && failed === 0 && processed > 0 && noRun === processed
     const isNoop = emptyQueue || noneProducedRun
     // Any thrown task is a real step failure, even when sibling tasks made
     // progress. Never paint a partially or fully failed batch green.
