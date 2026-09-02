@@ -1804,7 +1804,7 @@ async function runPortalPathway(db, {
   // Run Autopilot now (unattended).
   return await runAutopilotPathway(db, {
     task, profile, opportunity, grant, classification,
-    userId, authorizations, options,
+    userId, internalCaller, authorizations, options,
   })
 }
 
@@ -1823,7 +1823,8 @@ async function runPortalPathway(db, {
  *        - failed           engine error
  */
 async function runAutopilotPathway(db, {
-  task, profile, opportunity, grant, classification, userId, authorizations, options = {},
+  task, profile, opportunity, grant, classification, userId, internalCaller = null,
+  authorizations, options = {},
 }) {
   // Never trust an injected authorization object. Re-read the persisted grants
   // at the pathway boundary; submission is re-read again immediately before
