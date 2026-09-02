@@ -37,11 +37,19 @@ import request from 'supertest'
 // the documented escape hatch this gate offers; the alternative — setting a
 // real ingest secret in CI — would weaken the very posture being asserted.
 //
+// The task collection also fails closed with 503 until boot publishes a
+// healthy, queue-readable task-truth snapshot. This SMOKE_MODE sweep applies
+// migrations but intentionally does not impersonate the production boot audit,
+// so the snapshot remains migration_reconciled and unreadable. Focused task-
+// truth tests cover both the 503 gate and the transition to a readable snapshot.
+//
 // The router is mounted twice, under /api/hamilton and /api/yana, so both
 // mount points appear.
 const KNOWN_ALLOWLIST = new Map([
   ['GET /api/hamilton/automation/inbox-status', 'sms_ingest_disabled: HAMILTON_SMS_INGEST_TOKEN unset in CI; 503 is the secure-by-default posture, not a throwing handler'],
   ['GET /api/yana/automation/inbox-status', 'sms_ingest_disabled: same router mounted under /api/yana; see above'],
+  ['GET /api/hamilton/automation/tasks', 'task_truth_not_verified: SMOKE_MODE endpoint sweep does not run the production boot audit; 503 is the fail-closed contract'],
+  ['GET /api/yana/automation/tasks', 'task_truth_not_verified: same router mounted under /api/yana; see above'],
 ])
 
 describe('endpoint sweep — every GET endpoint is mounted and not 5xx (allowlist for pre-existing smoke gaps)', () => {
