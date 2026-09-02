@@ -237,6 +237,6 @@ describe('the applicant-type gate runs for EVERY record_origin, not just the cra
     const verdict = await assessHamiltonFundingSource(policyDb, { profileId: PROFILE, grant: { id: 'g-opp-unknown', funding_opportunity_id: 'opp-unknown' } })
     expect(verdict.ok).toBe(false)
     expect(verdict.code).toBe('funding_source_profile_not_accepted')
-    expect(verdict.reasons.join(' ')).toMatch(/applicant_type:not_positively_verified/)
+    expect(verdict.reasons.join(' ')).toMatch(/profile_match_not_accepted.*live_decision:review/)
   })
 })

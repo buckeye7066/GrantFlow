@@ -486,6 +486,9 @@ async function autoAddToProfile(db, { profileId, oppRow, facts, category }) {
       freshRescoreRequired: true,
       mode: 'live',
       source: ACQUISITION_MATCHER_VERSION,
+      pipelineStatus: 'saved',
+      pipelineCategory: PIPELINE_CATEGORY.APPLY_READY,
+      pipelineMatcherVersion: ACQUISITION_MATCHER_VERSION,
     },
   )
 }

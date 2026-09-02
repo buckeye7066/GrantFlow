@@ -85,6 +85,7 @@ function makeDb() {
       evaluated_at DATETIME,
       UNIQUE (profile_id, opportunity_id)
     );
+    CREATE TABLE exclusion_rules (id TEXT PRIMARY KEY, action TEXT);
     CREATE TABLE system_kv (key TEXT PRIMARY KEY, value TEXT, updated_at DATETIME);
   `)
   const p = sqlite.prepare('INSERT INTO profiles (id, display_name, primary_type, status, tags) VALUES (?, ?, ?, ?, ?)')

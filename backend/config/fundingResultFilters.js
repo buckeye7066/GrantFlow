@@ -702,6 +702,8 @@ export function isRelevantGeo(row, { states = null } = {}) {
   const resolved = resolvedUsOpportunityJurisdiction(row)
   const explicitlyNational = row?.is_national === true || row?.is_national === 1 ||
     /^(?:1|true|yes)$/i.test(String(row?.is_national ?? '').trim())
+  const explicitlyRegional = row?.is_national === false || row?.is_national === 0 ||
+    /^(?:0|false|no)$/i.test(String(row?.is_national ?? '').trim())
   const jurisdiction = explicitlyNational && resolved.source === 'stored_state'
     ? {
         ...resolved,
@@ -714,7 +716,7 @@ export function isRelevantGeo(row, { states = null } = {}) {
     : resolved
   const restrictiveEvidence = jurisdiction.source === 'canonical_funder' ||
     jurisdiction.source === 'declared_title' ||
-    jurisdiction.source === 'stored_state'
+    (jurisdiction.source === 'stored_state' && explicitlyRegional)
   if (
     restrictiveEvidence &&
     jurisdiction.state &&
