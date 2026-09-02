@@ -5,15 +5,14 @@
  *
  * 1. resolveContactFormVerifications — `submission_verification_required` is
  *    the honest quarantine for "Hamilton clicked submit and saw no receipt".
- *    Measured on prod 2026-08-31: all seven such cards on one profile were a
- *    MAILING-LIST / CONTACT form (first name + last name + email, one zip
- *    search) on a homepage — not an application. The engine now refuses those
+ *    Measured on prod 2026-08-31: several such cards were MAILING-LIST /
+ *    CONTACT forms rather than applications. The engine now refuses those
  *    clicks (hamiltonAutopilotEngine.isContactOrNewsletterForm); this sweep
- *    settles the ones already parked: when the retained run shows the filled
- *    fields were contact-shaped and no application-shaped field existed, the
- *    task closes as "no application was submitted" instead of asking the owner
- *    to check a portal for a newsletter sign-up. A run whose evidence is not
- *    that unambiguous is left exactly as it is — the quarantine is correct.
+ *    settles only historical rows whose retained run proves BOTH a small
+ *    contact-shaped field set and positive contact/newsletter surface text.
+ *    Bare name, email, phone, address, or ZIP fields are never sufficient:
+ *    real short applications can have exactly that shape. A run whose evidence
+ *    is absent or ambiguous remains in quarantine.
  *
  * 2. releaseParkedReviewsUnderFullAutomation — under the profile's full-
  *    automation toggle "waiting for your review" is not a state Hamilton may
@@ -51,14 +50,6 @@ export const CONTACT_SHAPED_KEYS = Object.freeze([
 ])
 const CONTACT_KEY_SET = new Set(CONTACT_SHAPED_KEYS)
 
-// Identity-only keys can auto-settle without a newsletter surface signal.
-// School, organization and message also appear on real short applications, so
-// those require positive contact-surface evidence or stay quarantined.
-const BARE_IDENTITY_KEYS = new Set([
-  'first_name', 'last_name', 'full_name', 'name', 'email', 'phone',
-  'zip', 'zip_code', 'postal_code', 'city', 'state', 'country',
-])
-
 // Mirrors hamiltonAutopilotEngine.isContactOrNewsletterForm without importing
 // the Playwright-heavy engine module into this scheduled sweep.
 const APPLICATION_CONTEXT_RX = /\b(appl(?:y|ication|icant)|scholarship|fellowship|grant|award|nominat|enrol|registration|request (?:for )?(?:funding|assistance|aid))/i
@@ -68,7 +59,8 @@ const CONTACT_SURFACE_RX = /newsletter|mailchimp|subscribe|mailing[\s_-]?list|st
 /**
  * Was the retained run's submit unambiguously a contact/newsletter form?
  * Application context in the task URL, confirmation URL or page text always
- * wins. School/org/message keys additionally need a positive contact surface.
+ * wins. A small identity/contact field set is necessary but never sufficient:
+ * positive contact/newsletter surface evidence is required in every case.
  */
 export function isContactShapedSubmission(runResult = {}, { urls = [] } = {}) {
   const filled = Array.isArray(runResult?.filled_fields) ? runResult.filled_fields : []
@@ -95,9 +87,7 @@ export function isContactShapedSubmission(runResult = {}, { urls = [] } = {}) {
   ].filter(Boolean).join(' | ')
   if (APPLICATION_CONTEXT_RX.test(contextHaystack)) return false
   if (APPLICATION_FIELD_SIGNAL_RX.test([...keys].join(' | '))) return false
-
-  const onlyBareIdentity = [...keys].every((key) => BARE_IDENTITY_KEYS.has(key))
-  if (!onlyBareIdentity && !CONTACT_SURFACE_RX.test(contextHaystack)) return false
+  if (!CONTACT_SURFACE_RX.test(contextHaystack)) return false
   return true
 }
 
