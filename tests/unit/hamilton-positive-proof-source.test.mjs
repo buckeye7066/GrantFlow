@@ -42,6 +42,14 @@ const triageSource = fs.readFileSync(
   new URL('../../src/pages/HamiltonTaskTriage.jsx', import.meta.url),
   'utf8',
 )
+const sqliteMigrationSource = fs.readFileSync(
+  new URL('../../backend/db/migrations/1001_live_hamilton_task_truth.mjs', import.meta.url),
+  'utf8',
+)
+const postgresMigrationSource = fs.readFileSync(
+  new URL('../../backend/db/postgres/migrations/1001_live_hamilton_task_truth.mjs', import.meta.url),
+  'utf8',
+)
 
 test('Hamilton policy recomputes ACCEPT and then evaluates every positive gate', () => {
   assert.doesNotMatch(policySource, /ALLOWED_MATCH_DECISIONS/)
@@ -78,6 +86,17 @@ test('every Hamilton funding-policy refusal returns before task creation', () =>
   assert.match(orchestratorSource, /childEligibility = await assessHamiltonFundingSource[\s\S]*?if \(!childEligibility\.ok\)[\s\S]*?const child = await ensureApplicationTask/)
   assert.match(orchestratorSource, /childPolicyUnavailable > 0[\s\S]*?status: 'waiting_for_window'/)
   assert.match(policySource, /tasks = await db\.prepare\([\s\S]*?FROM application_tasks/)
+})
+
+test('live task-truth migrations cannot advance the ledger after incomplete reconciliation', () => {
+  for (const migrationSource of [sqliteMigrationSource, postgresMigrationSource]) {
+    assert.match(migrationSource, /await runStrictPipelineReconciliation\(db/)
+    assert.doesNotMatch(
+      migrationSource,
+      /\bcatch\s*\(/,
+      'migration 1001 must propagate strict reconciliation failures to its transaction',
+    )
+  }
 })
 
 test('live queue, readiness metric, watch, and triage share current-task truth', () => {
