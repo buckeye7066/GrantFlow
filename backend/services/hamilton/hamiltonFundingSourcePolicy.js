@@ -4,8 +4,7 @@ import { SURFACED_MATCHER_VERSIONS_SQL } from '../../config/matchSurfacing.js'
 import { isPointerKind } from '../../config/opportunityKindClasses.js'
 import { isClearlyExpiredProgram, SEARCH_SURFACE_TITLE_RX, aggregatorBrandSurface } from '../../config/fundingResultFilters.js'
 
-const ALLOWED_MATCH_DECISIONS = new Set(['accept', 'review'])
-const PROFILE_MATCH_REQUIRED_ORIGINS = new Set(['live_crawl', 'geo_crawl', 'discovered'])
+const ALLOWED_MATCH_DECISIONS = new Set(['accept'])
 const TERMINAL_TASK_STATUSES = new Set(['submitted', 'completed', 'cancelled'])
 const TRUST_BLOCK_FLAGS = new Set([
   'loan',
@@ -96,11 +95,6 @@ function buildPolicyMessage(reasons) {
   return `Funding source does not meet GrantFlow crawler/profile rules: ${reasons.join(', ')}.`
 }
 
-function requiresProfileMatch(subject) {
-  const origin = asLower(subject?.record_origin)
-  return PROFILE_MATCH_REQUIRED_ORIGINS.has(origin)
-}
-
 /**
  * Pointer-kind rows and the application queue (owner directive 2026-08-04,
  * building on the 2026-08-03 decomposition work):
@@ -166,25 +160,12 @@ export function assessPointerResearchLead(subject, { profileNeeds = [] } = {}) {
 
 /**
  * LIVE canonical engine verdict for a (profile, subject) pair — the fallback
- * when no STORED match row exists (the TSAA class, 2026-07-27).
+ * when no STORED match row exists.
  *
- * The match store is a ROLLING SNAPSHOT: crawlerOsPersistence's reconcile
- * DELETEs a profile's crawler-os/xmatch rows on every discovery run and
- * re-inserts only what THAT run re-found (deliberate — "reconcile, don't
- * accumulate"). Tasks and grants are DURABLE. So any long-lived task
- * eventually points at a pair whose match row a reconcile wiped (crawls are
- * budget-bounded and never guaranteed to re-find everything), and requiring a
- * stored row here turned "the crawl didn't happen to re-surface it" into a
- * permanent missing_profile_crawler_match stop — prod carried 29 such stops,
- * including TSAA for a Tennessee student whose own store held 125 live rows.
- *
- * The requirement's PURPOSE is engine endorsement, and matchEngine is the
- * sole decision authority — a LIVE computeMatchDecision is fresher evidence
- * than any snapshot row (the funding-sources route recomputes live on every
- * read for the same reason). Dynamic imports keep this module light for its
- * crawler-persistence importer and avoid load-time cycles. Returns null when
- * the live compute is unavailable, in which case the caller keeps the
- * conservative stop.
+ * The match store is a rolling snapshot while tasks and grants are durable, so
+ * a missing stored row is re-evaluated live. The live result is evidence, not a
+ * shortcut: only ACCEPT may continue, and even ACCEPT must still pass the
+ * explicit applicant-type proof below before Hamilton can create work.
  */
 async function computeLiveEngineDecision(db, profileId, subject) {
   try {
@@ -245,14 +226,8 @@ export async function assessHamiltonFundingSource(db, { profileId, opportunity =
     }
   }
 
-  // A program whose own title says it ENDED ("Affordable Connectivity Program
-  // (ACP) — Ended May 2024"), a long-past firm deadline, or a stale cycle year
-  // must not be filled or submitted (owner report 2026-08-21/22). Expiry used to
-  // be 100% a function of the `deadline` COLUMN, so a curated row stating its
-  // sunset in PROSE with a NULL deadline was structurally unreachable by every
-  // expiry net and sat "In Progress" in the live queue. isClearlyExpiredProgram
-  // reads the title/deadline; a future/rolling deadline outranks a year in a
-  // name, so an open program is never mislabelled.
+  // A program whose own title says it ENDED, a long-past firm deadline, or a
+  // stale cycle year must not be filled or submitted.
   const expiredLabel = isClearlyExpiredProgram(subject)
   if (expiredLabel) {
     const reasons = ['funding_source_expired', String(expiredLabel)]
@@ -265,9 +240,21 @@ export async function assessHamiltonFundingSource(db, { profileId, opportunity =
     }
   }
 
+  if (!profileId) {
+    const reasons = ['missing_profile_context']
+    return {
+      ok: false,
+      code: 'funding_source_missing_profile_match',
+      reasons,
+      trust,
+      message: buildPolicyMessage(reasons),
+    }
+  }
+
   const opportunityId = policyOpportunity?.id || grant?.funding_opportunity_id || grant?.opportunity_id || null
-  const match = await loadProfileMatch(db, profileId, opportunityId)
+  let match = await loadProfileMatch(db, profileId, opportunityId)
   const decision = asLower(match?.match_decision)
+
   if (decision === 'reject') {
     const reasons = ['profile_match_rejected']
     if (match?.match_explanation) reasons.push(String(match.match_explanation).slice(0, 180))
@@ -280,7 +267,8 @@ export async function assessHamiltonFundingSource(db, { profileId, opportunity =
       message: buildPolicyMessage(reasons),
     }
   }
-  if (decision && !ALLOWED_MATCH_DECISIONS.has(decision)) {
+
+  if (match && !ALLOWED_MATCH_DECISIONS.has(decision)) {
     const reasons = ['profile_match_not_accepted']
     return {
       ok: false,
@@ -291,29 +279,22 @@ export async function assessHamiltonFundingSource(db, { profileId, opportunity =
       message: buildPolicyMessage(reasons),
     }
   }
-  if (!match && profileId && opportunityId && requiresProfileMatch(subject)) {
-    // No stored row ≠ no endorsement — the store is a rolling snapshot (see
-    // computeLiveEngineDecision). Ask the engine LIVE before stopping.
+
+  if (!match) {
+    // No stored row is not permission. Ask the canonical engine live for every
+    // origin, then continue through applicant-type proof rather than returning
+    // success from this block.
     const live = await computeLiveEngineDecision(db, profileId, subject)
     const liveDecision = asLower(live?.decision)
-    if (liveDecision === 'accept' || liveDecision === 'review') {
-      return {
-        ok: true,
-        reasons: [],
-        warnings: ['live_engine_endorsed'],
-        trust,
-        match: {
-          live: true,
-          match_decision: liveDecision,
-          match_score: Number.isFinite(Number(live?.score)) ? Number(live.score) : null,
-          match_explanation: live?.explanation ?? null,
-          matcher_version: 'live-recheck',
-        },
-        opportunityId,
-        grantId: grant?.id || null,
+    if (liveDecision === 'accept') {
+      match = {
+        live: true,
+        match_decision: liveDecision,
+        match_score: Number.isFinite(Number(live?.score)) ? Number(live.score) : null,
+        match_explanation: live?.explanation ?? null,
+        matcher_version: 'live-recheck',
       }
-    }
-    if (liveDecision === 'reject') {
+    } else if (liveDecision === 'reject') {
       const reasons = ['profile_match_rejected']
       if (live?.explanation) reasons.push(String(live.explanation).slice(0, 180))
       return {
@@ -324,48 +305,47 @@ export async function assessHamiltonFundingSource(db, { profileId, opportunity =
         match: { live: true, match_decision: 'reject', match_explanation: live?.explanation ?? null },
         message: buildPolicyMessage(reasons),
       }
-    }
-    // Live compute unavailable (profile failed to load, engine error) — keep
-    // the conservative stop rather than inventing an endorsement.
-    const reasons = ['missing_profile_crawler_match']
-    return {
-      ok: false,
-      code: 'funding_source_missing_profile_match',
-      reasons,
-      trust,
-      match,
-      message: buildPolicyMessage(reasons),
+    } else {
+      const reasons = [
+        liveDecision ? 'profile_match_not_accepted' : 'missing_profile_crawler_match',
+        ...(liveDecision ? [`live_decision:${liveDecision}`] : []),
+      ]
+      return {
+        ok: false,
+        code: liveDecision
+          ? 'funding_source_profile_not_accepted'
+          : 'funding_source_missing_profile_match',
+        reasons,
+        trust,
+        match: liveDecision
+          ? { live: true, match_decision: liveDecision, match_explanation: live?.explanation ?? null }
+          : null,
+        message: buildPolicyMessage(reasons),
+      }
     }
   }
 
-  // ── HARD APPLICANT-TYPE GATE, RUN FOR EVERY ORIGIN ──────────────────────
-  // The match checks above are reachable only when a stored row exists OR
-  // `requiresProfileMatch(subject)` is true, and that predicate is keyed on
-  // `PROFILE_MATCH_REQUIRED_ORIGINS = {live_crawl, geo_crawl, discovered}`.
-  // Every OTHER record_origin — `curated_verified`, `manual`,
-  // `scholarship_crawler` (what listing decomposition mints), the seeded
-  // registries — fell straight through to this `ok: true` having had NO
-  // eligibility evaluation of any kind, and Hamilton then opened an
-  // application for it.
-  //
-  // That is the second door on the 2026-08-21 owner report: an individual
-  // undergraduate holding queued applications to ONR / NSF / ACL / HUD / EDA
-  // institutional awards. Closing only the match-engine door would have left
-  // this one open for every curated and decomposition-minted row.
-  //
-  // The check is PURE, cheap, and it is the SAME authority the engine uses —
-  // it does not re-implement eligibility, and it only ever refuses on an
-  // EXPLICIT hard mismatch (`review`/`pass` both continue).
+  // HARD APPLICANT-TYPE GATE, RUN FOR EVERY ORIGIN AND AFTER LIVE ACCEPT.
+  // A negative-only "no mismatch found" verdict is not positive qualification.
   const applicantVerdict = await assessApplicantTypeForPolicy(db, profileId, subject)
-  if (applicantVerdict?.decision === 'mismatch') {
-    const reasons = ['profile_match_rejected', `applicant_type:${applicantVerdict.reason}`]
+  const positiveApplicantProof =
+    applicantVerdict?.decision === 'pass'
+    && applicantVerdict?.reason === 'explicit_applicant_types_match'
+  if (!positiveApplicantProof) {
+    const hardMismatch = applicantVerdict?.decision === 'mismatch'
+    const reasons = [
+      hardMismatch ? 'profile_match_rejected' : 'profile_match_not_accepted',
+      `applicant_type:${applicantVerdict?.reason || 'not_positively_verified'}`,
+    ]
     return {
       ok: false,
-      code: 'funding_source_profile_rejected',
+      code: hardMismatch
+        ? 'funding_source_profile_rejected'
+        : 'funding_source_profile_not_accepted',
       reasons,
       trust,
       match,
-      applicant_type: applicantVerdict,
+      applicant_type: applicantVerdict ?? { decision: 'review', reason: 'unavailable' },
       message: buildPolicyMessage(reasons),
     }
   }
@@ -373,9 +353,10 @@ export async function assessHamiltonFundingSource(db, { profileId, opportunity =
   return {
     ok: true,
     reasons: [],
-    warnings: match || !opportunityId ? [] : ['no_profile_match'],
+    warnings: match?.live ? ['live_engine_endorsed'] : [],
     trust,
     match,
+    applicant_type: applicantVerdict,
     opportunityId,
     grantId: grant?.id || null,
   }
@@ -383,8 +364,8 @@ export async function assessHamiltonFundingSource(db, { profileId, opportunity =
 
 /**
  * The applicant-type verdict for a (profile, subject) pair, using the canonical
- * gate. Returns null when the profile cannot be read — an unreadable profile is
- * never a reason to refuse (missing = neutral).
+ * gate. Returns null when the profile cannot be read; the caller treats null as
+ * unverified and refuses automation.
  */
 async function assessApplicantTypeForPolicy(db, profileId, subject) {
   if (!db || !profileId || !subject) return null
@@ -399,11 +380,9 @@ async function assessApplicantTypeForPolicy(db, profileId, subject) {
     const basic = sections.basic_information ?? sections.basic_info ?? {}
     const applicantType = profileRow?.applicant_type || profileRow?.primary_type ||
       basic?.profile_category || basic?.applicant_type || null
-    // Academic STAGE-OF-LIFE hard mismatch (owner 2026-08-22): a pre-college
-    // award (current-HS / K-12) is provably impossible for an enrolled college
-    // student. The canonical gate reads ONLY the subject's own eligibility text
-    // (missing = neutral) and also catches website-purpose locks. Return the
-    // same `mismatch` shape the caller already refuses on.
+    // Academic STAGE-OF-LIFE hard mismatch: a pre-college award is provably
+    // impossible for an enrolled college student. The canonical gate reads
+    // only the source's eligibility text and website-purpose locks.
     try {
       const { stageOfLifeConflictForSections } = await import('../../config/stageOfLifeEligibility.js')
       const stageConflict = stageOfLifeConflictForSections(sections, subject)
