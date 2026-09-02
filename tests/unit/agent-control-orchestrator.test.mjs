@@ -38,6 +38,7 @@ import {
   listEvents,
   recordStopRequest,
   latestUnfulfilledStop,
+  listStopRequests,
 } from '../../backend/services/agentControl/agentControlStore.js'
 import { setAdapter, resetRegistry } from '../../backend/services/agentControl/agentAdapters/agentAdapterRegistry.js'
 import { BaseAgentAdapter } from '../../backend/services/agentControl/agentAdapters/baseAgentAdapter.js'
@@ -454,6 +455,29 @@ describe('Agent Control Center — stop / pause / resume / emergency-stop', () =
     assert.match(queued.status, /stopped|skipped/)
     const events = await listEvents(db, run.id, { limit: 100, eventType: 'control.run.emergency_stop' })
     assert.equal(events.length >= 1, true)
+  })
+
+  it('rejects lifecycle commands after a run is terminal without writing requests', async () => {
+    const db = makeDb()
+    installMockAdapters()
+    const { run } = await startRun(db, { runType: 'sam_only', user: adminUser() })
+    await new Promise((r) => setTimeout(r, 80))
+    assert.equal((await getRun(db, run.id)).status, 'completed')
+
+    const commands = [
+      () => pauseRun(db, run.id, { user: adminUser() }),
+      () => resumeRun(db, run.id, { user: adminUser() }),
+      () => stopRun(db, run.id, { user: adminUser() }),
+      () => emergencyStopRun(db, run.id, { user: adminUser() }),
+      () => cancelRun(db, run.id, { user: adminUser() }),
+    ]
+    for (const command of commands) {
+      await assert.rejects(command, (error) =>
+        error?.status === 409 && error?.code === 'invalid_run_transition',
+      )
+    }
+    assert.equal((await getRun(db, run.id)).status, 'completed')
+    assert.deepEqual(await listStopRequests(db, run.id), [])
   })
 
   it('cancel marks queued steps skipped and finalises the run as cancelled', async () => {

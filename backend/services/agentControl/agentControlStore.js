@@ -366,7 +366,7 @@ export async function setRunStatus(db, runId, status, extra = {}) {
     fields.push('started_at = COALESCE(started_at, ?)')
     args.push(now)
   }
-  if (['completed', 'failed', 'cancelled', 'stopped', 'partial_stop', 'stop_failed'].includes(status)) {
+  if (['completed', 'completed_noop', 'failed', 'cancelled', 'stopped', 'partial_stop', 'stop_failed'].includes(status)) {
     fields.push('completed_at = COALESCE(completed_at, ?)')
     args.push(now)
   }
@@ -488,10 +488,10 @@ export async function getRunHighlights(db) {
       .prepare(`SELECT * FROM agent_control_runs ORDER BY COALESCE(started_at, created_at) DESC LIMIT 1`)
       .get()
     const last_full_cycle = await db
-      .prepare(`SELECT * FROM agent_control_runs WHERE run_type = 'full_cycle' ORDER BY COALESCE(started_at, created_at) DESC LIMIT 1`)
+      .prepare(`SELECT * FROM agent_control_runs WHERE run_type IN ('full_cycle','scheduled_cycle') ORDER BY COALESCE(started_at, created_at) DESC LIMIT 1`)
       .get()
     const last_success = await db
-      .prepare(`SELECT * FROM agent_control_runs WHERE status = 'completed' ORDER BY COALESCE(completed_at, started_at, created_at) DESC LIMIT 1`)
+      .prepare(`SELECT * FROM agent_control_runs WHERE status IN ('completed','completed_noop') ORDER BY COALESCE(completed_at, started_at, created_at) DESC LIMIT 1`)
       .get()
     const last_failure = await db
       .prepare(`SELECT * FROM agent_control_runs WHERE status IN ('failed','stop_failed','partial_stop') ORDER BY COALESCE(completed_at, started_at, created_at) DESC LIMIT 1`)

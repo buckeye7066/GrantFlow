@@ -156,6 +156,7 @@ function countAgentWork(agentName, summary) {
       return 0
   }
 }
+import { canTransition } from './agentRunStateMachine.js'
 import {
   notifyAgentBlocked,
   notifyAgentFailed,
@@ -453,8 +454,29 @@ export async function startRun(db, {
 // ---------------------------------------------------------------------------
 // Stop / pause / resume command surface
 // ---------------------------------------------------------------------------
+async function requireRunTransition(db, runId, event) {
+  const run = await getRun(db, runId)
+  if (!run) {
+    const error = new Error(`Agent-control run not found: ${runId}`)
+    error.status = 404
+    error.code = 'agent_control_run_not_found'
+    throw error
+  }
+  if (!canTransition(run.status, event)) {
+    const error = new Error(
+      `Cannot ${event} agent-control run ${runId} while it is ${run.status}.`,
+    )
+    error.status = 409
+    error.code = 'invalid_run_transition'
+    error.currentStatus = run.status
+    throw error
+  }
+  return run
+}
+
 export async function pauseRun(db, runId, { user = null, reason = null } = {}) {
   if (!isControlCenterAdmin(user)) { const e = new Error('admin only'); e.status = 403; throw e }
+  await requireRunTransition(db, runId, 'pause')
   await recordStopRequest(db, {
     controlRunId: runId,
     requestType: 'pause',
@@ -476,6 +498,7 @@ export async function pauseRun(db, runId, { user = null, reason = null } = {}) {
 
 export async function resumeRun(db, runId, { user = null } = {}) {
   if (!isControlCenterAdmin(user)) { const e = new Error('admin only'); e.status = 403; throw e }
+  await requireRunTransition(db, runId, 'resume')
   await recordStopRequest(db, {
     controlRunId: runId,
     requestType: 'resume',
@@ -515,6 +538,7 @@ export async function resumeRun(db, runId, { user = null } = {}) {
 
 export async function stopRun(db, runId, { user = null, reason = null } = {}) {
   if (!isControlCenterAdmin(user)) { const e = new Error('admin only'); e.status = 403; throw e }
+  await requireRunTransition(db, runId, 'graceful_stop')
   await recordStopRequest(db, {
     controlRunId: runId,
     requestType: 'graceful_stop',
@@ -535,6 +559,7 @@ export async function stopRun(db, runId, { user = null, reason = null } = {}) {
 
 export async function emergencyStopRun(db, runId, { user = null, reason = null } = {}) {
   if (!isControlCenterAdmin(user)) { const e = new Error('admin only'); e.status = 403; throw e }
+  await requireRunTransition(db, runId, 'emergency_stop')
   await recordStopRequest(db, {
     controlRunId: runId,
     requestType: 'emergency_stop',
@@ -577,6 +602,7 @@ export async function emergencyStopRun(db, runId, { user = null, reason = null }
 
 export async function cancelRun(db, runId, { user = null, reason = null } = {}) {
   if (!isControlCenterAdmin(user)) { const e = new Error('admin only'); e.status = 403; throw e }
+  await requireRunTransition(db, runId, 'cancel')
   await recordStopRequest(db, {
     controlRunId: runId,
     requestType: 'cancel',
