@@ -64,6 +64,7 @@ describe('pipelineValue choke point', () => {
     ]
     const insert = db.prepare('INSERT INTO grants VALUES (?, ?, ?, ?, ?, ?, ?)')
     rows.forEach((row) => insert.run(...row))
+    // audit:allow dynamic-sql — pipelineValueSql returns a compile-time literal; no user input
     const sql = db.prepare(`SELECT SUM(${pipelineValueSql('g', 'g.opportunity_kind')}) AS total FROM grants g`).get().total
     const js = db.prepare('SELECT * FROM grants').all().reduce((sum, row) => sum + grantPipelineValue(row), 0)
     expect(sql).toBe(6000)
