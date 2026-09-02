@@ -163,7 +163,10 @@ jobs:
 
   browser-smoke:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    # Playwright installs Ubuntu browser libraries from the runner's package
+    # mirror. Cold mirrors can exceed 20 minutes before the smoke suite starts;
+    # keep the job bounded while allowing the blocking browser assertions to run.
+    timeout-minutes: 40
 
     services:
       postgres:
