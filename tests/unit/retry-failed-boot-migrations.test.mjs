@@ -67,6 +67,7 @@ test('post-maintenance migration retry keeps readiness closed when a migration s
     migrate_boot_error: null,
     migrate_boot_failed_migrations: ['1001_live_hamilton_task_truth.mjs'],
   }
+  let verificationCalls = 0
   const result = await retryFailedBootMigrationsAfterMaintenance({
     appLocals,
     runPendingMigrationsOnBoot: async () => ({
@@ -74,12 +75,17 @@ test('post-maintenance migration retry keeps readiness closed when a migration s
       failed: ['1001_live_hamilton_task_truth.mjs'],
     }),
     verifyRecovery: async () => {
-      assert.fail('verification must not run while migrations remain failed')
+      verificationCalls += 1
+      assert.equal(appLocals.migrate_boot_error, 'boot_migration_retry_in_progress')
+      assert.deepEqual(appLocals.migrate_boot_failed_migrations, [
+        '1001_live_hamilton_task_truth.mjs',
+      ])
     },
     logger: quietLogger(),
   })
 
   assert.equal(result.recovered, false)
+  assert.equal(verificationCalls, 1)
   assert.equal(appLocals.migrate_boot_error, 'boot_migration_retry_incomplete')
   assert.deepEqual(appLocals.migrate_boot_failed_migrations, [
     '1001_live_hamilton_task_truth.mjs',
@@ -122,15 +128,21 @@ test('post-maintenance migration retry preserves the failed set when the runner 
     migrate_boot_error: null,
     migrate_boot_failed_migrations: ['1001_live_hamilton_task_truth.mjs'],
   }
+  let verificationCalls = 0
   const result = await retryFailedBootMigrationsAfterMaintenance({
     appLocals,
     runPendingMigrationsOnBoot: async () => {
       throw new Error('database unavailable')
     },
+    verifyRecovery: async () => {
+      verificationCalls += 1
+      assert.equal(appLocals.migrate_boot_error, 'boot_migration_retry_in_progress')
+    },
     logger: quietLogger(),
   })
 
   assert.equal(result.recovered, false)
+  assert.equal(verificationCalls, 1)
   assert.equal(result.error, 'boot_migration_retry_failed')
   assert.equal(appLocals.migrate_boot_error, 'boot_migration_retry_failed')
   assert.deepEqual(appLocals.migrate_boot_failed_migrations, [
