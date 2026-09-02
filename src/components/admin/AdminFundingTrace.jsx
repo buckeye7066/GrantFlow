@@ -4,6 +4,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
+import { Switch } from '@/components/ui/switch'
 import { Loader2, Search, Building2, DollarSign, ExternalLink, Plus, Check, Sparkles, Landmark } from 'lucide-react'
 import { traceFunding, addTracedSource } from '@/api/fundingTrace'
 import { useToast } from '@/components/ui/use-toast'
@@ -17,8 +18,8 @@ const ENTITY_TYPES = [
 ]
 
 const ORIGIN_META = {
-  usaspending: { label: 'Federal awards', icon: Landmark, className: 'bg-blue-50 text-blue-700 border-blue-300' },
-  ai_synthesis: { label: 'AI-identified', icon: Sparkles, className: 'bg-purple-50 text-purple-700 border-purple-300' },
+  usaspending: { label: 'Verified federal award evidence', icon: Landmark, className: 'bg-blue-50 text-blue-700 border-blue-300' },
+  ai_synthesis: { label: 'Unverified research hypothesis', icon: Sparkles, className: 'bg-purple-50 text-purple-700 border-purple-300' },
 }
 
 function formatAmount(amt) {
@@ -34,6 +35,7 @@ export default function AdminFundingTrace() {
   const [entity, setEntity] = useState('')
   const [entityType, setEntityType] = useState('company')
   const [loading, setLoading] = useState(false)
+  const [includeHypotheses, setIncludeHypotheses] = useState(false)
   const [result, setResult] = useState(null)
   const [adding, setAdding] = useState({}) // key -> 'pending' | 'added'
   const { toast } = useToast()
@@ -45,22 +47,29 @@ export default function AdminFundingTrace() {
     setLoading(true)
     setResult(null)
     try {
-      const data = await traceFunding(q, { entityType })
+      const data = await traceFunding(q, { entityType, useAi: includeHypotheses })
       setResult(data)
       if ((data.sources?.length ?? 0) === 0) {
-        toast({ title: 'No funding sources found', description: 'Try a more complete or official entity name.' })
+        const status = data.data_sources?.usaspending?.status
+        toast(status === 'unavailable' || status === 'partial'
+          ? {
+              title: status === 'unavailable' ? 'Official award evidence unavailable' : 'Official award evidence incomplete',
+              description: 'GrantFlow did not convert an unavailable data source into a zero. Retry when USASpending is healthy.',
+              variant: 'destructive',
+            }
+          : { title: 'No verified funding sources found', description: 'Try the exact official recipient name shown in public award records.' })
       }
     } catch (err) {
       toast({ title: 'Trace failed', description: err.message, variant: 'destructive' })
     } finally {
       setLoading(false)
     }
-  }, [entity, entityType, loading, toast])
+  }, [entity, entityType, includeHypotheses, loading, toast])
 
   const handleAdd = useCallback(async (source) => {
     setAdding((prev) => ({ ...prev, [source.key]: 'pending' }))
     try {
-      await addTracedSource(source, result?.entity)
+      await addTracedSource(source, result?.entity, result?.entity_type)
       setAdding((prev) => ({ ...prev, [source.key]: 'added' }))
       toast({ title: 'Added to GrantFlow', description: `${source.name} is now in the funding catalog.` })
     } catch (err) {
@@ -70,6 +79,9 @@ export default function AdminFundingTrace() {
   }, [result, toast])
 
   const sources = result?.sources ?? []
+  const hypotheses = result?.research_hypotheses ?? []
+  const resolution = result?.recipient_resolution ?? null
+  const usaSpendingStatus = result?.data_sources?.usaspending?.status ?? 'unknown'
 
   return (
     <div className="space-y-6">
@@ -106,6 +118,16 @@ export default function AdminFundingTrace() {
                 : <><Search className="w-4 h-4 mr-2" />Trace Funding</>}
             </Button>
           </div>
+          <div className="mt-3 flex items-center gap-2 text-xs text-slate-600">
+            <Switch
+              id="funding-trace-hypotheses"
+              checked={includeHypotheses}
+              onCheckedChange={(checked) => setIncludeHypotheses(Boolean(checked))}
+            />
+            <label htmlFor="funding-trace-hypotheses">
+              Include separate AI research hypotheses (never addable and never counted as verified sources)
+            </label>
+          </div>
         </CardContent>
       </Card>
 
@@ -117,8 +139,8 @@ export default function AdminFundingTrace() {
             </CardTitle>
             <CardDescription>
               {sources.length > 0
-                ? `${sources.length} source(s) found · ${result.counts?.federal_grant_awards ?? 0} grant + ${result.counts?.federal_contract_awards ?? 0} contract awards traced`
-                : 'No funding sources found.'}
+                ? `${sources.length} verified source(s) found from ${result.counts?.matched_recipient_awards ?? 0} award record(s) tied to the resolved recipient`
+                : 'No verified funding sources found.'}
               {result.nonprofit_match && (
                 <span className="block mt-1 text-xs text-slate-500">
                   Matched IRS 990 nonprofit: {result.nonprofit_match.name} ({result.nonprofit_match.state || 'n/a'})
@@ -127,9 +149,29 @@ export default function AdminFundingTrace() {
             </CardDescription>
           </CardHeader>
           <div className="mx-6 mb-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs leading-relaxed text-amber-900">
-            Funding Trace shows evidence GrantFlow can trace. Foundation outgoing-recipient lists only appear when
-            public 990/source data exposes them; otherwise GrantFlow marks the gap instead of guessing.
+            Direct source results below require an exact recipient identity and an official USASpending award record.
+            Broad name hits and AI ideas never receive the Add action; they remain separate research candidates.
           </div>
+          {usaSpendingStatus !== 'complete' ? (
+            <div className="mx-6 mb-3 rounded-lg border border-orange-200 bg-orange-50 px-3 py-2 text-xs leading-relaxed text-orange-900">
+              Official federal-award evidence is {usaSpendingStatus}. Results may be incomplete, and Add will revalidate the source before changing the catalog.
+            </div>
+          ) : null}
+          {resolution?.status && resolution.status !== 'resolved' ? (
+            <div className="mx-6 mb-3 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs leading-relaxed text-red-900">
+              GrantFlow did not resolve this text to one recipient ({resolution.status.replaceAll('_', ' ')}), so it returned no direct funding sources.
+              {resolution.candidates?.length ? (
+                <span className="block mt-1">
+                  Candidate recipient names: {resolution.candidates.map((candidate) => candidate.recipient_name).join('; ')}. Search the exact official name to continue.
+                </span>
+              ) : null}
+            </div>
+          ) : null}
+          {resolution?.status === 'resolved' ? (
+            <div className="mx-6 mb-3 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs leading-relaxed text-emerald-900">
+              Resolved recipient: <span className="font-semibold">{resolution.recipient_name}</span> ({resolution.score}% identity evidence).
+            </div>
+          ) : null}
           <CardContent className="space-y-2">
             {sources.map((source) => {
               const origin = ORIGIN_META[source.origin] || ORIGIN_META.usaspending
@@ -158,6 +200,7 @@ export default function AdminFundingTrace() {
                       ) : null}
                       {source.latest_year && <Badge variant="outline" className="text-xs">Latest {source.latest_year}</Badge>}
                       {source.parent_agency && <span className="text-xs text-slate-500 truncate">part of {source.parent_agency}</span>}
+                      {source.recipient_name && <span className="text-xs text-slate-500 truncate">recipient: {source.recipient_name}</span>}
                       {source.rationale && <span className="text-xs text-slate-500 italic truncate max-w-md">{source.rationale}</span>}
                     </div>
                   </div>
@@ -185,6 +228,31 @@ export default function AdminFundingTrace() {
           </CardContent>
         </Card>
       )}
+
+      {hypotheses.length > 0 ? (
+        <Card>
+          <CardHeader className="pb-3">
+            <CardTitle className="text-base">Research hypotheses — not verified funding sources</CardTitle>
+            <CardDescription>
+              These ideas came from optional AI synthesis. They cannot be added until a public award, official program page, or other source verifies them.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-2">
+            {hypotheses.map((source) => (
+              <div key={source.key} className="rounded-lg border border-purple-200 bg-purple-50/40 p-3">
+                <div className="flex items-center gap-2">
+                  <Sparkles className="h-4 w-4 text-purple-600" />
+                  <p className="text-sm font-medium text-slate-900">{source.name}</p>
+                  <Badge variant="outline" className="text-xs bg-purple-50 text-purple-700 border-purple-300">
+                    Unverified
+                  </Badge>
+                </div>
+                {source.rationale ? <p className="mt-1 text-xs text-slate-600">{source.rationale}</p> : null}
+              </div>
+            ))}
+          </CardContent>
+        </Card>
+      ) : null}
     </div>
   )
 }

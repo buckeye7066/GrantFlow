@@ -11,9 +11,9 @@
  *   - ProPublica 990   — if the entity is a nonprofit, its 990 financials and the
  *                        grantmaker ecosystem around it.
  *
- * AI layer (optional, best-effort): classifies the entity and surfaces likely
- * funding channels the public datasets miss (e.g. VC backers, parent companies,
- * corporate CSR programs). Never required — the service degrades to public data.
+ * AI layer (optional, best-effort): produces explicitly unverified research
+ * hypotheses for channels the public datasets miss. Hypotheses never enter the
+ * verified source list and can never be added to the funding catalog.
  */
 
 import { fetchWithRetry } from './sources/httpClient.js'
@@ -47,13 +47,135 @@ export const FUNDING_TRACE_ENTITY_TYPES = Object.freeze([
   'individual',
 ])
 
+const LEGAL_SUFFIXES = new Set([
+  'inc', 'incorporated', 'corp', 'corporation', 'co', 'company', 'llc', 'llp',
+  'lp', 'ltd', 'limited', 'pllc', 'pc', 'foundation',
+])
+
+function normalizedEntityName(value) {
+  return String(value ?? '')
+    .toLowerCase()
+    .replace(/&/g, ' and ')
+    .replace(/[^a-z0-9]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
+function coreEntityName(value) {
+  const tokens = normalizedEntityName(value).split(' ').filter(Boolean)
+  while (tokens.length > 1 && LEGAL_SUFFIXES.has(tokens[tokens.length - 1])) tokens.pop()
+  return tokens.join(' ')
+}
+
+/**
+ * Resolve the free-text request to exactly one recipient name present in the
+ * returned award evidence. Exact normalized name wins; equality after removal
+ * of a trailing legal suffix is the only fuzzy rule. Tied subsidiaries or
+ * other broad text hits fail closed as ambiguous.
+ */
+export function resolveRecipientIdentity(entity, awards = []) {
+  const requested = normalizedEntityName(entity)
+  const requestedCore = coreEntityName(entity)
+  const groups = new Map()
+  for (const row of Array.isArray(awards) ? awards : []) {
+    const display = String(row?.['Recipient Name'] ?? '').trim()
+    const normalized = normalizedEntityName(display)
+    if (!normalized) continue
+    const current = groups.get(normalized) ?? {
+      recipient_name: display,
+      normalized_name: normalized,
+      core_name: coreEntityName(display),
+      award_count: 0,
+      total_amount: 0,
+    }
+    current.award_count += 1
+    current.total_amount += parseAmount(row?.['Award Amount'])
+    groups.set(normalized, current)
+  }
+
+  const candidates = [...groups.values()]
+    .map((candidate) => ({
+      ...candidate,
+      score: candidate.normalized_name === requested
+        ? 100
+        : candidate.core_name && candidate.core_name === requestedCore
+          ? 98
+          : 0,
+    }))
+    .sort((a, b) => b.score - a.score || b.award_count - a.award_count || b.total_amount - a.total_amount)
+
+  const qualified = candidates.filter((candidate) => candidate.score >= 98)
+  const bestScore = qualified[0]?.score ?? 0
+  const best = qualified.filter((candidate) => candidate.score === bestScore)
+  const status = best.length === 1
+    ? 'resolved'
+    : best.length > 1
+      ? 'ambiguous'
+      : candidates.length > 0
+        ? 'no_exact_identity_match'
+        : 'no_recipient_identity'
+  const selected = status === 'resolved' ? best[0] : null
+
+  return {
+    status,
+    requested_name: String(entity ?? '').trim(),
+    recipient_name: selected?.recipient_name ?? null,
+    normalized_recipient_name: selected?.normalized_name ?? null,
+    score: selected?.score ?? null,
+    candidates: candidates.slice(0, 8).map((candidate) => ({
+      recipient_name: candidate.recipient_name,
+      score: candidate.score,
+      award_count: candidate.award_count,
+      total_amount: candidate.total_amount,
+    })),
+  }
+}
+
+export function resolveOrganizationIdentity(entity, organizations = []) {
+  const requested = normalizedEntityName(entity)
+  const requestedCore = coreEntityName(entity)
+  const candidates = (Array.isArray(organizations) ? organizations : [])
+    .filter((organization) => organization && String(organization.name ?? '').trim())
+    .map((organization) => {
+      const normalized = normalizedEntityName(organization.name)
+      const core = coreEntityName(organization.name)
+      return {
+        organization,
+        score: normalized === requested ? 100 : core && core === requestedCore ? 98 : 0,
+      }
+    })
+    .sort((a, b) => b.score - a.score)
+  const qualified = candidates.filter((candidate) => candidate.score >= 98)
+  const bestScore = qualified[0]?.score ?? 0
+  const best = qualified.filter((candidate) => candidate.score === bestScore)
+  return {
+    status: best.length === 1 ? 'resolved' : best.length > 1 ? 'ambiguous' : 'no_exact_identity_match',
+    match: best.length === 1 ? best[0].organization : null,
+    candidates: candidates.slice(0, 8).map(({ organization, score }) => ({
+      name: organization.name,
+      state: organization.state ?? null,
+      score,
+    })),
+  }
+}
+
+export function isVerifiedTraceSource(source) {
+  if (source?.origin !== 'usaspending' || source?.evidence_status !== 'verified_award_record') return false
+  if (!source?.recipient_name || !source?.sample_url) return false
+  try {
+    const host = new URL(source.sample_url).hostname.toLowerCase()
+    return host === 'usaspending.gov' || host.endsWith('.usaspending.gov')
+  } catch {
+    return false
+  }
+}
+
 /**
  * Decide whether a traced source is worth offering for one-click add.
  *
- * Applies to data-backed (federal) sources: requires a total at or above
- * `minAmount` AND a most-recent award within `maxAgeYears`. Sources with no
- * dollar data (e.g. AI-identified channels) are not subject to the dollar
- * floor — they keep whatever `addable` flag they arrived with.
+ * Applies only to verified federal-award evidence: requires resolved recipient
+ * identity, an official evidence URL, a total at or above `minAmount`, and a
+ * known most-recent award within `maxAgeYears`. Unknowns fail closed.
  *
  * @returns {boolean}
  */
@@ -61,17 +183,11 @@ export function isSourceAddable(source, { minAmount, maxAgeYears, now = new Date
   const min = Number.isFinite(minAmount) ? minAmount : ADDABILITY_DEFAULTS.minAmount
   const maxAge = Number.isFinite(maxAgeYears) ? maxAgeYears : ADDABILITY_DEFAULTS.maxAgeYears
 
-  // No dollar signal (AI sources): defer to the source's own flag.
-  if (source.total_amount === null || source.total_amount === undefined) return source.addable !== false
-
+  if (!isVerifiedTraceSource(source)) return false
   if (Number(source.total_amount) < min) return false
-
-  // Recency floor — only enforced when we know the latest year.
-  if (source.latest_year !== null && source.latest_year !== undefined) {
-    const cutoff = now.getFullYear() - maxAge
-    if (source.latest_year < cutoff) return false
-  }
-  return true
+  if (!Number.isFinite(Number(source.latest_year))) return false
+  const cutoff = now.getFullYear() - maxAge
+  return Number(source.latest_year) >= cutoff
 }
 
 /**
@@ -106,16 +222,29 @@ async function fetchRecipientAwards(entity, { awardTypeCodes, sinceYears = 5, li
   }
 
   try {
-    const data = await fetchWithRetry(`${USASPENDING_API}/search/spending_by_award/`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      data: payload,
-      timeout: 60000,
-    })
-    return Array.isArray(data?.results) ? data.results : []
+    const rows = []
+    const seenAwards = new Set()
+    for (let page = 1; page <= 10; page += 1) {
+      const data = await fetchWithRetry(`${USASPENDING_API}/search/spending_by_award/`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        data: { ...payload, page },
+        timeout: 60000,
+      })
+      const batch = Array.isArray(data?.results) ? data.results : []
+      for (const row of batch) {
+        const awardId = String(row?.['Award ID'] ?? '').trim()
+        const key = awardId || JSON.stringify(row)
+        if (seenAwards.has(key)) continue
+        seenAwards.add(key)
+        rows.push(row)
+      }
+      if (data?.page_metadata?.hasNext !== true || batch.length === 0) break
+    }
+    return { rows, error: null }
   } catch (err) {
     log.warn(`[fundingTrace] USASpending query failed for "${entity}": ${err?.message}`)
-    return []
+    return { rows: [], error: err?.message ?? String(err) }
   }
 }
 
@@ -202,9 +331,9 @@ export function consolidateFundingSources(awards) {
 }
 
 /**
- * Best-effort AI synthesis: classify the entity and name likely funding channels
- * that public award data won't show (VC, parent company, corporate foundations).
- * Returns [] on any failure or when no AI provider is configured.
+ * Best-effort AI hypotheses for channels public award data will not show. They
+ * are research prompts only: never verified, never addable, never merged into
+ * the evidence-backed `sources` collection.
  */
 async function aiFundingChannels(entity, entityType) {
   const prompt = `You are a funding-research analyst. The user wants to know WHERE the following ${entityType} gets its funding.
@@ -212,7 +341,7 @@ async function aiFundingChannels(entity, entityType) {
 Entity: "${entity}"
 
 Return STRICT JSON: an array (max 8) of likely funding SOURCES under the key "sources".
-Each item: { "name": string, "type": one of ["federal_agency","foundation","venture_capital","corporate_csr","parent_company","state_agency","other"], "rationale": short string, "addable": boolean (true only if it is a real, nameable grantmaking/funding ORGANIZATION an admin could add to a grant catalog) }.
+Each item: { "name": string, "type": one of ["federal_agency","foundation","venture_capital","corporate_csr","parent_company","state_agency","other"], "rationale": short string }.
 Only include sources you are reasonably confident about. Do NOT invent specific dollar amounts.`
 
   try {
@@ -232,7 +361,9 @@ Only include sources you are reasonably confident about. Do NOT invent specific 
         type: s.type || 'other',
         rationale: s.rationale || null,
         origin: 'ai_synthesis',
-        addable: s.addable !== false,
+        evidence_status: 'unverified_hypothesis',
+        classification: 'research_hypothesis_not_funding_source',
+        addable: false,
         total_amount: null,
         award_count: null,
       }))
@@ -263,49 +394,75 @@ async function markExistingInCatalog(db, sources) {
 /**
  * Main entry point. Trace an entity's funding into a consolidated, addable list.
  */
-export async function traceFunding(db, { entity, entityType = 'company', useAi = true, addability = {} } = {}) {
+export async function traceFunding(db, { entity, entityType = 'company', useAi = false, addability = {} } = {}) {
   const clean = String(entity || '').trim()
   if (!clean) throw new Error('entity is required')
 
   // 1) Pull federal awards received (grants + contracts) in parallel.
-  const [grantRows, contractRows] = await Promise.all([
+  const [grantQuery, contractQuery] = await Promise.all([
     fetchRecipientAwards(clean, { awardTypeCodes: GRANT_AWARD_TYPES }),
     fetchRecipientAwards(clean, { awardTypeCodes: CONTRACT_AWARD_TYPES }),
   ])
-  const federalSources = consolidateFundingSources([...grantRows, ...contractRows]).map((s) => ({
-    ...s,
-    origin: 'usaspending',
-    addable: isSourceAddable(s, addability),
-  }))
+  const grantRows = grantQuery.rows
+  const contractRows = contractQuery.rows
+  const allAwardRows = [...grantRows, ...contractRows]
+  const recipientResolution = resolveRecipientIdentity(clean, allAwardRows)
+  const matchedAwardRows = recipientResolution.status === 'resolved'
+    ? allAwardRows.filter((row) => normalizedEntityName(row?.['Recipient Name']) === recipientResolution.normalized_recipient_name)
+    : []
+  const federalSources = consolidateFundingSources(matchedAwardRows).map((source) => {
+    const evidenced = {
+      ...source,
+      origin: 'usaspending',
+      evidence_status: 'verified_award_record',
+      classification: 'evidence_backed_funder',
+      recipient_name: recipientResolution.recipient_name,
+      entity_resolution_score: recipientResolution.score,
+    }
+    return { ...evidenced, addable: isSourceAddable(evidenced, addability) }
+  })
 
   // 2) ProPublica 990 — is the entity itself a nonprofit? (context + 990 link)
   let nonprofitMatch = null
+  let nonprofitResolution = { status: 'unavailable', candidates: [] }
+  let nonprofitError = null
   try {
     const pp = await searchOrganizations({ q: clean })
-    nonprofitMatch = pp.organizations?.[0] ?? null
+    nonprofitResolution = resolveOrganizationIdentity(clean, pp.organizations ?? [])
+    nonprofitMatch = nonprofitResolution.match
   } catch (err) {
+    nonprofitError = err?.message ?? String(err)
     log.warn(`[fundingTrace] ProPublica lookup failed: ${err?.message}`)
   }
 
-  // 3) Optional AI synthesis for channels the public data misses.
-  const aiSources = useAi ? await aiFundingChannels(clean, entityType) : []
-
-  // 4) Merge + dedupe by name (federal/public data wins over AI guesses).
-  const merged = []
-  const seen = new Set()
-  for (const s of [...federalSources, ...aiSources]) {
-    const k = s.name.toLowerCase()
-    if (seen.has(k)) continue
-    seen.add(k)
-    merged.push(s)
-  }
-
-  const sources = await markExistingInCatalog(db, merged)
+  // 3) Optional AI hypotheses stay separate from evidence-backed sources.
+  const researchHypotheses = useAi ? await aiFundingChannels(clean, entityType) : []
+  const sources = await markExistingInCatalog(db, federalSources)
 
   return {
     entity: clean,
     entity_type: entityType,
+    recipient_resolution: recipientResolution,
     nonprofit_match: nonprofitMatch,
+    nonprofit_resolution: {
+      status: nonprofitResolution.status,
+      candidates: nonprofitResolution.candidates,
+    },
+    data_sources: {
+      usaspending: {
+        status: grantQuery.error && contractQuery.error
+          ? 'unavailable'
+          : grantQuery.error || contractQuery.error
+            ? 'partial'
+            : 'complete',
+        grant_query_error: grantQuery.error,
+        contract_query_error: contractQuery.error,
+      },
+      propublica: {
+        status: nonprofitError ? 'unavailable' : 'complete',
+        error: nonprofitError,
+      },
+    },
     addability: {
       min_amount: Number.isFinite(addability.minAmount) ? addability.minAmount : ADDABILITY_DEFAULTS.minAmount,
       max_age_years: Number.isFinite(addability.maxAgeYears) ? addability.maxAgeYears : ADDABILITY_DEFAULTS.maxAgeYears,
@@ -313,10 +470,13 @@ export async function traceFunding(db, { entity, entityType = 'company', useAi =
     counts: {
       federal_grant_awards: grantRows.length,
       federal_contract_awards: contractRows.length,
+      matched_recipient_awards: matchedAwardRows.length,
       total_sources: sources.length,
       addable_sources: sources.filter((s) => s.addable !== false).length,
+      research_hypotheses: researchHypotheses.length,
     },
     sources,
+    research_hypotheses: researchHypotheses,
   }
 }
 
@@ -325,6 +485,11 @@ export async function traceFunding(db, { entity, entityType = 'company', useAi =
  * compatible with POST /api/opportunities (validateFundingTerms + normalize).
  */
 export function traceSourceToOpportunity(source, entity) {
+  if (!isVerifiedTraceSource(source) || source?.addable !== true || !isSourceAddable(source)) {
+    const error = new Error('Only verified, addable USASpending award evidence can be added to the catalog')
+    error.code = 'UNVERIFIED_TRACE_SOURCE'
+    throw error
+  }
   const fundingType =
     source.type === 'foundation' ? 'foundation' : source.type === 'federal_agency' ? 'government' : 'other'
 
@@ -340,7 +505,7 @@ export function traceSourceToOpportunity(source, entity) {
   return {
     title: `${source.name} — Funding Source`,
     sponsor: source.name,
-    source: source.origin === 'ai_synthesis' ? 'funding_trace.ai' : 'funding_trace.usaspending',
+    source: 'funding_trace.usaspending',
     source_id: source.key,
     source_url: source.sample_url || null,
     description: descBits.join(' '),
