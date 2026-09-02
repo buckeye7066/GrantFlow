@@ -237,16 +237,14 @@ async function hasGrantsDecisionColumns(db) {
 
 /**
  * The one canonical pipeline admission predicate. It evaluates only; the sole
- * public entry point below owns persistence. Sweep callers opt into fail-closed
- * tombstones while ordinary interactive callers retain the historical
- * fail-open behavior.
+ * public entry point below owns persistence. Every automated and interactive
+ * caller fails closed when a required admission verdict cannot be established.
  */
 async function admitToPipeline(db, profileContext, opportunity, ctx = {}) {
   const profileId = ctx.profileId ?? profileContext?.profile?.id ?? profileContext?.id ?? null
   const callerReportedMatchPercentage = ctx.matchPercentage ?? null
   let matchPercentage = null
   const minMatchThreshold = ctx.minMatchThreshold ?? null
-  const failClosedTombstone = ctx.failClosedTombstone === true
   const quiet = ctx.quiet === true
   const fingerprints = pipelineAdmissionFingerprints(profileContext, opportunity)
   const denied = (reason, result, score = result?.matchPercentage ?? null) => ({
@@ -334,26 +332,19 @@ async function admitToPipeline(db, profileContext, opportunity, ctx = {}) {
           }, decision?.score ?? null)
         }
       } catch (dismissErr) {
-        if (failClosedTombstone) {
-          return denied('error:transient', {
-            saved: false,
-            reason: `Dismissal lookup failed: ${dismissErr?.message || dismissErr}`,
-            gate: 'DISMISSED_ERROR',
-            matchPercentage: null,
-            threshold,
-          })
-        }
-        // Tombstone lookup failure must never block a save — recall over
-        // suppression. Log it and proceed.
-        // CodeQL js/log-injection (#609/#610): opportunity.title is
-        // externally-sourced crawled text — any site a crawler visits
-        // controls this field.
         if (!quiet) console.warn(
           '[opportunityMatcher] Gate:DISMISSED check failed for profile %s, opp "%s":',
           profileId,
           sanitizeLogValue(opportunity?.title),
           dismissErr?.message || dismissErr,
         )
+        return denied('error:transient', {
+          saved: false,
+          reason: `Dismissal lookup failed: ${dismissErr?.message || dismissErr}`,
+          gate: 'DISMISSED_ERROR',
+          matchPercentage: null,
+          threshold,
+        })
       }
     }
 
@@ -363,14 +354,14 @@ async function admitToPipeline(db, profileContext, opportunity, ctx = {}) {
     // but only the MATCHES surfaces consulted it. The pipeline WRITER was the
     // one path that skipped it, so Federal Register comment requests reached
     // profile pipelines as grants (the "HRSA information-collection at 82"
-    // class, prod 2026-08-04). Only `not_a_grant` is refused here: `resource`
-    // (pointer kinds, signal-less rows) stays admissible per the locator rule.
+    // class, prod 2026-08-04). Automated pipeline admission requires a positive
+    // FUNDABLE verdict; RESOURCE rows remain in the catalog/verification queue.
     const fundingResult = classifyFundingResult(opportunity)
-    if (fundingResult.bucket === RESULT_BUCKETS.NOT_A_GRANT) {
+    if (fundingResult.bucket !== RESULT_BUCKETS.FUNDABLE) {
       if (!quiet) log.info(`[opportunityMatcher] Gate:FUNDING_RESULT suppressed "${opportunity?.title}" — ${fundingResult.reasons.join('; ')}`)
       return denied(`not_a_grant:${fundingResult.reasons[0] ?? 'unclassified'}`, {
         saved: false,
-        reason: `Not a fundable opportunity: ${fundingResult.reasons.join('; ')}`,
+        reason: `Not a positively fundable opportunity (${fundingResult.bucket}): ${fundingResult.reasons.join('; ')}`,
         gate: 'FUNDING_RESULT',
         matchPercentage: null,
         threshold,
@@ -384,10 +375,9 @@ async function admitToPipeline(db, profileContext, opportunity, ctx = {}) {
     // need coverage rather than rejecting on it ("a low score alone is not
     // hard ineligibility"), so until this gate a row serving only a need the
     // profile never declared could be admitted on applicant type + geography.
-    // Structured declarations only (never mined prose); silence on EITHER side
-    // is neutral and passes — the profile that declares nothing is one we
-    // cannot read, the row that states no need vocabulary is silent, not
-    // contrary. Reported as `live_reject` so every promotion/sweep sink already
+    // Structured declarations only (never mined prose); silence on either side
+    // is unknown, not a positive verdict, and therefore fails automated
+    // admission. Reported as `live_reject` so every promotion/sweep sink
     // classifies it as terminal.
     {
       const declaredNeeds = declaredNeedsFrom(rawProfile, profileSections)
@@ -442,11 +432,19 @@ async function admitToPipeline(db, profileContext, opportunity, ctx = {}) {
     }
 
     // Gate 3: Exclusion engine — custom suppression rules
-    let exclusion = { decision: 'ALLOW' }
+    let exclusion = null
     try {
       const exclusionRules = await db.prepare(`SELECT * FROM exclusion_rules WHERE action IS NOT NULL`).all()
       exclusion = evaluateExclusion(opportunity, exclusionRules || [])
-    } catch { /* table may not exist yet; treat as ALLOW */ }
+    } catch (exclusionErr) {
+      return denied('error:transient', {
+        saved: false,
+        reason: `Exclusion evaluation failed: ${exclusionErr?.message || exclusionErr}`,
+        gate: 'EXCLUSION_ENGINE_ERROR',
+        matchPercentage,
+        threshold,
+      })
+    }
 
     if (exclusion.decision === 'SUPPRESS') {
       if (!quiet) log.info(`[opportunityMatcher] Gate:EXCLUSION_ENGINE suppressed "${opportunity.title}" — rule ${exclusion.rule_id}`)
