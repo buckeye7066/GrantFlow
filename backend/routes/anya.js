@@ -125,7 +125,7 @@ router.get('/health', async (req, res) => {
 
   const [brain_memories, tool_usage_24h, sessions_24h] = await Promise.all([
     safeCount('SELECT COUNT(*) AS count FROM anya_brain_memory'),
-    safeCount('SELECT COUNT(*) AS count FROM anya_tool_usage WHERE ts >= ?', [dayAgo]),
+    safeCount('SELECT COUNT(*) AS count FROM anya_tool_usage WHERE created_at >= ?', [dayAgo]),
     safeCount("SELECT COUNT(*) AS count FROM anya_sessions WHERE created_at >= ?", [dayAgo]),
   ])
 
