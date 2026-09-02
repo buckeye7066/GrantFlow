@@ -36,14 +36,15 @@ function makeMemoryDb() {
       id TEXT PRIMARY KEY,
       user_id TEXT,
       organization_id TEXT,
-      display_name TEXT
+      display_name TEXT,
+      primary_type TEXT
     );
     CREATE TABLE IF NOT EXISTS users (
       id TEXT PRIMARY KEY,
       role TEXT
     );
-    INSERT INTO profiles (id, user_id, display_name) VALUES ('p-mtsu', 'u-1', 'Demo Student');
-    INSERT INTO profiles (id, user_id, display_name) VALUES ('p-other', 'u-2', 'Other Student');
+    INSERT INTO profiles (id, user_id, display_name, primary_type) VALUES ('p-mtsu', 'u-1', 'Demo Student', 'college_student');
+    INSERT INTO profiles (id, user_id, display_name, primary_type) VALUES ('p-other', 'u-2', 'Other Student', 'college_student');
     INSERT INTO users (id, role) VALUES ('u-admin', 'admin');
     CREATE TABLE IF NOT EXISTS profile_sections (
       id TEXT PRIMARY KEY,
@@ -66,7 +67,8 @@ function makeMemoryDb() {
     CREATE TABLE IF NOT EXISTS funding_opportunities (
       id TEXT PRIMARY KEY, title TEXT, description TEXT, application_url TEXT,
       funding_source_type TEXT, category TEXT, profile_id TEXT, record_origin TEXT,
-      opportunity_kind TEXT, source_trust_tier TEXT, reality_status TEXT, reality_reasons TEXT
+      opportunity_kind TEXT, source_trust_tier TEXT, reality_status TEXT, reality_reasons TEXT,
+      entity_types_allowed TEXT NOT NULL DEFAULT '["individual","student"]'
     );
     INSERT INTO funding_opportunities (id, title, description, application_url, funding_source_type, category, record_origin, opportunity_kind, source_trust_tier, reality_status, reality_reasons)
       VALUES ('opp-mtsu-merit', 'MTSU Presidential Scholarship',
@@ -98,8 +100,8 @@ function makeMemoryDb() {
       (profile_id, opportunity_id, match_score, match_decision, match_explanation, matcher_version, updated_at, computed_at)
       VALUES
       ('p-mtsu', 'opp-mtsu-merit', 92, 'accept', 'Crawler OS approved MTSU scholarship for this student profile.', 'crawler-os', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP),
-      ('p-mtsu', 'opp-fafsa', 88, 'review', 'Crawler OS approved MTSU financial aid for this student profile.', 'crawler-os', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP),
-      ('p-mtsu', 'opp-external', 74, 'review', 'Crawler OS approved external scholarship marketplace for this student profile.', 'crawler-os', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP);
+      ('p-mtsu', 'opp-fafsa', 88, 'accept', 'Crawler OS approved MTSU financial aid for this student profile.', 'crawler-os', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP),
+      ('p-mtsu', 'opp-external', 74, 'accept', 'Crawler OS approved external scholarship marketplace for this student profile.', 'crawler-os', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP);
     CREATE TABLE IF NOT EXISTS grants (
       id TEXT PRIMARY KEY, status TEXT, application_url TEXT
     );

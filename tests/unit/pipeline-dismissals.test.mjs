@@ -91,11 +91,20 @@ const SAMPLE_OPPORTUNITY = Object.freeze({
   title: 'MTSU Off-Campus Housing Resource',
   sponsor: 'Middle Tennessee State University',
   source: 'school_portal',
+  record_origin: 'verified_real',
+  opportunity_kind: 'GRANT',
+  opportunity_type: 'scholarship',
+  description: 'Scholarship for individual MTSU students with off-campus housing costs.',
+  need_types_supported: ['housing', 'education'],
+  entity_types_allowed: ['individual', 'student'],
+  categories: ['housing', 'education'],
+  keywords: ['student', 'scholarship', 'housing'],
+  eligibility_text: 'Individual students with off-campus housing expenses may apply.',
   application_url: 'https://offcampushousing.mtsu.edu/',
   url: 'https://offcampushousing.mtsu.edu/',
   deadline: 'rolling',
-  amount_min: null,
-  amount_max: null,
+  amount_min: 500,
+  amount_max: 2000,
 })
 
 test('pipelineDismissals: schema self-heals on a fresh in-memory db', async () => {
@@ -254,7 +263,7 @@ test('opportunityMatcher: dismissed opportunities are NOT re-added by saveToProf
   const opp = {
     ...SAMPLE_OPPORTUNITY,
     id: 'opp_mtsu_2',
-    title: 'MTSU Pell-Eligible Off-Campus Resource',
+    title: 'MTSU Pell-Eligible Off-Campus Housing Scholarship',
   }
   // Insert the opportunity into funding_opportunities so the FK check resolves.
   db.prepare(
@@ -266,9 +275,20 @@ test('opportunityMatcher: dismissed opportunities are NOT re-added by saveToProf
   // or a non-DISMISSED gate failure (e.g. THRESHOLD with no profile context),
   // because the assertion that matters is the second pass.
   const profileContext = {
-    profile: { id: 'p_demo_student', primary_type: 'individual_need', state: 'TN', applicant_type: 'individual' },
-    sections: {},
-    match_reasons: ['MTSU off-campus resource'],
+    profile: {
+      id: 'p_demo_student',
+      primary_type: 'individual_need',
+      state: 'TN',
+      applicant_type: 'college_student',
+      needs: ['housing', 'education'],
+      categories: ['housing', 'education'],
+      keywords: ['student', 'scholarship', 'housing'],
+    },
+    sections: {
+      basic_information: { state: 'TN', profile_category: 'college_student' },
+      education: { current_student: true },
+    },
+    match_reasons: ['MTSU off-campus housing scholarship'],
   }
   const first = await saveToProfilePipeline(db, opp, 'p_demo_student', profileContext, 90, 50)
   assert.notEqual(first.gate, 'DISMISSED', 'first save must not be blocked by DISMISSED gate')

@@ -94,8 +94,22 @@ function makeDb() {
       categories TEXT,
       keywords TEXT,
       eligibility_bullets TEXT,
+      entity_types_allowed TEXT,
+      reality_status TEXT,
+      reality_reasons TEXT,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
       updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE TABLE profile_opportunity_matches (
+      profile_id TEXT NOT NULL,
+      opportunity_id TEXT NOT NULL,
+      match_score REAL,
+      match_decision TEXT,
+      match_explanation TEXT,
+      matcher_version TEXT,
+      updated_at TEXT,
+      computed_at TEXT,
+      PRIMARY KEY (profile_id, opportunity_id, matcher_version)
     );
     CREATE TABLE grants (
       id TEXT PRIMARY KEY,
@@ -119,12 +133,22 @@ function makeDb() {
     CREATE TABLE documents (
       id TEXT PRIMARY KEY,
       user_id TEXT,
+      organization_id TEXT,
+      grant_id TEXT,
       profile_id TEXT,
+      university_application_id TEXT,
+      university_application_name TEXT,
       title TEXT,
+      name TEXT,
+      type TEXT,
       file_path TEXT,
       file_url TEXT,
       mime_type TEXT,
       file_size INTEGER,
+      file_bytes BLOB,
+      extracted_text TEXT,
+      processing_status TEXT,
+      notes TEXT,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
       updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
     );
@@ -268,6 +292,7 @@ describe('Hamilton agent adapter — MTSU queue drain', () => {
       {
         id: 'mtsu-centennial', title: 'MTSU Centennial', sponsor: 'MTSU',
         application_url: 'mailto:financial-aid@mtsu.edu',
+        source_url: 'https://www.mtsu.edu/financial-aid/scholarships/',
         opportunity_type: 'email',
       },
       {
@@ -279,9 +304,17 @@ describe('Hamilton agent adapter — MTSU queue drain', () => {
     for (const o of mtsuOpps) {
       await db.prepare(
         `INSERT INTO funding_opportunities
-           (id, title, sponsor, source, application_url, opportunity_type, is_active, source_url, created_at, updated_at)
-         VALUES (?, ?, ?, 'school_portal', ?, ?, 1, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
-      ).run(o.id, o.title, o.sponsor, o.application_url, o.opportunity_type, o.application_url)
+           (id, title, sponsor, source, application_url, opportunity_type, is_active, source_url,
+            entity_types_allowed, record_origin, source_trust_tier, reality_status, reality_reasons,
+            created_at, updated_at)
+         VALUES (?, ?, ?, 'school_portal', ?, ?, 1, ?, '["individual","student"]',
+           'live_crawl', 'official', 'verified', '[]', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
+      ).run(o.id, o.title, o.sponsor, o.application_url, o.opportunity_type, o.source_url || o.application_url)
+      await db.prepare(
+        `INSERT INTO profile_opportunity_matches
+           (profile_id, opportunity_id, match_score, match_decision, match_explanation, matcher_version, updated_at, computed_at)
+         VALUES (?, ?, 95, 'accept', 'Crawler OS approved this institutional scholarship for the student.', 'crawler-os', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
+      ).run(STUDENT_PROFILE_ID, o.id)
       await db.prepare(
         `INSERT INTO application_tasks
            (id, profile_id, opportunity_id, automation_type, status, current_pipeline_stage, created_at, updated_at)
@@ -334,8 +367,8 @@ describe('Hamilton agent adapter — MTSU queue drain', () => {
       )
       assert.doesNotMatch(
         msg,
-        /no such column.*funding_source_id/i,
-        `Hamilton must never fail with the funding_source_id schema bug — got: ${msg}`,
+        /no such column.*(?:funding_source_id|funding_opportunity_id|opportunity_id)/i,
+        `Hamilton must never fail because a legacy grant-link column is absent — got: ${msg}`,
       )
     }
 

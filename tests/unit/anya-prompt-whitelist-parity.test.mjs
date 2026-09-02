@@ -24,7 +24,11 @@ test('the prompt callable-tools list is exactly the chat whitelist (no drift)', 
 })
 
 test('every chat-callable tool Anya is told it can call is actually registered', () => {
-  const registered = new Set(listToolMetadata().map((t) => t.name))
+  // Registration parity is checked from the canonical owner context because
+  // admin/owner tools are intentionally hidden from ordinary callers.
+  const registered = new Set(
+    listToolMetadata({ isAdmin: true, email: 'admin@grantflow.local' }).map((t) => t.name),
+  )
   for (const name of CHAT_TOOL_WHITELIST) {
     assert.ok(registered.has(name), `whitelisted/advertised tool is not registered: ${name}`)
   }

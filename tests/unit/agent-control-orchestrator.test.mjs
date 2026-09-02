@@ -660,7 +660,7 @@ describe('Agent Control Center — adapter signal contract', () => {
 })
 
 describe('Agent Control Center — executeRun is idempotent on re-entry', () => {
-  it('concurrent executor kicks cannot invoke the same live adapter twice', async () => {
+  it('concurrent executor kicks cannot duplicate any sam_only phase', async () => {
     const db = makeDb()
     const mocks = installMockAdapters({
       sam: {
@@ -678,7 +678,9 @@ describe('Agent Control Center — executeRun is idempotent on re-entry', () => 
       executeRun({ db, runId: run.id }),
     ])
     await new Promise((r) => setTimeout(r, 160))
-    assert.equal(mocks.sam.startCallCount, 1)
+    // sam_only deliberately runs preflight, main, and postflight. Re-entry must
+    // not add a fourth invocation of any phase.
+    assert.equal(mocks.sam.startCallCount, 3)
   })
 
   it('re-invoking executeRun on a finished run does not re-run steps', async () => {

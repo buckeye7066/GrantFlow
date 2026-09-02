@@ -51,7 +51,8 @@ function makeMemoryDb() {
       id TEXT PRIMARY KEY,
       user_id TEXT,
       organization_id TEXT,
-      display_name TEXT
+      display_name TEXT,
+      primary_type TEXT
     );
     CREATE TABLE IF NOT EXISTS users (
       id TEXT PRIMARY KEY,
@@ -68,8 +69,38 @@ function makeMemoryDb() {
       application_url TEXT, application_mode TEXT,
       mailing_address TEXT, apply_email TEXT, apply_fax TEXT,
       funder_name TEXT, deadline TEXT, eligibility_text TEXT,
-      result_kind TEXT, opportunity_kind TEXT
+      result_kind TEXT, opportunity_kind TEXT,
+      entity_types_allowed TEXT NOT NULL DEFAULT '["individual","student"]',
+      record_origin TEXT NOT NULL DEFAULT 'verified_real',
+      source_trust_tier TEXT NOT NULL DEFAULT 'verified',
+      reality_status TEXT NOT NULL DEFAULT 'verified',
+      reality_reasons TEXT NOT NULL DEFAULT '[]'
     );
+    CREATE TABLE IF NOT EXISTS profile_opportunity_matches (
+      profile_id TEXT NOT NULL,
+      opportunity_id TEXT NOT NULL,
+      match_score REAL,
+      match_decision TEXT,
+      match_explanation TEXT,
+      matcher_version TEXT,
+      updated_at TEXT,
+      computed_at TEXT,
+      PRIMARY KEY (profile_id, opportunity_id, matcher_version)
+    );
+    -- These pathway tests start after crawler qualification. Seed that explicit
+    -- precondition for every inserted source without weakening production policy.
+    CREATE TRIGGER accept_inserted_test_opportunity
+    AFTER INSERT ON funding_opportunities
+    BEGIN
+      INSERT OR REPLACE INTO profile_opportunity_matches
+        (profile_id, opportunity_id, match_score, match_decision, match_explanation, matcher_version, updated_at, computed_at)
+      VALUES
+        ('p-A', NEW.id, 95, 'accept', 'Crawler OS approved this fixture for profile A.', 'crawler-os', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP);
+      INSERT OR REPLACE INTO profile_opportunity_matches
+        (profile_id, opportunity_id, match_score, match_decision, match_explanation, matcher_version, updated_at, computed_at)
+      VALUES
+        ('p-B', NEW.id, 95, 'accept', 'Crawler OS approved this fixture for profile B.', 'crawler-os', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP);
+    END;
     CREATE TABLE IF NOT EXISTS grants (
       id TEXT PRIMARY KEY, profile_id TEXT, status TEXT,
       application_url TEXT, opportunity_id TEXT, title TEXT,
@@ -86,8 +117,8 @@ function makeMemoryDb() {
       profile_id TEXT, document_id TEXT,
       PRIMARY KEY (profile_id, document_id)
     );
-    INSERT INTO profiles (id, user_id, display_name) VALUES ('p-A', 'u-A', 'Profile A');
-    INSERT INTO profiles (id, user_id, display_name) VALUES ('p-B', 'u-B', 'Profile B');
+    INSERT INTO profiles (id, user_id, display_name, primary_type) VALUES ('p-A', 'u-A', 'Profile A', 'college_student');
+    INSERT INTO profiles (id, user_id, display_name, primary_type) VALUES ('p-B', 'u-B', 'Profile B', 'college_student');
     INSERT INTO profile_sections (id, profile_id, section_key, data)
       VALUES ('ps-A-bi', 'p-A', 'basic_information',
               '{"first_name":"Anya","last_name":"K","email":"anya@example.com","address1":"100 Main St","city":"Murfreesboro","state":"TN","zip":"37130"}');
@@ -327,8 +358,8 @@ describe('hamiltonAutomationOrchestrator — multi-source dispatch', () => {
   it('automates a mail source: creates a task, generates DOCX, sets ready_to_print_mail, with mailing instructions', async () => {
     resetCaches()
     const db = makeMemoryDb()
-    db.raw.prepare(`INSERT INTO funding_opportunities (id, title, description, mailing_address, application_mode, funder_name)
-                    VALUES ('opp-mail', 'County Aid', 'Mail-in form', '1 Main St', 'mail', 'County Foundation')`).run()
+    db.raw.prepare(`INSERT INTO funding_opportunities (id, title, description, mailing_address, application_mode, funder_name, application_url)
+                    VALUES ('opp-mail', 'County Aid', 'Mail-in form', '1 Main St', 'mail', 'County Foundation', 'https://example.org/county-aid')`).run()
     const result = await automateSelected(db, {
       profileId: 'p-A',
       userId: 'u-A',
@@ -348,8 +379,8 @@ describe('hamiltonAutomationOrchestrator — multi-source dispatch', () => {
   it('automates an email source: ready_to_email + apply_email captured', async () => {
     resetCaches()
     const db = makeMemoryDb()
-    db.raw.prepare(`INSERT INTO funding_opportunities (id, title, description, apply_email, application_mode, funder_name)
-                    VALUES ('opp-email', 'Local Foundation', 'Email completed packet', 'grants@local.org', 'email', 'Local Foundation')`).run()
+    db.raw.prepare(`INSERT INTO funding_opportunities (id, title, description, apply_email, application_mode, funder_name, application_url)
+                    VALUES ('opp-email', 'Local Foundation', 'Email completed packet', 'grants@local.org', 'email', 'Local Foundation', 'https://example.org/local-foundation')`).run()
     const result = await automateSingleSource(db, {
       profileId: 'p-A',
       userId: 'u-A',
@@ -409,8 +440,8 @@ describe('hamiltonAutomationOrchestrator — multi-source dispatch', () => {
     // the profile actually HAS a FAFSA to link — seed it.
     db.raw.prepare(`INSERT INTO profile_sections (id, profile_id, section_key, data)
                     VALUES ('ps-A-edu-fafsa', 'p-A', 'education', '{"fafsa_completed": true}')`).run()
-    db.raw.prepare(`INSERT INTO funding_opportunities (id, title, description, application_mode, funder_name)
-                    VALUES ('opp-fafsa', 'University Need Aid', 'Awarded based on FAFSA results.', 'auto_profile', 'University')`).run()
+    db.raw.prepare(`INSERT INTO funding_opportunities (id, title, description, application_mode, funder_name, application_url)
+                    VALUES ('opp-fafsa', 'University Need Aid', 'Awarded based on FAFSA results.', 'auto_profile', 'University', 'https://studentaid.gov/h/apply-for-aid/fafsa')`).run()
     const result = await automateSingleSource(db, {
       profileId: 'p-A',
       userId: 'u-A',
@@ -423,8 +454,8 @@ describe('hamiltonAutomationOrchestrator — multi-source dispatch', () => {
   it('an auto_profile/FAFSA-link source with NO FAFSA on file parks with ONE honest ask (never fake-completes)', async () => {
     resetCaches()
     const db = makeMemoryDb()
-    db.raw.prepare(`INSERT INTO funding_opportunities (id, title, description, application_mode, funder_name)
-                    VALUES ('opp-fafsa-2', 'University Need Aid', 'Awarded based on FAFSA results.', 'auto_profile', 'University')`).run()
+    db.raw.prepare(`INSERT INTO funding_opportunities (id, title, description, application_mode, funder_name, application_url)
+                    VALUES ('opp-fafsa-2', 'University Need Aid', 'Awarded based on FAFSA results.', 'auto_profile', 'University', 'https://studentaid.gov/h/apply-for-aid/fafsa')`).run()
     const result = await automateSingleSource(db, {
       profileId: 'p-A',
       userId: 'u-A',
@@ -457,7 +488,7 @@ describe('hamiltonAutomationOrchestrator — multi-source dispatch', () => {
     }
   })
 
-  it('marks unknown sources as blocked with a clear note (does not fabricate)', async () => {
+  it('refuses an unverifiable unknown source before creating work', async () => {
     resetCaches()
     const db = makeMemoryDb()
     db.raw.prepare(`INSERT INTO funding_opportunities (id, title, description) VALUES ('opp-?', 'No info', 'Nothing actionable')`).run()
@@ -466,16 +497,18 @@ describe('hamiltonAutomationOrchestrator — multi-source dispatch', () => {
       userId: 'u-A',
       source: { opportunity_id: 'opp-?', current_stage: 'discovered' },
     })
-    assert.equal(result.classification.automation_type, 'unknown')
-    assert.equal(result.task.status, 'blocked')
-    assert.ok(result.task.last_agent_message?.toLowerCase().includes('could not determine'))
+    assert.equal(result.task, null)
+    assert.equal(result.skipped, true)
+    assert.equal(result.reason, 'funding_source_disallowed')
+    assert.ok(result.policy.reasons.includes('no_real_url'))
+    assert.equal((await listApplicationTasks(db, { profileId: 'p-A' })).length, 0)
   })
 
   it('does NOT block based on selected pipeline stage — accepts every stage from discovered through awarded', async () => {
     resetCaches()
     const db = makeMemoryDb()
-    db.raw.prepare(`INSERT INTO funding_opportunities (id, title, mailing_address, application_mode, funder_name)
-                    VALUES ('opp-anytime', 'Stage-agnostic award', '1 Main', 'mail', 'F')`).run()
+    db.raw.prepare(`INSERT INTO funding_opportunities (id, title, mailing_address, application_mode, funder_name, application_url)
+                    VALUES ('opp-anytime', 'Stage-agnostic award', '1 Main', 'mail', 'F', 'https://example.org/stage-agnostic-award')`).run()
     const stages = ['discovered', 'saved', 'interested', 'gathering_documents', 'drafting', 'ready_to_submit', 'submitted', 'follow_up', 'awarded']
     for (const stage of stages) {
       const r = await automateSingleSource(db, {
@@ -537,8 +570,8 @@ describe('hamiltonAutomationOrchestrator — multi-source dispatch', () => {
   it('keeps tasks scoped to the profile (no cross-profile leak)', async () => {
     resetCaches()
     const db = makeMemoryDb()
-    db.raw.prepare(`INSERT INTO funding_opportunities (id, title, mailing_address, application_mode, funder_name)
-                    VALUES ('opp-pm', 'X', '1', 'mail', 'F')`).run()
+    db.raw.prepare(`INSERT INTO funding_opportunities (id, title, mailing_address, application_mode, funder_name, application_url)
+                    VALUES ('opp-pm', 'X', '1', 'mail', 'F', 'https://example.org/profile-scope-award')`).run()
     await automateSingleSource(db, {
       profileId: 'p-A', userId: 'u-A',
       source: { opportunity_id: 'opp-pm', current_stage: 'discovered' },
@@ -552,8 +585,8 @@ describe('hamiltonAutomationOrchestrator — multi-source dispatch', () => {
   it('appends audit events for every classification + outcome', async () => {
     resetCaches()
     const db = makeMemoryDb()
-    db.raw.prepare(`INSERT INTO funding_opportunities (id, title, mailing_address, application_mode, funder_name)
-                    VALUES ('opp-audit', 'Award', '1', 'mail', 'F')`).run()
+    db.raw.prepare(`INSERT INTO funding_opportunities (id, title, mailing_address, application_mode, funder_name, application_url)
+                    VALUES ('opp-audit', 'Award', '1', 'mail', 'F', 'https://example.org/audit-award')`).run()
     const r = await automateSingleSource(db, {
       profileId: 'p-A', userId: 'u-A',
       source: { opportunity_id: 'opp-audit', current_stage: 'discovered' },
@@ -569,11 +602,11 @@ describe('hamiltonAutomationOrchestrator — multi-source dispatch', () => {
     resetCaches()
     const db = makeMemoryDb()
     db.raw.prepare(`INSERT INTO funding_opportunities (id, title, application_url, application_mode, funder_name)
-                    VALUES ('o-portal', 'P', 'https://x/apply', 'portal', 'F')`).run()
-    db.raw.prepare(`INSERT INTO funding_opportunities (id, title, mailing_address, application_mode, funder_name)
-                    VALUES ('o-mail', 'M', '1', 'mail', 'F')`).run()
+                    VALUES ('o-portal', 'P', 'https://example.org/apply', 'portal', 'F')`).run()
+    db.raw.prepare(`INSERT INTO funding_opportunities (id, title, mailing_address, application_mode, funder_name, application_url)
+                    VALUES ('o-mail', 'M', '1', 'mail', 'F', 'https://example.org/mail-award')`).run()
     db.raw.prepare(`INSERT INTO funding_opportunities (id, title, description, result_kind, funder_name)
-                    VALUES ('o-dir', 'D', 'directory', 'directory', 'F')`).run()
+                    VALUES ('o-dir', 'Scholarship Directory', 'directory', 'directory', 'F')`).run()
     delete process.env.HAMILTON_ENABLE_BROWSER_AUTOMATION
     const result = await automateSelected(db, {
       profileId: 'p-A', userId: 'u-A',
@@ -586,12 +619,15 @@ describe('hamiltonAutomationOrchestrator — multi-source dispatch', () => {
     assert.equal(result.results.length, 3)
     assert.equal(result.results[0].task.automation_type, 'portal')
     assert.equal(result.results[1].task.automation_type, 'mail')
-    assert.equal(result.results[2].task.automation_type, 'no_application')
-    // Each source produced its own task row.
+    assert.equal(result.results[2].task, null)
+    assert.equal(result.results[2].skipped, true)
+    assert.equal(result.results[2].reason, 'pointer_research_lead')
+    // Only leaf sources produce application tasks; the directory stays a
+    // research lead for discovery decomposition.
     const tasks = await listApplicationTasks(db, { profileId: 'p-A' })
-    assert.equal(tasks.length, 3)
+    assert.equal(tasks.length, 2)
     // Re-fetching each task by id returns the persisted shape.
-    for (const r of result.results) {
+    for (const r of result.results.filter((entry) => entry.task)) {
       const fresh = await getApplicationTask(db, r.task.id)
       assert.equal(fresh.id, r.task.id)
       assert.ok(fresh.automation_type)

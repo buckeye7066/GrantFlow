@@ -349,6 +349,13 @@ async function loadGrant(db, id) {
  * duplicate grant rows exist for the same opportunity, a protected row wins:
  * it is safer to reconcile existing submission evidence than to submit twice.
  */
+function isMissingGrantOpportunityColumn(error, column) {
+  const message = String(error?.message || error || '').toLowerCase()
+  const code = String(error?.code || '')
+  return message.includes(String(column).toLowerCase())
+    && (code === '42703' || message.includes('no such column') || message.includes('does not exist'))
+}
+
 export async function loadAuthoritativeGrantForSource(db, {
   profileId,
   grantId = null,
@@ -369,12 +376,29 @@ export async function loadAuthoritativeGrantForSource(db, {
   }
   if (!opportunityId) return null
 
-  const rows = await db.prepare(
-    `SELECT * FROM grants
-      WHERE profile_id = ?
-        AND funding_opportunity_id = ?`,
-  ).all(String(profileId), String(opportunityId))
-  const candidates = Array.isArray(rows) ? rows : []
+  // Production uses funding_opportunity_id; older/local schemas may expose
+  // opportunity_id, or no opportunity-link column at all. Probe only these two
+  // trusted identifiers and treat an absent legacy column as "no linked grant"
+  // rather than failing every opportunity-only Hamilton task.
+  let rows = []
+  let foundOpportunityColumn = false
+  for (const column of ['funding_opportunity_id', 'opportunity_id']) {
+    try {
+      const candidateRows = await db.prepare(
+        `SELECT * FROM grants
+          WHERE profile_id = ?
+            AND ${column} = ?`,
+      ).all(String(profileId), String(opportunityId))
+      foundOpportunityColumn = true
+      if (Array.isArray(candidateRows) && candidateRows.length > 0) {
+        rows = candidateRows
+        break
+      }
+    } catch (error) {
+      if (!isMissingGrantOpportunityColumn(error, column)) throw error
+    }
+  }
+  const candidates = foundOpportunityColumn && Array.isArray(rows) ? rows : []
   return candidates.find((row) => isHamiltonProtectedPipelineStage(row?.status))
     || candidates[0]
     || null

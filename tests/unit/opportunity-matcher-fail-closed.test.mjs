@@ -7,9 +7,16 @@ const profileContext = {
   profile: {
     id: 'profile-1',
     primary_type: 'student',
+    applicant_type: 'college_student',
+    state: 'TN',
     needs: ['education'],
+    categories: ['education'],
+    keywords: ['student', 'scholarship', 'education'],
   },
-  sections: {},
+  sections: {
+    basic_information: { state: 'TN', profile_category: 'college_student' },
+    education: { current_student: true },
+  },
 }
 
 test('canonical writer refuses resource rows instead of creating pipeline applications', async () => {
@@ -42,11 +49,19 @@ test('canonical writer fails closed when dismissal state cannot be checked', asy
     {
       id: 'grant-1',
       title: 'Education Award',
-      source: 'grants_gov',
+      source: 'scholarship_crawler',
+      record_origin: 'verified_real',
+      source_trust_tier: 'verified',
       opportunity_kind: 'GRANT',
+      opportunity_type: 'scholarship',
       need_types_supported: ['education'],
+      entity_types_allowed: ['individual', 'student'],
+      categories: ['education'],
+      keywords: ['student', 'scholarship', 'education'],
+      eligibility_text: 'Individual college students with education expenses may apply.',
+      state: 'TN',
       amount_max: 1000,
-      application_url: 'https://www.grants.gov/example',
+      application_url: 'https://example.org/education-award',
     },
     'profile-1',
     profileContext,
