@@ -169,14 +169,15 @@ describe('enforcePipelinePrecision — the boot net for the three conjuncts', ()
   })
 })
 
-describe('enforcePipelinePrecision — silence is neutral and REPORTED', () => {
-  it('a profile that declares NO needs never loses a row to the need gate, and is counted', async () => {
+describe('enforcePipelinePrecision — silence FAILS and is REPORTED', () => {
+  it('a profile that declares NO needs fails the need gate; rows are removed and counted', async () => {
     const { sqlite, db } = seed(ROWS.filter((r) => r.id === 'legal' || r.id === 'pell'), { declareNeeds: false })
     const res = await enforcePipelinePrecision(db)
     expect(res.ok).toBe(true)
-    expect(res.byGate.covers_need).toBe(0)
-    expect(res.needNeutralProfile).toBe(2)
-    expect(grantIds(sqlite)).toEqual(['g-legal', 'g-pell'])
+    expect(res.byGate.covers_need).toBeGreaterThan(0)
+    expect(res.needNeutralProfile).toBe(0)
+    // Both rows should be removed by the need gate.
+    expect(grantIds(sqlite)).toEqual([])
   })
 
   it('skips LOUDLY (not green) when the catalog lacks the gate-evidence columns', async () => {
@@ -225,12 +226,12 @@ describe('pipelinePrecision — the shared declared-need predicate', () => {
     expect(bad.opportunity_needs).toEqual(['legal'])
   })
 
-  it('is neutral — and SAYS so — when either side is silent', () => {
+  it('fails when either side is silent (explicitly reported detail)', () => {
     const noProfile = evaluateDeclaredNeedCoverage({ categories: ['legal'] }, [])
-    expect(noProfile.pass).toBe(true)
+    expect(noProfile.pass).toBe(false)
     expect(noProfile.detail).toBe(NEED_COVERAGE_DETAIL.PROFILE_DECLARES_NO_NEEDS)
     const noRow = evaluateDeclaredNeedCoverage({ categories: [] }, ['education'])
-    expect(noRow.pass).toBe(true)
+    expect(noRow.pass).toBe(false)
     expect(noRow.detail).toBe(NEED_COVERAGE_DETAIL.OPPORTUNITY_STATES_NO_NEEDS)
   })
 })

@@ -4,7 +4,7 @@ import { SURFACED_MATCHER_VERSIONS_SQL } from '../../config/matchSurfacing.js'
 import { isPointerKind } from '../../config/opportunityKindClasses.js'
 import { isClearlyExpiredProgram, SEARCH_SURFACE_TITLE_RX, aggregatorBrandSurface } from '../../config/fundingResultFilters.js'
 
-const ALLOWED_MATCH_DECISIONS = new Set(['accept', 'review'])
+const ALLOWED_MATCH_DECISIONS = new Set(['accept'])
 const PROFILE_MATCH_REQUIRED_ORIGINS = new Set(['live_crawl', 'geo_crawl', 'discovered'])
 const TERMINAL_TASK_STATUSES = new Set(['submitted', 'completed', 'cancelled'])
 const TRUST_BLOCK_FLAGS = new Set([
@@ -296,7 +296,7 @@ export async function assessHamiltonFundingSource(db, { profileId, opportunity =
     // computeLiveEngineDecision). Ask the engine LIVE before stopping.
     const live = await computeLiveEngineDecision(db, profileId, subject)
     const liveDecision = asLower(live?.decision)
-    if (liveDecision === 'accept' || liveDecision === 'review') {
+    if (liveDecision === 'accept') {
       return {
         ok: true,
         reasons: [],
@@ -311,6 +311,17 @@ export async function assessHamiltonFundingSource(db, { profileId, opportunity =
         },
         opportunityId,
         grantId: grant?.id || null,
+      }
+    }
+    if (liveDecision === 'review') {
+      const reasons = ['profile_match_not_accepted']
+      return {
+        ok: false,
+        code: 'funding_source_profile_not_accepted',
+        reasons,
+        trust,
+        match: { live: true, match_decision: 'review', match_explanation: live?.explanation ?? null },
+        message: buildPolicyMessage(reasons),
       }
     }
     if (liveDecision === 'reject') {
@@ -357,7 +368,7 @@ export async function assessHamiltonFundingSource(db, { profileId, opportunity =
   // it does not re-implement eligibility, and it only ever refuses on an
   // EXPLICIT hard mismatch (`review`/`pass` both continue).
   const applicantVerdict = await assessApplicantTypeForPolicy(db, profileId, subject)
-  if (applicantVerdict?.decision === 'mismatch') {
+  if (!applicantVerdict || applicantVerdict.decision !== 'pass') {
     const reasons = ['profile_match_rejected', `applicant_type:${applicantVerdict.reason}`]
     return {
       ok: false,

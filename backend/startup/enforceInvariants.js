@@ -5381,7 +5381,7 @@ export async function enforcePipelinePrecision(db) {
     try { await db.prepare('SELECT id FROM application_tasks LIMIT 1').get(); hasTasks = true } catch { hasTasks = false }
 
     const counts = {
-      scanned: 0, kept: 0, removed: 0, relabeled: 0, failed: 0, tasksCancelled: 0,
+      scanned: 0, kept: 0, removed: 0, relabeled: 0, failed: 0, tasksCancelled: 0, matchesRemoved: 0,
       protectedProfilesSkipped: 0, needNeutralProfile: 0, needNeutralRow: 0,
       harvestFirst: 0, truncated: false, loadFailures: 0, firstLoadError: null,
     }
@@ -5400,10 +5400,13 @@ export async function enforcePipelinePrecision(db) {
         return new Map((rows || []).map((r) => [String(r.id), Number(r.amount_awarded) || 0]))
       } catch { return new Map() }
     }
+    // Pipeline-precision-specific protected statuses: irreversible outcomes only.
+    const PIPELINE_PRECISION_PROTECTED = new Set([
+      'submitted', 'awarded', 'declined', 'follow_up', 'in_review', 'under_review', 'archived',
+    ])
     const isProtectedRow = (row, awarded) => {
       const status = row.grant_status === null || row.grant_status === undefined ? null : String(row.grant_status).toLowerCase()
-      if (status && PROTECTED_PIPELINE_STATUSES.includes(status)) return true
-      if (PROTECTED_NAME_PATTERN.test(`${row.title ?? ''} ${row.sponsor ?? ''}`)) return true
+      if (status && PIPELINE_PRECISION_PROTECTED.has(status)) return true
       if ((awarded.get(String(row.grant_id)) || 0) > 0) return true
       return false
     }
@@ -5489,6 +5492,32 @@ export async function enforcePipelinePrecision(db) {
             byGate[failedGate] = (byGate[failedGate] || 0) + 1
             byReason[reasonKey] = (byReason[reasonKey] || 0) + 1
             affectedProfiles.add(profileId)
+            // Cancel any non-terminal Hamilton tasks backing this protected-but-failing row.
+            if (hasTasks && cancelApplicationTask) {
+              try {
+                const ph = TERMINAL_TASK_STATUSES.map(() => '?').join(', ')
+                const taskRows = await db
+                  .prepare(`SELECT id FROM application_tasks WHERE profile_id = ? AND grant_id = ? AND (status IS NULL OR status NOT IN (${ph}))`)
+                  .all(profileId, row.grant_id, ...TERMINAL_TASK_STATUSES)
+                for (const t of taskRows || []) {
+                  try {
+                    await cancelApplicationTask(db, t.id, { actorRole: 'system', reason: `Pipeline precision — ${reasonKey}` })
+                    counts.tasksCancelled += 1
+                  } catch (err) {
+                    log.warn('pipeline_precision: task cancel failed (non-fatal)', { task: t.id, error: String(err?.message || err) })
+                  }
+                }
+              } catch { /* best-effort across schema drift */ }
+            }
+            // Suppress resurrecting matches so Hamilton does not re-pick this source.
+            try {
+              if (row.funding_opportunity_id) {
+                const del = await db
+                  .prepare('DELETE FROM profile_opportunity_matches WHERE profile_id = ? AND opportunity_id = ?')
+                  .run(profileId, row.funding_opportunity_id)
+                counts.matchesRemoved += changesOf(del) || 0
+              }
+            } catch { /* match table may be absent */ }
           } catch (err) {
             counts.failed += 1
             log.warn('pipeline_precision: re-label failed (non-fatal)', { grant: row.grant_id, error: String(err?.message || err) })
@@ -5539,6 +5568,15 @@ export async function enforcePipelinePrecision(db) {
           byReason[reasonKey] = (byReason[reasonKey] || 0) + 1
           affectedProfiles.add(profileId)
           if (examples.length < 5) examples.push(`${row.title} [${reasonKey}]`)
+          // Also remove any persisted surfaced match rows for this pair.
+          try {
+            if (row.funding_opportunity_id) {
+              const del = await db
+                .prepare('DELETE FROM profile_opportunity_matches WHERE profile_id = ? AND opportunity_id = ?')
+                .run(profileId, row.funding_opportunity_id)
+              counts.matchesRemoved += changesOf(del) || 0
+            }
+          } catch { /* optional across schema drift */ }
         } catch (err) {
           counts.failed += 1
           log.warn('pipeline_precision: removal failed (non-fatal)', { grant: row.grant_id, error: String(err?.message || err) })
@@ -5565,8 +5603,24 @@ export async function enforcePipelinePrecision(db) {
       log.warn('pipeline_precision: removed nothing', { scanned: counts.scanned, kept: counts.kept, profiles: profileIds.length })
     } else {
       log.info('pipeline_precision: converged profile pipelines', {
-        ...counts, byGate, byReason, profilesAffected: affectedProfiles.size, examples,
+        ...counts, byGate, byReason, profilesAffected: affectedProfiles.size, examples, timestamp: new Date().toISOString(),
       })
+      // Persist a lightweight last-run summary for deployment visibility.
+      try {
+        await db.prepare(
+          `INSERT INTO system_kv (key, value, updated_at)
+           VALUES ('pipeline_precision_last_run', ?, ?)
+           ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`,
+        ).run(JSON.stringify({
+          scanned: counts.scanned,
+          removed: counts.removed,
+          relabeled: counts.relabeled,
+          tasksCancelled: counts.tasksCancelled,
+          matchesRemoved: counts.matchesRemoved,
+          truncated: counts.truncated,
+          timestamp: new Date().toISOString(),
+        }), new Date().toISOString())
+      } catch { /* kv table may not exist on minimal schemas */ }
     }
     return {
       ...counts,

@@ -721,6 +721,28 @@ export async function automateSingleSource(db, {
       },
     }
   }
+  // Any other policy refusal (expired, trust/disallowed, not accepted, missing match)
+  // MUST skip before task creation and close any existing idle task.
+  if (eligibility && eligibility.ok === false) {
+    const closedTasks = await closeExistingTasksForRefusedSource(db, {
+      profileId: resolvedProfileId,
+      opportunityId,
+      grantId,
+      reason: eligibility.code || 'funding_source_disallowed',
+      message: eligibility.message || 'Funding source does not meet automation policy.',
+    })
+    return {
+      task: null,
+      skipped: true,
+      reason: eligibility.code || 'funding_source_disallowed',
+      closed_tasks: closedTasks,
+      policy: {
+        code: eligibility.code || 'funding_source_disallowed',
+        reasons: eligibility.reasons || [],
+        message: eligibility.message || null,
+      },
+    }
+  }
 
   const classification = classifyFundingSource({
     opportunity,

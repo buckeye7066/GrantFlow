@@ -154,15 +154,15 @@ describe('Hamilton task-creation eligibility gate', () => {
     expect(await taskCount(db)).toBe(0)
   })
 
-  it('still ADMITS a REVIEW verdict — missing facts stay neutral (G4)', async () => {
+  it('REFUSES a REVIEW verdict — positive ACCEPT required', async () => {
     await storeDecision(db, 'review')
     const r = await automateSingleSource(db, {
       profileId: PROFILE,
       source: { grant_id: 'g-restricted' },
     })
-    expect(r.skipped).not.toBe(true)
-    expect(r.task?.id).toBeTruthy()
-    expect(await taskCount(db)).toBe(1)
+    expect(r.skipped).toBe(true)
+    expect(r.task).toBeNull()
+    expect(await taskCount(db)).toBe(0)
   })
 
   it('still ADMITS a source with NO stored verdict at all', async () => {
