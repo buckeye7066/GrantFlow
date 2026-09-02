@@ -28,7 +28,12 @@ import {
   clearDismissal,
   buildDismissalKey,
   countDismissals,
+  reconcileDismissedGrants,
 } from '../../backend/services/pipelineDismissals.js'
+import {
+  ensureApplicationTaskSchema,
+  _resetSchemaCache as resetApplicationTaskSchemaCache,
+} from '../../backend/services/hamilton/applicationTaskStore.js'
 
 import { saveToProfilePipeline } from '../../backend/services/opportunityMatcher.js'
 
@@ -292,4 +297,86 @@ test('opportunityMatcher: dismissed opportunities are NOT re-added by saveToProf
   const second = await saveToProfilePipeline(db, opp, 'p_demo_student', profileContext, 90, 50)
   assert.equal(second.saved, false, 'previously-dismissed opportunity must not be re-added')
   assert.equal(second.gate, 'DISMISSED', `expected DISMISSED gate, got: ${second.gate}; reason: ${second.reason}`)
+})
+
+
+test('reconcileDismissedGrants cancels open Hamilton tasks before deleting grants', async () => {
+  const db = createTestDb()
+  resetApplicationTaskSchemaCache()
+  await ensureApplicationTaskSchema(db)
+
+  db.prepare(`
+    INSERT INTO grants (
+      id, organization_id, profile_id, funding_opportunity_id, title, funder,
+      status, fingerprint
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    'grant-orphan-proof',
+    'org_demo_student',
+    'p_demo_student',
+    'opp-orphan-proof',
+    'Education Award',
+    'Example Foundation',
+    'interested',
+    'fp-orphan-proof',
+  )
+  db.prepare(`
+    INSERT INTO application_tasks (id, profile_id, grant_id, status)
+    VALUES (?, ?, ?, ?)
+  `).run('task-orphan-proof', 'p_demo_student', 'grant-orphan-proof', 'ready_to_start')
+
+  await recordDismissal(db, {
+    profileId: 'p_demo_student',
+    grantRow: {
+      id: 'grant-orphan-proof',
+      profile_id: 'p_demo_student',
+      funding_opportunity_id: 'opp-orphan-proof',
+      title: 'Education Award',
+      funder: 'Example Foundation',
+      fingerprint: 'fp-orphan-proof',
+    },
+    reason: 'pipeline_precision:qualifies:mismatch',
+  })
+
+  const removed = await reconcileDismissedGrants(db)
+  assert.equal(removed, 1)
+  assert.equal(db.prepare('SELECT 1 FROM grants WHERE id = ?').get('grant-orphan-proof'), undefined)
+  const task = db.prepare('SELECT status FROM application_tasks WHERE id = ?').get('task-orphan-proof')
+  assert.equal(task.status, 'cancelled')
+})
+
+test('duplicate tombstone title fallback does not delete the surviving twin', async () => {
+  const db = createTestDb()
+  db.prepare(`
+    INSERT INTO grants (
+      id, organization_id, profile_id, funding_opportunity_id, title, funder,
+      status, fingerprint
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    'grant-kept-twin',
+    'org_demo_student',
+    'p_demo_student',
+    'opp-kept-twin',
+    'Pell Grant',
+    'U.S. Department of Education',
+    'interested',
+    'fp-kept-twin',
+  )
+
+  await recordDismissal(db, {
+    profileId: 'p_demo_student',
+    grantRow: {
+      id: 'grant-losing-twin',
+      profile_id: 'p_demo_student',
+      funding_opportunity_id: 'opp-losing-twin',
+      title: 'Pell Grant',
+      funder: 'U.S. Department of Education',
+      fingerprint: 'fp-losing-twin',
+    },
+    reason: 'pipeline_precision:duplicate:duplicate',
+  })
+
+  const removed = await reconcileDismissedGrants(db)
+  assert.equal(removed, 0)
+  assert.ok(db.prepare('SELECT 1 FROM grants WHERE id = ?').get('grant-kept-twin'))
 })
