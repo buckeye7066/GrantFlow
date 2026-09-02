@@ -77,6 +77,10 @@ import { trustedOriginClause, trustedSourceClause } from '../utils/recordOrigins
 import { normalizeState, statesMatch } from '../utils/stateNormalization.js'
 import { scoreOpportunity, computeMatchDecision } from './matchEngine.js'
 import { loadProfileContext } from './profileHelpers.js'
+import {
+  loadAnyaProfileSnapshot,
+  ANYA_PROFILE_TOOL_MAX_CHARS,
+} from './anyaProfileVisibility.js'
 import { searchWeb } from './shared/webSearchEngine.js'
 import { searchLocalWebByProfile } from './shared/liveWebSearch.js'
 import { syncProfileFieldsFromSection } from '../utils/profileSectionSync.js'
@@ -312,7 +316,8 @@ function daysUntil(deadline) {
 
 function ensureProfileAccess(ctx, profileId) {
   if (!profileId) return false
-  if (!ctx || !ctx.userId) return false
+  const authenticatedIdentity = ctx?.userId ?? ctx?.id ?? ctx?.user_id ?? ctx?.email ?? null
+  if (!authenticatedIdentity) return false
   if (ctx.isAdmin) return true
   if (ctx.accessibleProfileIds instanceof Set) {
     return ctx.accessibleProfileIds.has(String(profileId))
@@ -791,6 +796,16 @@ export async function invokeTool(name, params, context) {
 
   const tool = tools.get(name)
 
+  // Owner authority is independent of admin-tool visibility. Several owner
+  // tools intentionally use requiresOwner without requiresAdmin, so enforcing
+  // this only inside the admin branch would let a caller bypass the hidden
+  // schema by invoking a known owner tool id directly.
+  if (tool.requiresOwner && !isOwnerCaller(context)) {
+    const error = new Error(`Tool "${name}" is restricted to the owner account`)
+    error.status = 403
+    throw error
+  }
+
   // Check admin access: prefer the already-resolved ctx.isAdmin (DB-backed,
   // canonical from requestContext middleware) before falling back to a fresh DB lookup.
   if (tool.requiresAdmin) {
@@ -822,15 +837,6 @@ export async function invokeTool(name, params, context) {
 
     if (!isAdmin) {
       const error = new Error(`Tool "${name}" requires admin privileges`)
-      error.status = 403
-      throw error
-    }
-
-    // HARD owner gate (stricter than admin): these powers run other agents /
-    // edit data / crawl, so only the owner account may invoke them — enforced
-    // server-side here, not just hidden from the tool list.
-    if (tool.requiresOwner && !isOwnerCaller(context)) {
-      const error = new Error(`Tool "${name}" is restricted to the owner account`)
       error.status = 403
       throw error
     }
@@ -1617,6 +1623,52 @@ registerTool({
       message: unset
         ? `Done — ${target.name} is back to "planning" and all schools' funding cards are visible in the feed again.`
         : `Done — ${target.name} is marked as the school you are attending. Other still-active applications were moved to "deferred", and the funding feed is now scoped to ${target.name}.`,
+    }
+  },
+})
+
+registerTool({
+  name: 'profile.getSnapshot',
+  description: 'Read the access-scoped canonical profile facts Anya needs to answer or complete a profile task. Returns every non-empty fact that fits, names any omitted sections, redacts credentials, and can be called again for specific sectionKeys.',
+  schema: {
+    type: 'object',
+    properties: {
+      profileId: { type: 'string', description: 'The profile ID to read.' },
+      sectionKeys: {
+        type: 'array',
+        description: 'Optional section keys to read in full after the preload reports them as truncated.',
+        items: { type: 'string' },
+        maxItems: 12,
+      },
+    },
+    required: ['profileId'],
+    additionalProperties: false,
+  },
+  handler: async (params, context) => {
+    if (!context?.db) throw new Error('Database connection unavailable')
+    const ctx = context?.ctx
+    const profileId = String(params?.profileId || '').trim()
+    if (!profileId) throw new Error('profileId is required')
+    if (!ensureProfileAccess(ctx, profileId)) {
+      const error = new Error('Not authorized to view this profile')
+      error.status = 403
+      throw error
+    }
+
+    const sectionKeys = Array.isArray(params?.sectionKeys)
+      ? [...new Set(params.sectionKeys.map((key) => String(key).trim()).filter(Boolean))].slice(0, 12)
+      : null
+    const snapshot = await loadAnyaProfileSnapshot(context.db, profileId, {
+      sectionKeys,
+      maxChars: ANYA_PROFILE_TOOL_MAX_CHARS,
+    })
+    return {
+      ...snapshot,
+      guidance: snapshot.truncated_sections.length > 0
+        ? `Call profile.getSnapshot again with sectionKeys: ${snapshot.truncated_sections.join(', ')} before answering about those sections.`
+        : snapshot.truncated_components.length > 0
+          ? `Use the section facts returned here. The bounded snapshot compacted: ${snapshot.truncated_components.join(', ')}.`
+          : 'Use these facts directly. Never ask the user to repeat a fact that is present here.',
     }
   },
 })
@@ -3235,7 +3287,8 @@ registerTool({
   name: 'admin.anya.runCrawlers',
   description:
     'Run the Crawler OS discovery pipeline (runProfileDiscoveryLive) for all active profiles or ' +
-    'specific ones. Saves opportunities + matches directly to the live tables. Admin only. ' +
+    'specific ones after an admin explicitly asks to run discovery. Saves opportunities + matches ' +
+    'directly to the live tables. Admin only. A status or planning question is not permission to run it. ' +
     '(2026-06-23 cutover: the legacy local/scholarship/curated_benefits/comprehensive/' +
     'profile_enrichment job-type fleet is retired — crawlerTypes/maxRetries/waitForCompletion/' +
     'timeoutMinutes are no longer read by the handler and have been removed from this schema; ' +

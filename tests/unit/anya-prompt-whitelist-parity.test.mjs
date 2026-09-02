@@ -16,7 +16,7 @@ import {
   buildAnyaSystemPrompt,
   resolveAnyaActiveProfileId,
 } from '../../backend/services/anyaOrchestrator.js'
-import { listToolMetadata } from '../../backend/services/anyaToolRegistry.js'
+import { invokeTool, listToolMetadata } from '../../backend/services/anyaToolRegistry.js'
 
 test('the prompt callable-tools list is exactly the chat whitelist (no drift)', () => {
   const docNames = CHAT_CALLABLE_TOOL_DOCS.map(([name]) => name)
@@ -41,6 +41,24 @@ test('each advertised callable tool has a non-empty description', () => {
       `missing description for advertised tool: ${name}`,
     )
   }
+})
+
+test('the system prompt advertises only tools available to the authenticated role', () => {
+  const ordinaryPrompt = buildAnyaSystemPrompt(false)
+  assert.match(ordinaryPrompt, /- profile\.getSnapshot:/)
+  assert.doesNotMatch(ordinaryPrompt, /- admin\.crawler\.run:/)
+  assert.doesNotMatch(ordinaryPrompt, /- owner\.get_self_heal_status:/)
+
+  const adminPrompt = buildAnyaSystemPrompt(true, [
+    'profile.getSnapshot',
+    'admin.anya.runCrawlers',
+    'admin.crawler.run',
+  ])
+  assert.match(adminPrompt, /- profile\.getSnapshot:/)
+  assert.match(adminPrompt, /- admin\.anya\.runCrawlers:/)
+  assert.match(adminPrompt, /- admin\.crawler\.run:/)
+  assert.doesNotMatch(adminPrompt, /- admin\.db\.query:/)
+  assert.doesNotMatch(adminPrompt, /- owner\.get_self_heal_status:/)
 })
 
 test('profile and page values stay in an explicitly untrusted user-role context block', () => {
@@ -70,8 +88,86 @@ test('Anya context is bounded before it reaches a provider', () => {
   )
 
   assert.equal(messages[0].role, 'user')
-  assert.ok(messages[0].content.length < 12_500)
-  assert.match(messages[0].content, /application context truncated/)
+  assert.ok(messages[0].content.length < 46_000)
+  const encoded = messages[0].content.match(
+    /<application_context_json>\n([\s\S]*?)\n<\/application_context_json>/,
+  )?.[1]
+  const context = JSON.parse(encoded)
+  assert.equal(context.current_page.snapshot, null)
+  assert.equal(context.current_page.snapshot_omitted_for_context_budget, true)
+  assert.match(context.context_notice, /profile facts/i)
+})
+
+test('large page state cannot push late canonical profile sections out of context', () => {
+  const messages = buildAnyaModelMessages([], {
+    active_profile: {
+      profile: { display_name: 'Demo Applicant' },
+      available_sections: ['basic_information', 'medical_history'],
+      sections: {
+        basic_information: { age: 42 },
+        medical_history: { dme_needed: ['portable oxygen concentrator'] },
+      },
+    },
+    current_page: { name: 'Profile', snapshot: { text: 'x'.repeat(50_000) } },
+  })
+  const encoded = messages[0].content.match(
+    /<application_context_json>\n([\s\S]*?)\n<\/application_context_json>/,
+  )?.[1]
+  const context = JSON.parse(encoded)
+  assert.deepEqual(
+    context.active_profile.sections.medical_history.dme_needed,
+    ['portable oxygen concentrator'],
+  )
+})
+
+test('profile visibility is user-scoped while operational powers are admin-only', () => {
+  const ordinary = new Set(
+    listToolMetadata({ isAdmin: false, userId: 'ordinary-user' }).map((tool) => tool.name),
+  )
+  const admin = new Set(
+    listToolMetadata({ isAdmin: true, userId: 'admin-user', email: 'admin@grantflow.local' })
+      .map((tool) => tool.name),
+  )
+  assert.ok(ordinary.has('profile.getSnapshot'))
+
+  for (const name of [
+    'admin.anya.runCrawlers',
+    'admin.crawler.run',
+    'admin.crawler.triggerAll',
+    'admin.crawler.retry',
+    'admin.crawler.cancel',
+    'admin.db.query',
+    'admin.db.stats',
+    'admin.health.check',
+    'admin.health.logs',
+    'admin.diagnostics',
+    'admin.code.crawl',
+    'admin.code.analyze',
+    'admin.code.scan',
+  ]) {
+    assert.equal(ordinary.has(name), false, `${name} leaked to a non-admin`)
+    assert.equal(admin.has(name), true, `${name} missing for a DB-backed admin`)
+  }
+})
+
+test('admin mutation tools require an explicit admin request in the prompt contract', () => {
+  const prompt = buildAnyaSystemPrompt(true)
+  assert.match(
+    prompt,
+    /Mutation rule: call run\/retry\/cancel\/trigger tools only after the admin explicitly asks/,
+  )
+  assert.match(prompt, /admin\.anya\.runCrawlers:[^\n]+explicit admin request/)
+})
+
+test('a hidden owner tool cannot be invoked directly by a non-owner', async () => {
+  await assert.rejects(
+    invokeTool('owner.get_self_heal_status', {}, {
+      ctx: { isAdmin: true, email: 'not-the-owner@example.com' },
+      user: { isAdmin: true, email: 'not-the-owner@example.com' },
+      db: {},
+    }),
+    (error) => error?.status === 403 && /owner account/i.test(error?.message),
+  )
 })
 
 test('client page context cannot move a non-admin tool call to an inaccessible profile', () => {
