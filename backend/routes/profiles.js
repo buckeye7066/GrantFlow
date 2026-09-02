@@ -538,9 +538,10 @@ async function enrichProfileWithSummary(db, profile) {
     const row = await db
       .prepare(
         `
-        SELECT COALESCE(SUM(${pipelineValueSql('g')}), 0) as total,
-               COALESCE(${unvaluedCountSql('g')}, 0) as unvalued
+        SELECT COALESCE(SUM(${pipelineValueSql('g', 'fo.opportunity_kind')}), 0) as total,
+               COALESCE(${unvaluedCountSql('g', 'fo.opportunity_kind')}, 0) as unvalued
         FROM grants g
+        LEFT JOIN funding_opportunities fo ON fo.id = g.funding_opportunity_id
         WHERE g.profile_id = ?
           AND g.status IN (${placeholders})
       `,
@@ -559,9 +560,10 @@ async function enrichProfileWithSummary(db, profile) {
       const row = await db
         .prepare(
           `
-          SELECT COALESCE(SUM(${pipelineValueSql('g')}), 0) as total,
-                 COALESCE(${unvaluedCountSql('g')}, 0) as unvalued
+          SELECT COALESCE(SUM(${pipelineValueSql('g', 'fo.opportunity_kind')}), 0) as total,
+                 COALESCE(${unvaluedCountSql('g', 'fo.opportunity_kind')}, 0) as unvalued
           FROM grants g
+          LEFT JOIN funding_opportunities fo ON fo.id = g.funding_opportunity_id
           WHERE g.organization_id = ?
             AND g.status IN (${placeholders})
         `,
@@ -2034,7 +2036,7 @@ router.get('/:id', async (req, res) => {
   try {
     const pipelineRow = await req.db
       .prepare(
-        `SELECT COALESCE(SUM(${pipelineValueSql('g')}), 0) as total, COALESCE(${unvaluedCountSql('g')}, 0) as unvalued FROM grants g WHERE g.profile_id = ? AND g.status IN (${pipelinePlaceholders})`,
+        `SELECT COALESCE(SUM(${pipelineValueSql('g', 'fo.opportunity_kind')}), 0) as total, COALESCE(${unvaluedCountSql('g', 'fo.opportunity_kind')}, 0) as unvalued FROM grants g LEFT JOIN funding_opportunities fo ON fo.id = g.funding_opportunity_id WHERE g.profile_id = ? AND g.status IN (${pipelinePlaceholders})`,
       )
       .get(row.id, ...activeStatuses)
     pipelineTotal = pipelineRow?.total ?? 0
@@ -2048,7 +2050,7 @@ router.get('/:id', async (req, res) => {
     try {
       const pipelineRow = await req.db
         .prepare(
-          `SELECT COALESCE(SUM(${pipelineValueSql('g')}), 0) as total, COALESCE(${unvaluedCountSql('g')}, 0) as unvalued FROM grants g WHERE g.organization_id = ? AND g.status IN (${pipelinePlaceholders})`,
+          `SELECT COALESCE(SUM(${pipelineValueSql('g', 'fo.opportunity_kind')}), 0) as total, COALESCE(${unvaluedCountSql('g', 'fo.opportunity_kind')}, 0) as unvalued FROM grants g LEFT JOIN funding_opportunities fo ON fo.id = g.funding_opportunity_id WHERE g.organization_id = ? AND g.status IN (${pipelinePlaceholders})`,
         )
         .get(row.organization_id, ...activeStatuses)
       pipelineTotal = pipelineRow?.total ?? 0
@@ -2068,7 +2070,7 @@ router.get('/:id', async (req, res) => {
   try {
     const pipelineCountRow = await req.db
       .prepare(
-        `SELECT COUNT(*) as total FROM grants g WHERE g.profile_id = ? AND g.status IN (${pipelinePlaceholders})`,
+        `SELECT COUNT(*) as total FROM grants g LEFT JOIN funding_opportunities fo ON fo.id = g.funding_opportunity_id WHERE g.profile_id = ? AND g.status IN (${pipelinePlaceholders})`,
       )
       .get(row.id, ...activeStatuses)
     pipelineCount = pipelineCountRow?.total ?? 0
@@ -2078,7 +2080,7 @@ router.get('/:id', async (req, res) => {
       try {
         const pipelineCountRow = await req.db
           .prepare(
-            `SELECT COUNT(*) as total FROM grants g WHERE g.organization_id = ? AND g.status IN (${pipelinePlaceholders})`,
+            `SELECT COUNT(*) as total FROM grants g LEFT JOIN funding_opportunities fo ON fo.id = g.funding_opportunity_id WHERE g.organization_id = ? AND g.status IN (${pipelinePlaceholders})`,
           )
           .get(row.organization_id, ...activeStatuses)
         pipelineCount = pipelineCountRow?.total ?? 0
@@ -2163,6 +2165,7 @@ router.get('/:id/pipeline-potential', async (req, res) => {
       .prepare(
         `SELECT g.id, g.title, g.funder, g.status, g.deadline,
                 g.amount_requested, g.amount_min, g.amount_max,
+                g.eligibility_status, g.match_decision, fo.opportunity_kind,
                 COALESCE(g.amount_text, fo.amount_text) AS amount_text,
                 COALESCE(g.amount_status, fo.amount_status) AS amount_status,
                 g.notes, fo.description AS opportunity_description,
@@ -2191,6 +2194,10 @@ router.get('/:id/pipeline-potential', async (req, res) => {
         amount_requested: g.amount_requested ?? null,
         amount_min: g.amount_min ?? null,
         amount_max: g.amount_max ?? null,
+        eligibility_status: g.eligibility_status ?? null,
+        match_decision: g.match_decision ?? null,
+        opportunity_kind: g.opportunity_kind ?? null,
+        pipeline_value: grantPipelineValue(g),
         // A fuller description for the printable packet (still capped).
         description: desc ? String(desc).slice(0, 600) : null,
         // Contact + how-to-apply, so the printout stands on its own.

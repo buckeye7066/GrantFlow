@@ -131,13 +131,10 @@ const PHASE_ORDER = ["Preparing", "Applied", "Approved"]
 // section sums to something meaningful even when a source has a range, not a
 // single requested figure).
 function estimatedValue(item) {
-  const req = Number(item?.amount_requested)
-  if (Number.isFinite(req) && req > 0) return req
-  const max = Number(item?.amount_max)
-  if (Number.isFinite(max) && max > 0) return max
-  const min = Number(item?.amount_min)
-  if (Number.isFinite(min) && min > 0) return min
-  return 0
+  // The API owns pipeline-dollar semantics; this field already excludes
+  // ineligible/rejected/resource rows and wide program-envelope ceilings.
+  const canonical = Number(item?.pipeline_value)
+  return Number.isFinite(canonical) && canonical > 0 ? canonical : 0
 }
 
 // Human contact + how-to-apply lines for a source, present-fields only.

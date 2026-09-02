@@ -52,8 +52,19 @@ const usdCompact = new Intl.NumberFormat("en-US", {
 
 // Best-estimate dollar value for a grant card (requested → max → min → amount).
 function grantValue(grant) {
-  const candidates = [grant?.amount_requested, grant?.amount_awarded, grant?.amount_max, grant?.amount_min, grant?.amount];
-  for (const raw of candidates) {
+  if (String(grant?.eligibility_status ?? '').toLowerCase() === 'ineligible') return 0;
+  if (String(grant?.match_decision ?? '').toUpperCase() === 'REJECT') return 0;
+  if (['directory', 'referral', 'school_portal', 'past_award_intel', 'benefit']
+    .includes(String(grant?.opportunity_kind ?? '').toLowerCase())) return 0;
+
+  const requested = Number(grant?.amount_requested);
+  const min = Number(grant?.amount_min);
+  const max = Number(grant?.amount_max);
+  const wide = Number.isFinite(min) && min > 0 && Number.isFinite(max) &&
+    max > min && max > min * 10;
+  if (Number.isFinite(requested) && requested > 0 && !(wide && requested === max)) return requested;
+  if (wide) return min;
+  for (const raw of [grant?.amount_awarded, grant?.amount_max, grant?.amount_min, grant?.amount]) {
     const n = Number(raw);
     if (Number.isFinite(n) && n > 0) return n;
   }
