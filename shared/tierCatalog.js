@@ -41,6 +41,18 @@ export const CAPABILITY_LABELS = Object.freeze({
   },
 })
 
+/**
+ * Capability add-ons are durable account entitlements, not shadow tiers. Prices
+ * are intentionally absent here: a price must come from a versioned quote or
+ * verified Stripe/service purchase, while this catalog owns only the stable
+ * capability vocabulary and customer-facing meaning.
+ */
+export const ADDON_CATALOG = Object.freeze([
+  Object.freeze({ id: 'document_ai', capability_key: CAPABILITY_KEYS.DOCUMENT_AI, label: CAPABILITY_LABELS.enable_document_ai.label, plain: CAPABILITY_LABELS.enable_document_ai.plain }),
+  Object.freeze({ id: 'item_funding', capability_key: CAPABILITY_KEYS.ITEM_FUNDING, label: CAPABILITY_LABELS.enable_item_funding.label, plain: CAPABILITY_LABELS.enable_item_funding.plain }),
+  Object.freeze({ id: 'pipeline_automation', capability_key: CAPABILITY_KEYS.PIPELINE_AUTOMATION, label: CAPABILITY_LABELS.enable_pipeline_automation.label, plain: CAPABILITY_LABELS.enable_pipeline_automation.plain }),
+])
+
 const cap = (documentAi, itemFunding, pipeline) => ({
   enable_document_ai: documentAi,
   enable_item_funding: itemFunding,
@@ -214,6 +226,7 @@ export function fullCatalog() {
   return {
     capability_keys: CAPABILITY_KEYS,
     capability_labels: CAPABILITY_LABELS,
+    addons: ADDON_CATALOG,
     tiers: publicPricingTiers(),
     discounts: DISCOUNTS,
   }

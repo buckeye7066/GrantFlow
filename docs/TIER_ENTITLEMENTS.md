@@ -58,6 +58,26 @@ of a tier**, never tiers themselves. Stored on `billing_accounts`
 catalog `DISCOUNTS` list (student 15%, minister 10%, hardship 15%, pro bono
 100%). An admin approves/sets them; `computeEffectiveBilling` applies them.
 
+### Capability add-ons
+
+An add-on grants exactly one canonical capability without inventing a shadow
+tier. Durable rows live in `billing_addon_entitlements`; every grant/revoke
+writes `billing_entitlement_events`. The public catalog publishes stable
+capability names and descriptions but no made-up prices: the price or waiver
+must come from a versioned quote, verified Stripe/service purchase, promotion,
+or explicit admin action.
+
+The effective decision is server-side and conjunctive:
+
+1. DB-backed admins bypass.
+2. The profile must not be suspended, blocked, banned, or deleted.
+3. A persisted pricing row, when present, must be `active_paid` or
+   `admin_waived`.
+4. An active promotion, the assigned tier, or a current add-on must grant the
+   requested capability.
+5. A DB/schema/read failure is `entitlement_authority_unavailable` and remains
+   locked; it is never treated as a missing tier or profile.
+
 ## 5. Seat → invoice amount
 
 `computeEffectiveBilling(db, profileId, account)`
@@ -79,7 +99,9 @@ returns `409 requires_confirmation`).
 
 Every premium endpoint resolves the profile's tier and checks the relevant flag
 via `requireTierCapability` / `enforceTierCapability` (routes) or
-`enforceCrawlerJobTier` (crawler jobs). Admins (`req.ctx.isAdmin`) bypass.
+`enforceCrawlerJobTier` (crawler jobs). These all delegate to the same tier,
+add-on, payment, profile-status, promotion, and DB-backed-admin decision.
+Admins (`req.ctx.isAdmin`) bypass.
 
 | Capability | Enforced at (examples) |
 |-----------|------------------------|
@@ -93,8 +115,8 @@ Frontend disabled buttons are **convenience only** — the server is authoritati
 
 - **`useTierEntitlements(profileId)`** (`src/hooks/useTierEntitlements.js`) is the
   one place the UI asks "what can this profile do?" — returns `tier`,
-  `capabilities`, `can(key)`, `locked[]`, `upgradeMessage(key)`, and
-  loading/error. Admins bypass. It supersedes the ad-hoc
+  `capabilities`, active `addons`, `can(key)`, `locked[]`,
+  `upgradeMessage(key)`, and loading/error. Admins bypass. It supersedes the ad-hoc
   `canUseFeature(billing, 'enable_x')` checks (migration of each page to the hook
   is ongoing — see verification report).
 - **`TierMatrix`** renders the plain-English "What your plan includes" comparison

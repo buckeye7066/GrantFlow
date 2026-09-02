@@ -484,19 +484,27 @@ class APIClient {
       if (!response.ok) {
         const errorBody = await response.json().catch(() => ({ error: response.statusText }));
 
-        if (response.status === 403 && errorBody?.error === 'Tier upgrade required') {
+        // Consistent UX for every backend-authoritative entitlement denial.
+        const entitlementDenials = {
+          tier_or_addon_required: 'Upgrade or add-on required',
+          payment_required: 'Payment required',
+          profile_access_paused: 'Profile access paused',
+          entitlement_authority_unavailable: 'Billing verification unavailable',
+        }
+        const entitlementTitle = entitlementDenials[errorBody?.error]
+        if (entitlementTitle && [402, 403, 423, 503].includes(response.status)) {
           try {
             if (typeof window !== 'undefined') {
               showToast({
-                title: 'Tier upgrade required',
+                title: entitlementTitle,
                 description:
                   typeof errorBody?.message === 'string' && errorBody.message.trim()
                     ? errorBody.message
-                    : 'Your current billing tier does not include this feature.',
+                    : 'This feature is locked until GrantFlow verifies the profile’s billing entitlement.',
               })
             }
           } catch {
-            // Non-blocking.
+            // Non-blocking: never fail a request due to toast rendering.
           }
         }
 

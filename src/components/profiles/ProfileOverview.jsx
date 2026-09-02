@@ -50,6 +50,7 @@ import { useDashboardPreferences } from "@/contexts/DashboardPreferencesContext.
 import { useSettingsStore } from "@/stores/settingsStore"
 import EditableField from "@/components/shared/EditableField.jsx"
 import { useAuthenticatedAvatar } from "@/hooks/useAuthenticatedAvatar"
+import { useTierEntitlements } from "@/hooks/useTierEntitlements"
 import { isRealProfileId } from "@/api/profileIdGuards"
 import ProfileGapGate from "./ProfileGapGate"
 import { isGapGateEnabled } from "@/lib/gapGateFlag"
@@ -1042,6 +1043,7 @@ export default function ProfileOverview({
   // dashboard-preferences context.
   const accentColor = useSettingsStore((s) => s.preferences?.accent_color)
   const theme = THEME_PRESETS[accentColor] ?? THEME_PRESETS.blue
+  const billingEntitlements = useTierEntitlements(profile?.id ?? null)
   const columnMap = {
     1: "md:grid-cols-1",
     2: "md:grid-cols-2",
@@ -1532,9 +1534,10 @@ export default function ProfileOverview({
             <div className="rounded-2xl border border-slate-200 bg-slate-50/80 p-4 space-y-2">
               <p className="text-xs font-medium uppercase tracking-wide text-slate-500">Capabilities</p>
               <ul className="text-xs text-slate-600 space-y-1">
-                {(billing.tier?.enable_pipeline_automation ? ["Pipeline automation insights"] : [])
-                  .concat(billing.tier?.enable_item_funding ? ["Item funding discovery"] : [])
-                  .concat(billing.tier?.enable_document_ai ? ["AI document enrichment"] : [])
+                {(billingEntitlements.capabilities.pipelineAutomation ? ["Pipeline automation insights"] : [])
+                  .concat(billingEntitlements.capabilities.itemFunding ? ["Item funding discovery"] : [])
+                  .concat(billingEntitlements.capabilities.documentAI ? ["AI document enrichment"] : [])
+                  .concat(billingEntitlements.addons.length > 0 ? [`${billingEntitlements.addons.length} active capability add-on${billingEntitlements.addons.length === 1 ? "" : "s"}`] : [])
                   .concat(billing.is_pro_bono ? ["Document time logged but not invoiced"] : [])
                   .concat(!billing.tier ? ["Awaiting tier assignment"] : [])
                   .map((item, index) => (
