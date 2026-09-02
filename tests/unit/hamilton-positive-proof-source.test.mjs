@@ -1,6 +1,10 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
+import {
+  bucketForTaskStatus,
+  partitionHamiltonTasks,
+} from '../../shared/hamiltonTaskLifecycle.js'
 
 const policySource = fs.readFileSync(
   new URL('../../backend/services/hamilton/hamiltonFundingSourcePolicy.js', import.meta.url),
@@ -22,8 +26,16 @@ const versionRouteSource = fs.readFileSync(
   new URL('../../backend/routes/version.js', import.meta.url),
   'utf8',
 )
+const startupSource = fs.readFileSync(
+  new URL('../../backend/startup/enforceInvariants.js', import.meta.url),
+  'utf8',
+)
 const watchSource = fs.readFileSync(
   new URL('../../src/pages/HamiltonAutomationWatch.jsx', import.meta.url),
+  'utf8',
+)
+const queueSource = fs.readFileSync(
+  new URL('../../src/components/hamilton/HamiltonAutomationQueue.jsx', import.meta.url),
   'utf8',
 )
 const triageSource = fs.readFileSync(
@@ -64,6 +76,8 @@ test('every Hamilton funding-policy refusal returns before task creation', () =>
 
   assert.match(automationRouteSource, /selectAutoSubmitSources[\s\S]*?const assessment = await assess\(db[\s\S]*?if \(assessment\.ok\) selected\.push/)
   assert.match(orchestratorSource, /childEligibility = await assessHamiltonFundingSource[\s\S]*?if \(!childEligibility\.ok\)[\s\S]*?const child = await ensureApplicationTask/)
+  assert.match(orchestratorSource, /childPolicyUnavailable > 0[\s\S]*?status: 'waiting_for_window'/)
+  assert.match(policySource, /tasks = await db\.prepare\([\s\S]*?FROM application_tasks/)
 })
 
 test('live queue, readiness metric, watch, and triage share current-task truth', () => {
@@ -71,14 +85,24 @@ test('live queue, readiness metric, watch, and triage share current-task truth',
   const endpointPartition = automationRouteSource.indexOf('const operational =', endpointAudit)
   assert.ok(endpointAudit > 0 && endpointPartition > endpointAudit, 'endpoint must reconcile before labeling operational tasks')
   assert.match(automationRouteSource, /tasks, current: operational, history, counts/)
-  assert.match(versionRouteSource, /auditUnfinishedHamiltonTasks\(db, \{ enforce: false/)
-  assert.match(versionRouteSource, /by_bucket: sanitizeCountMap\(live\?\.byBucket\)/)
+  assert.doesNotMatch(versionRouteSource, /auditUnfinishedHamiltonTasks/)
+  assert.match(versionRouteSource, /verificationTaskAudit \?\? parsed\.taskAudit/)
   assert.match(versionRouteSource, /evaluator\.invalid === 0/)
-  assert.match(versionRouteSource, /numeric_live_task_truth_v2/)
-  assert.match(watchSource, /setTasks\(Array\.isArray\(res\?\.current\)/)
-  assert.match(watchSource, /setHistory\(Array\.isArray\(res\?\.history\)/)
+  assert.match(versionRouteSource, /numeric_boot_verified_task_truth_v3/)
+  assert.match(startupSource, /verificationTaskAudit = await auditUnfinishedHamiltonTasks/)
+  assert.match(startupSource, /'pipeline_precision_last_run'/)
+  assert.match(watchSource, /partitionHamiltonTasks\(res\)/)
+  assert.match(queueSource, /partitionHamiltonTasks\(res\)/)
   assert.match(watchSource, /No unfinished Hamilton work\./)
-  assert.match(triageSource, /\.\.\.\(payload\?\.current \|\| payload\?\.items \|\| \[\]\)/)
-  assert.match(triageSource, /\.\.\.\(payload\?\.history \|\| \[\]\)/)
+  assert.match(triageSource, /partitionHamiltonTasks\(res\)/)
   assert.match(triageSource, /bucketForTaskStatus\(t\?\.status\) === 'finished'/)
+
+  for (const status of ['complete', 'done', 'canceled', 'archived', 'rejected', 'closed']) {
+    assert.equal(bucketForTaskStatus(status), 'finished', `${status} must remain terminal during rollout`)
+  }
+  const legacy = partitionHamiltonTasks({
+    tasks: [{ id: 'live', status: 'queued' }, { id: 'old', status: 'complete' }],
+  })
+  assert.deepEqual(legacy.current.map((task) => task.id), ['live'])
+  assert.deepEqual(legacy.history.map((task) => task.id), ['old'])
 })

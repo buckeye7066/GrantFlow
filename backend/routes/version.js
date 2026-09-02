@@ -10,7 +10,6 @@ import {
   resolveReleaseCommit,
 } from '../../shared/releaseIdentity.js'
 import { createLogger } from '../utils/logger.js'
-import { auditUnfinishedHamiltonTasks } from '../services/pipelineStrictReconciliation.js'
 
 const routeLogger = createLogger('route:version')
 const router = express.Router()
@@ -101,12 +100,15 @@ function sanitizeCountMap(value) {
  */
 async function getPipelinePrecisionVerification(db) {
   let cleanup = null
+  let evaluator = null
   try {
     const row = await db
       .prepare('SELECT value FROM system_kv WHERE key = ? LIMIT 1')
       .get('pipeline_precision_last_run')
     const parsed = typeof row?.value === 'string' ? JSON.parse(row.value) : null
     if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      const repairAudit = parsed.taskRepairAudit ?? parsed.taskAudit ?? null
+      const verifiedAudit = parsed.verificationTaskAudit ?? parsed.taskAudit ?? null
       cleanup = {
         timestamp: typeof parsed.timestamp === 'string' ? parsed.timestamp : null,
         scanned: finiteCount(parsed.scanned),
@@ -120,30 +122,27 @@ async function getPipelinePrecisionVerification(db) {
         profiles: finiteCount(parsed.profiles),
         profiles_affected: finiteCount(parsed.profilesAffected ?? parsed.profiles_affected),
         by_gate: sanitizeCountMap(parsed.byGate ?? parsed.by_gate),
-        task_failed: finiteCount(parsed.taskAudit?.failed),
-        task_repair_failed: finiteCount(parsed.taskAudit?.repairFailed),
-        task_truncated: parsed.taskAudit?.truncated === true,
+        task_failed: finiteCount(repairAudit?.failed),
+        task_repair_failed: finiteCount(repairAudit?.repairFailed),
+        task_truncated: repairAudit?.truncated === true,
+      }
+      if (verifiedAudit && typeof verifiedAudit === 'object') {
+        evaluator = {
+          as_of: cleanup.timestamp,
+          scanned: finiteCount(verifiedAudit.scanned),
+          valid: finiteCount(verifiedAudit.valid),
+          invalid: finiteCount(verifiedAudit.invalid),
+          protected: finiteCount(verifiedAudit.protected),
+          failed: finiteCount(verifiedAudit.failed),
+          repair_failed: finiteCount(verifiedAudit.repairFailed),
+          truncated: verifiedAudit.truncated === true,
+          by_gate: sanitizeCountMap(verifiedAudit.byGate),
+          by_bucket: sanitizeCountMap(verifiedAudit.byBucket),
+        }
       }
     }
   } catch {
     cleanup = null
-  }
-
-  let evaluator = null
-  try {
-    const live = await auditUnfinishedHamiltonTasks(db, { enforce: false, limit: 100000 })
-    evaluator = {
-      scanned: finiteCount(live?.scanned),
-      valid: finiteCount(live?.valid),
-      invalid: finiteCount(live?.invalid),
-      protected: finiteCount(live?.protected),
-      failed: finiteCount(live?.failed),
-      repair_failed: finiteCount(live?.repairFailed),
-      truncated: live?.truncated === true,
-      by_gate: sanitizeCountMap(live?.byGate),
-      by_bucket: sanitizeCountMap(live?.byBucket),
-    }
-  } catch {
     evaluator = null
   }
 
@@ -193,7 +192,7 @@ router.get('/', async (req, res) => {
         geo_crawl_unknown_run: '200_missing_payload',
         release_identity: releaseIdentity.contract,
         database_migrations: databaseMigrations.contract || null,
-        pipeline_precision: 'numeric_live_task_truth_v2',
+        pipeline_precision: 'numeric_boot_verified_task_truth_v3',
       },
     })
   } catch (error) {

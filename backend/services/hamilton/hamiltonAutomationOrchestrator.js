@@ -3134,6 +3134,7 @@ async function runAutopilotPathway(db, {
 
     engineResult.listing_decomposition = decomposition
     const childTaskIds = []
+    let childPolicyUnavailable = 0
     for (const item of decomposition?.items || []) {
       if (item.outcome !== 'accepted_apply_deferred' || !item.opportunity_id) continue
       let childOpportunity = null
@@ -3148,6 +3149,7 @@ async function runAutopilotPathway(db, {
       if (childEligibility.unavailable) {
         item.outcome = 'policy_unavailable_retry'
         item.rejection_gate = childEligibility.gate || 'canonical_accept'
+        childPolicyUnavailable += 1
         continue
       }
       if (!childEligibility.ok) {
@@ -3189,7 +3191,10 @@ async function runAutopilotPathway(db, {
     // waiting_for_window state so the scheduler re-attempts it, exactly like an
     // out-of-window run. Only genuine outcomes (real awards, a truly empty
     // page, an insert/match error) become a waiting_for_review card below.
-    if (decomposition?.enumeration_unavailable && Number(decomposition?.enumerated || 0) === 0 && childTaskIds.length === 0) {
+    if (
+      childPolicyUnavailable > 0
+      || (decomposition?.enumeration_unavailable && Number(decomposition?.enumerated || 0) === 0 && childTaskIds.length === 0)
+    ) {
       // Escalating backoff (15m → 1h → 4h → 12h → 24h): an exhausted-credits
       // outage lasts hours, and every retry opens a real browser. Named
       // plainly when the provider says the account is out of credits — that
@@ -3197,8 +3202,10 @@ async function runAutopilotPathway(db, {
       const priorDeferrals = Number((await reload(db, task.id))?.retry_count) || 0
       const backoffMins = AUTH_BACKOFF_MINUTES[Math.min(priorDeferrals, AUTH_BACKOFF_MINUTES.length - 1)]
       const retryAt = new Date(Date.now() + Math.max(DECOMPOSITION_RETRY_DELAY_MS, backoffMins * 60_000)).toISOString()
-      const rawWhy = (Array.isArray(decomposition?.notFound) ? decomposition.notFound.filter(Boolean) : []).join('; ')
-        || (decomposition.enumeration_transient ? 'the AI provider was momentarily unavailable' : 'no AI provider is configured')
+      const rawWhy = childPolicyUnavailable > 0
+        ? `the current funding-source policy could not verify ${childPolicyUnavailable} accepted award${childPolicyUnavailable === 1 ? '' : 's'}`
+        : (Array.isArray(decomposition?.notFound) ? decomposition.notFound.filter(Boolean) : []).join('; ')
+          || (decomposition.enumeration_transient ? 'the AI provider was momentarily unavailable' : 'no AI provider is configured')
       const creditsOut = /credit balance|no credits|insufficient_quota|exceeded your current quota|billing/i.test(rawWhy)
       const why = creditsOut
         ? `Hamilton's AI reader has NO CREDITS (owner action: add credits to the Anthropic / OpenAI account configured on Railway) — provider said: ${rawWhy.slice(0, 300)}`
@@ -3210,7 +3217,15 @@ async function runAutopilotPathway(db, {
       }).catch(() => {})
       await updateAutopilotRun(db, run.id, {
         status: 'deferred',
-        result: { ...engineResult, deferred: true, reason: decomposition.enumeration_transient ? 'llm_unavailable_transient' : 'llm_provider_unconfigured' },
+        result: {
+          ...engineResult,
+          deferred: true,
+          reason: childPolicyUnavailable > 0
+            ? 'child_policy_unavailable'
+            : decomposition.enumeration_transient
+              ? 'llm_unavailable_transient'
+              : 'llm_provider_unconfigured',
+        },
         blockerKind: null, blockerDetail: null,
         finishedAt: new Date().toISOString(),
       }).catch(() => {})

@@ -7,6 +7,7 @@ import client from '@/api/client'
 import { statusLabel } from '@/api/hamilton'
 import { StatusDot } from '@/components/ui/StatusDot'
 import HamiltonTaskDrawer from './HamiltonTaskDrawer'
+import { partitionHamiltonTasks } from '../../../shared/hamiltonTaskLifecycle.js'
 
 /**
  * HamiltonAutomationQueue
@@ -55,8 +56,9 @@ export default function HamiltonAutomationQueue({ profileId }) {
       const params = new URLSearchParams({ profile_id: String(profileId) })
       const res = await client.get(`/api/hamilton/automation/tasks?${params.toString()}`)
       if (runId !== runIdRef.current) return
-      setTasks(Array.isArray(res?.current) ? res.current : [])
-      setHistory(Array.isArray(res?.history) ? res.history : [])
+      const partition = partitionHamiltonTasks(res)
+      setTasks(partition.current)
+      setHistory(partition.history)
     } catch {
       // Network errors shouldn't tear the panel down — leave the prior list visible.
     } finally {

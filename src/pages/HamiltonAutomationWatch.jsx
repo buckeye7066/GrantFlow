@@ -41,6 +41,7 @@ import {
   bucketForTaskStatus,
   countTaskBuckets,
   isRecognisedTaskStatus,
+  partitionHamiltonTasks,
   terminalOutcome,
 } from '../../shared/hamiltonTaskLifecycle.js'
 
@@ -409,8 +410,9 @@ export default function HamiltonAutomationWatch() {
       const qs = new URLSearchParams({ profile_id: profileId })
       const res = await client.get(`/api/hamilton/automation/tasks?${qs.toString()}`)
       if (runId !== runIdRef.current) return
-      setTasks(Array.isArray(res?.current) ? res.current : [])
-      setHistory(Array.isArray(res?.history) ? res.history : [])
+      const partition = partitionHamiltonTasks(res)
+      setTasks(partition.current)
+      setHistory(partition.history)
       setLoadError(null)
     } catch (err) {
       if (runId !== runIdRef.current) return

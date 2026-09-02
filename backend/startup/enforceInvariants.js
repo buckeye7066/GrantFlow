@@ -5565,23 +5565,70 @@ export async function enforcePipelinePrecision(db) {
     // sweep above. Audit every unfinished task with the SAME live evaluator
     // used at task creation and by /api/version; fail loud on any unreadable or
     // truncated remainder so boot can never record a false green.
-    let taskAudit
+    let auditUnfinishedHamiltonTasks
     try {
-      const { auditUnfinishedHamiltonTasks } = await import('../services/pipelineStrictReconciliation.js')
-      taskAudit = await auditUnfinishedHamiltonTasks(db, {
-        enforce: true,
-        limit,
-        actor: 'system_pipeline_precision_boot',
-      })
+      ({ auditUnfinishedHamiltonTasks } = await import('../services/pipelineStrictReconciliation.js'))
     } catch (err) {
       throw new Error(`pipeline_precision Hamilton task audit unavailable: ${String(err?.message || err)}`)
     }
-    if (taskAudit.failed > 0 || taskAudit.repairFailed > 0 || taskAudit.truncated) {
+    const taskRepairAudit = await auditUnfinishedHamiltonTasks(db, {
+      enforce: true,
+      limit,
+      actor: 'system_pipeline_precision_boot',
+    })
+    if (taskRepairAudit.failed > 0 || taskRepairAudit.repairFailed > 0 || taskRepairAudit.truncated) {
       throw new Error(
-        `pipeline_precision Hamilton task audit incomplete: failed=${taskAudit.failed}, repair_failed=${taskAudit.repairFailed}, truncated=${taskAudit.truncated}`,
+        `pipeline_precision Hamilton task audit incomplete: failed=${taskRepairAudit.failed}, repair_failed=${taskRepairAudit.repairFailed}, truncated=${taskRepairAudit.truncated}`,
       )
     }
-    counts.tasksCancelled += Number(taskAudit.tasksCancelled || 0)
+    counts.tasksCancelled += Number(taskRepairAudit.tasksCancelled || 0)
+
+    // Read back after enforcement. The repair audit counts rows that were
+    // invalid before it fixed them; readiness needs the post-repair census.
+    // This expensive exact evaluator runs once at boot, never on public
+    // /api/version health polling.
+    const verificationTaskAudit = await auditUnfinishedHamiltonTasks(db, {
+      enforce: false,
+      limit,
+      actor: 'system_pipeline_precision_boot_verify',
+    })
+    if (
+      verificationTaskAudit.invalid > 0
+      || verificationTaskAudit.failed > 0
+      || verificationTaskAudit.repairFailed > 0
+      || verificationTaskAudit.truncated
+    ) {
+      throw new Error(
+        `pipeline_precision Hamilton verification incomplete: invalid=${verificationTaskAudit.invalid}, failed=${verificationTaskAudit.failed}, repair_failed=${verificationTaskAudit.repairFailed}, truncated=${verificationTaskAudit.truncated}`,
+      )
+    }
+
+    // Replace any stale migration snapshot with this successful boot result.
+    // /api/version exposes this numeric-only cache instead of walking the full
+    // task table on every unauthenticated health request.
+    const precisionTimestamp = new Date().toISOString()
+    const precisionSummary = {
+      timestamp: precisionTimestamp,
+      scanned: counts.scanned,
+      kept: counts.kept,
+      removed: counts.removed,
+      relabeled: counts.relabeled,
+      tasksCancelled: counts.tasksCancelled,
+      matchesRemoved: Number(taskRepairAudit.matchesRemoved || 0),
+      failed: counts.failed + counts.loadFailures,
+      truncated: counts.truncated,
+      profiles: profileIds.length,
+      profilesAffected: affectedProfiles.size,
+      byGate,
+      taskRepairAudit,
+      taskAudit: verificationTaskAudit,
+      verificationTaskAudit,
+    }
+    await db.prepare(`
+      INSERT INTO system_kv (key, value, updated_at)
+      VALUES (?, ?, ?)
+      ON CONFLICT (key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
+    `).run('pipeline_precision_last_run', JSON.stringify(precisionSummary), precisionTimestamp)
 
     if (counts.scanned === 0) {
       log.warn('pipeline_precision: no pipeline rows scanned', { profiles: profileIds.length })
@@ -5599,7 +5646,8 @@ export async function enforcePipelinePrecision(db) {
       byReason,
       profiles: profileIds.length,
       profilesAffected: affectedProfiles.size,
-      taskAudit,
+      taskRepairAudit,
+      taskAudit: verificationTaskAudit,
       enforced: true,
     }
   })

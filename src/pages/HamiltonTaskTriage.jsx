@@ -15,7 +15,7 @@ import { useToast } from '@/components/ui/use-toast'
 import { showInfoToast, showErrorToast } from '@/components/shared/toastHelpers'
 import { Loader2, RefreshCw, CheckCircle2, Trash2, Sparkles, ChevronDown, ChevronRight } from 'lucide-react'
 import { categorizeHamiltonTask, HAMILTON_TASK_CATEGORIES } from '../../shared/hamiltonTaskCategory.js'
-import { bucketForTaskStatus } from '../../shared/hamiltonTaskLifecycle.js'
+import { bucketForTaskStatus, partitionHamiltonTasks } from '../../shared/hamiltonTaskLifecycle.js'
 
 const ORDER = HAMILTON_TASK_CATEGORIES.map((c) => c.key)
 // Finished/terminal statuses live on the ARCHIVE tab; everything else is ACTIVE.
@@ -38,10 +38,8 @@ export default function HamiltonTaskTriage() {
     setLoading(true)
     try {
       const res = await client.get(`/api/hamilton/automation/tasks?profile=${encodeURIComponent(profileId)}`)
-      const payload = res?.data && !Array.isArray(res.data) ? res.data : res
-      const list = Array.isArray(res?.data)
-        ? res.data
-        : [...(payload?.current || payload?.items || []), ...(payload?.history || [])]
+      const partition = partitionHamiltonTasks(res)
+      const list = [...partition.current, ...partition.history]
       setTasks(list)
       setSelected(new Set())
     } catch (err) {

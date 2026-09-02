@@ -14,8 +14,10 @@ An unfinished Hamilton task exists only while its current funding source:
 5. positively qualifies the profile, including explicit applicant type.
 
 `assessHamiltonFundingSource()` is the choke point. Task creation, the strict
-reconciliation, the boot `pipeline_precision` net, ready-source selection, and
-the numeric `/api/version` readiness metric all consume it.
+reconciliation, the boot `pipeline_precision` net, and ready-source selection
+all consume it. The boot net persists a post-repair numeric census for the
+public `/api/version` readiness metric, so health polling never reruns the full
+evaluator.
 
 “Real” requires a positive link status backed by a verification timestamp no
 older than 30 days. If the profile evidence or canonical evaluator is
@@ -55,7 +57,7 @@ Do not close #1475 from a health check alone. Required proof remains:
 
 - required checks green on the focused PR,
 - exact merged main SHA deployed on Railway and Vercel,
-- `/api/version.pipeline_precision` healthy with the live evaluator reporting
-  zero invalid unfinished Hamilton tasks,
+- `/api/version.pipeline_precision` healthy with the boot-verified exact
+  evaluator reporting zero invalid unfinished Hamilton tasks,
 - a fresh authenticated capture of the named profile, and
 - a post-deploy crawler/agent cycle with no re-created invalid work.

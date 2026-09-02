@@ -509,7 +509,7 @@ async function loadGeneratedDocumentIds(db, profileId, tasks) {
     }
 
     try {
-      const rows = db.prepare(`
+      const rows = await db.prepare(`
         SELECT id
         FROM documents
         WHERE profile_id = ?
@@ -526,7 +526,7 @@ async function loadGeneratedDocumentIds(db, profileId, tasks) {
 
 async function insertTaskCancellationEvent(db, taskId, message, details) {
   try {
-    db.prepare(`
+    await db.prepare(`
       INSERT INTO application_task_events (
         id, task_id, event_type, status, step, message, details_json, actor_role, created_at
       )
@@ -556,7 +556,7 @@ export async function cleanupDisallowedHamiltonTraces(
 
   let tasks = []
   try {
-    tasks = db.prepare(`
+    tasks = await db.prepare(`
       SELECT *
       FROM application_tasks
       WHERE ${where.sql}
@@ -574,7 +574,7 @@ export async function cleanupDisallowedHamiltonTraces(
   let cancelledTasks = 0
   for (const task of activeTasks) {
     try {
-      const result = db.prepare(`
+      const result = await db.prepare(`
         UPDATE application_tasks
         SET status = 'cancelled',
             allow_auto_submit = FALSE,
@@ -588,7 +588,7 @@ export async function cleanupDisallowedHamiltonTraces(
       cancelledTasks += result?.changes || 0
     } catch {
       try {
-        const result = db.prepare(`
+        const result = await db.prepare(`
           UPDATE application_tasks
           SET status = 'cancelled', updated_at = ${nowFn(db)}
           WHERE id = ?
@@ -604,7 +604,7 @@ export async function cleanupDisallowedHamiltonTraces(
   let removedMissingInfo = 0
   if (taskIds.length) {
     try {
-      const result = db.prepare(`
+      const result = await db.prepare(`
         DELETE FROM application_missing_info
         WHERE task_id IN (${placeholders(taskIds)})
       `).run(...taskIds)
@@ -618,7 +618,7 @@ export async function cleanupDisallowedHamiltonTraces(
   let removedDocuments = 0
   if (documentIds.length) {
     try {
-      db.prepare(`
+      await db.prepare(`
         DELETE FROM profile_documents
         WHERE profile_id = ? AND document_id IN (${placeholders(documentIds)})
       `).run(String(profileId), ...documentIds)
@@ -627,7 +627,7 @@ export async function cleanupDisallowedHamiltonTraces(
     }
 
     try {
-      const result = db.prepare(`
+      const result = await db.prepare(`
         DELETE FROM documents
         WHERE profile_id = ?
           AND type = 'hamilton_generated_application'
@@ -641,7 +641,7 @@ export async function cleanupDisallowedHamiltonTraces(
 
   let removedPortalLinks = 0
   try {
-    const result = db.prepare(`
+    const result = await db.prepare(`
       DELETE FROM application_portal_links
       WHERE ${where.sql}
     `).run(...where.params)
@@ -668,7 +668,7 @@ export async function cleanupDisallowedHamiltonTraces(
     }
 
     if (authClauses.length) {
-      const result = db.prepare(`
+      const result = await db.prepare(`
         UPDATE hamilton_authorizations
         SET revoked_at = ${nowFn(db)},
             revoked_reason = ?
