@@ -533,6 +533,21 @@ export function evaluateApplicantTypeEligibility(opportunity, profileApplicantTy
   const explicitTypes = gatherExplicitTypes(opportunity)
   const softenStructured = looksLikeIndividualAssistance(opportunity)
 
+  // Federal NOFO feeds are organizational mechanisms unless the row positively
+  // identifies an individual-assistance shape. Empty entity_types_allowed is
+  // not evidence that a person can apply.
+  const sourceIdentity = `${opportunity?.source ?? ''} ${opportunity?.record_origin ?? ''} ${opportunity?.source_url ?? ''}`.toLowerCase()
+  const federalNofoSource = /grants(?:\.gov|_gov)|notice of funding opportunity/.test(sourceIdentity)
+  if (
+    federalNofoSource &&
+    buckets.size === 1 &&
+    buckets.has('individual') &&
+    explicitTypes.length === 0 &&
+    !softenStructured
+  ) {
+    return { decision: 'mismatch', reason: 'federal_nofo_excludes_individual' }
+  }
+
   // A profile may hold MORE THAN ONE identity (the owner's farm case: a person
   // who also runs a farm business). A hard mismatch is a claim that the
   // applicant can never be the applicant — so it may only be returned when the
