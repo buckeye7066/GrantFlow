@@ -136,6 +136,7 @@ async function getPipelinePrecisionVerification(db) {
     const terminalSql = ACTIVE_TASK_HISTORY_STATUSES
       .map((status) => `'${status.replaceAll("'", "''")}'`)
       .join(', ')
+    // audit:allow unscoped-profile-query -- intentionally global, sanitized readiness count; no tenant data is returned.
     const row = await db.prepare(`
       SELECT COUNT(*) AS count
         FROM application_tasks t
