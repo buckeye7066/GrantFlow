@@ -301,6 +301,39 @@ describe('stored auto-submit authorization reaches the submit step', () => {
     expect(result.autopilot_result.submit_withheld_reason).toBe('profile_auto_submit_disabled')
   })
 
+  it('a concurrent submitted-stage transition vetoes the irreversible click', async () => {
+    process.env.HAMILTON_TAILORED_APPROVAL_GATE = '0'
+    const db = makeDb()
+    await seedFixture(db)
+    await seedStoredAuthorization(db, { submit: true })
+    await seedTaskWith(db, { allowAutoSubmit: true })
+    runAutopilot.mockImplementationOnce(async ({ beforeSubmit }) => {
+      await db.prepare('UPDATE grants SET status = ? WHERE id = ?')
+        .run('submitted', 'g-1')
+
+      const boundary = await beforeSubmit()
+      expect(boundary).toMatchObject({
+        allow: false,
+        reason: 'pipeline_stage_protected',
+        pipeline_stage: 'submitted',
+      })
+      return {
+        status: 'completed_draft',
+        submit_withheld_reason: boundary.reason,
+        filled_fields: [],
+        pages_visited: 1,
+        trace: [],
+      }
+    })
+
+    const result = await runSource(db)
+
+    expect(result.task.status).toBe('waiting_for_review')
+    expect(result.autopilot_result.submit_withheld_reason).toBe('pipeline_stage_protected')
+    const events = await listTaskEvents(db, result.task.id)
+    expect(events.find((event) => event.event_type === 'submitted')).toBeFalsy()
+  })
+
   // OWNER RULE 2026-08-03: "auto submit should mean auto submit. No more, no
   // less." An unapproved (or absent) tailored record no longer withholds an
   // authorized submit; only genuine incompleteness (missing required
