@@ -198,19 +198,25 @@ router.post('/', async (req, res) => {
   }
   // The referenced source must actually EXIST (2026-08-03): a task whose ids
   // resolve to nothing renders as a permanent "Untitled application" card.
-  // A lookup that ERRORS is treated as unverifiable (allow) — only a lookup
-  // that succeeds and finds nothing refuses.
+  // A lookup that errors is unverifiable and therefore refuses creation. A
+  // task writer must never manufacture work while its policy evidence is down.
   try {
     let resolves = false
     if (body.opportunity_id) {
       try {
         resolves = Boolean(await req.db.prepare('SELECT id FROM funding_opportunities WHERE id = ? LIMIT 1').get(String(body.opportunity_id)))
-      } catch { resolves = true }
+      } catch (lookupErr) {
+        log.warn('task-create opportunity lookup unavailable (fail-closed)', { error: lookupErr?.message })
+        return res.status(503).json({ ok: false, error: 'funding_source_lookup_unavailable' })
+      }
     }
     if (!resolves && body.grant_id) {
       try {
         resolves = Boolean(await req.db.prepare('SELECT id FROM grants WHERE id = ? LIMIT 1').get(String(body.grant_id)))
-      } catch { resolves = true }
+      } catch (lookupErr) {
+        log.warn('task-create grant lookup unavailable (fail-closed)', { error: lookupErr?.message })
+        return res.status(503).json({ ok: false, error: 'funding_source_lookup_unavailable' })
+      }
     }
     if (!resolves) {
       return res.status(422).json({ ok: false, error: 'unresolvable_funding_source', detail: 'Neither opportunity_id nor grant_id resolves to an existing funding source.' })
@@ -219,40 +225,34 @@ router.post('/', async (req, res) => {
     // orchestrator applies. This raw create was the ONE writer with no gate.
     // A pointer research lead is refused with the owner handoff instructions
     // so the caller can surface them instead of minting a task that can only
-    // die silently; a policy lookup ERROR stays fail-open (allow), matching
-    // the existence check's posture above.
+    // die silently. Every negative gate is a refusal, and an evaluator error
+    // is unavailable evidence (503), never permission.
     try {
       const { assessHamiltonFundingSource } = await import('../services/hamilton/hamiltonFundingSourcePolicy.js')
       let opportunityRow = null
       if (body.opportunity_id) {
-        try {
-          opportunityRow = await req.db.prepare('SELECT * FROM funding_opportunities WHERE id = ? LIMIT 1').get(String(body.opportunity_id))
-        } catch { opportunityRow = null }
+        opportunityRow = await req.db.prepare('SELECT * FROM funding_opportunities WHERE id = ? LIMIT 1').get(String(body.opportunity_id))
       }
       let grantRow = null
       if (body.grant_id) {
-        try {
-          grantRow = await req.db.prepare('SELECT * FROM grants WHERE id = ? LIMIT 1').get(String(body.grant_id))
-        } catch { grantRow = null }
+        grantRow = await req.db.prepare('SELECT * FROM grants WHERE id = ? LIMIT 1').get(String(body.grant_id))
       }
       const assessment = await assessHamiltonFundingSource(req.db, {
         profileId,
         opportunity: opportunityRow,
         grant: grantRow,
       })
-      if (!assessment.ok && assessment.code === 'pointer_research_lead') {
-        return res.status(422).json({
+      if (!assessment.ok) {
+        return res.status(assessment.unavailable ? 503 : 422).json({
           ok: false,
-          error: 'pointer_research_lead',
+          error: assessment.code || 'funding_source_disallowed',
           handoff: assessment.handoff,
           detail: assessment.message,
         })
       }
-      if (!assessment.ok && assessment.code === 'funding_source_profile_rejected') {
-        return res.status(422).json({ ok: false, error: assessment.code, detail: assessment.message })
-      }
     } catch (policyErr) {
-      log.warn('task-create policy check unavailable (fail-open)', { error: policyErr?.message })
+      log.warn('task-create policy check unavailable (fail-closed)', { error: policyErr?.message })
+      return res.status(503).json({ ok: false, error: 'funding_source_policy_unavailable' })
     }
     const task = await ensureApplicationTask(req.db, {
       profileId,

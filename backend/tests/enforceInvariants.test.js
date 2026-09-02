@@ -1981,6 +1981,7 @@ describe('enforceHamiltonStopRecheck', () => {
         application_url TEXT, source_url TEXT, deadline TEXT, deadline_type TEXT,
         record_origin TEXT, source TEXT, source_trust_tier TEXT, reality_status TEXT,
         opportunity_kind TEXT, entity_types_allowed TEXT, is_active INTEGER DEFAULT 1,
+        need_types_supported TEXT, categories TEXT,
         is_national INTEGER DEFAULT 1, profile_id TEXT, link_status TEXT, last_verified_at TEXT
       );
       CREATE TABLE profile_opportunity_matches (
@@ -1994,6 +1995,8 @@ describe('enforceHamiltonStopRecheck', () => {
     taskStore._resetSchemaCache()
     await taskStore.ensureApplicationTaskSchema(raw)
     raw.prepare('INSERT INTO profiles (id, display_name, primary_type) VALUES (?, ?, ?)').run('p-rob', 'Robert Michael White', 'college_student')
+    raw.prepare('INSERT INTO profile_sections (profile_id, section_key, data) VALUES (?, ?, ?)')
+      .run('p-rob', 'financial_information', JSON.stringify({ needs: ['education'] }))
     return raw
   }
 
@@ -2018,12 +2021,14 @@ describe('enforceHamiltonStopRecheck', () => {
     db.prepare(
       `INSERT INTO funding_opportunities
         (id, title, sponsor, description, application_url, source_url, deadline_type, record_origin,
-         source, source_trust_tier, reality_status, opportunity_kind, entity_types_allowed, is_active)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         source, source_trust_tier, reality_status, opportunity_kind, entity_types_allowed,
+         need_types_supported, categories, is_active, link_status, last_verified_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'ok', CURRENT_TIMESTAMP)`,
     ).run(
       o.id, o.title, o.sponsor, o.description ?? null, o.application_url, o.source_url,
       o.deadline_type, o.record_origin, o.source, o.source_trust_tier, o.reality_status,
-      o.opportunity_kind, o.entity_types_allowed, o.is_active,
+      o.opportunity_kind, o.entity_types_allowed, JSON.stringify(['education']),
+      JSON.stringify(['education']), o.is_active,
     )
     return o
   }
@@ -2088,7 +2093,7 @@ describe('enforceHamiltonStopRecheck', () => {
     expect((await taskStore.getApplicationTask(db, task.id)).status).toBe('ready')
   })
 
-  it('leaves an honest stop untouched when the live engine REJECTS the pair', async () => {
+  it('cancels and resolves a policy stop when the live engine REJECTS the pair', async () => {
     const db = await makeDb()
     insertOpp(db, {
       id: 'opp-vetlirn',
@@ -2099,9 +2104,9 @@ describe('enforceHamiltonStopRecheck', () => {
 
     const res = await __testables.enforceHamiltonStopRecheck(db)
     expect(res.itemsResolved).toBe(0)
-    expect(res.tasksCancelled).toBe(0)
-    expect(await unresolved(db, task.id)).toEqual(['crawler_profile_rules'])
-    expect((await taskStore.getApplicationTask(db, task.id)).status).toBe('blocked')
+    expect(res.tasksCancelled).toBe(1)
+    expect(await unresolved(db, task.id)).toEqual([])
+    expect((await taskStore.getApplicationTask(db, task.id)).status).toBe('cancelled')
   })
 
   it('resolves a portal-URL stop when the catalog row now has a real URL, and stamps it on the task', async () => {
@@ -2158,7 +2163,7 @@ describe('enforceHamiltonStopRecheck', () => {
     expect((await taskStore.getApplicationTask(db, task.id)).status).toBe('ready')
   })
 
-  it('a link that is REALLY dead keeps the stop (probe persists the broken verdict, nothing resolves)', async () => {
+  it('a link that is REALLY dead cancels the policy-refused task and resolves its stop', async () => {
     const db = await makeDb()
     insertOpp(db)
     db.prepare("UPDATE funding_opportunities SET link_status = 'broken' WHERE id = 'opp-tsaa'").run()
@@ -2168,8 +2173,9 @@ describe('enforceHamiltonStopRecheck', () => {
     const res = await __testables.enforceHamiltonStopRecheck(db, { verifyLink })
     expect(res.linksReverified).toBe(1)
     expect(res.itemsResolved).toBe(0)
-    expect(await unresolved(db, task.id)).toEqual(['crawler_profile_rules'])
-    expect((await taskStore.getApplicationTask(db, task.id)).status).toBe('blocked')
+    expect(res.tasksCancelled).toBe(1)
+    expect(await unresolved(db, task.id)).toEqual([])
+    expect((await taskStore.getApplicationTask(db, task.id)).status).toBe('cancelled')
   })
 
   it('count-only mode never probes links (no verification writes)', async () => {

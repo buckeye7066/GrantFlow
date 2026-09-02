@@ -392,6 +392,7 @@ export default function HamiltonAutomationWatch() {
   const profileId = params.get('profile') || ''
 
   const [tasks, setTasks] = useState([])
+  const [history, setHistory] = useState([])
   const [loadedAt, setLoadedAt] = useState(null)
   const [loadError, setLoadError] = useState(null)
   const [firstLoadDone, setFirstLoadDone] = useState(false)
@@ -408,7 +409,8 @@ export default function HamiltonAutomationWatch() {
       const qs = new URLSearchParams({ profile_id: profileId })
       const res = await client.get(`/api/hamilton/automation/tasks?${qs.toString()}`)
       if (runId !== runIdRef.current) return
-      setTasks(Array.isArray(res?.tasks) ? res.tasks : [])
+      setTasks(Array.isArray(res?.current) ? res.current : [])
+      setHistory(Array.isArray(res?.history) ? res.history : [])
       setLoadError(null)
     } catch (err) {
       if (runId !== runIdRef.current) return
@@ -504,7 +506,7 @@ export default function HamiltonAutomationWatch() {
         */}
         <p className="mt-1.5 text-xs text-slate-400">
           {counts.working} working · {counts.needs_you} need you · {counts.waiting} waiting ·{' '}
-          {counts.finished} finished · {counts.total} in total
+          {history.length} finished · {counts.total} unfinished · {counts.total + history.length} total
           {loadedAt ? ` · checked ${loadedAt.toLocaleTimeString()}` : ''}
         </p>
         {counts.unrecognised > 0 && (
@@ -532,7 +534,7 @@ export default function HamiltonAutomationWatch() {
           </p>
         )}
 
-        {firstLoadDone && sorted.length === 0 && (
+        {firstLoadDone && sorted.length === 0 && history.length === 0 && (
           <div className="rounded-xl border border-slate-800 bg-slate-950/40 p-5">
             <p className="text-sm font-medium">No automation tasks on this profile yet.</p>
             <p className="mt-1.5 text-xs text-slate-400">
@@ -546,6 +548,26 @@ export default function HamiltonAutomationWatch() {
         <ul className="space-y-3">
           {sorted.map((task) => <TaskCard key={task.id} task={task} onDelete={deleteTask} />)}
         </ul>
+
+        {firstLoadDone && sorted.length === 0 && history.length > 0 && (
+          <div className="rounded-xl border border-emerald-900/60 bg-emerald-950/20 p-5">
+            <p className="text-sm font-medium">No unfinished Hamilton work.</p>
+            <p className="mt-1.5 text-xs text-slate-400">Completed, cancelled, and failed outcomes are kept below as history.</p>
+          </div>
+        )}
+
+        {history.length > 0 && (
+          <details className="mt-6 rounded-xl border border-slate-800 bg-slate-950/30 p-4">
+            <summary className="cursor-pointer text-sm font-medium text-slate-300">
+              History ({history.length})
+            </summary>
+            <ul className="mt-4 space-y-3">
+              {[...history]
+                .sort((a, b) => timeValue(b.updated_at) - timeValue(a.updated_at))
+                .map((task) => <TaskCard key={task.id} task={task} onDelete={deleteTask} />)}
+            </ul>
+          </details>
+        )}
 
         {sorted.length > 0 && (
           <p className="mt-4 flex items-center gap-1.5 text-xs text-slate-500">

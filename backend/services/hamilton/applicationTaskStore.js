@@ -103,11 +103,9 @@ export const AUTOMATION_TYPES = Object.freeze([
   'email',
   'no_application',
   'auto_profile',
-  // A pointer-kind source that decomposition cannot reach (no usable URL):
-  // not an application at all — a labeled research lead carrying owner
-  // handoff instructions (owner directive 2026-08-04; the manual-handoff
-  // rule). Reclassified by the enforcePointerTaskReclassification boot net;
-  // new creates are refused at the policy gate instead.
+  // A pointer-kind source is not an application at all, even with a usable
+  // discovery URL. It remains a labeled research lead; decomposition creates
+  // only independently verified leaf tasks (owner directive 2026-09-02).
   'research_lead',
   'unknown',
 ])
@@ -597,8 +595,8 @@ export async function assessApplicationTaskPointerSource(db, {
     ...opportunity,
     title: opportunity.title ?? grant?.title ?? null,
     // Give the policy the combined, evidence-backed task surface without
-    // mutating either source row. Any real URL keeps listing decomposition
-    // reachable; no URL means there is literally nothing to apply through.
+    // mutating either source row. The URL is useful in the research handoff,
+    // but never turns a listing surface into an application.
     url: usableUrl ?? opportunity.url ?? null,
   })
 }

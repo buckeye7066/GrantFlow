@@ -67,19 +67,18 @@ describe('ensureApplicationTask pointer creation choke point', () => {
     expect(db.prepare('SELECT COUNT(*) AS count FROM application_tasks').get().count).toBe(0)
   })
 
-  it('preserves the listing-decomposition lane for a pointer with a usable URL', async () => {
+  it('refuses a URL-carrying pointer because a discovery page is not a leaf application', async () => {
     db.prepare(
       `INSERT INTO funding_opportunities (id, title, opportunity_kind, source_url)
        VALUES ('pointer-with-url', 'Official Scholarship Directory', 'directory', 'https://www.tn.gov/collegepays/')`,
     ).run()
 
-    const task = await ensureApplicationTask(db, {
+    await expect(ensureApplicationTask(db, {
       profileId: PROFILE_ID,
       opportunityId: 'pointer-with-url',
       automationType: 'portal',
-    })
-    expect(task.id).toBeTruthy()
-    expect(db.prepare('SELECT COUNT(*) AS count FROM application_tasks').get().count).toBe(1)
+    })).rejects.toMatchObject({ code: 'pointer_research_lead' })
+    expect(db.prepare('SELECT COUNT(*) AS count FROM application_tasks').get().count).toBe(0)
   })
 
   it('preserves direct, kindless, and manual grant behavior', async () => {
@@ -107,7 +106,7 @@ describe('ensureApplicationTask pointer creation choke point', () => {
     expect(db.prepare('SELECT COUNT(*) AS count FROM application_tasks').get().count).toBe(2)
   })
 
-  it('uses the grant-linked catalog kind, while a real grant URL keeps the task applyable', async () => {
+  it('uses the grant-linked catalog kind even when the grant copied a directory URL', async () => {
     db.prepare(
       `INSERT INTO funding_opportunities (id, title, opportunity_kind)
        VALUES ('linked-pointer', 'Referral Locator', 'referral')`,
@@ -126,12 +125,11 @@ describe('ensureApplicationTask pointer creation choke point', () => {
     db.prepare(
       `UPDATE grants SET application_url = 'https://www.tn.gov/apply' WHERE id = 'grant-pointer'`,
     ).run()
-    const task = await ensureApplicationTask(db, {
+    await expect(ensureApplicationTask(db, {
       profileId: PROFILE_ID,
       grantId: 'grant-pointer',
       automationType: 'portal',
-    })
-    expect(task.id).toBeTruthy()
+    })).rejects.toMatchObject({ code: 'pointer_research_lead' })
   })
 
   it('fails closed when an existing grant belongs to another profile', async () => {

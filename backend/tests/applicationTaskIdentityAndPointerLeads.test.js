@@ -37,7 +37,9 @@ function makeDb() {
       id TEXT PRIMARY KEY, profile_id TEXT, title TEXT, description TEXT,
       opportunity_kind TEXT, application_url TEXT, apply_url TEXT,
       source_url TEXT, url TEXT, evidence_url TEXT, record_origin TEXT,
-      source TEXT, source_trust_tier TEXT, reality_status TEXT, is_active INTEGER
+      source TEXT, source_trust_tier TEXT, reality_status TEXT, is_active INTEGER,
+      need_types_supported TEXT, categories TEXT, link_status TEXT,
+      last_verified_at TEXT, state TEXT, is_national INTEGER
     );
     CREATE TABLE profile_opportunity_matches (
       id TEXT PRIMARY KEY, profile_id TEXT, opportunity_id TEXT,
@@ -99,10 +101,10 @@ describe('pointer rows become research leads, never application tasks', () => {
     expect(lead.instructions).toMatch(/Discovery/)
   })
 
-  it('assessPointerResearchLead: a pointer WITH a usable URL stays allowed (decomposition owns it)', () => {
+  it('assessPointerResearchLead: a pointer WITH a usable URL is still research, never a leaf task', () => {
     delete process.env.HAMILTON_DECOMPOSE_POINTER_LISTINGS
     const lead = assessPointerResearchLead({ opportunity_kind: 'directory', title: 'X', application_url: 'https://example.org/list' })
-    expect(lead).toBeNull()
+    expect(lead).toBeTruthy()
   })
 
   it('assessPointerResearchLead: decomposition disabled makes even a URL-carrying pointer a research lead', () => {
@@ -180,9 +182,19 @@ describe('the applicant-type gate runs for EVERY record_origin, not just the cra
     return database.prepare(`
       INSERT INTO funding_opportunities
         (id, title, opportunity_kind, application_url, source_url, record_origin, source,
-         source_trust_tier, reality_status, is_active, entity_types_allowed)
-      VALUES (?, ?, 'direct', ?, ?, ?, 'curated', 'official', 'real', 1, ?)
-    `).run(id, title, url, url, origin, JSON.stringify(entityTypes))
+         source_trust_tier, reality_status, is_active, entity_types_allowed,
+         need_types_supported, categories, link_status, last_verified_at, is_national)
+      VALUES (?, ?, 'direct', ?, ?, ?, 'curated', 'official', 'real', 1, ?, ?, ?, 'ok', CURRENT_TIMESTAMP, 1)
+    `).run(
+      id,
+      title,
+      url,
+      url,
+      origin,
+      JSON.stringify(entityTypes),
+      JSON.stringify(['education']),
+      JSON.stringify(['education']),
+    )
   }
 
   let policyDb
@@ -194,6 +206,11 @@ describe('the applicant-type gate runs for EVERY record_origin, not just the cra
     await policyDb.prepare('ALTER TABLE profiles ADD COLUMN primary_type TEXT').run()
     await policyDb.prepare("UPDATE profiles SET primary_type = 'college_student' WHERE id = ?").run(PROFILE)
     await policyDb.prepare('CREATE TABLE profile_sections (profile_id TEXT, section_key TEXT, data TEXT)').run()
+    await policyDb.prepare('INSERT INTO profile_sections (profile_id, section_key, data) VALUES (?, ?, ?)').run(
+      PROFILE,
+      'financial_information',
+      JSON.stringify({ needs: ['education'] }),
+    )
   })
 
   // NOTE: the assessment is driven through a GRANT, not a bare `{id}` stub —

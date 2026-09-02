@@ -770,18 +770,19 @@ export async function automateSingleSource(db, {
     }
   }
 
-  // 0. Eligibility gate (2026-08-03): a source the canonical engine REJECTS
-  // for this profile (an explicitly-exclusive restriction against a KNOWN
-  // conflicting profile fact — the UNCF-for-a-white-student class) is refused
-  // BEFORE a task exists. The task IS the "In Progress" application card, so
-  // create-then-block still showed the profile an ineligible application.
-  // ONLY the engine's reject refuses creation: review/unknown still admits
-  // (G4 — missing profile facts are neutral), and every other policy stop
-  // (trust, missing match) keeps the existing create-then-preflight-block
-  // behaviour so recoverable stops stay visible and recheckable.
+  // 0. Positive task-truth gate (tightened 2026-09-02): canonical ACCEPT plus
+  // current REAL, RELATABLE/APPLYABLE, COVERS-DECLARED-NEED, and QUALIFIES
+  // evidence must all exist BEFORE a task does. REVIEW, unknown, silence, and
+  // every negative gate remain Discovery evidence, never an application card.
   const eligibility = await assessHamiltonFundingSource(db, {
     profileId: resolvedProfileId, opportunity, grant,
   })
+  if (eligibility?.unavailable) {
+    const error = new Error(eligibility.message || 'Hamilton funding policy is temporarily unavailable.')
+    error.code = eligibility.code || 'funding_source_policy_unavailable'
+    error.status = 503
+    throw error
+  }
   if (eligibility?.ok === false || (eligibility?.code && eligibility?.ok !== true)) {
     const pointerLead = eligibility?.code === 'pointer_research_lead'
     const profileRejected = eligibility?.code === 'funding_source_profile_rejected'
@@ -3135,6 +3136,26 @@ async function runAutopilotPathway(db, {
     const childTaskIds = []
     for (const item of decomposition?.items || []) {
       if (item.outcome !== 'accepted_apply_deferred' || !item.opportunity_id) continue
+      let childOpportunity = null
+      try {
+        childOpportunity = await db.prepare('SELECT * FROM funding_opportunities WHERE id = ? LIMIT 1')
+          .get(String(item.opportunity_id))
+      } catch { childOpportunity = null }
+      const childEligibility = await assessHamiltonFundingSource(db, {
+        profileId: task.profile_id,
+        opportunity: childOpportunity,
+      })
+      if (childEligibility.unavailable) {
+        item.outcome = 'policy_unavailable_retry'
+        item.rejection_gate = childEligibility.gate || 'canonical_accept'
+        continue
+      }
+      if (!childEligibility.ok) {
+        item.outcome = 'rejected_current_policy'
+        item.rejection_gate = childEligibility.gate || childEligibility.code || 'unknown'
+        item.rejection_reasons = childEligibility.reasons || []
+        continue
+      }
       const child = await ensureApplicationTask(db, {
         profileId: task.profile_id,
         userId: task.user_id || userId,

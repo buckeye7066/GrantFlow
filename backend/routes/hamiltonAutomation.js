@@ -63,6 +63,9 @@ import {
 } from '../services/hamilton/hamiltonFullAutomationMode.js'
 import { isAutoSubmitGloballyEnabled } from '../services/hamiltonApplicationAgent.js'
 import { attachTaskPresentation } from '../services/hamilton/hamiltonTaskPresentation.js'
+import { assessHamiltonFundingSource } from '../services/hamilton/hamiltonFundingSourcePolicy.js'
+import { auditUnfinishedHamiltonTasks } from '../services/pipelineStrictReconciliation.js'
+import { bucketForTaskStatus, countTaskBuckets } from '../../shared/hamiltonTaskLifecycle.js'
 import { cancelActiveHamiltonTaskRun } from '../services/hamilton/hamiltonRunCancellation.js'
 import {
   automateSelected,
@@ -517,17 +520,54 @@ router.get('/tasks', async (req, res) => {
       ? null
       : await getAccessibleProfileIds(req.db, user)
 
-    const scoped = await listScopedHamiltonTasks({
+    let scoped = await listScopedHamiltonTasks({
       isAdmin: req.ctx?.isAdmin === true,
       requestedProfileId: profileIdParam,
       accessibleProfileIds,
       status,
-      limit: 200,
+      limit: 500,
       listTasks: (opts) => listApplicationTasks(req.db, opts),
     })
 
     if (scoped.forbidden) {
       return res.status(403).json({ error: 'forbidden' })
+    }
+
+    // The live queue is an acceptance gate, not a stale database dump. Before
+    // labeling any row Working/Waiting/Needs-you, reconcile each profile in
+    // scope with the same live policy used at creation and by /api/version,
+    // then reload so invalid work appears only in terminal history. A partial
+    // audit returns no queue at all rather than presenting unverified work.
+    const profileIdsToAudit = new Set(
+      (scoped.tasks || []).map((task) => String(task?.profile_id || '')).filter(Boolean),
+    )
+    if (profileIdParam) profileIdsToAudit.add(String(profileIdParam))
+    for (const profileId of profileIdsToAudit) {
+      const audit = await auditUnfinishedHamiltonTasks(req.db, {
+        enforce: true,
+        profileId,
+        limit: 100000,
+        actor: 'system:hamilton-live-queue',
+      })
+      if (audit.failed > 0 || audit.repairFailed > 0 || audit.truncated) {
+        log.error('live_task_policy_reconciliation_incomplete', {
+          profileId,
+          failed: audit.failed,
+          repairFailed: audit.repairFailed,
+          truncated: audit.truncated,
+        })
+        return res.status(503).json({ error: 'task_policy_reconciliation_incomplete' })
+      }
+    }
+    if (profileIdsToAudit.size > 0) {
+      scoped = await listScopedHamiltonTasks({
+        isAdmin: req.ctx?.isAdmin === true,
+        requestedProfileId: profileIdParam,
+        accessibleProfileIds,
+        status,
+        limit: 500,
+        listTasks: (opts) => listApplicationTasks(req.db, opts),
+      })
     }
 
     let tasks = scoped.tasks
@@ -546,7 +586,14 @@ router.get('/tasks', async (req, res) => {
     } catch (err) {
       log.warn('task_presentation_failed', { err: err?.message })
     }
-    return res.json({ ok: true, tasks })
+    const counts = countTaskBuckets(tasks)
+    if (status) return res.json({ ok: true, tasks, history: [], counts })
+    const operational = (tasks || []).filter((task) => bucketForTaskStatus(task.status) !== 'finished')
+    const history = (tasks || []).filter((task) => bucketForTaskStatus(task.status) === 'finished')
+    // Keep `tasks` as the backward-compatible complete collection for existing
+    // calendar/pipeline consumers; truth-aware queue surfaces use the explicit
+    // current/history partition.
+    return res.json({ ok: true, tasks, current: operational, history, counts })
   } catch (err) {
     log.error('list_tasks_failed', { err: err?.message })
     return res.status(500).json({ error: 'list_failed' })
@@ -1313,9 +1360,35 @@ async function listReadySources(db, profileId) {
  * completing nothing. Those sources remain visible through listReadySources;
  * they are simply never cold-enqueued as applications.
  */
-export async function selectAutoSubmitSources(db, profileId) {
+export async function selectAutoSubmitSources(db, profileId, { assess = assessHamiltonFundingSource } = {}) {
   const ready = await listReadySources(db, profileId)
-  return ready.filter((source) => source.is_applyable === true)
+  const selected = []
+  for (const source of ready) {
+    if (source.is_applyable !== true) continue
+    let grant = null
+    let opportunity = null
+    try {
+      grant = await db.prepare('SELECT * FROM grants WHERE id = ? AND profile_id = ? LIMIT 1')
+        .get(String(source.grant_id), String(profileId))
+      const opportunityId = source.opportunity_id || grant?.funding_opportunity_id || null
+      if (opportunityId) {
+        opportunity = await db.prepare('SELECT * FROM funding_opportunities WHERE id = ? LIMIT 1')
+          .get(String(opportunityId))
+      }
+      const assessment = await assess(db, { profileId, opportunity, grant })
+      if (assessment.ok) selected.push(source)
+    } catch (err) {
+      // A ready-source census is a writer precursor. Missing policy evidence
+      // cannot become permission; keep the source visible in Discovery and do
+      // not create Hamilton work for it.
+      log.warn('ready_source_policy_unavailable', {
+        profileId,
+        grantId: source.grant_id,
+        error: err?.message,
+      })
+    }
+  }
+  return selected
 }
 
 /** What "Select all sources" will pick, so the count shown is the count run. */

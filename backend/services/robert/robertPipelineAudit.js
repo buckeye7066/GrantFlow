@@ -173,11 +173,14 @@ export function deriveProfileFacts(row, sections, { profileId = null } = {}) {
   }
 }
 
-export async function loadProfileFacts(db, profileId) {
+export async function loadProfileFacts(db, profileId, { strict = false } = {}) {
   let row = null
   try {
     row = await db.prepare('SELECT * FROM profiles WHERE id = ? LIMIT 1').get(String(profileId))
-  } catch { row = null }
+  } catch (error) {
+    if (strict) throw error
+    row = null
+  }
 
   const sections = {}
   try {
@@ -189,7 +192,10 @@ export async function loadProfileFacts(db, profileId) {
       const parsed = parseMaybeJson(sec.data, null)
       if (parsed && typeof parsed === 'object') sections[sec.section_key] = parsed
     }
-  } catch { /* a degraded deployment may lack the table — never guess */ }
+  } catch (error) {
+    if (strict) throw error
+    // A degraded read caller may lack the table — never guess.
+  }
 
   return deriveProfileFacts(row, sections, { profileId })
 }
@@ -226,11 +232,14 @@ const OPPORTUNITY_ROW_COLUMNS = Object.freeze([
   ['entity_types_allowed', 'entity_types_allowed'], ['need_types_supported', 'need_types_supported'],
   ['categories', 'categories'], ['keywords', 'keywords'], ['opportunity_kind', 'opportunity_kind'],
   ['opportunity_type', 'opportunity_type'], ['funding_category', 'funding_category'], ['source', 'source'],
+  ['record_origin', 'record_origin'], ['source_trust_tier', 'source_trust_tier'],
+  ['reality_status', 'reality_status'], ['application_mode', 'application_mode'],
   ['source_url', 'source_url'], ['application_url', 'opp_application_url'], ['apply_url', 'apply_url'],
   ['final_url', 'final_url'], ['evidence_url', 'evidence_url'], ['external_id', 'external_id'],
   ['state', 'state'], ['is_national', 'is_national'], ['deadline', 'opp_deadline'],
   ['deadline_type', 'deadline_type'], ['amount_min', 'amount_min'], ['amount_max', 'amount_max'],
   ['amount_text', 'amount_text'], ['is_active', 'is_active'], ['link_status', 'link_status'],
+  ['last_verified_at', 'last_verified_at'],
   ['canonical_opportunity_key', 'canonical_opportunity_key'],
 ])
 

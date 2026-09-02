@@ -23,8 +23,9 @@
  *   2. The funding source NO LONGER EXISTS (grant and catalog row both gone —
  *      purged upstream as junk/dismissed) → CANCEL the task. A task for a
  *      deleted source can never be fulfilled; leaving it blocked is a lie.
- *   3. The stop still reproduces → leave it. It stays visible and honest,
- *      and the next sweep clears it the moment reality changes.
+ *   3. The canonical policy still refuses the source → CANCEL the task. A
+ *      policy-refused source is discovery/history, never unfinished work that
+ *      asks the owner to unblock an application Hamilton must not pursue.
  */
 
 import {
@@ -49,7 +50,7 @@ const log = createLogger('service:hamiltonStopRecheck')
 // unresolved school_name stop is a stop whose writer no longer exists. The
 // recheck clears them so those tasks resume instead of sitting blocked forever.
 const RECHECKABLE_KEYS = ['crawler_profile_rules', 'application_url', 'school_name']
-const SKIP_STATUSES = ['submitted', 'failed', 'cancelled', 'completed']
+const SKIP_STATUSES = ['submitted', 'draft_completed', 'completed_draft', 'failed', 'cancelled', 'completed']
 
 function usableUrl(...candidates) {
   for (const raw of candidates) {
@@ -87,6 +88,22 @@ function blockedOnlyByLink(assessment) {
     reasons.length > 0 &&
     reasons.every((r) => LINK_ONLY_TRUST_REASONS.has(String(r)))
   )
+}
+
+async function resolveCancelledStops(db, taskId, items, reason) {
+  for (const item of items || []) {
+    try {
+      await resolveMissingInfoItem(db, taskId, {
+        kind: item.kind,
+        key: item.key,
+        value: `task_cancelled:${reason}`,
+        resolvedBy: 'stop_recheck',
+      })
+    } catch {
+      // Cancellation is authoritative. A later precision cleanup removes any
+      // legacy blocker row whose schema could not be updated here.
+    }
+  }
 }
 
 /**
@@ -198,6 +215,12 @@ export async function recheckHamiltonPolicyStops(db, { limit = 200, enforce = tr
           value: 'policy_recheck_passed', resolvedBy: 'stop_recheck',
         })
         if (ok) { resolvedHere += 1; out.itemsResolved += 1 }
+      } else if (assessment.unavailable) {
+        // An engine/database outage is our problem, not proof the source is
+        // invalid. Leave the durable task untouched; the live queue refuses to
+        // display unverified work until a later audit succeeds.
+        out.leftHonest += 1
+        continue
       } else if (assessment.code === 'missing_funding_source') {
         // The grant AND catalog row are gone — purged upstream (relevance
         // floor, sticky delete, dedup). The task can never be fulfilled.
@@ -209,6 +232,7 @@ export async function recheckHamiltonPolicyStops(db, { limit = 200, enforce = tr
           })
           cancelled = true
           out.tasksCancelled += 1
+          await resolveCancelledStops(db, taskId, items, 'missing_funding_source')
           await appendTaskEvent(db, {
             taskId,
             eventType: 'cancelled',
@@ -221,7 +245,29 @@ export async function recheckHamiltonPolicyStops(db, { limit = 200, enforce = tr
         } catch { /* best-effort; next sweep retries */ }
         break // no point rechecking the task's other items
       } else {
-        out.leftHonest += 1
+        if (!enforce) { out.leftHonest += 1; continue }
+        try {
+          const reason = `funding source failed current Hamilton policy (${assessment.gate || assessment.code || 'unknown'}) — invalid application task closed by stop recheck`
+          await cancelApplicationTask(db, taskId, { actorRole: 'system', reason })
+          cancelled = true
+          out.tasksCancelled += 1
+          await resolveCancelledStops(db, taskId, items, assessment.gate || assessment.code || 'policy')
+          await appendTaskEvent(db, {
+            taskId,
+            eventType: 'cancelled',
+            status: 'cancelled',
+            step: 'stop_recheck',
+            message: 'This source no longer passes the live application policy, so it was removed from unfinished work.',
+            actorRole: 'agent',
+            details: {
+              via: 'stop_recheck',
+              gate: assessment.gate || null,
+              code: assessment.code || null,
+              reasons: assessment.reasons || [],
+            },
+          })
+        } catch { out.leftHonest += 1 }
+        break
       }
     }
 

@@ -10,6 +10,7 @@ import {
   resolveReleaseCommit,
 } from '../../shared/releaseIdentity.js'
 import { createLogger } from '../utils/logger.js'
+import { auditUnfinishedHamiltonTasks } from '../services/pipelineStrictReconciliation.js'
 
 const routeLogger = createLogger('route:version')
 const router = express.Router()
@@ -78,12 +79,6 @@ function getVersionInfo() {
   return cachedVersion
 }
 
-const ACTIVE_TASK_HISTORY_STATUSES = Object.freeze([
-  'submitted', 'completed', 'complete', 'done', 'cancelled', 'canceled',
-  'archived', 'rejected', 'closed', 'submit_attempt_started',
-  'submit_evidence_pending', 'submission_verification_required',
-])
-
 function finiteCount(value) {
   const count = Number(value)
   return Number.isFinite(count) && count >= 0 ? count : 0
@@ -125,70 +120,50 @@ async function getPipelinePrecisionVerification(db) {
         profiles: finiteCount(parsed.profiles),
         profiles_affected: finiteCount(parsed.profilesAffected ?? parsed.profiles_affected),
         by_gate: sanitizeCountMap(parsed.byGate ?? parsed.by_gate),
+        task_failed: finiteCount(parsed.taskAudit?.failed),
+        task_repair_failed: finiteCount(parsed.taskAudit?.repairFailed),
+        task_truncated: parsed.taskAudit?.truncated === true,
       }
     }
   } catch {
     cleanup = null
   }
 
-  let invalidActiveTasks = null
+  let evaluator = null
   try {
-    const safeTerminalSql = ACTIVE_TASK_HISTORY_STATUSES
-      .map((status) => `'${status.replaceAll("'", "''")}'`)
-      .join(', ')
-    // audit:allow unscoped-profile-query -- intentionally global, sanitized readiness count; no tenant data is returned.
-    const row = await db.prepare(`
-      SELECT COUNT(*) AS count
-        FROM application_tasks t
-       WHERE LOWER(COALESCE(t.status, '')) NOT IN (${safeTerminalSql})
-         AND (
-           (t.grant_id IS NULL AND t.opportunity_id IS NULL)
-           OR (
-             t.grant_id IS NOT NULL
-             AND NOT EXISTS (SELECT 1 FROM grants missing_g WHERE missing_g.id = t.grant_id)
-           )
-           OR (
-             t.opportunity_id IS NOT NULL
-             AND NOT EXISTS (
-               SELECT 1 FROM funding_opportunities missing_fo
-                WHERE missing_fo.id = t.opportunity_id
-             )
-           )
-           OR EXISTS (
-             SELECT 1
-               FROM grants rejected_g
-              WHERE rejected_g.id = t.grant_id
-                AND (
-                  LOWER(COALESCE(rejected_g.eligibility_status, '')) = 'ineligible'
-                  OR LOWER(COALESCE(rejected_g.match_decision, '')) = 'reject'
-                )
-           )
-           OR EXISTS (
-             SELECT 1
-               FROM grants rejected_pair
-              WHERE rejected_pair.profile_id = t.profile_id
-                AND rejected_pair.funding_opportunity_id = t.opportunity_id
-                AND (
-                  LOWER(COALESCE(rejected_pair.eligibility_status, '')) = 'ineligible'
-                  OR LOWER(COALESCE(rejected_pair.match_decision, '')) = 'reject'
-                )
-           )
-         )
-    `).get()
-    invalidActiveTasks = finiteCount(row?.count)
+    const live = await auditUnfinishedHamiltonTasks(db, { enforce: false, limit: 100000 })
+    evaluator = {
+      scanned: finiteCount(live?.scanned),
+      valid: finiteCount(live?.valid),
+      invalid: finiteCount(live?.invalid),
+      protected: finiteCount(live?.protected),
+      failed: finiteCount(live?.failed),
+      repair_failed: finiteCount(live?.repairFailed),
+      truncated: live?.truncated === true,
+      by_gate: sanitizeCountMap(live?.byGate),
+      by_bucket: sanitizeCountMap(live?.byBucket),
+    }
   } catch {
-    invalidActiveTasks = null
+    evaluator = null
   }
 
   return {
-    available: cleanup !== null && invalidActiveTasks !== null,
+    available: cleanup !== null && evaluator !== null,
     healthy:
       cleanup !== null
       && cleanup.failed === 0
       && cleanup.truncated === false
-      && invalidActiveTasks === 0,
+      && cleanup.task_failed === 0
+      && cleanup.task_repair_failed === 0
+      && cleanup.task_truncated === false
+      && evaluator !== null
+      && evaluator.failed === 0
+      && evaluator.repair_failed === 0
+      && evaluator.truncated === false
+      && evaluator.invalid === 0,
     cleanup,
-    invalid_active_hamilton_tasks: invalidActiveTasks,
+    evaluator,
+    invalid_active_hamilton_tasks: evaluator?.invalid ?? null,
   }
 }
 
@@ -218,7 +193,7 @@ router.get('/', async (req, res) => {
         geo_crawl_unknown_run: '200_missing_payload',
         release_identity: releaseIdentity.contract,
         database_migrations: databaseMigrations.contract || null,
-        pipeline_precision: 'numeric_summary_v1',
+        pipeline_precision: 'numeric_live_task_truth_v2',
       },
     })
   } catch (error) {

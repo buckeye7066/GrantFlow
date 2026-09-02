@@ -5559,6 +5559,30 @@ export async function enforcePipelinePrecision(db) {
         `pipeline_precision could not load any pipeline rows (${counts.loadFailures} profile loads failed): ${counts.firstLoadError}`,
       )
     }
+
+    // The pipeline table is not the Hamilton queue. Opportunity-only tasks and
+    // tasks created from a stale persisted ACCEPT can survive every grant-row
+    // sweep above. Audit every unfinished task with the SAME live evaluator
+    // used at task creation and by /api/version; fail loud on any unreadable or
+    // truncated remainder so boot can never record a false green.
+    let taskAudit
+    try {
+      const { auditUnfinishedHamiltonTasks } = await import('../services/pipelineStrictReconciliation.js')
+      taskAudit = await auditUnfinishedHamiltonTasks(db, {
+        enforce: true,
+        limit,
+        actor: 'system_pipeline_precision_boot',
+      })
+    } catch (err) {
+      throw new Error(`pipeline_precision Hamilton task audit unavailable: ${String(err?.message || err)}`)
+    }
+    if (taskAudit.failed > 0 || taskAudit.repairFailed > 0 || taskAudit.truncated) {
+      throw new Error(
+        `pipeline_precision Hamilton task audit incomplete: failed=${taskAudit.failed}, repair_failed=${taskAudit.repairFailed}, truncated=${taskAudit.truncated}`,
+      )
+    }
+    counts.tasksCancelled += Number(taskAudit.tasksCancelled || 0)
+
     if (counts.scanned === 0) {
       log.warn('pipeline_precision: no pipeline rows scanned', { profiles: profileIds.length })
     } else if (counts.removed === 0 && counts.relabeled === 0) {
@@ -5575,6 +5599,7 @@ export async function enforcePipelinePrecision(db) {
       byReason,
       profiles: profileIds.length,
       profilesAffected: affectedProfiles.size,
+      taskAudit,
       enforced: true,
     }
   })

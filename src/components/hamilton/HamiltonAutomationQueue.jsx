@@ -38,6 +38,7 @@ function taskTone(status) {
 }
 export default function HamiltonAutomationQueue({ profileId }) {
   const [tasks, setTasks] = useState([])
+  const [history, setHistory] = useState([])
   const [loading, setLoading] = useState(false)
   const [openTask, setOpenTask] = useState(null)
 
@@ -54,7 +55,8 @@ export default function HamiltonAutomationQueue({ profileId }) {
       const params = new URLSearchParams({ profile_id: String(profileId) })
       const res = await client.get(`/api/hamilton/automation/tasks?${params.toString()}`)
       if (runId !== runIdRef.current) return
-      setTasks(Array.isArray(res?.tasks) ? res.tasks : [])
+      setTasks(Array.isArray(res?.current) ? res.current : [])
+      setHistory(Array.isArray(res?.history) ? res.history : [])
     } catch {
       // Network errors shouldn't tear the panel down — leave the prior list visible.
     } finally {
@@ -100,9 +102,9 @@ export default function HamiltonAutomationQueue({ profileId }) {
                   <StatusDot tone={tone} className="mt-0.5 self-start" />
                   <div className="min-w-0 flex-1">
                     <div className="money truncate text-sm font-medium text-current-ink">
-                      {t.opportunity_id ? `opportunity ${String(t.opportunity_id).slice(0, 8)}…`
-                        : t.grant_id ? `grant ${String(t.grant_id).slice(0, 8)}…`
-                        : 'task'}
+                      {t.display_title || t.funder_name || (t.opportunity_id
+                        ? `opportunity ${String(t.opportunity_id).slice(0, 8)}…`
+                        : t.grant_id ? `grant ${String(t.grant_id).slice(0, 8)}…` : 'task')}
                     </div>
                     <div className="flex flex-wrap items-center gap-1.5 text-[11px] text-current-ink/60">
                       <span className="money inline-flex items-center gap-1.5">
@@ -135,6 +137,25 @@ export default function HamiltonAutomationQueue({ profileId }) {
             })}
           </ul>
         )}
+
+        {history.length > 0 && (
+          <details className="mt-4 border-t border-current-line pt-3">
+            <summary className="cursor-pointer text-xs font-medium text-current-ink/70">
+              History ({history.length})
+            </summary>
+            <ul className="mt-2 space-y-2">
+              {history.map((t) => (
+                <li key={t.id} className="flex items-center justify-between gap-3 rounded-xl border border-current-line bg-current-card/60 px-3 py-2">
+                  <div className="min-w-0 flex-1">
+                    <div className="truncate text-sm text-current-ink/80">{t.display_title || t.funder_name || `task ${String(t.id).slice(0, 8)}…`}</div>
+                    <div className="text-[11px] text-current-ink/55">{statusLabel(t.status)}{t.outcome_reason ? ` · ${t.outcome_reason}` : ''}</div>
+                  </div>
+                  <Button size="sm" variant="ghost" onClick={() => setOpenTask(t)}>View</Button>
+                </li>
+              ))}
+            </ul>
+          </details>
+        )}
       </CardContent>
 
       {openTask && (
@@ -142,9 +163,7 @@ export default function HamiltonAutomationQueue({ profileId }) {
           open={!!openTask}
           task={openTask}
           onClose={() => setOpenTask(null)}
-          onTaskUpdated={(updated) => {
-            setTasks((prev) => prev.map((t) => (t.id === updated.id ? updated : t)))
-          }}
+          onTaskUpdated={() => load()}
         />
       )}
     </Card>
