@@ -5563,8 +5563,9 @@ export async function enforcePipelinePrecision(db) {
     // The pipeline table is not the Hamilton queue. Opportunity-only tasks and
     // tasks created from a stale persisted ACCEPT can survive every grant-row
     // sweep above. Audit every unfinished task with the SAME live evaluator
-    // used at task creation and by /api/version; fail loud on any unreadable or
-    // truncated remainder so boot can never record a false green.
+    // used at task creation and represented by /api/version's cached snapshot;
+    // fail loud on any unreadable or truncated remainder so boot can never
+    // record a false green.
     let auditUnfinishedHamiltonTasks
     try {
       ({ auditUnfinishedHamiltonTasks } = await import('../services/pipelineStrictReconciliation.js'))

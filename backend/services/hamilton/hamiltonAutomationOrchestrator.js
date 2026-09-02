@@ -3138,17 +3138,25 @@ async function runAutopilotPathway(db, {
     for (const item of decomposition?.items || []) {
       if (item.outcome !== 'accepted_apply_deferred' || !item.opportunity_id) continue
       let childOpportunity = null
+      let childEligibility = null
       try {
         childOpportunity = await db.prepare('SELECT * FROM funding_opportunities WHERE id = ? LIMIT 1')
           .get(String(item.opportunity_id))
-      } catch { childOpportunity = null }
-      const childEligibility = await assessHamiltonFundingSource(db, {
-        profileId: task.profile_id,
-        opportunity: childOpportunity,
-      })
+        childEligibility = await assessHamiltonFundingSource(db, {
+          profileId: task.profile_id,
+          opportunity: childOpportunity,
+        })
+      } catch (error) {
+        item.outcome = 'policy_unavailable_retry'
+        item.rejection_gate = 'policy_unavailable'
+        item.rejection_reasons = [String(error?.message || error).slice(0, 180)]
+        childPolicyUnavailable += 1
+        continue
+      }
       if (childEligibility.unavailable) {
         item.outcome = 'policy_unavailable_retry'
         item.rejection_gate = childEligibility.gate || 'canonical_accept'
+        item.rejection_reasons = childEligibility.reasons || []
         childPolicyUnavailable += 1
         continue
       }

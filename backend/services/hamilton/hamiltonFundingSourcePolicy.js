@@ -66,15 +66,15 @@ async function loadOpportunityForPolicy(db, profileId, opportunity, grant) {
     // grant-backed task is already scoped by grants.profile_id at its caller,
     // so it may use a shared catalog row first discovered for another profile.
     if (grant) {
-      return db.prepare(
+      return await db.prepare(
         'SELECT * FROM funding_opportunities WHERE id = ? LIMIT 1',
       ).get(String(linkedOpportunityId))
     }
     return profileId
-      ? db.prepare(
+      ? await db.prepare(
           'SELECT * FROM funding_opportunities WHERE id = ? AND (profile_id IS NULL OR profile_id = ?) LIMIT 1',
         ).get(String(linkedOpportunityId), String(profileId))
-      : db.prepare(
+      : await db.prepare(
           'SELECT * FROM funding_opportunities WHERE id = ? AND profile_id IS NULL LIMIT 1',
         ).get(String(linkedOpportunityId))
   } catch {
@@ -86,7 +86,7 @@ async function loadProfileMatch(db, profileId, opportunityId) {
   if (!profileId || !opportunityId) return null
 
   try {
-    return db.prepare(`
+    return await db.prepare(`
       SELECT match_score, match_decision, match_explanation, matcher_version, updated_at, computed_at
       FROM profile_opportunity_matches
       WHERE profile_id = ?
