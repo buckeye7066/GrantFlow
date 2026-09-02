@@ -238,13 +238,13 @@ export async function startScheduledCycle(db, { options = {} } = {}) {
  * Build the ordered step plan for a run. Sam pre/postflight only fire
  * for full_cycle / selected_agents runs that include sam.
  */
-function buildStepPlan(runType, agents, options) {
+export function buildStepPlan(runType, agents, options) {
   const sel = new Set(agents)
   const includeSam = sel.has('sam')
   const plan = []
   let order = 0
 
-  if ((runType === 'full_cycle' || runType === 'selected_agents' || runType === 'sam_only')
+  if ((runType === 'full_cycle' || runType === 'scheduled_cycle' || runType === 'selected_agents' || runType === 'sam_only')
       && includeSam
       && options.run_sam_preflight !== false) {
     plan.push({ agent: 'sam', step_name: 'sam_preflight', step_order: order++, stage: 'preflight' })
@@ -261,7 +261,7 @@ function buildStepPlan(runType, agents, options) {
     plan.push({ agent: 'sam', step_name: 'sam_main', step_order: order++, stage: 'observe' })
   }
 
-  if ((runType === 'full_cycle' || runType === 'selected_agents' || runType === 'sam_only')
+  if ((runType === 'full_cycle' || runType === 'scheduled_cycle' || runType === 'selected_agents' || runType === 'sam_only')
       && includeSam
       && options.run_sam_postflight !== false) {
     plan.push({ agent: 'sam', step_name: 'sam_postflight', step_order: order++, stage: 'postflight' })
