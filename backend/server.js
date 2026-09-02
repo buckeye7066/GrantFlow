@@ -3372,6 +3372,29 @@ if (process.env.NODE_ENV !== 'test') {
       }
     })();
 
+    // Canonical background agent cycle. This is the runtime counterpart to the
+    // documented scheduled_cycle: Sam preflight → Robert → Yana → John →
+    // Hamilton → Sam postflight, persisted through Mission Control and guarded
+    // by the distributed full-cycle lock. Defaults on only in deployed runtime;
+    // AGENT_CONTROL_SCHEDULED_ENABLED=false is the explicit kill switch.
+    ;(async () => {
+      try {
+        const { startAgentControlScheduler } = await import(
+          './services/agentControl/agentControlScheduler.js'
+        )
+        const result = BACKGROUND_SERVICES_DISABLED
+          ? { started: false, reason: 'background_services_disabled' }
+          : startAgentControlScheduler({ db, logger: console })
+        if (result?.started) {
+          console.log('[agent-control:scheduler] started:', JSON.stringify(result))
+        } else {
+          console.log('[agent-control:scheduler] not started:', result?.reason || 'disabled')
+        }
+      } catch (scheduleErr) {
+        console.warn('[agent-control:scheduler] failed to start:', scheduleErr?.message || scheduleErr)
+      }
+    })();
+
     // Auto-heal Postgres CHECK constraints that may be outdated if migrations haven't run.
     if (db.dialect === 'postgres') {
       (async () => {
