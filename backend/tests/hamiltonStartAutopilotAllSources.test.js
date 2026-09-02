@@ -177,6 +177,22 @@ describe('applyability prioritisation', () => {
     expect(res.body.error).toBe('no_ready_sources')
   })
 
+  it('rejects a grant id paired with a different opportunity id', async () => {
+    const res = await request(appWith(READY))
+      .post('/api/hamilton/automation/start-autopilot')
+      .send({
+        profile_id: 'profile-1',
+        selected_sources: [{
+          grant_id: 'g1',
+          opportunity_id: 'o-different',
+          current_stage: 'interested',
+        }],
+      })
+
+    expect(res.status).toBe(409)
+    expect(res.body.error).toBe('source_identity_mismatch')
+  })
+
   it('rejects a spoofed opportunity-only selection when the server grant is submitted', async () => {
     const submitted = [{
       id: 'gSubmitted',
