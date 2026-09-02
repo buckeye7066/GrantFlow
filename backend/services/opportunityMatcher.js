@@ -418,17 +418,21 @@ async function admitToPipeline(db, profileContext, opportunity, ctx = {}) {
       await persistFreshCanonicalDecision(db, profileId, opportunity?.id, decision)
     }
 
-    // Gate 2: Canonical decision engine — REJECT means hard ineligible
-    if (decision?.decision === 'REJECT') {
-      if (!quiet) log.info(`[opportunityMatcher] Gate:DECISION_ENGINE rejected "${opportunity.title}" — ${(decision.ineligibilityReasons ?? []).join('; ')}`)
-      return denied('live_reject', {
+    // Gate 2: Canonical decision engine — automated persistence requires a
+    // positive ACCEPT. REVIEW/unknown is evidence still to be established, not
+    // proof that the profile qualifies.
+    if (decision?.decision !== 'ACCEPT') {
+      const verdict = String(decision?.decision || 'UNKNOWN').toUpperCase()
+      const reasons = decision?.ineligibilityReasons ?? decision?.reasons ?? []
+      if (!quiet) log.info(`[opportunityMatcher] Gate:DECISION_ENGINE refused ${verdict} for "${opportunity.title}" — ${reasons.join('; ')}`)
+      return denied(verdict === 'REJECT' ? 'live_reject' : 'eligibility_unverified', {
         saved: false,
-        reason: `Rejected: ${(decision.ineligibilityReasons ?? []).join('; ')}`,
+        reason: `${verdict} is not positive qualification evidence: ${reasons.join('; ') || 'eligibility must be verified'}`,
         gate: 'DECISION_ENGINE',
-        matchPercentage: decision.score ?? 0,
+        matchPercentage: decision?.score ?? 0,
         threshold,
-        decision: 'REJECT',
-      }, decision.score ?? 0)
+        decision: verdict,
+      }, decision?.score ?? 0)
     }
 
     // Gate 3: Exclusion engine — custom suppression rules
