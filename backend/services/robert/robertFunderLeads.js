@@ -47,7 +47,6 @@
  * auto-submitted application.
  */
 
-import crypto from 'crypto'
 import { createLogger } from '../../utils/logger.js'
 import {
   PIPELINE_CATEGORY,
@@ -195,7 +194,7 @@ export async function admitFunderLeads(db, {
   countOnly = parseBoolEnv(process.env.ENFORCE_FUNDER_LEAD_ADMISSION) === false,
 } = {}) {
   const out = {
-    profiles: 0, scanned: 0, added: 0, wouldAdd: 0, skippedExisting: 0,
+    profiles: 0, scanned: 0, added: 0, catalogOnly: 0, wouldAdd: 0, skippedExisting: 0,
     skippedTombstoned: 0, byReason: {}, perProfileCapped: 0, truncated: false,
     examples: [], skipped: null, enforced: true,
   }
@@ -332,31 +331,14 @@ export async function admitFunderLeads(db, {
         `${fit.inState ? ' incl. in-state' : ''}${fit.nationalFootprint ? ` (national footprint >= ${NATIONAL_FOOTPRINT_MIN_STATES})` : ''}` +
         `${fit.fundsIndividuals ? '; funds individuals' : ''}. Under investigation — confirm an application path before applying.`
 
-      try {
-        const grantId = crypto.randomUUID()
-        const insCols = ['id', 'profile_id', 'funding_opportunity_id', 'title', 'funder', 'status', 'notes', 'pipeline_category', 'funder_lead_state']
-        const insVals = [grantId, profileId, opp.id, opp.title, opp.sponsor || opp.title || null, 'interested', noteLine, PIPELINE_CATEGORY.FUNDER_LEAD, FUNDER_LEAD_STATE.CANDIDATE]
-        // Research URLs (ProPublica org pages) land ONLY in source_url — never
-        // in url/application_url. Copying them into url made hasUsableApplyPath
-        // true on every admit, so the next investigation pass auto-promoted
-        // every lead to apply-ready without a real application path.
-        const optional = [
-          ['organization_id', ctx.profile.organization_id ?? null],
-          ['match_score', score],
-          ['match_decision', decisionStr],
-          ['matcher_version', FUNDER_LEAD_MATCHER_VERSION],
-          ['source_url', opp.source_url ?? null],
-        ]
-        for (const [c, v] of optional) if (cols.has(c)) { insCols.push(c); insVals.push(v) }
-        const ph = insCols.map(() => '?').join(', ')
-        await db.prepare(`INSERT INTO grants (${insCols.join(', ')}) VALUES (${ph})`).run(...insVals)
-        out.added += 1
-        addedThisProfile += 1
-        if (out.examples.length < 5) out.examples.push(`${opp.sponsor ?? opp.title} (${state ?? '?'}, states ${fit.distinctStates}${fit.inState ? '+in-state' : ''})`)
-      } catch (err) {
-        const msg = String(err?.message || '').toLowerCase()
-        if (msg.includes('unique') || msg.includes('duplicate')) { out.skippedExisting += 1; continue }
-        log.warn('funder-lead admission: insert failed (non-fatal)', { profile: profileId, opportunity: opp.id, error: String(err?.message || err) })
+      // A funder record is research evidence, not an application. Keep it in
+      // funding_opportunities for investigation and do not manufacture a grants
+      // row that bypasses the canonical leaf-opportunity admission contract.
+      out.catalogOnly += 1
+      bump('funder_lead_catalog_only')
+      addedThisProfile += 1
+      if (out.examples.length < 5) {
+        out.examples.push(`${opp.sponsor ?? opp.title} (catalog research only; ${state ?? '?'}, states ${fit.distinctStates})`)
       }
     }
   }
