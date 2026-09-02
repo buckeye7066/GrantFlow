@@ -63,9 +63,26 @@ export const WIDE_AWARD_RANGE_RATIO = 10
  *
  * @param {string} [alias='g'] table alias; pass '' for un-aliased queries.
  */
-export function pipelineValueSql(alias = 'g') {
+export function pipelineValueSql(alias = 'g', opportunityKindColumn = null) {
   const p = alias ? `${alias}.` : ''
-  return `COALESCE(NULLIF(${p}amount_requested, 0), NULLIF(${p}amount_max, 0), NULLIF(${p}amount_min, 0), 0)`
+  const wide = `(${p}amount_min > 0 AND ${p}amount_max > ${p}amount_min AND ${p}amount_max > ${p}amount_min * ${WIDE_AWARD_RANGE_RATIO})`
+  const kindExcluded = opportunityKindColumn
+    ? `LOWER(COALESCE(${opportunityKindColumn}, '')) IN ('directory', 'referral', 'school_portal', 'past_award_intel', 'benefit')`
+    : '0 = 1'
+  return `CASE
+    WHEN LOWER(COALESCE(${p}eligibility_status, '')) = 'ineligible'
+      OR UPPER(COALESCE(${p}match_decision, '')) = 'REJECT'
+      OR ${kindExcluded}
+    THEN 0
+    ELSE COALESCE(
+      CASE WHEN NULLIF(${p}amount_requested, 0) IS NOT NULL
+                  AND NOT (${wide} AND ${p}amount_requested = ${p}amount_max)
+           THEN ${p}amount_requested END,
+      CASE WHEN ${wide} THEN ${p}amount_min END,
+      NULLIF(${p}amount_max, 0),
+      NULLIF(${p}amount_min, 0),
+      0)
+  END`
 }
 
 /**
@@ -102,10 +119,25 @@ export function pipelineValueWithCatalogSql(alias = 'g', foAlias = 'fo') {
 
 /** JS twin of pipelineValueSql for rows already in memory. */
 export function grantPipelineValue(grant) {
-  for (const key of ['amount_requested', 'amount_max', 'amount_min']) {
-    const v = Number(grant?.[key])
-    if (Number.isFinite(v) && v > 0) return v
-  }
+  if (String(grant?.eligibility_status ?? '').trim().toLowerCase() === 'ineligible') return 0
+  if (String(grant?.match_decision ?? '').trim().toUpperCase() === 'REJECT') return 0
+
+  const kind = String(grant?.opportunity_kind ?? '').trim().toLowerCase()
+  if (['directory', 'referral', 'school_portal', 'past_award_intel', 'benefit'].includes(kind)) return 0
+
+  const requested = Number(grant?.amount_requested)
+  const min = Number(grant?.amount_min)
+  const max = Number(grant?.amount_max)
+  const wide = Number.isFinite(min) && min > 0 &&
+    Number.isFinite(max) && max > min && max > min * WIDE_AWARD_RANGE_RATIO
+
+  // Schema has no requested-amount provenance. Conservatively treat only an
+  // exact requested==ceiling value on a wide range as auto-derived; every
+  // independently different positive request remains authoritative.
+  if (Number.isFinite(requested) && requested > 0 && !(wide && requested === max)) return requested
+  if (wide) return min
+  if (Number.isFinite(max) && max > 0) return max
+  if (Number.isFinite(min) && min > 0) return min
   return 0
 }
 
@@ -119,8 +151,8 @@ export function grantPipelineValue(grant) {
  *
  * @param {string} [alias='g'] table alias; pass '' for un-aliased queries.
  */
-export function unvaluedCountSql(alias = 'g') {
-  return `SUM(CASE WHEN ${pipelineValueSql(alias)} = 0 THEN 1 ELSE 0 END)`
+export function unvaluedCountSql(alias = 'g', opportunityKindColumn = null) {
+  return `SUM(CASE WHEN ${pipelineValueSql(alias, opportunityKindColumn)} = 0 THEN 1 ELSE 0 END)`
 }
 
 /** JS twin of unvaluedCountSql for rows already in memory. */
