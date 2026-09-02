@@ -36,11 +36,10 @@
  *     `normalizeNeedCategory` the profile side uses.
  *   - "At least PART" of one declared need is the owner's bar: one overlapping
  *     canonical need passes.
- *   - SILENCE IS NEUTRAL ON BOTH SIDES and is REPORTED, never hidden. A profile
- *     that declares no needs is a profile we cannot read, not a profile with
- *     nothing to fund; a row that states no need vocabulary is silent, not
- *     contrary. Both outcomes carry a distinct `detail` so every sweep can
- *     count them per reason instead of folding them into "kept".
+ *   - SILENCE FAILS AUTOMATED ADMISSION on both sides and is REPORTED, never
+ *     hidden. Unknown is not positive evidence for a hard gate. Both outcomes
+ *     carry a distinct `detail` so every sweep can count and quarantine them
+ *     instead of folding them into "kept".
  */
 
 import { normalizeNeedCategory } from './profileNormalizer.js'
@@ -91,7 +90,7 @@ export function parseMaybeJson(value, fallback) {
  * @param {object|null} sections    `{ section_key: parsedData }`
  * @returns {string[]} canonical need ids, de-duplicated, insertion-ordered
  */
-export function declaredNeedsFrom(profileRow, sections, { includeSectionKeys = true } = {}) {
+export function declaredNeedsFrom(profileRow, sections, { includeSectionKeys = false } = {}) {
   const needs = new Set()
   const addNeed = (value) => {
     const canonical = canonicalNeed(value)
@@ -204,7 +203,7 @@ export function evaluateDeclaredNeedCoverage(row, declaredNeeds) {
   const opportunityNeeds = opportunityNeedVocabulary(row)
   if (needs.length === 0) {
     return {
-      pass: true,
+      pass: false,
       detail: NEED_COVERAGE_DETAIL.PROFILE_DECLARES_NO_NEEDS,
       matched: [],
       profile_needs: [],
@@ -213,7 +212,7 @@ export function evaluateDeclaredNeedCoverage(row, declaredNeeds) {
   }
   if (opportunityNeeds.length === 0) {
     return {
-      pass: true,
+      pass: false,
       detail: NEED_COVERAGE_DETAIL.OPPORTUNITY_STATES_NO_NEEDS,
       matched: [],
       profile_needs: needs,
