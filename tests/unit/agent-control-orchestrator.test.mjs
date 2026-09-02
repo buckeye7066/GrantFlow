@@ -550,6 +550,51 @@ describe('Agent Control Center — notifications + status', () => {
 })
 
 describe('Agent Control Center — store helpers', () => {
+  it('ensureSchema retries after a transient DDL failure and caches only success', async () => {
+    _resetSchemaCache()
+    let failedOnce = false
+    let runTableAttempts = 0
+    const db = {
+      prepare(sql) {
+        return {
+          async run() {
+            if (/CREATE TABLE IF NOT EXISTS agent_control_runs\s*\(/i.test(sql)) {
+              runTableAttempts += 1
+              if (!failedOnce) {
+                failedOnce = true
+                throw new Error('transient ddl failure')
+              }
+            }
+            return { changes: 0 }
+          },
+        }
+      },
+    }
+
+    await ensureSchema(db)
+    await ensureSchema(db)
+    await ensureSchema(db)
+    assert.equal(runTableAttempts, 2)
+  })
+
+  it('run-wide stop polling ignores an agent-scoped stop', async () => {
+    const db = makeDb()
+    await ensureSchema(db)
+    await recordStopRequest(db, {
+      controlRunId: 'run-scoped-stop',
+      agentName: 'robert',
+      requestType: 'graceful_stop',
+    })
+    assert.equal(
+      await latestUnfulfilledStop(db, 'run-scoped-stop', { runWideOnly: true }),
+      null,
+    )
+    assert.equal(
+      (await latestUnfulfilledStop(db, 'run-scoped-stop', { agentName: 'robert' }))?.request_type,
+      'graceful_stop',
+    )
+  })
+
   it('latestUnfulfilledStop respects priority: emergency > cancel > graceful_stop > pause', async () => {
     const db = makeDb()
     await ensureSchema(db)
