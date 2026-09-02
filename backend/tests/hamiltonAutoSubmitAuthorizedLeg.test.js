@@ -334,6 +334,65 @@ describe('stored auto-submit authorization reaches the submit step', () => {
     expect(events.find((event) => event.event_type === 'submitted')).toBeFalsy()
   })
 
+  it('refuses an opportunity-only selection whose authoritative grant is submitted', async () => {
+    const db = makeDb()
+    await seedFixture(db)
+    await db.prepare('UPDATE grants SET status = ? WHERE id = ?')
+      .run('submitted', 'g-1')
+
+    const result = await automateSingleSource(db, {
+      profileId: PROFILE,
+      userId: 'user-1',
+      source: { opportunity_id: 'opp-1', current_stage: 'saved' },
+      options: { allow_auto_submit: true },
+    })
+
+    expect(result).toMatchObject({
+      task: null,
+      skipped: true,
+      reason: 'pipeline_stage_protected',
+      pipeline_stage: 'submitted',
+    })
+    expect(runAutopilot).not.toHaveBeenCalled()
+  })
+
+  it('binds an opportunity-only run to its grant and rechecks it at submit time', async () => {
+    process.env.HAMILTON_TAILORED_APPROVAL_GATE = '0'
+    const db = makeDb()
+    await seedFixture(db)
+    await seedStoredAuthorization(db, { submit: true })
+    runAutopilot.mockImplementationOnce(async ({ beforeSubmit }) => {
+      await db.prepare('UPDATE grants SET status = ? WHERE id = ?')
+        .run('submitted', 'g-1')
+
+      const boundary = await beforeSubmit()
+      expect(boundary).toMatchObject({
+        allow: false,
+        reason: 'pipeline_stage_protected',
+        pipeline_stage: 'submitted',
+      })
+      return {
+        status: 'completed_draft',
+        submit_withheld_reason: boundary.reason,
+        filled_fields: [],
+        pages_visited: 1,
+        trace: [],
+      }
+    })
+
+    const result = await automateSingleSource(db, {
+      profileId: PROFILE,
+      userId: 'user-1',
+      source: { opportunity_id: 'opp-1', current_stage: 'saved' },
+      options: { allow_auto_submit: true },
+    })
+
+    expect(result.task.grant_id).toBe('g-1')
+    expect(result.autopilot_result.submit_withheld_reason).toBe('pipeline_stage_protected')
+    const events = await listTaskEvents(db, result.task.id)
+    expect(events.find((event) => event.event_type === 'submitted')).toBeFalsy()
+  })
+
   // OWNER RULE 2026-08-03: "auto submit should mean auto submit. No more, no
   // less." An unapproved (or absent) tailored record no longer withholds an
   // authorized submit; only genuine incompleteness (missing required
