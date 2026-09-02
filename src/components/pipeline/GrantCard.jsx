@@ -666,6 +666,24 @@ function GrantCard({ grant, organization, organizationName, onStatusChange, onSt
 // callbacks each render, which would defeat memoization). The callbacks act on the
 // passed `grant`, which IS in the comparison, so skipping stale-identity is safe.
 function grantCardPropsEqual(prev, next) {
+  // Normalize eligibility-related fields used by the Ineligible badge/Hamilton lock
+  const prevEligibility = String(prev.grant?.eligibility_status ?? '').trim().toLowerCase()
+  const nextEligibility = String(next.grant?.eligibility_status ?? '').trim().toLowerCase()
+  const prevDecision = String(prev.grant?.match_decision ?? '').trim().toUpperCase()
+  const nextDecision = String(next.grant?.match_decision ?? '').trim().toUpperCase()
+  // Deep compare ineligibility reasons (array or JSON string)
+  const prevReasons = (() => {
+    const raw = prev.grant?.ineligibility_reasons
+    if (Array.isArray(raw)) return raw
+    try { return JSON.parse(raw ?? '[]') } catch { return [] }
+  })()
+  const nextReasons = (() => {
+    const raw = next.grant?.ineligibility_reasons
+    if (Array.isArray(raw)) return raw
+    try { return JSON.parse(raw ?? '[]') } catch { return [] }
+  })()
+  const reasonsEqual = JSON.stringify(prevReasons) === JSON.stringify(nextReasons)
+
   return (
     prev.grant?.id === next.grant?.id &&
     prev.grant?.status === next.grant?.status &&
@@ -674,6 +692,10 @@ function grantCardPropsEqual(prev, next) {
     prev.grant?.match_score === next.grant?.match_score &&
     prev.grant?.deadline === next.grant?.deadline &&
     prev.grant?.updated_at === next.grant?.updated_at &&
+    // Eligibility-related props that drive the Ineligible badge and Hamilton availability
+    prevEligibility === nextEligibility &&
+    prevDecision === nextDecision &&
+    reasonsEqual &&
     prev.isDragging === next.isDragging &&
     prev.checklistProgress === next.checklistProgress &&
     prev.showSummary === next.showSummary &&

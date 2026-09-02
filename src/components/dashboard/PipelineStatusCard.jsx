@@ -44,6 +44,11 @@ function resolveCount(stats, key) {
 }
 
 function grantValue(grant) {
+  // Exclude quarantined/ineligible rows from dollar totals
+  const eligibility = String(grant?.eligibility_status ?? '').trim().toLowerCase()
+  const decision = String(grant?.match_decision ?? '').trim().toUpperCase()
+  if (eligibility === 'ineligible' || decision === 'REJECT') return 0
+
   const candidates = grant?.status === 'awarded'
     ? [grant?.amount_awarded, grant?.amount_requested, grant?.amount_max, grant?.amount_min, grant?.amount]
     : [grant?.amount_requested, grant?.amount_max, grant?.amount_min, grant?.amount, grant?.amount_awarded]
