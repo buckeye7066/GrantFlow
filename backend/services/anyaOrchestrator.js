@@ -92,6 +92,15 @@ export const CHAT_CALLABLE_TOOL_DOCS = [
   ['app.explainFeature', 'Explain what a GrantFlow page or feature does, its main actions, and how it relates to other features (routeName e.g. SmartMatcher, Pipeline, MyProfiles).'],
   ['app.explainField', 'Explain what a specific profile field does, why it matters for matching, and whether it affects crawlers (field key e.g. zip, state, health_conditions).'],
   ['app.getMaintenanceStatus', 'Read the live maintenance state and report whether the banner is on or off. Use whenever asked about maintenance, the banner, downtime, or reopening.'],
+  ['system.health', 'Read current GrantFlow system health and return grounded component status. Read-only.'],
+  ['admin.crawler.list', 'List configured crawlers and their current state. Read-only; owner/admin only.'],
+  ['admin.crawler.check', 'Inspect the latest result and failure state for a named crawler. Read-only; owner/admin only.'],
+  ['admin.hamilton.sessionReadiness', 'Report whether Hamilton has the saved sessions and authentication prerequisites needed for portal work. Read-only; owner/admin only.'],
+  ['admin.hamilton.portalAutopilotReadiness', 'Report Hamilton portal-autopilot readiness, blockers, and task counts. Read-only; owner/admin only.'],
+  ['admin.anya.getStatus', 'Report the current autonomous Anya agent/crawler runner state. Read-only; owner/admin only.'],
+  ['owner.get_self_heal_status', 'Report the current self-healing agent state and recent outcome. Read-only; owner only.'],
+  ['owner.get_portal_sync_status', 'Report Hamilton portal synchronization status and blockers. Read-only; owner only.'],
+  ['owner.coverage_audit_status', 'Report crawler coverage audit state, gaps, and most recent outcome. Read-only; owner only.'],
   ['profile.thresholdReport', "Show what the profile qualifies for and ALMOST qualifies for — each source's explicit ACT/SAT/GPA/income/age requirement vs the profile's facts, the exact gap, and the application link."],
   ['profile.find', "Find a profile by (partial) NAME — e.g. 'Robert' — and get its id and type. ALWAYS use this instead of asking the user for a profile ID when they name a person or profile."],
   ['chat.setAppearance', "Change this chat panel's colors when the user says it is hard to read or asks for a different background / dark mode / higher contrast. preset: 'dark', 'high_contrast', or 'default' (restore normal), or background: '#hex'. Text stays readable automatically."],
@@ -107,7 +116,7 @@ const _CHAT_TOOL_PROMPT_LINES = [
   '',
   'You do NOT have a chat tool for anything else. In particular:',
   '- Writing an LOI, needs statement, or full grant/benefit application: there is NO tool — you write the document yourself, directly in your reply, using the user\'s real profile data. Producing the text IS the deliverable; never claim a tool "generated" or "saved" it.',
-  '- Submission details, letters of medical necessity, medical profile review, pipeline medical scans, codebase search, cross-session memory, and broad system-health checks run through GrantFlow\'s app panels, not this chat. The live maintenance state is the exception: call app.getMaintenanceStatus and report the result. For everything else, point the user to the exact screen — do NOT claim you executed it.',
+  '- Submission details, letters of medical necessity, medical profile review, pipeline medical scans, codebase search, and cross-session memory run through GrantFlow\'s app panels, not this chat. For live operational questions, call the appropriate read-only system, crawler, Hamilton, Anya, self-heal, portal-sync, or coverage-audit tool and report its evidence. Do NOT guess or send the owner elsewhere when a listed status tool can answer.',
 ]
 
 // OpenAI's tool/function naming spec only allows [a-zA-Z0-9_-], so the
