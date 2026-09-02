@@ -185,6 +185,10 @@ import {
 } from '../services/hamilton/hamiltonCustomFieldRegistry.js'
 import { resolveMissingInfoItem } from '../services/hamilton/applicationTaskStore.js'
 import { categorizeHamiltonTask } from '../../shared/hamiltonTaskCategory.js'
+import {
+  HAMILTON_PROTECTED_PIPELINE_STATUSES,
+  isHamiltonProtectedPipelineStage,
+} from '../../shared/hamiltonProcessingPolicy.js'
 import { classifyNeedYouBlock } from '../services/hamilton/hamiltonNeedYouRelease.js'
 import { HAMILTON_ADMIN_EMAIL } from '../services/hamilton/hamiltonAdminAccount.js'
 import { markNotificationsResolved } from '../services/hamilton/hamiltonNotifications.js'
@@ -1198,6 +1202,7 @@ const APPLY_SURFACE_PREFERENCE_SQL = `CASE WHEN COALESCE(g.application_url, fo.a
 // it can only speak to the grant's own columns. A missing kind is NEUTRAL here
 // for the same reason it is above - absence of a signal is not a denial.
 const APPLY_SURFACE_PREFERENCE_BARE_SQL = `CASE WHEN COALESCE(application_url, portal_url) IS NOT NULL THEN 0 ELSE 1 END`
+const HAMILTON_PROTECTED_STATUS_SQL = HAMILTON_PROTECTED_PIPELINE_STATUSES.map(() => '?').join(', ')
 
 async function listReadySources(db, profileId) {
   // FUNDER LEADS are NEVER auto-submit-ready. A 990 foundation Robert added and
@@ -1250,10 +1255,10 @@ async function listReadySources(db, profileId) {
          FROM grants g
          LEFT JOIN funding_opportunities fo ON fo.id = g.funding_opportunity_id
         WHERE g.profile_id = ?
-          AND g.status NOT IN ('submitted', 'awarded', 'declined', 'archived')${categoryFilterG}
+          AND g.status NOT IN (${HAMILTON_PROTECTED_STATUS_SQL})${categoryFilterG}
         ORDER BY ${APPLY_SURFACE_PREFERENCE_SQL}, g.updated_at DESC
         LIMIT 100`,
-    ).all(profileId)
+    ).all(profileId, ...HAMILTON_PROTECTED_PIPELINE_STATUSES)
   } catch {
     // Degraded schema (e.g. prod fo.url drift / missing column): fall back to
     // the bare grants read so ready-sources never 500s.
@@ -1264,10 +1269,10 @@ async function listReadySources(db, profileId) {
       `SELECT id, funding_opportunity_id, title, status
          FROM grants
         WHERE profile_id = ?
-          AND status NOT IN ('submitted', 'awarded', 'declined', 'archived')${categoryFilterBare}
+          AND status NOT IN (${HAMILTON_PROTECTED_STATUS_SQL})${categoryFilterBare}
         ORDER BY ${APPLY_SURFACE_PREFERENCE_BARE_SQL}, updated_at DESC
         LIMIT 100`,
-    ).all(profileId)
+    ).all(profileId, ...HAMILTON_PROTECTED_PIPELINE_STATUSES)
   }
   const mapped = (Array.isArray(rows) ? rows : []).map((r, idx) => {
     const source = {
@@ -1359,6 +1364,16 @@ router.post('/start-autopilot', startLimiter, async (req, res) => {
     }
   }
   if (selectedSources.length === 0) return res.status(400).json({ error: 'selected_sources_required' })
+  const protectedSources = selectedSources.filter((source) =>
+    isHamiltonProtectedPipelineStage(source?.current_stage || source?.currentStage),
+  )
+  if (protectedSources.length > 0) {
+    return res.status(409).json({
+      error: 'pipeline_stage_protected',
+      message: 'Hamilton will not restart submitted or post-submission funding sources. Verify their existing submission history instead.',
+      protected_count: protectedSources.length,
+    })
+  }
   // Web callers may reference saved sessions/documents only by opaque,
   // profile-owned identifiers. Raw server paths would let an authenticated
   // caller make Playwright read or upload arbitrary files from the host.
