@@ -76,6 +76,7 @@ async function seed() {
       entities: ['student'],
       needs: ['education'],
       state: 'TN',
+      isNational: false,
       grantStatus: 'saved',
       taskStatus: 'ready_to_start',
     },
@@ -86,6 +87,7 @@ async function seed() {
       entities: ['nonprofit', 'school'],
       needs: ['education'],
       state: null,
+      isNational: true,
       grantStatus: 'saved',
       taskStatus: 'waiting_for_review',
     },
@@ -96,6 +98,7 @@ async function seed() {
       entities: ['individual', 'family'],
       needs: ['housing'],
       state: 'AK',
+      isNational: false,
       grantStatus: 'interested',
       taskStatus: 'filling_portal',
     },
@@ -106,6 +109,7 @@ async function seed() {
       entities: ['school', 'university'],
       needs: ['education'],
       state: 'TN',
+      isNational: false,
       grantStatus: 'portal',
       taskStatus: 'waiting_for_review',
     },
@@ -116,6 +120,7 @@ async function seed() {
       entities: ['government', 'nonprofit'],
       needs: ['housing'],
       state: null,
+      isNational: true,
       grantStatus: 'submitted',
       taskStatus: 'waiting_for_review',
     },
@@ -125,8 +130,8 @@ async function seed() {
     INSERT INTO funding_opportunities (
       id, title, sponsor, description, entity_types_allowed,
       need_types_supported, categories, opportunity_kind, source,
-      record_origin, source_url, application_url, state, is_active, link_status
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, 'direct', 'test_lane', 'live_crawl', ?, ?, ?, 1, 'ok')
+      record_origin, source_url, application_url, state, is_national, is_active, link_status
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, 'direct', 'test_lane', 'live_crawl', ?, ?, ?, ?, 1, 'ok')
   `)
   const insertGrant = sqlite.prepare(`
     INSERT INTO grants (
@@ -157,6 +162,7 @@ async function seed() {
       url,
       url,
       item.state,
+      item.isNational ? 1 : 0,
     )
     insertGrant.run(
       grantId,

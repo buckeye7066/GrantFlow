@@ -156,6 +156,7 @@ function countAgentWork(agentName, summary) {
       return 0
   }
 }
+import { canTransition } from './agentRunStateMachine.js'
 import {
   notifyAgentBlocked,
   notifyAgentFailed,
@@ -208,16 +209,43 @@ export function authorizeControlCenterUser(user, context) {
 export function getCanonicalAdminEmail() { return ADMIN_EMAIL }
 
 /**
- * Build the ordered step plan for a run. Sam pre/postflight only fire
- * for full_cycle / selected_agents runs that include sam.
+ * Start the documented background full-agent cycle without manufacturing an
+ * HTTP request principal. This is the single internal entry point used by the
+ * scheduler; it still goes through startRun, schema checks, durable run rows,
+ * distributed locks, adapter consent gates, and the normal audit timeline.
  */
-function buildStepPlan(runType, agents, options) {
+export async function startScheduledCycle(db, { options = {} } = {}) {
+  if (!ADMIN_EMAIL) {
+    return { skipped: true, reason: 'agent_control_admin_email_not_configured' }
+  }
+  return startRun(db, {
+    runType: 'scheduled_cycle',
+    options: {
+      scheduled: true,
+      skip_if_locked: true,
+      run_name: 'Scheduled background agent cycle',
+      ...options,
+    },
+    user: {
+      userId: 'system_agent_scheduler',
+      email: ADMIN_EMAIL,
+      primary_email: ADMIN_EMAIL,
+      controlCenterAuthorized: true,
+    },
+  })
+}
+
+/**
+ * Build the ordered step plan for a run. Sam pre/postflight only fire
+ * for full_cycle / scheduled_cycle / selected_agents runs that include sam.
+ */
+export function buildStepPlan(runType, agents, options) {
   const sel = new Set(agents)
   const includeSam = sel.has('sam')
   const plan = []
   let order = 0
 
-  if ((runType === 'full_cycle' || runType === 'selected_agents' || runType === 'sam_only')
+  if ((runType === 'full_cycle' || runType === 'scheduled_cycle' || runType === 'selected_agents' || runType === 'sam_only')
       && includeSam
       && options.run_sam_preflight !== false) {
     plan.push({ agent: 'sam', step_name: 'sam_preflight', step_order: order++, stage: 'preflight' })
@@ -234,7 +262,7 @@ function buildStepPlan(runType, agents, options) {
     plan.push({ agent: 'sam', step_name: 'sam_main', step_order: order++, stage: 'observe' })
   }
 
-  if ((runType === 'full_cycle' || runType === 'selected_agents' || runType === 'sam_only')
+  if ((runType === 'full_cycle' || runType === 'scheduled_cycle' || runType === 'selected_agents' || runType === 'sam_only')
       && includeSam
       && options.run_sam_postflight !== false) {
     plan.push({ agent: 'sam', step_name: 'sam_postflight', step_order: order++, stage: 'postflight' })
@@ -288,8 +316,8 @@ export async function startRun(db, {
   // can't race past us.
   if (runType === 'full_cycle') {
     const active = await getActiveRun(db)
-    if (active && active.run_type === 'full_cycle') {
-      const e = new Error(`A full_cycle run is already in progress (id=${active.id}).`)
+    if (active && ['full_cycle', 'scheduled_cycle'].includes(active.run_type)) {
+      const e = new Error(`A full agent cycle is already in progress (id=${active.id}).`)
       e.status = 409
       e.runId = active.id
       throw e
@@ -322,7 +350,7 @@ export async function startRun(db, {
   // for other run types we lock the per-agent name so individual runs
   // can't overlap with each other (but they can overlap with a
   // full_cycle if explicitly allowed).
-  const lockName = runType === 'full_cycle'
+  const lockName = ['full_cycle', 'scheduled_cycle'].includes(runType)
     ? FULL_CYCLE_LOCK
     : (resolvedAgents.length === 1 ? agentLockName(resolvedAgents[0]) : null)
 
@@ -426,8 +454,29 @@ export async function startRun(db, {
 // ---------------------------------------------------------------------------
 // Stop / pause / resume command surface
 // ---------------------------------------------------------------------------
+async function requireRunTransition(db, runId, event) {
+  const run = await getRun(db, runId)
+  if (!run) {
+    const error = new Error(`Agent-control run not found: ${runId}`)
+    error.status = 404
+    error.code = 'agent_control_run_not_found'
+    throw error
+  }
+  if (!canTransition(run.status, event)) {
+    const error = new Error(
+      `Cannot ${event} agent-control run ${runId} while it is ${run.status}.`,
+    )
+    error.status = 409
+    error.code = 'invalid_run_transition'
+    error.currentStatus = run.status
+    throw error
+  }
+  return run
+}
+
 export async function pauseRun(db, runId, { user = null, reason = null } = {}) {
   if (!isControlCenterAdmin(user)) { const e = new Error('admin only'); e.status = 403; throw e }
+  await requireRunTransition(db, runId, 'pause')
   await recordStopRequest(db, {
     controlRunId: runId,
     requestType: 'pause',
@@ -449,6 +498,7 @@ export async function pauseRun(db, runId, { user = null, reason = null } = {}) {
 
 export async function resumeRun(db, runId, { user = null } = {}) {
   if (!isControlCenterAdmin(user)) { const e = new Error('admin only'); e.status = 403; throw e }
+  await requireRunTransition(db, runId, 'resume')
   await recordStopRequest(db, {
     controlRunId: runId,
     requestType: 'resume',
@@ -456,8 +506,17 @@ export async function resumeRun(db, runId, { user = null } = {}) {
     requestedByUserId: user?.userId,
   })
   // Mark the existing pause requests fulfilled so the next poll sees
-  // the resume state cleanly.
+  // the resume state cleanly. A step that cooperatively paused is requeued:
+  // its adapter resumes from durable task state instead of being skipped.
   await fulfillStopRequestsByType(db, runId, 'pause')
+  const pausedSteps = await listSteps(db, runId)
+  for (const step of pausedSteps) {
+    if (step.status === 'paused') {
+      await setStepStatus(db, step.id, 'queued', {
+        progress: { ...(step.progress || {}), resumed_at: new Date().toISOString() },
+      })
+    }
+  }
   await setRunStatus(db, runId, 'running', { resumeRequestedAt: new Date().toISOString() })
   await recordEvent(db, {
     controlRunId: runId,
@@ -479,6 +538,7 @@ export async function resumeRun(db, runId, { user = null } = {}) {
 
 export async function stopRun(db, runId, { user = null, reason = null } = {}) {
   if (!isControlCenterAdmin(user)) { const e = new Error('admin only'); e.status = 403; throw e }
+  await requireRunTransition(db, runId, 'graceful_stop')
   await recordStopRequest(db, {
     controlRunId: runId,
     requestType: 'graceful_stop',
@@ -499,6 +559,7 @@ export async function stopRun(db, runId, { user = null, reason = null } = {}) {
 
 export async function emergencyStopRun(db, runId, { user = null, reason = null } = {}) {
   if (!isControlCenterAdmin(user)) { const e = new Error('admin only'); e.status = 403; throw e }
+  await requireRunTransition(db, runId, 'emergency_stop')
   await recordStopRequest(db, {
     controlRunId: runId,
     requestType: 'emergency_stop',
@@ -541,6 +602,7 @@ export async function emergencyStopRun(db, runId, { user = null, reason = null }
 
 export async function cancelRun(db, runId, { user = null, reason = null } = {}) {
   if (!isControlCenterAdmin(user)) { const e = new Error('admin only'); e.status = 403; throw e }
+  await requireRunTransition(db, runId, 'cancel')
   await recordStopRequest(db, {
     controlRunId: runId,
     requestType: 'cancel',
@@ -584,6 +646,7 @@ export async function startAgent(db, agentName, { user = null, options = {} } = 
 }
 
 export async function stopAgent(db, agentName, { user = null, reason = null } = {}) {
+  if (!isControlCenterAdmin(user)) { const e = new Error('admin only'); e.status = 403; throw e }
   const name = String(agentName || '').toLowerCase()
   if (!ALL_AGENTS.includes(name)) {
     const e = new Error(`invalid agent "${agentName}"`); e.status = 400; throw e
@@ -649,8 +712,37 @@ export async function getControlCenterStatus(db) {
 // ---------------------------------------------------------------------------
 // Internal: orchestration loop
 // ---------------------------------------------------------------------------
-export async function executeRun({ db, runId } = {}) {
+export async function executeRun(args = {}) {
+  const { db, runId } = args
   if (!db || !runId) return
+
+  // A run-level lock prevents rapid Resume clicks or two Railway replicas from
+  // starting concurrent executors for the same durable run. The full-cycle
+  // lock prevents other runs; this narrower lease prevents duplicate side
+  // effects inside one run. It is released on pause so Resume can take over.
+  const executorLockName = `agent_control:executor:${runId}`
+  const executorLease = await acquireLock(db, {
+    lockName: executorLockName,
+    controlRunId: runId,
+    acquiredBy: 'agent-control-executor',
+    ttlMs: 60 * 60 * 1000,
+    retries: 0,
+  })
+  if (!executorLease.acquired) {
+    return { skipped: true, reason: 'executor_already_active' }
+  }
+  try {
+    return await executeRunOnce(args)
+  } finally {
+    await releaseLock(db, {
+      lockName: executorLockName,
+      controlRunId: runId,
+      ownerToken: executorLease.ownerToken,
+    }).catch(() => {})
+  }
+}
+
+async function executeRunOnce({ db, runId } = {}) {
   const run = await getRun(db, runId)
   if (!run) return
 
@@ -696,8 +788,9 @@ export async function executeRun({ db, runId } = {}) {
   // lock's TTL is the safety net if resume never comes).
   try {
   while (true) {
-    // Refresh stop signal between every step.
-    const stopReq = await latestUnfulfilledStop(db, runId)
+    // Refresh run-wide stop signal between every step. Agent-scoped stops are
+    // consumed only by that agent's live signal and never terminate the fleet.
+    const stopReq = await latestUnfulfilledStop(db, runId, { runWideOnly: true })
     if (stopReq) {
       if (stopReq.request_type === 'pause') {
         pauseRequested = true
@@ -759,11 +852,41 @@ export async function executeRun({ db, runId } = {}) {
       : next.step_name?.endsWith('postflight') ? 'postflight'
       : 'main')
 
+    let agentStopRequested = false
+    let signalRefreshInFlight = false
+    const refreshStepControl = async () => {
+      if (signalRefreshInFlight) return
+      signalRefreshInFlight = true
+      try {
+        const request = await latestUnfulfilledStop(db, runId, { agentName: next.agent_name })
+        if (!request) return
+        const agentScoped = Boolean(request.agent_name)
+        if (request.request_type === 'pause' && !agentScoped) pauseRequested = true
+        if (request.request_type === 'graceful_stop' || request.request_type === 'cancel') {
+          if (agentScoped) agentStopRequested = true
+          else stoppedRequested = true
+        }
+        if (request.request_type === 'emergency_stop') {
+          stoppedRequested = true
+          emergency = true
+        }
+      } finally {
+        signalRefreshInFlight = false
+      }
+    }
+    await refreshStepControl()
+    const controlPollTimer = setInterval(() => {
+      void refreshStepControl().catch(() => {})
+    }, 100)
+    controlPollTimer.unref?.()
+
     const signal = makeSignal({
       runId,
       stepId: next.id,
       agentName: next.agent_name,
-      shouldStop: () => emergency || stoppedRequested || pauseRequested,
+      // Pause is distinct from stop: adapters may finish their current atomic
+      // unit and return paused so Resume can requeue the same durable step.
+      shouldStop: () => emergency || stoppedRequested || agentStopRequested,
       shouldPause: () => pauseRequested,
       isEmergency: () => emergency,
       heartbeat: async (progress) => heartbeat(db, next.id, progress),
@@ -781,7 +904,18 @@ export async function executeRun({ db, runId } = {}) {
         db,
         controlRunId: runId,
         stepId: next.id,
-        options: run.options || {},
+        options: {
+          ...(run.options || {}),
+          // Adapter-facing actor metadata is built from the durable run row
+          // after user options are spread, so request JSON cannot impersonate
+          // another caller by supplying its own control_actor object.
+          control_actor: {
+            user_id: run.started_by_user_id || null,
+            email: run.started_by_email || null,
+            run_type: run.run_type || null,
+            run_id: run.id || runId,
+          },
+        },
         stage,
         signal,
       })
@@ -792,12 +926,16 @@ export async function executeRun({ db, runId } = {}) {
         error: err?.message || String(err),
         summary: { agent: next.agent_name, error: String(err?.message || err) },
       }
+    } finally {
+      clearInterval(controlPollTimer)
+      await refreshStepControl().catch(() => {})
     }
 
     const status = (() => {
       if (result?.status === 'blocked') return 'blocked'
       if (result?.status === 'skipped') return 'skipped'
       if (result?.status === 'stopped') return 'stopped'
+      if (result?.status === 'paused') return 'paused'
       if (result?.status === 'failed') return 'failed'
       return result?.ok === false ? 'failed' : 'completed'
     })()
@@ -814,6 +952,7 @@ export async function executeRun({ db, runId } = {}) {
       eventType: status === 'failed' ? 'control.step.failed'
         : status === 'blocked' ? 'control.step.blocked'
         : status === 'stopped' ? 'control.step.stopped'
+        : status === 'paused' ? 'control.step.paused'
         : status === 'skipped' ? 'control.step.skipped'
         : 'control.step.completed',
       severity: status === 'failed' ? 'high' : status === 'blocked' ? 'high' : 'info',
@@ -835,6 +974,7 @@ export async function executeRun({ db, runId } = {}) {
       : (status === 'failed' ? 'failed'
         : status === 'blocked' ? 'blocked'
         : status === 'stopped' ? 'stopped'
+        : status === 'paused' ? 'paused'
         : status === 'skipped' ? 'skipped'
         : status)
     await insertActivityEvent(db, {
@@ -870,7 +1010,18 @@ export async function executeRun({ db, runId } = {}) {
       }
     }
 
-    if (status === 'stopped') {
+    if (status === 'paused') {
+      await setRunStatus(db, runId, 'paused')
+      await recordEvent(db, {
+        controlRunId: runId,
+        eventType: 'control.run.paused',
+        severity: 'medium',
+        message: `Run paused after ${next.agent_name}; the same durable step will resume.`,
+      })
+      return
+    }
+
+    if (status === 'stopped' && !agentStopRequested) {
       stoppedRequested = true
       partial = true
     }
@@ -880,12 +1031,20 @@ export async function executeRun({ db, runId } = {}) {
   }
 
   // Any in-flight step wasn't cleanly ended? Mark it stopped.
-  const stepsAfter = await listSteps(db, runId)
+  let stepsAfter = await listSteps(db, runId)
+  const persistedTotalWork = stepsAfter.reduce(
+    (sum, step) => sum + (step.status === 'completed' ? countAgentWork(step.agent_name, step.result) : 0),
+    0,
+  )
+  const failedSteps = stepsAfter.filter((step) => step.status === 'failed')
   for (const s of stepsAfter) {
     if (s.status === 'queued' && stoppedRequested) {
       await setStepStatus(db, s.id, 'skipped', { errorMessage: emergency ? 'emergency_stop' : 'stop_requested' })
     }
   }
+  // Re-read after terminalizing queued steps so the persisted summary reports
+  // their actual final states instead of stale "queued" snapshots.
+  stepsAfter = await listSteps(db, runId)
 
   // Resolve final run status. If a previous command (cancelRun /
   // emergencyStopRun) already set the run to a terminal state, respect
@@ -901,9 +1060,12 @@ export async function executeRun({ db, runId } = {}) {
     finalStatus = stillRunning ? 'partial_stop' : 'stopped'
   } else if (stoppedRequested) {
     finalStatus = 'stopped'
-  } else if (runError) {
+  } else if (runError || failedSteps.length > 0) {
     finalStatus = 'failed'
-  } else if (totalWork > 0) {
+    if (!runError) {
+      runError = `${failedSteps.length} agent step(s) failed: ${failedSteps.map((step) => step.agent_name).join(', ')}`
+    }
+  } else if (persistedTotalWork > 0 || totalWork > 0) {
     finalStatus = 'completed'
   } else {
     // Acceptance/verification: the agents executed without error but none
@@ -915,11 +1077,11 @@ export async function executeRun({ db, runId } = {}) {
   await setRunStatus(db, runId, finalStatus, {
     errorMessage: runError || null,
     summary: {
-      step_results: stepResults.map((r) => ({
-        agent: r.step.agent_name,
-        step: r.step.step_name,
-        status: r.status,
-        ok: r.ok,
+      step_results: stepsAfter.map((step) => ({
+        agent: step.agent_name,
+        step: step.step_name,
+        status: step.status,
+        ok: !['failed', 'blocked', 'stopped'].includes(step.status),
       })),
       stopped: stoppedRequested,
       emergency,

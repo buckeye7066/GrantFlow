@@ -14,6 +14,8 @@ import {
   createRun,
   createSteps,
   getRun,
+  getRunHighlights,
+  setRunStatus,
 } from '../../backend/services/agentControl/agentControlStore.js'
 import { executeRun } from '../../backend/services/agentControl/agentControlOrchestrator.js'
 import { setAdapter, resetRegistry } from '../../backend/services/agentControl/agentAdapters/agentAdapterRegistry.js'
@@ -95,6 +97,7 @@ test('a step that does no real work → run completed_noop + a noop telemetry ev
   const db = createSqliteTestDb(ACTIVITY_DDL)
   const run = await runOneStep(db, 'john', { agent: 'john', drafts_created: 0, drafts_blocked: 0 })
   assert.equal(run.status, 'completed_noop', 'a run with zero persisted work must NOT report completed')
+  assert.ok(run.completed_at, 'completed_noop must carry a terminal completion timestamp')
   const events = await readActivityEvents(db, { ...FULL_RANGE, limit: 50 })
   const johnEvents = events.filter((e) => e.agent_name === 'john')
   assert.ok(johnEvents.some((e) => e.status === 'noop'), 'expected an honest noop telemetry event')
@@ -123,4 +126,23 @@ test('aggregateJohn does not throw when john_alias_checks lacks alias_status (#3
   const out = await aggregateJohn(db, resolveRange({ range: '24h' }))
   assert.ok(!(out.notes || []).some((n) => /unavailable|does not exist/i.test(n)), `no metrics error expected, got: ${JSON.stringify(out.notes)}`)
   assert.equal(out.primary_metrics.alias_status, 'verified')
+})
+
+
+test('scheduled clean cycles appear in full-cycle and success highlights', async () => {
+  const db = createSqliteTestDb()
+  await ensureSchema(db)
+  const runId = await createRun(db, {
+    runType: 'scheduled_cycle',
+    requestedAgents: ['sam', 'robert', 'yana', 'john', 'hamilton'],
+    options: { scheduled: true },
+    status: 'queued',
+    adminEmail: 'owner@example.invalid',
+    startedByEmail: 'owner@example.invalid',
+  })
+  await setRunStatus(db, runId, 'completed_noop')
+  const highlights = await getRunHighlights(db)
+  assert.equal(highlights.last_full_cycle?.id, runId)
+  assert.equal(highlights.last_success?.id, runId)
+  assert.ok(highlights.last_success?.completed_at)
 })

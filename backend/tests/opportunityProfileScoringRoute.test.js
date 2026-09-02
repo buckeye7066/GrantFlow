@@ -109,9 +109,9 @@ function makeDb() {
     INSERT INTO funding_opportunities
       (id, title, sponsor, deadline, source_id, source_url, application_url, state, created_at)
     VALUES
-      ('opp-low', 'Low score', 'Funder', '2026-09-01', 'low', 'https://example.test/low', 'https://example.test/low', 'OH', '2026-08-01'),
-      ('opp-mid', 'Mid score', 'Funder', '2026-10-01', 'mid', 'https://example.test/mid', 'https://example.test/mid', 'OH', '2026-08-02'),
-      ('opp-high', 'High score', 'Funder', '2026-11-01', 'high', 'https://example.test/high', 'https://example.test/high', 'OH', '2026-08-03');
+      ('opp-low', 'Low score', 'Funder', '2027-09-01', 'low', 'https://example.test/low', 'https://example.test/low', 'OH', '2026-08-01'),
+      ('opp-mid', 'Mid score', 'Funder', '2027-10-01', 'mid', 'https://example.test/mid', 'https://example.test/mid', 'OH', '2026-08-02'),
+      ('opp-high', 'High score', 'Funder', '2027-11-01', 'high', 'https://example.test/high', 'https://example.test/high', 'OH', '2026-08-03');
   `)
   return db
 }

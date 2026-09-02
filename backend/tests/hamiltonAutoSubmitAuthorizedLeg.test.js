@@ -70,7 +70,8 @@ function makeDb() {
       id TEXT PRIMARY KEY,
       user_id TEXT,
       created_by TEXT,
-      display_name TEXT
+      display_name TEXT,
+      primary_type TEXT
     );
     CREATE TABLE profile_sections (
       profile_id TEXT,
@@ -82,8 +83,15 @@ function makeDb() {
       profile_id TEXT,
       title TEXT,
       description TEXT,
+      opportunity_kind TEXT,
+      entity_types_allowed TEXT,
       application_url TEXT,
-      source_url TEXT
+      source_url TEXT,
+      source TEXT,
+      record_origin TEXT,
+      source_trust_tier TEXT,
+      reality_status TEXT,
+      is_active INTEGER
     );
     CREATE TABLE grants (
       id TEXT PRIMARY KEY,
@@ -94,6 +102,10 @@ function makeDb() {
       status TEXT,
       updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
     );
+    CREATE TABLE profile_opportunity_matches (
+      profile_id TEXT, opportunity_id TEXT, match_score REAL, match_decision TEXT,
+      match_explanation TEXT, matcher_version TEXT, updated_at DATETIME, computed_at DATETIME
+    );
   `)
   const db = wrapSqlite(sqlite)
   _resetSchemaCache()
@@ -102,23 +114,37 @@ function makeDb() {
 }
 
 async function seedFixture(db) {
-  await db.prepare('INSERT INTO profiles (id, user_id, display_name) VALUES (?, ?, ?)')
-    .run(PROFILE, 'user-1', 'Focus Forward Ministry')
+  await db.prepare('INSERT INTO profiles (id, user_id, display_name, primary_type) VALUES (?, ?, ?, ?)')
+    .run(PROFILE, 'user-1', 'Focus Forward Ministry', 'nonprofit')
   await db.prepare('INSERT INTO profile_sections (profile_id, section_key, data) VALUES (?, ?, ?)')
-    .run(PROFILE, 'basic_information', JSON.stringify({ first_name: 'Focus', last_name: 'Forward', email: 'ffm@example.org' }))
+    .run(PROFILE, 'basic_information', JSON.stringify({ first_name: 'Focus', last_name: 'Forward', email: 'ffm@example.org', profile_category: 'nonprofit' }))
   // The auto-submit toggle now defaults OFF when unset (2026-08-03). This
   // suite pins the AUTHORIZED leg — the profile has explicitly selected
   // auto-submit — so the fixture writes the explicit true a real selection
   // persists.
   await db.prepare('INSERT INTO profile_sections (profile_id, section_key, data) VALUES (?, ?, ?)')
     .run(PROFILE, 'automation_preferences', JSON.stringify({ automations: { hamilton_auto_submit: true, hamilton_autopilot: true } }))
-  await db.prepare('INSERT INTO funding_opportunities (id, title, description, application_url) VALUES (?, ?, ?, ?)')
+  await db.prepare(`INSERT INTO funding_opportunities
+    (id, title, description, opportunity_kind, entity_types_allowed, application_url,
+     source_url, source, record_origin, source_trust_tier, reality_status, is_active)
+    VALUES (?, ?, ?, 'direct_grant', ?, ?, ?, 'curated_verified', 'curated_verified', 'official', 'real', 1)`)
     // Reserved synthetic host: the bounded release deliberately has zero real
     // reviewed submit adapters, but this fixture keeps the positive proof path
     // executable without enabling any real portal.
-    .run('opp-1', 'Community Ministry Grant', 'Apply through the portal.', 'https://hamilton-submit-fixture.invalid/apply')
+    .run(
+      'opp-1',
+      'Community Ministry Grant',
+      'Apply through the portal.',
+      JSON.stringify(['nonprofit']),
+      'https://hamilton-submit-fixture.invalid/apply',
+      'https://hamilton-submit-fixture.invalid/apply',
+    )
   await db.prepare('INSERT INTO grants (id, profile_id, funding_opportunity_id, title) VALUES (?, ?, ?, ?)')
     .run('g-1', PROFILE, 'opp-1', 'Community Ministry Grant')
+  await db.prepare(`INSERT INTO profile_opportunity_matches
+    (profile_id, opportunity_id, match_score, match_decision, matcher_version, updated_at, computed_at)
+    VALUES (?, ?, 90, 'accept', 'crawler-os', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`)
+    .run(PROFILE, 'opp-1')
 }
 
 async function runSource(db, extraOptions = {}) {
@@ -301,6 +327,119 @@ describe('stored auto-submit authorization reaches the submit step', () => {
     expect(result.autopilot_result.submit_withheld_reason).toBe('profile_auto_submit_disabled')
   })
 
+  it('a concurrent submitted-stage transition vetoes the irreversible click', async () => {
+    process.env.HAMILTON_TAILORED_APPROVAL_GATE = '0'
+    const db = makeDb()
+    await seedFixture(db)
+    await seedStoredAuthorization(db, { submit: true })
+    await seedTaskWith(db, { allowAutoSubmit: true })
+    runAutopilot.mockImplementationOnce(async ({ beforeSubmit }) => {
+      await db.prepare('UPDATE grants SET status = ? WHERE id = ?')
+        .run('submitted', 'g-1')
+
+      const boundary = await beforeSubmit()
+      expect(boundary).toMatchObject({
+        allow: false,
+        reason: 'pipeline_stage_protected',
+        pipeline_stage: 'submitted',
+      })
+      return {
+        status: 'completed_draft',
+        submit_withheld_reason: boundary.reason,
+        filled_fields: [],
+        pages_visited: 1,
+        trace: [],
+      }
+    })
+
+    const result = await runSource(db)
+
+    expect(result.task.status).toBe('waiting_for_review')
+    expect(result.autopilot_result.submit_withheld_reason).toBe('pipeline_stage_protected')
+    const events = await listTaskEvents(db, result.task.id)
+    expect(events.find((event) => event.event_type === 'submitted')).toBeFalsy()
+  })
+
+  it('refuses an opportunity-only selection whose authoritative grant is submitted', async () => {
+    const db = makeDb()
+    await seedFixture(db)
+    await db.prepare('UPDATE grants SET status = ? WHERE id = ?')
+      .run('submitted', 'g-1')
+
+    const result = await automateSingleSource(db, {
+      profileId: PROFILE,
+      userId: 'user-1',
+      source: { opportunity_id: 'opp-1', current_stage: 'saved' },
+      options: { allow_auto_submit: true },
+    })
+
+    expect(result).toMatchObject({
+      task: null,
+      skipped: true,
+      reason: 'pipeline_stage_protected',
+      pipeline_stage: 'submitted',
+    })
+    expect(runAutopilot).not.toHaveBeenCalled()
+  })
+
+  it('rejects a grant paired with a different opportunity before task creation', async () => {
+    const db = makeDb()
+    await seedFixture(db)
+
+    await expect(automateSingleSource(db, {
+      profileId: PROFILE,
+      userId: 'user-1',
+      source: {
+        grant_id: 'g-1',
+        opportunity_id: 'opp-different',
+        current_stage: 'saved',
+      },
+      options: { allow_auto_submit: true },
+    })).rejects.toMatchObject({
+      code: 'source_identity_mismatch',
+      status: 409,
+    })
+
+    expect(runAutopilot).not.toHaveBeenCalled()
+  })
+
+  it('binds an opportunity-only run to its grant and rechecks it at submit time', async () => {
+    process.env.HAMILTON_TAILORED_APPROVAL_GATE = '0'
+    const db = makeDb()
+    await seedFixture(db)
+    await seedStoredAuthorization(db, { submit: true })
+    runAutopilot.mockImplementationOnce(async ({ beforeSubmit }) => {
+      await db.prepare('UPDATE grants SET status = ? WHERE id = ?')
+        .run('submitted', 'g-1')
+
+      const boundary = await beforeSubmit()
+      expect(boundary).toMatchObject({
+        allow: false,
+        reason: 'pipeline_stage_protected',
+        pipeline_stage: 'submitted',
+      })
+      return {
+        status: 'completed_draft',
+        submit_withheld_reason: boundary.reason,
+        filled_fields: [],
+        pages_visited: 1,
+        trace: [],
+      }
+    })
+
+    const result = await automateSingleSource(db, {
+      profileId: PROFILE,
+      userId: 'user-1',
+      source: { opportunity_id: 'opp-1', current_stage: 'saved' },
+      options: { allow_auto_submit: true },
+    })
+
+    expect(result.task.grant_id).toBe('g-1')
+    expect(result.autopilot_result.submit_withheld_reason).toBe('pipeline_stage_protected')
+    const events = await listTaskEvents(db, result.task.id)
+    expect(events.find((event) => event.event_type === 'submitted')).toBeFalsy()
+  })
+
   // OWNER RULE 2026-08-03: "auto submit should mean auto submit. No more, no
   // less." An unapproved (or absent) tailored record no longer withholds an
   // authorized submit; only genuine incompleteness (missing required
@@ -334,14 +473,14 @@ describe('stored auto-submit authorization reaches the submit step', () => {
     const db = makeDb()
     await seedFixture(db)
     await db.prepare('UPDATE funding_opportunities SET application_url = ? WHERE id = ?')
-      .run('https://portal.example.org/apply', 'opp-1')
+      .run('https://www.mtsu.edu/scholarships/apply', 'opp-1')
     await seedStoredAuthorization(db, { submit: true })
     await seedTaskWith(db, { allowAutoSubmit: true })
 
     const result = await runSource(db)
 
     expect(runAutopilot).toHaveBeenCalledTimes(1)
-    expect(runAutopilot.mock.calls[0][0].url).toBe('https://portal.example.org/apply')
+    expect(runAutopilot.mock.calls[0][0].url).toBe('https://www.mtsu.edu/scholarships/apply')
     expect(runAutopilot.mock.calls[0][0].allowAutoSubmit).toBe(true)
     expect(result.skipped_browser).toBeFalsy()
     const events = await listTaskEvents(db, result.task.id)

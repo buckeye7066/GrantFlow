@@ -5,15 +5,14 @@
  *
  * 1. resolveContactFormVerifications — `submission_verification_required` is
  *    the honest quarantine for "Hamilton clicked submit and saw no receipt".
- *    Measured on prod 2026-08-31: all seven such cards on one profile were a
- *    MAILING-LIST / CONTACT form (first name + last name + email, one zip
- *    search) on a homepage — not an application. The engine now refuses those
+ *    Measured on prod 2026-08-31: several such cards were MAILING-LIST /
+ *    CONTACT forms rather than applications. The engine now refuses those
  *    clicks (hamiltonAutopilotEngine.isContactOrNewsletterForm); this sweep
- *    settles the ones already parked: when the retained run shows the filled
- *    fields were contact-shaped and no application-shaped field existed, the
- *    task closes as "no application was submitted" instead of asking the owner
- *    to check a portal for a newsletter sign-up. A run whose evidence is not
- *    that unambiguous is left exactly as it is — the quarantine is correct.
+ *    settles only historical rows whose retained run proves BOTH a small
+ *    contact-shaped field set and positive contact/newsletter surface text.
+ *    Bare name, email, phone, address, or ZIP fields are never sufficient:
+ *    real short applications can have exactly that shape. A run whose evidence
+ *    is absent or ambiguous remains in quarantine.
  *
  * 2. releaseParkedReviewsUnderFullAutomation — under the profile's full-
  *    automation toggle "waiting for your review" is not a state Hamilton may
@@ -51,13 +50,19 @@ export const CONTACT_SHAPED_KEYS = Object.freeze([
 ])
 const CONTACT_KEY_SET = new Set(CONTACT_SHAPED_KEYS)
 
+// Mirrors hamiltonAutopilotEngine.isContactOrNewsletterForm without importing
+// the Playwright-heavy engine module into this scheduled sweep.
+const APPLICATION_CONTEXT_RX = /\b(appl(?:y|ication|icant)|scholarship|fellowship|grant|award|nominat|enrol|registration|request (?:for )?(?:funding|assistance|aid))/i
+const APPLICATION_FIELD_SIGNAL_RX = /\b(essay|personal statement|statement of|gpa|grade point|graduat|date of birth|birth ?date|\bdob\b|major|degree|income|household|award|scholarship|applicant|upload|resume|résumé|transcript|reference|recommend|amount requested|budget|project (title|description|summary)|financial need|ssn|social security|student id|enrollment|semester|term|academic|citizenship|ethnicity|gender|veteran|disability|employer|occupation|address line|street)\b/i
+const CONTACT_SURFACE_RX = /newsletter|mailchimp|subscribe|mailing[\s_-]?list|stay\s+informed|contact[\s_-]?us|get\s+updates|keep\s+me\s+(?:posted|informed)/i
+
 /**
- * Was the retained run's submit a contact / newsletter form? Pure. TRUE only
- * when every filled key is contact identity, at most 4 distinct keys were
- * filled, nothing came from a narrative/LLM answer, and the run touched at
- * most 3 pages (a real multi-step application walks further).
+ * Was the retained run's submit unambiguously a contact/newsletter form?
+ * Application context in the task URL, confirmation URL or page text always
+ * wins. A small identity/contact field set is necessary but never sufficient:
+ * positive contact/newsletter surface evidence is required in every case.
  */
-export function isContactShapedSubmission(runResult = {}) {
+export function isContactShapedSubmission(runResult = {}, { urls = [] } = {}) {
   const filled = Array.isArray(runResult?.filled_fields) ? runResult.filled_fields : []
   if (filled.length === 0) return false
   const keys = new Set()
@@ -71,6 +76,18 @@ export function isContactShapedSubmission(runResult = {}) {
   if (keys.size > 4) return false
   const pages = Number(runResult?.pages_visited)
   if (Number.isFinite(pages) && pages > 3) return false
+
+  const contextHaystack = [
+    ...(Array.isArray(urls) ? urls : []),
+    runResult?.url,
+    runResult?.confirmation_url,
+    runResult?.confirmation_page_text,
+    runResult?.page_title,
+    runResult?.pageTitle,
+  ].filter(Boolean).join(' | ')
+  if (APPLICATION_CONTEXT_RX.test(contextHaystack)) return false
+  if (APPLICATION_FIELD_SIGNAL_RX.test([...keys].join(' | '))) return false
+  if (!CONTACT_SURFACE_RX.test(contextHaystack)) return false
   return true
 }
 
@@ -118,7 +135,8 @@ export async function resolveContactFormVerifications(db, { limit = 50, logger =
       const runs = await listAutopilotRuns(db, { taskId: task.id, limit: 3 })
       const latest = (runs || []).find((r) => r?.status === 'submission_verification_required' || parseResult(r)?.submit_clicked === true) || (runs || [])[0]
       const result = parseResult(latest)
-      if (!latest || !isContactShapedSubmission(result)) { out.kept += 1; continue }
+      const urls = [task.application_url, task.portal_url].filter(Boolean)
+      if (!latest || !isContactShapedSubmission(result, { urls })) { out.kept += 1; continue }
       const url = task.application_url || task.portal_url || result?.url || 'the page'
       const keys = [...new Set((result.filled_fields || []).map((f) => String(f?.key || '')))].join(', ')
       const message = `The form Hamilton submitted on ${url} was a contact / newsletter sign-up (${keys}), not an application — no application was submitted, so there is nothing to verify on a portal. Closed as a research lead; Hamilton no longer clicks these forms.`

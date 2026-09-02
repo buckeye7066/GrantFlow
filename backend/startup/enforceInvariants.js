@@ -4442,7 +4442,7 @@ export async function enforceGrantDirectAmountEnrichment(db, deps = {}) {
     const TIME_BUDGET_MS = Math.max(1000, Number.parseInt(deps.timeBudgetMs ?? process.env.GRANT_DIRECT_AMOUNT_TIME_BUDGET_MS ?? '20000', 10) || 20000)
     const MAX_ATTEMPTS = Math.max(1, Number.parseInt(deps.maxAttempts ?? process.env.AMOUNT_ENRICH_MAX_ATTEMPTS ?? '3', 10) || 3)
     const statuses = PIPELINE_ACTIVE_STATUSES.map((s) => `'${s}'`).join(', ')
-    const VAL = pipelineValueSql('g')
+    const VAL = pipelineValueSql('g', null, grantCols)
 
     const ENV_MAX = Math.max(1, Number.parseInt(deps.envMaxAttempts ?? AMOUNT_ENRICH_ENV_MAX_ATTEMPTS, 10) || AMOUNT_ENRICH_ENV_MAX_ATTEMPTS)
     const ENV_REPROBE = Math.max(0, Number.parseInt(deps.envReprobeLimit ?? AMOUNT_ENRICH_ENV_REPROBE_LIMIT, 10) || 0)
@@ -5087,7 +5087,7 @@ export async function enforceDeadUrlRepair(db, deps = {}) {
     const MAX_ATTEMPTS = Math.max(1, Number.parseInt(deps.maxAttempts ?? process.env.DEAD_URL_REPAIR_MAX_ATTEMPTS ?? '3', 10) || 3)
     const COOLDOWN_MS = Math.max(0, Number.parseInt(deps.cooldownMs ?? process.env.DEAD_URL_REPAIR_COOLDOWN_MS ?? String(7 * 24 * 60 * 60 * 1000), 10) || 0)
     const statuses = PIPELINE_ACTIVE_STATUSES.map((s) => `'${s}'`).join(', ')
-    const VAL = pipelineValueSql('g')
+    const VAL = pipelineValueSql('g', null, grantCols)
     const NON_SYNTH = `NOT EXISTS (SELECT 1 FROM profiles p WHERE p.id = g.profile_id AND p.created_by = 'agent:amy')`
 
     // Two candidate lanes — the same two places an answer can live (census rule).

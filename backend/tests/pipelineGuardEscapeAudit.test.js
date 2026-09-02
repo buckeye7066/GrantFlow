@@ -59,7 +59,7 @@ const ROWS = [
   // AWARDED money → KEPT via Robert's canonical protected-status set.
   { id: 'won', t: 'Some Non-Qualifying Org RFP', s: 'Big Org Fund', ent: ['nonprofit'], cats: ['legal'], url: 'https://example-org.org/rfp', status: 'awarded', awarded: 5000, keep: true },
   // A funder_lead research prospect — low-score BY DESIGN → excluded from the audit → KEPT.
-  { id: 'lead', t: 'Community Grantmaker Foundation (prospect)', s: 'Community Grantmaker', ent: ['nonprofit'], cats: ['education'], url: 'https://example-grantmaker.org', category: 'funder_lead', keep: true },
+  { id: 'lead', t: 'Community Grantmaker Foundation (prospect)', s: 'Community Grantmaker', ent: ['nonprofit'], cats: ['education'], kind: 'directory', url: 'https://example-grantmaker.org', category: 'funder_lead', keep: true },
 ]
 
 function seed(rows = ROWS) {
@@ -105,13 +105,14 @@ function seed(rows = ROWS) {
   }
 
   const fo = sqlite.prepare(`INSERT INTO funding_opportunities
-    (id, title, sponsor, entity_types_allowed, categories, source, source_url, application_url, is_active)
-    VALUES (@id, @title, @sponsor, @ent, @cats, 'test_lane', @url, @url, 1)`)
+    (id, title, sponsor, entity_types_allowed, categories, opportunity_kind,
+     source, source_url, application_url, is_active)
+    VALUES (@id, @title, @sponsor, @ent, @cats, @kind, 'test_lane', @url, @url, 1)`)
   const g = sqlite.prepare(`INSERT INTO grants
     (id, profile_id, funding_opportunity_id, title, funder, status, pipeline_category, application_url, url, amount_awarded, updated_at)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '2026-08-20T00:00:00Z')`)
   for (const r of rows) {
-    fo.run({ id: `fo-${r.id}`, title: r.t, sponsor: r.s, ent: JSON.stringify(r.ent), cats: JSON.stringify(r.cats ?? []), url: r.url })
+    fo.run({ id: `fo-${r.id}`, title: r.t, sponsor: r.s, ent: JSON.stringify(r.ent), cats: JSON.stringify(r.cats ?? []), kind: r.kind ?? 'grant', url: r.url })
     g.run(`g-${r.id}`, PROFILE_ID, `fo-${r.id}`, r.t, r.s, r.status ?? 'discovered', r.category ?? null, r.url, r.url, r.awarded ?? null)
     // Also seed a grant on the synthetic profile that WOULD be an escape — to
     // prove the real-only filter keeps Amy's reap off her own synthetics.

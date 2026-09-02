@@ -67,6 +67,7 @@ import { cancelActiveHamiltonTaskRun } from '../services/hamilton/hamiltonRunCan
 import {
   automateSelected,
   automateSingleSource,
+  loadAuthoritativeGrantForSource,
 } from '../services/hamilton/hamiltonAutomationOrchestrator.js'
 import { getLiveFrame } from '../services/hamilton/hamiltonLiveView.js'
 import { generateAndSavePacket } from '../services/hamilton/hamiltonApplicationPacketGenerator.js'
@@ -185,6 +186,10 @@ import {
 } from '../services/hamilton/hamiltonCustomFieldRegistry.js'
 import { resolveMissingInfoItem } from '../services/hamilton/applicationTaskStore.js'
 import { categorizeHamiltonTask } from '../../shared/hamiltonTaskCategory.js'
+import {
+  HAMILTON_PROTECTED_PIPELINE_STATUSES,
+  isHamiltonProtectedPipelineStage,
+} from '../../shared/hamiltonProcessingPolicy.js'
 import { classifyNeedYouBlock } from '../services/hamilton/hamiltonNeedYouRelease.js'
 import { HAMILTON_ADMIN_EMAIL } from '../services/hamilton/hamiltonAdminAccount.js'
 import { markNotificationsResolved } from '../services/hamilton/hamiltonNotifications.js'
@@ -1136,7 +1141,7 @@ router.post('/preflight', async (req, res) => {
     if (selectedSources.length === 0) {
       return res.status(409).json({
         error: 'no_ready_sources',
-        message: 'Nothing in this profile pipeline is ready to work. Add a funding source first.',
+        message: 'No source in this profile currently has a verified direct application surface for Hamilton to work.',
       })
     }
   }
@@ -1198,6 +1203,7 @@ const APPLY_SURFACE_PREFERENCE_SQL = `CASE WHEN COALESCE(g.application_url, fo.a
 // it can only speak to the grant's own columns. A missing kind is NEUTRAL here
 // for the same reason it is above - absence of a signal is not a denial.
 const APPLY_SURFACE_PREFERENCE_BARE_SQL = `CASE WHEN COALESCE(application_url, portal_url) IS NOT NULL THEN 0 ELSE 1 END`
+const HAMILTON_PROTECTED_STATUS_SQL = HAMILTON_PROTECTED_PIPELINE_STATUSES.map(() => '?').join(', ')
 
 async function listReadySources(db, profileId) {
   // FUNDER LEADS are NEVER auto-submit-ready. A 990 foundation Robert added and
@@ -1250,10 +1256,10 @@ async function listReadySources(db, profileId) {
          FROM grants g
          LEFT JOIN funding_opportunities fo ON fo.id = g.funding_opportunity_id
         WHERE g.profile_id = ?
-          AND g.status NOT IN ('submitted', 'awarded', 'declined', 'archived')${categoryFilterG}
+          AND g.status NOT IN (${HAMILTON_PROTECTED_STATUS_SQL})${categoryFilterG}
         ORDER BY ${APPLY_SURFACE_PREFERENCE_SQL}, g.updated_at DESC
         LIMIT 100`,
-    ).all(profileId)
+    ).all(profileId, ...HAMILTON_PROTECTED_PIPELINE_STATUSES)
   } catch {
     // Degraded schema (e.g. prod fo.url drift / missing column): fall back to
     // the bare grants read so ready-sources never 500s.
@@ -1264,10 +1270,10 @@ async function listReadySources(db, profileId) {
       `SELECT id, funding_opportunity_id, title, status
          FROM grants
         WHERE profile_id = ?
-          AND status NOT IN ('submitted', 'awarded', 'declined', 'archived')${categoryFilterBare}
+          AND status NOT IN (${HAMILTON_PROTECTED_STATUS_SQL})${categoryFilterBare}
         ORDER BY ${APPLY_SURFACE_PREFERENCE_BARE_SQL}, updated_at DESC
         LIMIT 100`,
-    ).all(profileId)
+    ).all(profileId, ...HAMILTON_PROTECTED_PIPELINE_STATUSES)
   }
   const mapped = (Array.isArray(rows) ? rows : []).map((r, idx) => {
     const source = {
@@ -1299,22 +1305,17 @@ async function listReadySources(db, profileId) {
 }
 
 /**
- * The set Hamilton's AUTO-SUBMIT ("all_ready_sources") expands to. It PREFERS
- * applyable sources — an account_portal login or an info_only description page
- * is never a thing Hamilton can cold-submit, and putting one in front of the
- * auto-submit gate is exactly the "13 runs, 1 completed application" failure
- * this addresses. When at least one applyable (online_form / mail_or_pdf) source
- * exists, ONLY those are handed to auto-submit; when a profile has none, the
- * full ranked list is returned unchanged (the per-source Hamilton gate still
- * refuses the unworkable ones) so behaviour never regresses and no source is
- * hidden from the owner's own view. Set HAMILTON_APPLYABLE_ONLY_AUTOSUBMIT=0 to
- * fall back to the old "all ready rows" behaviour.
+ * The set Hamilton's AUTO-SUBMIT ("all_ready_sources") expands to.
+ *
+ * Only sources with a real application surface are eligible. Falling back to
+ * account portals and info-only pages when none were applyable manufactured a
+ * queue of guaranteed hard stops and made "full automation" look active while
+ * completing nothing. Those sources remain visible through listReadySources;
+ * they are simply never cold-enqueued as applications.
  */
-async function selectAutoSubmitSources(db, profileId) {
+export async function selectAutoSubmitSources(db, profileId) {
   const ready = await listReadySources(db, profileId)
-  if (String(process.env.HAMILTON_APPLYABLE_ONLY_AUTOSUBMIT ?? '1') === '0') return ready
-  const applyable = ready.filter((s) => s.is_applyable === true)
-  return applyable.length ? applyable : ready
+  return ready.filter((source) => source.is_applyable === true)
 }
 
 /** What "Select all sources" will pick, so the count shown is the count run. */
@@ -1325,7 +1326,7 @@ router.get('/ready-sources', async (req, res) => {
   if (!profileId) return res.status(400).json({ error: 'profile_id_required' })
   if (!(await userMayAccessProfile(req, user, profileId))) return res.status(403).json({ error: 'forbidden' })
   try {
-    const sources = await listReadySources(req.db, profileId)
+    const sources = await selectAutoSubmitSources(req.db, profileId)
     return res.json({ ok: true, count: sources.length, sources })
   } catch (err) {
     return res.status(500).json({ error: 'ready_sources_failed', message: err?.message || String(err) })
@@ -1354,11 +1355,65 @@ router.post('/start-autopilot', startLimiter, async (req, res) => {
     if (selectedSources.length === 0) {
       return res.status(409).json({
         error: 'no_ready_sources',
-        message: 'Nothing in this profile pipeline is ready to work. Add a funding source first.',
+        message: 'No source in this profile currently has a verified direct application surface for Hamilton to work.',
       })
     }
   }
   if (selectedSources.length === 0) return res.status(400).json({ error: 'selected_sources_required' })
+  const protectedSources = selectedSources.filter((source) =>
+    isHamiltonProtectedPipelineStage(source?.current_stage || source?.currentStage),
+  )
+  if (protectedSources.length > 0) {
+    return res.status(409).json({
+      error: 'pipeline_stage_protected',
+      message: 'Hamilton will not restart submitted or post-submission funding sources. Verify their existing submission history instead.',
+      protected_count: protectedSources.length,
+    })
+  }
+
+  // Client stage snapshots are advisory. Resolve the profile's grant from
+  // grant_id OR opportunity_id before accepting the run, so omitting grant_id
+  // or spoofing current_stage cannot bypass the post-submission boundary.
+  try {
+    const authoritativeProtected = []
+    for (const source of selectedSources) {
+      const grantId = source?.grant_id || source?.grantId || null
+      const opportunityId = source?.opportunity_id || source?.opportunityId || null
+      const authoritativeGrant = await loadAuthoritativeGrantForSource(req.db, {
+        profileId,
+        grantId,
+        opportunityId,
+      })
+      if (grantId && (
+        !authoritativeGrant?.profile_id
+        || String(authoritativeGrant.profile_id) !== String(profileId)
+      )) {
+        return res.status(403).json({ error: 'source_profile_mismatch' })
+      }
+      if (authoritativeGrant && isHamiltonProtectedPipelineStage(authoritativeGrant.status)) {
+        authoritativeProtected.push(authoritativeGrant)
+      }
+    }
+    if (authoritativeProtected.length > 0) {
+      return res.status(409).json({
+        error: 'pipeline_stage_protected',
+        message: 'Hamilton will not restart submitted or post-submission funding sources. Verify their existing submission history instead.',
+        protected_count: authoritativeProtected.length,
+      })
+    }
+  } catch (err) {
+    if (err?.code === 'source_identity_mismatch') {
+      return res.status(409).json({
+        error: 'source_identity_mismatch',
+        message: 'The selected grant and opportunity do not identify the same funding source.',
+      })
+    }
+    log.error('pipeline_stage_validation_failed', { err: err?.message, profileId })
+    return res.status(503).json({
+      error: 'pipeline_stage_unavailable',
+      message: 'Hamilton could not verify the current pipeline stage, so the run was not started.',
+    })
+  }
   // Web callers may reference saved sessions/documents only by opaque,
   // profile-owned identifiers. Raw server paths would let an authenticated
   // caller make Playwright read or upload arbitrary files from the host.

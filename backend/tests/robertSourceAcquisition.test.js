@@ -69,6 +69,23 @@ function makeDb() {
       amount_requested REAL, amount_min REAL, amount_max REAL, amount_awarded REAL,
       match_score REAL, match_decision TEXT, updated_at DATETIME, created_at DATETIME DEFAULT CURRENT_TIMESTAMP
     );
+    CREATE TABLE profile_opportunity_matches (
+      id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
+      profile_id TEXT NOT NULL,
+      opportunity_id TEXT NOT NULL,
+      match_score REAL,
+      match_confidence REAL,
+      match_decision TEXT,
+      match_explanation TEXT,
+      match_reasons TEXT,
+      match_explain_json TEXT,
+      matcher_version TEXT,
+      computed_at DATETIME,
+      updated_at DATETIME,
+      evaluated_at DATETIME,
+      UNIQUE (profile_id, opportunity_id)
+    );
+    CREATE TABLE exclusion_rules (id TEXT PRIMARY KEY, action TEXT);
     CREATE TABLE system_kv (key TEXT PRIMARY KEY, value TEXT, updated_at DATETIME);
   `)
   const p = sqlite.prepare('INSERT INTO profiles (id, display_name, primary_type, status, tags) VALUES (?, ?, ?, ?, ?)')
@@ -79,20 +96,40 @@ function makeDb() {
   sec.run(STUDENT, 'education', JSON.stringify({ current_institution: 'Middle Tennessee State University', highest_level: 'College Student - Currently in undergraduate program' }))
   sec.run(STUDENT, 'financial_information', JSON.stringify({ needs: ['education'] }))
   sec.run(BIZ, 'basic_information', JSON.stringify({ city: 'Nashville', state: 'TN', profile_category: 'small_business' }))
-  sec.run(BIZ, 'financial_information', JSON.stringify({ needs: ['business'] }))
+  sec.run(BIZ, 'small_business_details', JSON.stringify({ business_name: 'Acq Business', industry: 'technology', years_in_business: 3 }))
+  sec.run(BIZ, 'financial_information', JSON.stringify({ needs: ['business', 'startup_funding', 'equipment', 'employment'] }))
   return { sqlite, db: wrapSqlite(sqlite) }
 }
 
 function insertOpp(sqlite, o) {
+  const entityTypes = o.ent ?? []
+  const needs = o.needs ?? []
+  const eligibility = o.eligibility ?? (
+    entityTypes.some((type) => ['student', 'individual', 'family'].includes(type))
+      ? 'Eligible applicants are individual college students and families.'
+      : entityTypes.some((type) => ['small_business', 'business'].includes(type))
+        ? 'Eligible applicants are small businesses.'
+        : entityTypes.some((type) => ['nonprofit', 'school', 'government'].includes(type))
+          ? 'Eligible applicants are nonprofit organizations and public institutions.'
+          : null
+  )
   sqlite.prepare(`INSERT INTO funding_opportunities
-    (id, title, sponsor, entity_types_allowed, need_types_supported, categories,
-     opportunity_kind, source, record_origin, source_url, application_url, is_active, created_at)
-    VALUES (@id, @title, @sponsor, @ent, @needs, @cats, @kind, @source, @origin, @url, @apply, 1, @created)`)
+    (id, title, sponsor, description, eligibility_text, entity_types_allowed,
+     need_types_supported, categories, opportunity_kind, source, record_origin,
+     source_url, application_url, state, is_national, amount_max, is_active, created_at)
+    VALUES (@id, @title, @sponsor, @description, @eligibility, @ent, @needs, @cats,
+            @kind, @source, @origin, @url, @apply, @state, @national, @amount, 1, @created)`)
     .run({
       id: o.id, title: o.title, sponsor: o.sponsor,
-      ent: JSON.stringify(o.ent ?? []), needs: JSON.stringify(o.needs ?? []), cats: JSON.stringify(o.cats ?? []),
+      description: o.description ?? `${o.title} provides ${needs.join(', ') || 'program'} funding.`,
+      eligibility,
+      ent: JSON.stringify(entityTypes), needs: JSON.stringify(needs), cats: JSON.stringify(o.cats ?? []),
       kind: o.kind ?? 'scholarship', source: o.source ?? 'curated_verified', origin: o.origin ?? 'curated_verified',
-      url: o.url, apply: o.apply ?? o.url, created: o.created ?? '2026-08-23T00:00:00Z',
+      url: o.url, apply: o.apply ?? o.url,
+      state: o.state ?? null,
+      national: o.national === true ? 1 : (o.national === false ? 0 : null),
+      amount: o.amount ?? 10000,
+      created: o.created ?? '2026-08-23T00:00:00Z',
     })
 }
 
@@ -141,17 +178,15 @@ describe('robertSourceAcquisition — parse added sources against profiles + aut
     expect(Object.keys(out.byReason).length).toBeGreaterThan(0)
   })
 
-  it('auto-adds a qualifying-but-not-applyable account-portal award as a funder_lead (never apply_ready — the cold-submit safety rule)', async () => {
+  it('keeps a qualifying-but-not-applyable account portal catalog-only (never apply_ready)', async () => {
     insertOpp(sqlite, ACCOUNT_PORTAL_AWARD)
     const out = await parseOpportunitiesAgainstProfiles(db, { opportunityIds: [ACCOUNT_PORTAL_AWARD.id] })
 
-    const studentGrants = grantsFor(sqlite, STUDENT)
-    expect(studentGrants).toHaveLength(1)
-    // #2 (sourceApplyability) rules studentaid.gov an account_portal → funder_lead,
-    // even though the URL path contains "apply". This is the SAFETY guarantee.
-    expect(studentGrants[0].pipeline_category).toBe('funder_lead')
-    expect(studentGrants[0].funder_lead_state).toBe('candidate')
-    expect(out.addedLeads).toBe(1)
+    // An account portal is discovery evidence, not a leaf application. It stays
+    // in the catalog until decomposition finds a real application surface.
+    expect(grantsFor(sqlite, STUDENT)).toHaveLength(0)
+    expect(out.catalogLeads).toBe(1)
+    expect(out.addedLeads).toBe(0)
     expect(out.added).toBe(0)
 
     // The business (need mismatch: business_funding) does not get it.
@@ -184,7 +219,11 @@ describe('robertSourceAcquisition — parse added sources against profiles + aut
     // sources (e.g. small-business grants for Olivia) to existing profiles.
     insertOpp(sqlite, {
       id: 'fo-sbg', title: 'Nashville Small Business Growth Grant', sponsor: 'Metro Nashville',
-      ent: ['small_business'], needs: ['business'], cats: ['business'], kind: 'grant',
+      description: 'Competitive Tennessee small-business grant for equipment purchases, expansion, and local job creation.',
+      ent: ['small_business', 'business'],
+      needs: ['business', 'startup_funding', 'equipment', 'employment'],
+      cats: ['business', 'innovation', 'small_business'], kind: 'grant',
+      state: 'TN', national: false,
       url: 'https://nashville.gov/programs/small-business-grant/apply',
     })
     // NEWER ProPublica 990 directory rows (the churn that dominates "newest N").
@@ -267,8 +306,8 @@ describe('robertSourceAcquisition — hub decomposition into individual awards',
     // enumerator and the DB inserter. The real decomposeListing wiring runs.
     const enumerate = async () => ({
       items: [
-        { title: 'STEM Excellence Scholarship', sponsor: 'ScholarshipOwl Partner', applyUrl: 'https://scholarshipowl.com/awards/stem-excellence/apply', amount: 5000, evidence: 'STEM Excellence Scholarship' },
-        { title: 'First-Gen Leaders Award', sponsor: 'ScholarshipOwl Partner', applyUrl: 'https://scholarshipowl.com/awards/first-gen/apply', amount: 2500, evidence: 'First-Gen Leaders Award' },
+        { title: 'STEM Excellence Scholarship', sponsor: 'River County Community Foundation', applyUrl: 'https://rivercountyfoundation.org/awards/stem-excellence/apply', amount: 5000, evidence: 'STEM Excellence Scholarship' },
+        { title: 'First-Gen Leaders Award', sponsor: 'River County Community Foundation', applyUrl: 'https://rivercountyfoundation.org/awards/first-gen/apply', amount: 2500, evidence: 'First-Gen Leaders Award' },
       ],
       rejected: [], notFound: [], raw: { attempted: true },
     })
@@ -278,14 +317,15 @@ describe('robertSourceAcquisition — hub decomposition into individual awards',
       insertOpp(sqlite, {
         id, title: record.title, sponsor: record.sponsor, ent: ['student'], needs: ['education'],
         cats: ['education'], kind: 'scholarship', origin: 'scholarship_crawler', source: 'scholarship_crawler',
+        national: true,
         url: record.application_url || record.source_url,
       })
       return { id, inserted: true }
     }
     // Wire my acquisition to a hub seed + a live-ish fetch + the REAL decomposer.
     const deps = {
-      knownSeedSourcesForProfile: () => ([{ title: 'ScholarshipOwl', url: 'https://scholarshipowl.com/scholarships', shape: 'hub', applicant_types: ['student'], need_categories: ['education'] }]),
-      fetchPage: async () => ({ text: 'STEM Excellence Scholarship. First-Gen Leaders Award.', links: ['https://scholarshipowl.com/awards/stem-excellence/apply'], title: 'ScholarshipOwl' }),
+      knownSeedSourcesForProfile: () => ([{ title: 'River County Community Foundation', url: 'https://rivercountyfoundation.org/scholarships', shape: 'hub', applicant_types: ['student'], need_categories: ['education'] }]),
+      fetchPage: async () => ({ text: 'STEM Excellence Scholarship. First-Gen Leaders Award.', links: ['https://rivercountyfoundation.org/awards/stem-excellence/apply'], title: 'River County Community Foundation' }),
       decomposeListing: (args) => decomposeListing(args, { enumerate, insert }),
     }
     const acq = await acquireKnownSources(db, { profileIds: [STUDENT], deps, allowHubDecomposition: true })

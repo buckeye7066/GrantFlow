@@ -174,31 +174,42 @@ export async function appendAnyaRunLog(db, runId, level, message, meta) {
 }
 
 export async function completeAnyaRun(db, runId, { status, response, error } = {}) {
-  if (!runId) return
-  try {
-    await db
-      .prepare(
-        `
-          UPDATE anya_runs
-          SET status = ?,
-              completed_at = CURRENT_TIMESTAMP,
-              response_json = COALESCE(?, response_json),
-              error = COALESCE(?, error)
-          WHERE id = ?
-        `,
-      )
-      .run(
-        status || 'completed',
-        response !== undefined ? safeJson(response) : null,
-        error !== undefined ? String(error) : null,
-        runId,
-      )
-  } catch (dbError) {
-    qualityLog.error(`Failed to complete Anya run ${runId}:`, dbError)
-    // Do NOT re-throw: the Anya computation already succeeded.
-    // The DB write failure is an observability loss (Goal 8) but must not
-    // surface as a workflow error to the caller (Goal 13).
-    // Operators should monitor console errors for anya_runs write failures.
+  if (!runId) return false
+  let lastError = null
+  // Completion is part of the user-visible delivery contract, not merely
+  // observability: the background client waits for this row to leave running.
+  // Retry bounded transient contention so a successfully stored assistant
+  // message cannot strand the UI in "Anya is working" forever.
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    try {
+      const result = await db
+        .prepare(
+          `
+            UPDATE anya_runs
+            SET status = ?,
+                completed_at = CURRENT_TIMESTAMP,
+                response_json = COALESCE(?, response_json),
+                error = COALESCE(?, error)
+            WHERE id = ?
+          `,
+        )
+        .run(
+          status || 'completed',
+          response !== undefined ? safeJson(response) : null,
+          error !== undefined ? String(error) : null,
+          runId,
+        )
+      const changed = Number(result?.changes ?? result?.rowCount ?? 1)
+      if (changed > 0) return true
+      lastError = new Error('Anya run row no longer exists')
+    } catch (dbError) {
+      lastError = dbError
+    }
+    if (attempt < 2) {
+      await new Promise((resolve) => setTimeout(resolve, 75 * (attempt + 1)))
+    }
   }
+  qualityLog.error(`Failed to complete Anya run ${runId} after retries:`, lastError)
+  return false
 }
 

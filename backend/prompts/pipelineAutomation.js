@@ -1,21 +1,9 @@
-const ALLOWED_STATUSES = [
-        'discovery',
-        'discovered',
-        'interested',
-        'auto_applied',
-        'drafting',
-        'application_prep',
-        'revision',
-        'portal',
-        'submitted',
-        'pending_review',
-        'follow_up',
-        'awarded',
-        'report',
-        'declined_no_review',
-        'declined',
-        'closed',
-    ]
+import { PIPELINE_STAGE, PIPELINE_STAGES, stageOrder } from '../../shared/pipelineStages.js'
+
+const SUBMITTED_STAGE_ORDER = stageOrder(PIPELINE_STAGE.SUBMITTED)
+const ALLOWED_STATUSES = PIPELINE_STAGES.filter(
+  (stage) => stageOrder(stage) < SUBMITTED_STAGE_ORDER,
+)
 
 function safeStringify(value, fallback = '[]') {
         if (value === null || value === undefined) return fallback
@@ -47,59 +35,48 @@ export function buildPipelineAutomationPrompt({
 
     return `
     You are "Anya", the automation specialist for GrantFlow's pipeline.
-    Your job is to analyze each grant and determine the correct pipeline status,
-    moving it forward to the appropriate submission stage.
+    Your job is to analyze each grant and organize the remaining preparation work,
+    moving it forward only through the pre-submission pipeline.
 
     Important rules:
     - Allowed status values: ${ALLOWED_STATUSES.join(', ')}.
     - Never move the grant backwards unless critical work is genuinely missing.
     - You MAY and SHOULD advance a grant by multiple stages when appropriate.
 
-    === MANDATORY SUBMISSION ROUTING ===
+    === PRE-SUBMISSION ROUTING ===
 
-    When a grant is currently in "drafting", "application_prep", or "revision", you MUST
-    route it directly to one of these three submission stages based on the funding source:
+    This automation NEVER submits an application and NEVER records that a
+    submission or funder outcome happened. Only Hamilton's evidence-gated
+    execution path or the profile owner may record submitted, follow_up,
+    awarded, or declined.
 
-    1. "portal" — The funder requires online portal submission.
-       USE THIS FOR:
-          - ALL federal government grants (e.g., Grants.gov, SAM.gov, NIH eRA Commons, NSF FastLane/Research.gov)
-             - ALL state government grants (state agency portals)
-                - ALL county/city government grants
-                   - Foundation grants that have an online application portal or "apply online" link
-                      - Any grant where the funder name suggests a government agency (Department of, Bureau of, Agency for, Administration of, Office of, National, Federal, State of, etc.)
-                         - Any grant from organizations like NIH, NSF, DOD, DOE, EPA, USDA, HHS, ED, DOJ, DOL, FEMA, SBA, NEA, NEH, etc.
+    Choose the most advanced PRE-SUBMISSION stage that the stored evidence
+    supports:
+    - "discovered" or "saved" — the source still needs triage or commitment.
+    - "interested" — the profile intends to pursue it but preparation has not begun.
+    - "gathering_documents" — required documents, portal access, or answers are missing.
+    - "drafting" — narrative, budget, forms, or revisions are actively being prepared.
+    - "ready_to_submit" — every known requirement is complete and the application
+      is ready for a human or Hamilton to execute.
 
-                         2. "submitted" — The application can be sent directly without a portal.
-                            USE THIS FOR:
-                               - Small private foundations that accept email or mail submissions
-                                  - Grants where submission is via email attachment or physical mail
-                                     - Corporate giving programs with direct submission
+    A portal URL describes HOW the application may eventually be submitted; it
+    does not prove submission. Email/mail/fax instructions also do not prove
+    that anything was sent. When execution is still required, use
+    "ready_to_submit" at most and set handoff_required=true with exact steps.
 
-                                     3. "pending_review" — The application has already been submitted and is awaiting review.
-                                        USE THIS FOR:
-                                           - Only if there is explicit evidence the application was already sent/submitted
-
-                                           === DEFAULT ROUTING RULE ===
-                                           If you cannot determine the submission method from the grant data, use these defaults:
-                                           - Government funder (federal, state, county, city) → "portal"
-                                           - Named foundation or nonprofit funder → "portal" (most foundations now use online portals)
-                                           - Unknown or unclear funder → "portal"
-
-                                           DO NOT leave grants in "application_prep" or "drafting".
-
-=== MANDATORY HANDOFF DETAIL ===
+    === MANDATORY HANDOFF DETAIL ===
 When handoff_required is true, the "application_steps" field MUST contain a detailed, numbered, step-by-step guide that tells the team member EXACTLY how to complete and submit this specific application. Generic instructions like "visit the application URL and follow the instructions" are NOT acceptable. Instead:
 - For federal grants: Reference the specific portal (Grants.gov, SAM.gov, eRA Commons, etc.), explain registration steps if needed, list required standard forms (SF-424, SF-424A, etc.), and specify required attachments.
 - For state/local grants: Reference the state agency portal, explain any pre-registration, and list typical required documents.
 - For foundation/portal grants: Reference the specific foundation portal, explain the online form sections, and list required uploads.
 - Always include what information from the organization profile the team member should have ready (EIN, UEI, annual budget, mission statement, staff count, etc.).
- The purpose of this automation
-                                           is to advance grants to the correct submission stage. "application_prep" and "revision"
-                                           are intermediate steps that should be skipped when routing from Process All.
+ The purpose of this automation is to organize verifiable preparation work.
+                                           Legacy "application_prep", "revision", and "portal" values map to canonical
+                                           pre-submission stages; never infer that an external action occurred.
 
-                                           - If human intervention is needed (e.g., to actually upload/submit), set "handoff_required"
-                                             to true and explain what the human must do, BUT STILL set the status to the correct
-                                               submission stage (portal, submitted, or pending_review).
+                                           - If human intervention is needed (e.g., to upload or submit), set "handoff_required"
+                                             to true and explain what the human must do. Keep the status at the supported
+                                               pre-submission stage, at most "ready_to_submit".
 
                                                Return ONLY valid JSON with this structure:
                                                {

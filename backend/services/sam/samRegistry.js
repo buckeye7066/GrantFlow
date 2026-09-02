@@ -201,6 +201,17 @@ function timeCutoff(db, msAgo) {
   return iso.replace('T', ' ').replace('Z', '').replace(/\.\d+$/, '')
 }
 
+async function grantColumnNames(db) {
+  const rows = db?.dialect === 'postgres'
+    ? await db.prepare(
+      `SELECT column_name
+         FROM information_schema.columns
+        WHERE table_schema = 'public' AND table_name = 'grants'`,
+    ).all()
+    : await db.prepare('PRAGMA table_info(grants)').all()
+  return new Set((rows || []).map((row) => String(row.column_name ?? row.name)))
+}
+
 // ---------------------------------------------------------------------------
 // RECENCY WINDOWS — a rate check must be able to go green on its own
 // ---------------------------------------------------------------------------
@@ -648,10 +659,11 @@ export const DIAGNOSTIC_CHECKS = Object.freeze([
         promotionProjection = row?.value ? JSON.parse(row.value) : null
       } catch { promotionProjection = null }
       try {
+        const grantColumns = await grantColumnNames(db)
         grants = await db
           .prepare(
             `SELECT COUNT(*) AS total,
-                    SUM(CASE WHEN ${pipelineValueSql('grants')} > 0 THEN 1 ELSE 0 END) AS with_value
+                    SUM(CASE WHEN ${pipelineValueSql('grants', null, grantColumns)} > 0 THEN 1 ELSE 0 END) AS with_value
                FROM grants
               WHERE status IN (${statusesSql})
                 AND ${NON_SYNTHETIC_PIPELINE('grants')}`,

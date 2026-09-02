@@ -347,11 +347,19 @@ test('per-agent stop endpoint returns 400 for invalid agent', async () => {
 
 test('admin can pause and resume a run', async () => {
   const db = makeDb()
+  // Keep the first phase alive so pause exercises a live run instead of racing
+  // trivial adapters that can finish before the HTTP request arrives.
+  const slow = new BaseAgentAdapter({ name: 'sam' })
+  slow.start = async ({ signal }) => {
+    for (let i = 0; i < 30; i += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 10))
+      if (signal.shouldStop()) return { ok: true, status: 'stopped', summary: {} }
+    }
+    return { ok: true, status: 'completed', summary: { findings_total: 1 } }
+  }
+  setAdapter('sam', slow)
   const server = startApp({ db, user: adminSession() })
   try {
-    // With trivial adapters everything finishes immediately, so we
-    // pre-create a run and exercise the pause/resume endpoints
-    // independently of the executor's race window.
     const start = await request(server, 'POST', '/api/admin/agent-control/start', { run_type: 'full_cycle' })
     const runId = start.body.run.id
     const pause = await request(server, 'POST', `/api/admin/agent-control/runs/${runId}/pause`, { reason: 'test pause' })
@@ -360,11 +368,11 @@ test('admin can pause and resume a run', async () => {
     const resume = await request(server, 'POST', `/api/admin/agent-control/runs/${runId}/resume`)
     assert.equal(resume.status, 200)
     assert.equal(resume.body.ok, true)
-    await new Promise((r) => setTimeout(r, 100))
-    // After resume the run drives to its terminal state; either the
-    // run has already completed or pause arrived after completion —
-    // both outcomes are acceptable here. We only assert that the
-    // endpoints accept the requests and return ok.
+    // Stop the deliberately slow run so no background executor leaks into
+    // the next test.
+    const stop = await request(server, 'POST', `/api/admin/agent-control/runs/${runId}/emergency-stop`, { reason: 'test cleanup' })
+    assert.equal(stop.status, 200)
+    await new Promise((resolve) => setTimeout(resolve, 50))
   } finally { server.close() }
 })
 

@@ -1970,7 +1970,7 @@ describe('enforceHamiltonStopRecheck', () => {
   async function makeDb() {
     const raw = new Database(':memory:')
     raw.exec(`
-      CREATE TABLE profiles (id TEXT PRIMARY KEY, user_id TEXT, display_name TEXT);
+      CREATE TABLE profiles (id TEXT PRIMARY KEY, user_id TEXT, display_name TEXT, primary_type TEXT);
       CREATE TABLE profile_sections (profile_id TEXT, section_key TEXT, data TEXT);
       CREATE TABLE grants (
         id TEXT PRIMARY KEY, profile_id TEXT, funding_opportunity_id TEXT,
@@ -1979,8 +1979,9 @@ describe('enforceHamiltonStopRecheck', () => {
       CREATE TABLE funding_opportunities (
         id TEXT PRIMARY KEY, title TEXT, sponsor TEXT, description TEXT,
         application_url TEXT, source_url TEXT, deadline TEXT, deadline_type TEXT,
-        record_origin TEXT, is_national INTEGER DEFAULT 1, profile_id TEXT,
-        link_status TEXT, last_verified_at TEXT
+        record_origin TEXT, source TEXT, source_trust_tier TEXT, reality_status TEXT,
+        opportunity_kind TEXT, entity_types_allowed TEXT, is_active INTEGER DEFAULT 1,
+        is_national INTEGER DEFAULT 1, profile_id TEXT, link_status TEXT, last_verified_at TEXT
       );
       CREATE TABLE profile_opportunity_matches (
         id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
@@ -1992,7 +1993,7 @@ describe('enforceHamiltonStopRecheck', () => {
     taskStore = await import('../services/hamilton/applicationTaskStore.js')
     taskStore._resetSchemaCache()
     await taskStore.ensureApplicationTaskSchema(raw)
-    raw.prepare('INSERT INTO profiles (id, display_name) VALUES (?, ?)').run('p-rob', 'Robert Michael White')
+    raw.prepare('INSERT INTO profiles (id, display_name, primary_type) VALUES (?, ?, ?)').run('p-rob', 'Robert Michael White', 'college_student')
     return raw
   }
 
@@ -2004,13 +2005,26 @@ describe('enforceHamiltonStopRecheck', () => {
     source_url: 'https://www.tn.gov/collegepays/tsaa.html',
     deadline_type: 'rolling',
     record_origin: 'live_crawl',
+    source: 'curated_verified',
+    source_trust_tier: 'OFFICIAL_API',
+    reality_status: 'real',
+    opportunity_kind: 'grant',
+    entity_types_allowed: JSON.stringify(['student', 'individual']),
+    is_active: 1,
   }
 
   function insertOpp(db, opp = {}) {
     const o = { ...TSAA_OPP, ...opp }
     db.prepare(
-      'INSERT INTO funding_opportunities (id, title, sponsor, description, application_url, source_url, deadline_type, record_origin) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
-    ).run(o.id, o.title, o.sponsor, o.description ?? null, o.application_url, o.source_url, o.deadline_type, o.record_origin)
+      `INSERT INTO funding_opportunities
+        (id, title, sponsor, description, application_url, source_url, deadline_type, record_origin,
+         source, source_trust_tier, reality_status, opportunity_kind, entity_types_allowed, is_active)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(
+      o.id, o.title, o.sponsor, o.description ?? null, o.application_url, o.source_url,
+      o.deadline_type, o.record_origin, o.source, o.source_trust_tier, o.reality_status,
+      o.opportunity_kind, o.entity_types_allowed, o.is_active,
+    )
     return o
   }
 

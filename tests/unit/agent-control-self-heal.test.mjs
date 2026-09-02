@@ -16,10 +16,7 @@ import assert from 'node:assert/strict'
 import Database from 'better-sqlite3'
 import { wrapSqlite } from '../helpers/sqliteTestDb.mjs'
 
-import {
-  startRun,
-  executeRun,
-} from '../../backend/services/agentControl/agentControlOrchestrator.js'
+import { startRun } from '../../backend/services/agentControl/agentControlOrchestrator.js'
 import { _resetSchemaCache, getRun } from '../../backend/services/agentControl/agentControlStore.js'
 import { setAdapter, resetRegistry } from '../../backend/services/agentControl/agentAdapters/agentAdapterRegistry.js'
 import { BaseAgentAdapter } from '../../backend/services/agentControl/agentAdapters/baseAgentAdapter.js'
@@ -99,7 +96,17 @@ describe('Agent Control Center self-heal', () => {
         controlCenterAuthorized: true,
       },
     })
-    await executeRun({ db, runId: run.id })
+    // startRun launches the executor asynchronously. Wait for that canonical
+    // executor instead of racing it with a second executeRun call that correctly
+    // loses the per-run lease.
+    const terminal = new Set(['completed', 'completed_noop', 'completed_with_errors', 'failed', 'stopped', 'cancelled', 'canceled'])
+    const deadline = Date.now() + 3_000
+    let finished = await getRun(db, run.id)
+    while (!terminal.has(finished?.status) && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 10))
+      finished = await getRun(db, run.id)
+    }
+    assert.ok(terminal.has(finished?.status), `run did not finish before timeout (status=${finished?.status})`)
 
     // Self-heal created the agent tables...
     assert.equal(tableExists(db, 'robert_runs'), true, 'robert_runs must exist after the run self-heals')
@@ -107,7 +114,6 @@ describe('Agent Control Center self-heal', () => {
     assert.equal(tableExists(db, 'agent_control_runs'), true)
 
     // ...and the run did not fail on a missing relation.
-    const finished = await getRun(db, run.id)
     assert.notEqual(finished.status, 'failed', `run should not fail; got ${finished.status} (${finished.error || 'no error'})`)
 
     // Robert actually persisted a run row.

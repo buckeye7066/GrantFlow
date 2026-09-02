@@ -6,10 +6,12 @@ const releaseGates = fs.readFileSync('scripts/release-gates.mjs', 'utf8')
 const packageJson = JSON.parse(fs.readFileSync('package.json', 'utf8'))
 const ciWorkflow = fs.readFileSync('.github/workflows/ci.yml', 'utf8')
 
-test('release gates fail closed outside the verified Node 20 runtime', () => {
-  assert.match(releaseGates, /const REQUIRED_NODE_VERSION = '20\.20\.2'/)
-  assert.match(releaseGates, /process\.versions\.node !== REQUIRED_NODE_VERSION/)
-  assert.match(releaseGates, /assertNode20Runtime\(\)/)
+test('release gates fail closed outside the supported Node 24 runtime', () => {
+  assert.equal(packageJson.engines?.node, '24.x')
+  assert.match(releaseGates, /const REQUIRED_NODE_MAJOR = 24/)
+  assert.match(releaseGates, /Number\.parseInt\(process\.versions\.node\.split\('\.'\)\[0\], 10\)/)
+  assert.match(releaseGates, /major !== REQUIRED_NODE_MAJOR/)
+  assert.match(releaseGates, /assertNodeRuntime\(\)/)
 })
 
 test('package exposes authoritative Crawler OS lint and test commands', () => {

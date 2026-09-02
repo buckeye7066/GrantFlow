@@ -5,6 +5,12 @@ on:
   push:
     branches: [main]
 
+# Superseded pull-request revisions do not need to consume a hosted runner.
+# Main-branch runs keep a SHA-specific group and are never cancelled.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref == 'refs/heads/main' && github.sha || github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
 permissions:
   contents: read
 

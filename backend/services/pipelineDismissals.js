@@ -137,19 +137,31 @@ export function buildDismissalKey({ grantRow = null, opportunity = null } = {}) 
     application_url: grantRow?.application_url ?? opportunity?.application_url ?? null,
     source_url: grantRow?.source_url ?? opportunity?.source_url ?? null,
   }
-  // grantFingerprintFromOpportunity uses opportunity.title/sponsor/deadline/url-ish fields.
+  // grantFingerprintFromOpportunity hashes its input shape. Do not mint an
+  // all-empty fingerprint for row-specific cleanup that intentionally carries
+  // only an opportunity id (duplicate reconciliation relies on that scope).
+  const hasFingerprintIdentity = [
+    merged.title,
+    merged.funder,
+    merged.deadline,
+    merged.url,
+    merged.application_url,
+    merged.source_url,
+  ].some((value) => normString(value))
   let fingerprint = null
-  try {
-    fingerprint = grantFingerprintFromOpportunity({
-      title: merged.title,
-      sponsor: merged.funder,
-      deadline: merged.deadline,
-      url: merged.url,
-      application_url: merged.application_url,
-      source_url: merged.source_url,
-    })
-  } catch {
-    fingerprint = null
+  if (hasFingerprintIdentity) {
+    try {
+      fingerprint = grantFingerprintFromOpportunity({
+        title: merged.title,
+        sponsor: merged.funder,
+        deadline: merged.deadline,
+        url: merged.url,
+        application_url: merged.application_url,
+        source_url: merged.source_url,
+      })
+    } catch {
+      fingerprint = null
+    }
   }
   const sourceUrl = chooseGrantUrl({ ...merged, url: merged.url, application_url: merged.application_url, source_url: merged.source_url })
   return {
@@ -390,7 +402,24 @@ export async function reconcileDismissedGrants(db, { limit = 100000 } = {}) {
       `).all(grant.id, grant.profile_id, ...TASK_TERMINAL_STATUSES)
     } catch (err) {
       const message = String(err?.message || err).toLowerCase()
-      if (!(message.includes('no such table') || message.includes('does not exist'))) throw err
+      const tableMissing = message.includes('no such table') ||
+        (message.includes('application_tasks') && message.includes('does not exist'))
+      const profileColumnMissing =
+        /no such column:\s*(?:application_tasks\.)?profile_id/.test(message) ||
+        /column\s+["']?profile_id["']?.*does not exist/.test(message)
+      if (profileColumnMissing) {
+        // Legacy task schemas predate application_tasks.profile_id. Grant ids
+        // are globally unique, so retain cancellation safety by falling back to
+        // the same active-task query scoped by the authoritative grant id.
+        tasks = await db.prepare(`
+          SELECT id
+          FROM application_tasks
+          WHERE grant_id = ?
+            AND (status IS NULL OR status NOT IN (${terminalPlaceholders}))
+        `).all(grant.id, ...TASK_TERMINAL_STATUSES)
+      } else if (!tableMissing) {
+        throw err
+      }
     }
 
     for (const task of tasks || []) {

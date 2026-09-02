@@ -153,38 +153,31 @@ describe('analyzeFunderFit', () => {
 })
 
 describe('admitFunderLeads — admission gates', () => {
-  it('adds a NATIONAL-footprint funder as a FUNDER_LEAD (never apply-ready)', async () => {
+  it('keeps a NATIONAL-footprint funder as catalog research (never an application row)', async () => {
     seedProfile('p1', { type: 'nonprofit', state: 'TN' })
     seedFunder('f1', '111111111', { name: 'National Housing Fund' })
     for (const st of ['CA', 'NY', 'TX', 'FL', 'WA']) seedTx('111111111', st)
 
     const res = await admitFunderLeads(db)
-    expect(res.added).toBe(1)
-    const rows = grantsFor('p1')
-    expect(rows).toHaveLength(1)
-    expect(rows[0].pipeline_category).toBe(PIPELINE_CATEGORY.FUNDER_LEAD)
-    expect(rows[0].funder_lead_state).toBe(FUNDER_LEAD_STATE.CANDIDATE)
-    expect(rows[0].status).toBe('interested') // a research stage, NOT ready_to_submit
-    expect(isApplyReady(rows[0])).toBe(false)
-    // Research ProPublica URL stays in source_url only — never in url (promotion bait).
-    expect(rows[0].source_url).toContain('propublica.org')
-    expect(rows[0].url).toBeNull()
+    expect(res.added).toBe(0)
+    expect(res.catalogOnly).toBe(1)
+    expect(grantsFor('p1')).toHaveLength(0)
   })
 
   it('admit→investigate must NOT auto-promote on the ProPublica research URL alone', async () => {
     seedProfile('p1', { type: 'nonprofit', state: 'TN' })
     seedFunder('f1', '111111111', { name: 'National Housing Fund' })
     for (const st of ['CA', 'NY', 'TX', 'FL', 'WA']) seedTx('111111111', st)
-    expect((await admitFunderLeads(db)).added).toBe(1)
+    const admission = await admitFunderLeads(db)
+    expect(admission.catalogOnly).toBe(1)
+    expect(grantsFor('p1')).toHaveLength(0)
 
-    // Simulate the OLD bug shape (url = research page) AND the fixed admit
-    // shape — neither may promote without a real application path.
+    // With no manufactured application row, investigation has nothing unsafe
+    // to promote from the ProPublica research URL.
     const findUrl = async () => ({ url: 'https://nhf.org', searched: true, hits: 2 })
     const res = await investigateFunderLeads(db, { findUrl })
     expect(res.promoted).toBe(0)
-    const row = grantsFor('p1')[0]
-    expect(row.pipeline_category).toBe(PIPELINE_CATEGORY.FUNDER_LEAD)
-    expect(isApplyReady(row)).toBe(false)
+    expect(grantsFor('p1')).toHaveLength(0)
   })
 
   it('a lead whose ONLY url is ProPublica is NEVER promoted via promoteFunderLeadIfApplicable', async () => {
@@ -222,7 +215,8 @@ describe('admitFunderLeads — admission gates', () => {
     seedTx('222222222', 'TN')
     seedTx('222222222', 'TN', { amount: 20000 })
     const res = await admitFunderLeads(db)
-    expect(res.added).toBe(1)
+    expect(res.added).toBe(0)
+    expect(res.catalogOnly).toBe(1)
   })
 
   it('does NOT add a geographically restricted funder (1 out-of-state grant)', async () => {
@@ -250,7 +244,8 @@ describe('admitFunderLeads — admission gates', () => {
     for (const st of ['CA', 'NY', 'TX', 'FL']) seedTx('555555555', st, { individual: false })
     seedTx('555555555', 'WA', { individual: true }) // one PERSON recipient
     const res = await admitFunderLeads(db)
-    expect(res.added).toBe(1)
+    expect(res.added).toBe(0)
+    expect(res.catalogOnly).toBe(1)
   })
 
   it('does NOT add a funder whose giving does not evidence the declared need', async () => {
@@ -261,13 +256,13 @@ describe('admitFunderLeads — admission gates', () => {
     expect(res.added).toBe(0)
   })
 
-  it('is idempotent — a second pass adds nothing', async () => {
+  it('repeated scans never manufacture a grant from the same research record', async () => {
     seedProfile('p1', { type: 'nonprofit', state: 'TN' })
     seedFunder('f1', '111111111')
     for (const st of ['CA', 'NY', 'TX', 'FL', 'WA']) seedTx('111111111', st)
-    expect((await admitFunderLeads(db)).added).toBe(1)
-    expect((await admitFunderLeads(db)).added).toBe(0)
-    expect(grantsFor('p1')).toHaveLength(1)
+    expect((await admitFunderLeads(db)).catalogOnly).toBe(1)
+    expect((await admitFunderLeads(db)).catalogOnly).toBe(1)
+    expect(grantsFor('p1')).toHaveLength(0)
   })
 
   it('respects the per-profile cap', async () => {
@@ -277,7 +272,8 @@ describe('admitFunderLeads — admission gates', () => {
       for (const st of ['CA', 'NY', 'TX', 'FL', 'WA']) seedTx(ein, st)
     }
     const res = await admitFunderLeads(db, { perProfileCap: 1 })
-    expect(res.added).toBe(1)
+    expect(res.added).toBe(0)
+    expect(res.catalogOnly).toBe(1)
     expect(res.perProfileCapped).toBeGreaterThan(0)
   })
 

@@ -5,6 +5,12 @@ on:
   push:
     branches: [main]
 
+# Keep only the newest revision of a pull request. Main-branch runs retain a
+# SHA-specific group so every merged revision is still verified.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref == 'refs/heads/main' && github.sha || github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
 jobs:
   test-suite:
     runs-on: ubuntu-latest

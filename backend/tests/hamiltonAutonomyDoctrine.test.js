@@ -209,35 +209,74 @@ describe('resolveContactFormVerifications', () => {
 
   it('isContactShapedSubmission mirrors the engine vocabulary and refuses anything application-shaped', () => {
     expect(CONTACT_SHAPED_KEYS).toContain('first_name')
-    expect(isContactShapedSubmission({ filled_fields: [{ key: 'first_name' }, { key: 'last_name' }, { key: 'email' }], pages_visited: 1 })).toBe(true)
-    expect(isContactShapedSubmission({ filled_fields: [{ key: 'zip' }], pages_visited: 1 })).toBe(true)
+    // Identity/contact field shape alone is never proof that the surface was
+    // a newsletter; short real applications can contain exactly these fields.
+    expect(isContactShapedSubmission({ filled_fields: [{ key: 'first_name' }, { key: 'last_name' }, { key: 'email' }], pages_visited: 1 })).toBe(false)
+    expect(isContactShapedSubmission({ filled_fields: [{ key: 'zip' }], pages_visited: 1 })).toBe(false)
     expect(isContactShapedSubmission({ filled_fields: [{ key: 'first_name' }, { key: 'essay', source: 'narrative' }], pages_visited: 1 })).toBe(false)
     expect(isContactShapedSubmission({ filled_fields: [{ key: 'first_name' }, { key: 'id_ssn', source: 'identity_vault' }], pages_visited: 1 })).toBe(false)
     expect(isContactShapedSubmission({ filled_fields: [{ key: 'first_name' }, { key: 'email' }], pages_visited: 6 })).toBe(false)
     expect(isContactShapedSubmission({ filled_fields: [] })).toBe(false)
+    // Short scholarship apps share name/email/school with newsletters. Without
+    // a positive contact surface, school/org/message must stay quarantined.
+    expect(isContactShapedSubmission({
+      filled_fields: [{ key: 'first_name' }, { key: 'last_name' }, { key: 'email' }, { key: 'school' }],
+      pages_visited: 1,
+    })).toBe(false)
+    expect(isContactShapedSubmission({
+      filled_fields: [{ key: 'first_name' }, { key: 'email' }, { key: 'school' }],
+      pages_visited: 1,
+      confirmation_page_text: 'Stay informed — join our newsletter',
+    })).toBe(true)
+    // Application/scholarship context wins even for identity-only fields.
+    expect(isContactShapedSubmission(
+      { filled_fields: [{ key: 'first_name' }, { key: 'email' }], pages_visited: 1 },
+      { urls: ['https://portal.example.org/scholarship-application'] },
+    )).toBe(false)
+    expect(isContactShapedSubmission({
+      filled_fields: [{ key: 'first_name' }, { key: 'last_name' }, { key: 'email' }],
+      pages_visited: 1,
+      confirmation_page_text: 'Scholarship Application — thank you for submitting',
+    })).toBe(false)
   })
 
   it('closes a contact-shaped quarantine as "no application was submitted" and leaves a real one alone', async () => {
     await seedTask(db, 'news', 'submission_verification_required', { url: 'https://www.familypromisebradleytn.org/' })
     await seedRun(db, 'news', {
       status: 'submission_verification_required', blockerKind: 'submission_verification_required',
-      result: { submit_clicked: true, pages_visited: 1, filled_fields: [{ key: 'first_name', fid: 'f1' }, { key: 'last_name', fid: 'f2' }, { key: 'email', fid: 'f3' }] },
+      result: {
+        submit_clicked: true,
+        pages_visited: 1,
+        filled_fields: [{ key: 'first_name', fid: 'f1' }, { key: 'last_name', fid: 'f2' }, { key: 'email', fid: 'f3' }],
+        confirmation_page_text: 'Thanks for joining our newsletter',
+      },
     })
     await seedTask(db, 'real', 'submission_verification_required', { url: 'https://portal.example.org/apply' })
     await seedRun(db, 'real', {
       status: 'submission_verification_required', blockerKind: 'submission_verification_required',
       result: { submit_clicked: true, pages_visited: 4, filled_fields: [{ key: 'first_name' }, { key: 'essay', source: 'narrative' }, { key: 'gpa' }] },
     })
+    await seedTask(db, 'short', 'submission_verification_required', { url: 'https://awards.example.org/scholarship-application' })
+    await seedRun(db, 'short', {
+      status: 'submission_verification_required', blockerKind: 'submission_verification_required',
+      result: {
+        submit_clicked: true,
+        pages_visited: 1,
+        filled_fields: [{ key: 'first_name' }, { key: 'last_name' }, { key: 'email' }, { key: 'school' }],
+        confirmation_page_text: 'Scholarship Application received',
+      },
+    })
     const out = await resolveContactFormVerifications(db, { logger: { info() {}, warn() {} } })
-    expect(out).toMatchObject({ scanned: 2, resolved: 1, kept: 1, failed: 0 })
+    expect(out).toMatchObject({ scanned: 3, resolved: 1, kept: 2, failed: 0 })
     const news = db.prepare(`SELECT status, last_agent_message FROM application_tasks WHERE id='news'`).get()
     expect(news.status).toBe('completed')
     expect(news.last_agent_message).toMatch(/contact \/ newsletter sign-up/)
     expect(news.last_agent_message).toContain('https://www.familypromisebradleytn.org/')
     expect(db.prepare(`SELECT status FROM application_tasks WHERE id='real'`).get().status).toBe('submission_verification_required')
+    expect(db.prepare(`SELECT status FROM application_tasks WHERE id='short'`).get().status).toBe('submission_verification_required')
     // idempotent
     const again = await resolveContactFormVerifications(db, { logger: { info() {}, warn() {} } })
-    expect(again.scanned).toBe(1)
+    expect(again.scanned).toBe(2)
     expect(again.resolved).toBe(0)
   })
 })

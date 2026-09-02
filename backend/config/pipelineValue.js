@@ -63,20 +63,29 @@ export const WIDE_AWARD_RANGE_RATIO = 10
  *
  * @param {string} [alias='g'] table alias; pass '' for un-aliased queries.
  */
-export function pipelineValueSql(alias = 'g', opportunityKindColumn = null) {
+export function pipelineValueSql(alias = 'g', opportunityKindColumn = null, availableColumns = null) {
   const p = alias ? `${alias}.` : ''
   const wide = `(${p}amount_min > 0 AND ${p}amount_max > ${p}amount_min AND ${p}amount_max > ${p}amount_min * ${WIDE_AWARD_RANGE_RATIO})`
-  const kindExcluded = opportunityKindColumn
-    ? `LOWER(COALESCE(${opportunityKindColumn}, '')) IN ('directory', 'referral', 'school_portal', 'past_award_intel', 'benefit')`
-    : '0 = 1'
+  const hasColumn = (name) => !(availableColumns instanceof Set) || availableColumns.has(name)
+  const exclusionPredicates = []
+  if (hasColumn('eligibility_status')) {
+    exclusionPredicates.push(`LOWER(COALESCE(${p}eligibility_status, '')) = 'ineligible'`)
+  }
+  if (hasColumn('match_decision')) {
+    exclusionPredicates.push(`UPPER(COALESCE(${p}match_decision, '')) = 'REJECT'`)
+  }
+  if (opportunityKindColumn) {
+    exclusionPredicates.push(
+      `LOWER(COALESCE(${opportunityKindColumn}, '')) IN ('directory', 'referral', 'school_portal', 'past_award_intel', 'benefit')`,
+    )
+  }
+  const excluded = exclusionPredicates.length ? exclusionPredicates.join('\n      OR ') : '0 = 1'
   return `CASE
-    WHEN LOWER(COALESCE(${p}eligibility_status, '')) = 'ineligible'
-      OR UPPER(COALESCE(${p}match_decision, '')) = 'REJECT'
-      OR ${kindExcluded}
+    WHEN ${excluded}
     THEN 0
     ELSE COALESCE(
       CASE WHEN NULLIF(${p}amount_requested, 0) IS NOT NULL
-                  AND NOT (${wide} AND ${p}amount_requested = ${p}amount_max)
+                  AND (${wide} AND ${p}amount_requested = ${p}amount_max) IS NOT TRUE
            THEN ${p}amount_requested END,
       CASE WHEN ${wide} THEN ${p}amount_min END,
       NULLIF(${p}amount_max, 0),

@@ -119,6 +119,7 @@ describe('a pre-task-creation skip closes the existing idle task', () => {
     })
     const result = await automateSingleSource(db, {
       profileId: PROFILE,
+      userId: 'owner-1',
       source: { opportunity_id: 'opp-1' },
     })
 
@@ -144,6 +145,7 @@ describe('a pre-task-creation skip closes the existing idle task', () => {
     })
     const result = await automateSingleSource(db, {
       profileId: PROFILE,
+      userId: 'owner-1',
       source: { opportunity_id: 'opp-1' },
     })
 
@@ -160,7 +162,7 @@ describe('a pre-task-creation skip closes the existing idle task', () => {
     const task = await seedTask(db)
 
     assessMock.mockResolvedValue({ code: 'funding_source_profile_rejected', reasons: [] })
-    await automateSingleSource(db, { profileId: PROFILE, source: { opportunity_id: 'opp-1' } })
+    await automateSingleSource(db, { profileId: PROFILE, userId: 'owner-1', source: { opportunity_id: 'opp-1' } })
 
     // The adapter's selection predicate (hamiltonAgentAdapter.js) — the closed
     // task must not be re-picked on the next tick.
@@ -185,6 +187,7 @@ describe('a pre-task-creation skip closes the existing idle task', () => {
     assessMock.mockResolvedValue({ code: 'funding_source_profile_rejected', reasons: [] })
     const result = await automateSingleSource(db, {
       profileId: PROFILE,
+      userId: 'owner-1',
       source: { opportunity_id: 'opp-1' },
     })
 
@@ -201,6 +204,7 @@ describe('a pre-task-creation skip closes the existing idle task', () => {
     assessMock.mockResolvedValue({ code: 'funding_source_profile_rejected', reasons: [] })
     const result = await automateSingleSource(db, {
       profileId: PROFILE,
+      userId: 'owner-1',
       source: { opportunity_id: 'opp-1' },
     })
 
@@ -216,6 +220,7 @@ describe('a pre-task-creation skip closes the existing idle task', () => {
     assessMock.mockResolvedValue({ code: 'funding_source_profile_rejected', reasons: ['r1'] })
     const result = await automateSingleSource(db, {
       profileId: PROFILE,
+      userId: 'owner-1',
       source: { opportunity_id: 'opp-1' },
     })
 
@@ -241,7 +246,7 @@ describe('a pre-task-creation skip closes the existing idle task', () => {
 
     let thrown = null
     try {
-      await automateSingleSource(db, { profileId: PROFILE, source: { opportunity_id: 'opp-1' } })
+      await automateSingleSource(db, { profileId: PROFILE, userId: 'owner-1', source: { opportunity_id: 'opp-1' } })
     } catch (err) {
       thrown = err
     }
@@ -276,7 +281,7 @@ describe('a pre-task-creation skip closes the existing idle task', () => {
 
     let thrown = null
     try {
-      await automateSingleSource(db, { profileId: PROFILE, source: { opportunity_id: 'opp-1' } })
+      await automateSingleSource(db, { profileId: PROFILE, userId: 'owner-1', source: { opportunity_id: 'opp-1' } })
     } catch (err) {
       thrown = err
     }

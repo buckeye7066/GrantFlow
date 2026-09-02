@@ -110,9 +110,9 @@ async function emitPromotionOutcome(outcomeSink, payload) {
   }
 }
 
-// Cache the result of the decision-columns PRAGMA check per DB instance to avoid
-// running PRAGMA table_info(grants) on every saveToProfilePipeline call.
-const _decisionColumnCache = new WeakMap()
+// Cache the grants-column probe per DB instance so admission and persistence
+// share one exact schema view without issuing a PRAGMA/catalog query per row.
+const _grantsColumnCache = new WeakMap()
 const _profileMatchColumnCache = new WeakMap()
 
 async function profileMatchColumns(db) {
@@ -139,6 +139,14 @@ async function profileMatchColumns(db) {
 async function persistFreshCanonicalDecision(db, profileId, opportunityId, decision) {
   if (!profileId || !opportunityId || !decision) return 0
   const columns = await profileMatchColumns(db)
+  for (const required of ['profile_id', 'opportunity_id', 'match_score', 'match_decision']) {
+    if (!columns.has(required)) {
+      const error = new Error(`profile_opportunity_matches lacks required column ${required}`)
+      error.canonicalMatchPersistenceFailed = true
+      throw error
+    }
+  }
+
   const now = new Date().toISOString()
   const explain = {
     ...(decision.match_explain ?? {}),
@@ -150,7 +158,7 @@ async function persistFreshCanonicalDecision(db, profileId, opportunityId, decis
       null,
     canonical_decision: String(decision.decision ?? '').toUpperCase() || null,
   }
-  const candidates = [
+  const decisionValues = [
     ['match_score', Number.isFinite(Number(decision.score)) ? Number(decision.score) : null],
     ['match_confidence', Number.isFinite(Number(decision.confidence)) ? Number(decision.confidence) : null],
     ['match_decision', String(decision.decision ?? '').toLowerCase() || null],
@@ -163,21 +171,25 @@ async function persistFreshCanonicalDecision(db, profileId, opportunityId, decis
     ['evaluated_at', decision.evaluatedAt ?? now],
   ].filter(([column]) => columns.has(column))
 
-  if (!candidates.some(([column]) => column === 'match_score') ||
-      !candidates.some(([column]) => column === 'match_decision')) {
-    const error = new Error('profile_opportunity_matches lacks canonical score/decision columns')
-    error.canonicalMatchPersistenceFailed = true
-    throw error
-  }
-
+  const insertValues = [
+    ['profile_id', profileId],
+    ['opportunity_id', opportunityId],
+    ...decisionValues,
+  ]
+  const updateAssignments = decisionValues
+    .map(([column]) => `${column} = excluded.${column}`)
+    .join(', ')
   const result = await db.prepare(
-    `UPDATE profile_opportunity_matches
-        SET ${candidates.map(([column]) => `${column} = ?`).join(', ')}
-      WHERE profile_id = ? AND opportunity_id = ?`,
-  ).run(...candidates.map(([, value]) => value), profileId, opportunityId)
+    `INSERT INTO profile_opportunity_matches
+       (${insertValues.map(([column]) => column).join(', ')})
+     VALUES (${insertValues.map(() => '?').join(', ')})
+     ON CONFLICT (profile_id, opportunity_id) DO UPDATE SET
+       ${updateAssignments}`,
+  ).run(...insertValues.map(([, value]) => value))
+
   const changed = Number(result?.changes ?? result?.rowCount ?? 0)
   if (!Number.isFinite(changed) || changed < 1) {
-    const error = new Error('fresh canonical rescore did not update its persisted profile/opportunity pair')
+    const error = new Error('fresh canonical rescore did not persist its profile/opportunity pair')
     error.canonicalMatchPersistenceFailed = true
     throw error
   }
@@ -198,9 +210,9 @@ function titleFunderKey(title, funder) {
   return `${t}|${f}`
 }
 
-async function hasGrantsDecisionColumns(db) {
-  if (_decisionColumnCache.has(db)) return _decisionColumnCache.get(db)
-  let result = { decision: false, url: false, fingerprint: false }
+async function grantsColumns(db) {
+  if (_grantsColumnCache.has(db)) return _grantsColumnCache.get(db)
+  let columns = new Set()
   try {
     const dialect = db?.dialect || 'sqlite'
     if (dialect === 'postgres') {
@@ -210,29 +222,19 @@ async function hasGrantsDecisionColumns(db) {
            WHERE table_schema = 'public' AND table_name = 'grants'`,
         )
         .all()
-      const names = new Set((rows || []).map((r) => String(r.column_name)))
-      result = {
-        decision: names.has('match_decision'),
-        url: names.has('url'),
-        fingerprint: names.has('fingerprint'),
-      }
+      columns = new Set((rows || []).map((row) => String(row.column_name)))
     } else {
-      const cols = await db.prepare('PRAGMA table_info(grants)').all()
-      const names = new Set(cols.map((c) => c.name))
-      result = {
-        decision: names.has('match_decision'),
-        url: names.has('url'),
-        fingerprint: names.has('fingerprint'),
-      }
+      const rows = await db.prepare('PRAGMA table_info(grants)').all()
+      columns = new Set((rows || []).map((row) => String(row.name)))
     }
   } catch (err) {
-    // Treat a missing grants table or probe failure as "no decision columns" —
-    // surface it so ops can see schema drift instead of swallowing silently.
-    console.warn('[opportunityMatcher] hasGrantsDecisionColumns probe failed:', err?.message || err)
-    result = { decision: false, url: false, fingerprint: false }
+    // Surface a missing grants table/probe failure. The required-column checks
+    // below then fail closed with a stable schema-drift reason.
+    console.warn('[opportunityMatcher] grantsColumns probe failed:', err?.message || err)
+    columns = new Set()
   }
-  _decisionColumnCache.set(db, result)
-  return result
+  _grantsColumnCache.set(db, columns)
+  return columns
 }
 
 /**
@@ -308,46 +310,6 @@ async function admitToPipeline(db, profileContext, opportunity, ctx = {}) {
       }, decision?.score ?? null)
     }
 
-    // Gate 1.5: Pipeline dismissals (sticky deletes). The user's explicit
-    // decision to remove an opportunity from this profile's pipeline overrides
-    // every downstream matching/admission gate. We run this BEFORE
-    // the decision engine so the response correctly reports DISMISSED rather
-    // than being absorbed by DECISION_ENGINE or another admission policy, and
-    // so we don't pay the cost of running the matcher for a row we'll reject
-    // anyway. Manual re-add via POST /api/grants/from-opportunity clears the
-    // tombstone.
-    if (profileId) {
-      try {
-        const dismissed = await isPipelineDismissed(db, profileId, opportunity)
-        if (dismissed) {
-          if (!quiet) log.info(
-            `[opportunityMatcher] Gate:DISMISSED suppressed "${opportunity?.title}" — profile ${profileId} previously removed this opportunity`,
-          )
-          return denied('tombstoned', {
-            saved: false,
-            reason: 'Previously dismissed by user — re-add manually to bring it back',
-            gate: 'DISMISSED',
-            matchPercentage: null,
-            threshold,
-          }, decision?.score ?? null)
-        }
-      } catch (dismissErr) {
-        if (!quiet) console.warn(
-          '[opportunityMatcher] Gate:DISMISSED check failed for profile %s, opp "%s":',
-          profileId,
-          sanitizeLogValue(opportunity?.title),
-          dismissErr?.message || dismissErr,
-        )
-        return denied('error:transient', {
-          saved: false,
-          reason: `Dismissal lookup failed: ${dismissErr?.message || dismissErr}`,
-          gate: 'DISMISSED_ERROR',
-          matchPercentage: null,
-          threshold,
-        })
-      }
-    }
-
     // Gate 1.75: Funding-result junk chain (config/fundingResultFilters.js).
     // The 2026-08-03 owner QA chain classified regulatory notices, lead-gen
     // scholarships, clearly-expired programs, and anonymized-funder records —
@@ -418,7 +380,46 @@ async function admitToPipeline(db, profileContext, opportunity, ctx = {}) {
       await persistFreshCanonicalDecision(db, profileId, opportunity?.id, decision)
     }
 
-    // Gate 2: Canonical decision engine — automated persistence requires a
+    // Gate 2: Pipeline dismissals (sticky deletes). The user's explicit
+    // dismissal wins after deterministic source/fundability/need checks and
+    // the canonical rescore, regardless of whether today's score is ACCEPT or
+    // REVIEW. Otherwise a later scoring-policy change can hide the tombstone
+    // behind DECISION_ENGINE and make sticky deletion appear broken. An
+    // unreadable dismissal store fails closed. Manual re-add via
+    // POST /api/grants/from-opportunity clears the tombstone.
+    if (profileId) {
+      try {
+        const dismissed = await isPipelineDismissed(db, profileId, opportunity)
+        if (dismissed) {
+          if (!quiet) log.info(
+            `[opportunityMatcher] Gate:DISMISSED suppressed "${opportunity?.title}" — profile ${profileId} previously removed this opportunity`,
+          )
+          return denied('tombstoned', {
+            saved: false,
+            reason: 'Previously dismissed by user — re-add manually to bring it back',
+            gate: 'DISMISSED',
+            matchPercentage: null,
+            threshold,
+          }, decision?.score ?? null)
+        }
+      } catch (dismissErr) {
+        if (!quiet) console.warn(
+          '[opportunityMatcher] Gate:DISMISSED check failed for profile %s, opp "%s":',
+          profileId,
+          sanitizeLogValue(opportunity?.title),
+          dismissErr?.message || dismissErr,
+        )
+        return denied('error:transient', {
+          saved: false,
+          reason: `Dismissal lookup failed: ${dismissErr?.message || dismissErr}`,
+          gate: 'DISMISSED_ERROR',
+          matchPercentage: null,
+          threshold,
+        })
+      }
+    }
+
+    // Gate 2.5: Canonical decision engine — automated persistence requires a
     // positive ACCEPT. REVIEW/unknown is evidence still to be established, not
     // proof that the profile qualifies.
     if (decision?.decision !== 'ACCEPT') {
@@ -583,10 +584,25 @@ async function admitToPipeline(db, profileContext, opportunity, ctx = {}) {
       ? ((await db.prepare('SELECT id FROM funding_opportunities WHERE id = ? LIMIT 1').get(opportunity.id))?.id ?? null)
       : null
 
+    const grantCols = await grantsColumns(db)
+    for (const requiredColumn of ['id', 'profile_id']) {
+      if (!grantCols.has(requiredColumn)) {
+        throw new Error(`grants schema missing required column: ${requiredColumn}`)
+      }
+    }
+    const optionalDedupColumn = (column) =>
+      grantCols.has(column) ? column : `NULL AS ${column}`
     const dupCandidateRows = await db
       .prepare(
         `
-          SELECT id, funding_opportunity_id, fingerprint, title, funder, deadline, url, application_url
+          SELECT id,
+                 ${optionalDedupColumn('funding_opportunity_id')},
+                 ${optionalDedupColumn('fingerprint')},
+                 ${optionalDedupColumn('title')},
+                 ${optionalDedupColumn('funder')},
+                 ${optionalDedupColumn('deadline')},
+                 ${optionalDedupColumn('url')},
+                 ${optionalDedupColumn('application_url')}
           FROM grants
           WHERE profile_id = ?
         `,
@@ -768,8 +784,9 @@ export async function saveToProfilePipeline(
     const grantId = crypto.randomUUID()
     const contactInfo = parseContactInfo(opportunity)
 
-    // Detect which columns exist in the grants table (handles DBs without migration applied)
-    const grantCols = await hasGrantsDecisionColumns(db)
+    // Re-probe through the per-DB cache so the INSERT and duplicate check use
+    // the same schema view for fully migrated and partially migrated databases.
+    const grantCols = await grantsColumns(db)
 
     // Canonical grant URL + content fingerprint. Populated regardless of
     // whether the decision columns are present — these are the minimum
@@ -795,133 +812,61 @@ export async function saveToProfilePipeline(
       toPositiveMoney(opportunity.amount_requested ?? opportunity.requestedAmount) ??
       amountMaxValue ?? amountMinValue
 
-    if (grantCols.decision) {
-      const cols = [
-        'id',
-        'organization_id',
-        'profile_id',
-        'funding_opportunity_id',
-        'title',
-        'funder',
-        'status',
-        'deadline',
-        'match_score',
-        'match_reasons',
-        'notes',
-        'application_url',
-        'application_method',
-        'contact_name',
-        'contact_email',
-        'contact_phone',
-        'amount_requested',
-        'amount_min',
-        'amount_max',
-        'match_decision',
-        'match_explanation',
-        'matched_needs',
-        'eligibility_status',
-        'ineligibility_reasons',
-        'profile_fingerprint',
-        'opportunity_fingerprint',
-        'matcher_version',
-        'evaluated_at',
-        'match_confidence',
-      ]
-      const vals = [
-        grantId,
-        profile.organization_id ?? null,
-        profileId,
-        fkOpportunityId,
-        opportunity.title,
-        opportunity.sponsor || opportunity.funder || null,
-        'discovered',
-        opportunity.deadline ?? null,
-        matchPercentage,
-        JSON.stringify(canonicalReasons),
-        `Auto-added: ${matchPercentage}% match for profile ${profileId} (decision: ${decision?.decision ?? 'N/A'})`,
-        canonicalUrl,
-        opportunity.application_method || opportunity.submission_method || guessMethodFromOpportunity(opportunity) || null,
-        contactInfo.name,
-        contactInfo.email,
-        contactInfo.phone,
-        amountRequestedValue,
-        amountMinValue,
-        amountMaxValue,
-        decision?.decision ?? 'review',
-        decision?.explanation ?? null,
-        JSON.stringify(decision?.matchedNeeds ?? []),
-        decision ? String(decision.eligible) : null,
-        JSON.stringify(decision?.ineligibilityReasons ?? []),
-        profileFingerprint ?? null,
-        opportunityFingerprint ?? null,
-        decision?.matcherVersion ?? null,
-        decision?.evaluatedAt ?? null,
-        decision?.confidence ?? null,
-      ]
-      if (grantCols.url) { cols.push('url'); vals.push(canonicalUrl) }
-      if (grantCols.fingerprint) {
-        cols.push('fingerprint', 'fingerprint_version')
-        vals.push(canonicalFingerprint, GRANT_FINGERPRINT_VERSION)
+    const pipelineStatus = outcomeSink?.pipelineStatus === 'saved' ? 'saved' : 'discovered'
+    const pipelineCategory = outcomeSink?.pipelineCategory === 'apply_ready' ? 'apply_ready' : null
+    const pipelineMatcherVersion =
+      typeof outcomeSink?.pipelineMatcherVersion === 'string' && outcomeSink.pipelineMatcherVersion.trim()
+        ? outcomeSink.pipelineMatcherVersion.trim().slice(0, 128)
+        : decision?.matcherVersion ?? null
+    const insertPairs = [
+      ['id', grantId],
+      ['organization_id', profile.organization_id ?? null],
+      ['profile_id', profileId],
+      ['funding_opportunity_id', fkOpportunityId],
+      ['title', opportunity.title],
+      ['funder', opportunity.sponsor || opportunity.funder || null],
+      ['status', pipelineStatus],
+      ['deadline', opportunity.deadline ?? null],
+      ['match_score', matchPercentage],
+      ['match_reasons', JSON.stringify(canonicalReasons)],
+      ['notes', `Auto-added: ${matchPercentage}% match for profile ${profileId} (decision: ${decision?.decision ?? 'N/A'})`],
+      ['application_url', canonicalUrl],
+      ['application_method', opportunity.application_method || opportunity.submission_method || guessMethodFromOpportunity(opportunity) || null],
+      ['contact_name', contactInfo.name],
+      ['contact_email', contactInfo.email],
+      ['contact_phone', contactInfo.phone],
+      ['amount_requested', amountRequestedValue],
+      ['amount_min', amountMinValue],
+      ['amount_max', amountMaxValue],
+      ['match_decision', decision?.decision ?? 'review'],
+      ['match_explanation', decision?.explanation ?? null],
+      ['matched_needs', JSON.stringify(decision?.matchedNeeds ?? [])],
+      ['eligibility_status', decision ? String(decision.eligible) : null],
+      ['ineligibility_reasons', JSON.stringify(decision?.ineligibilityReasons ?? [])],
+      ['profile_fingerprint', profileFingerprint ?? null],
+      ['opportunity_fingerprint', opportunityFingerprint ?? null],
+      ['matcher_version', pipelineMatcherVersion],
+      ['evaluated_at', decision?.evaluatedAt ?? null],
+      ['match_confidence', decision?.confidence ?? null],
+      ['url', canonicalUrl],
+      ['fingerprint', canonicalFingerprint],
+      ['fingerprint_version', GRANT_FINGERPRINT_VERSION],
+    ]
+    if (pipelineCategory) insertPairs.push(['pipeline_category', pipelineCategory])
+
+    const supportedPairs = insertPairs.filter(([column]) => grantCols.has(column))
+    const supportedNames = new Set(supportedPairs.map(([column]) => column))
+    for (const requiredColumn of ['id', 'profile_id', 'title']) {
+      if (!supportedNames.has(requiredColumn)) {
+        throw new Error(`grants schema missing required column: ${requiredColumn}`)
       }
-      const placeholders = cols.map(() => '?').join(', ')
-      await db
-        .prepare(`INSERT INTO grants (${cols.join(', ')}) VALUES (${placeholders})`)
-        .run(...vals)
-    } else {
-      // Legacy insert without decision columns (pre-migration DBs).
-      // Still populate url/fingerprint when those columns landed separately.
-      const cols = [
-        'id',
-        'organization_id',
-        'profile_id',
-        'funding_opportunity_id',
-        'title',
-        'funder',
-        'status',
-        'deadline',
-        'match_score',
-        'match_reasons',
-        'notes',
-        'application_url',
-        'application_method',
-        'contact_name',
-        'contact_email',
-        'contact_phone',
-        'amount_requested',
-        'amount_min',
-        'amount_max',
-      ]
-      const vals = [
-        grantId,
-        profile.organization_id ?? null,
-        profileId,
-        fkOpportunityId,
-        opportunity.title,
-        opportunity.sponsor || opportunity.funder || null,
-        'discovered',
-        opportunity.deadline ?? null,
-        matchPercentage,
-        JSON.stringify(canonicalReasons),
-        `Auto-added: ${matchPercentage}% match for profile ${profileId} (decision: ${decision?.decision ?? 'N/A'})`,
-        canonicalUrl,
-        opportunity.application_method || opportunity.submission_method || guessMethodFromOpportunity(opportunity) || null,
-        contactInfo.name,
-        contactInfo.email,
-        contactInfo.phone,
-        amountRequestedValue,
-        amountMinValue,
-        amountMaxValue,
-      ]
-      if (grantCols.url) { cols.push('url'); vals.push(canonicalUrl) }
-      if (grantCols.fingerprint) {
-        cols.push('fingerprint', 'fingerprint_version')
-        vals.push(canonicalFingerprint, GRANT_FINGERPRINT_VERSION)
-      }
-      const placeholders = cols.map(() => '?').join(', ')
-      await db
-        .prepare(`INSERT INTO grants (${cols.join(', ')}) VALUES (${placeholders})`)
-        .run(...vals)
     }
+    const cols = supportedPairs.map(([column]) => column)
+    const vals = supportedPairs.map(([, value]) => value)
+    const placeholders = cols.map(() => '?').join(', ')
+    await db
+      .prepare(`INSERT INTO grants (${cols.join(', ')}) VALUES (${placeholders})`)
+      .run(...vals)
     
     if (!outcomeSink?.quiet) log.info(`[opportunityMatcher] Added to pipeline: ${opportunity.title} (${matchPercentage}% match for profile ${profileId}, decision: ${decision?.decision ?? 'N/A'})`)
 

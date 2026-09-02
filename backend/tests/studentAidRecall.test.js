@@ -29,9 +29,20 @@ vi.mock('../services/matchEngine.js', async (importOriginal) => {
     computeMatchDecision: (...args) => {
       const result = actual.computeMatchDecision(...args)
       const forcedScore = Number(args[1]?.__test_canonical_score)
-      return Number.isFinite(forcedScore)
-        ? { ...result, score: forcedScore }
-        : result
+      const forcedDecision = args[1]?.__test_canonical_decision
+      return {
+        ...result,
+        ...(Number.isFinite(forcedScore) ? { score: forcedScore } : {}),
+        ...(forcedDecision
+          ? {
+              decision: forcedDecision,
+              eligible: forcedDecision === 'ACCEPT',
+              ineligibilityReasons: forcedDecision === 'REJECT'
+                ? ['focused fixture rejection']
+                : [],
+            }
+          : {}),
+      }
     },
   }
 })
@@ -81,6 +92,10 @@ const tnHope = {
   state: 'TN',
   requires_student: true,
   url: 'https://www.tn.gov/collegepays/hope',
+  application_url: 'https://www.tn.gov/collegepays/hope',
+  opportunity_kind: 'scholarship',
+  need_types_supported: JSON.stringify(['education', 'student_aid']),
+  amount_max: 5000,
   record_origin: 'curated_catalog',
   source: 'scholarship_crawler',
 }
@@ -184,7 +199,11 @@ describe('(a) trusted student aid scoring in the trusted band SAVES via the trus
     expect(score).toBeLessThan(RELEVANCE_FLOOR)
     expect(score).toBeGreaterThanOrEqual(TRUSTED_RELEVANCE_FLOOR)
 
-    const canonicalLowScore = { ...tnHope, __test_canonical_score: score }
+    const canonicalLowScore = {
+      ...tnHope,
+      __test_canonical_score: score,
+      __test_canonical_decision: 'ACCEPT',
+    }
     const res = await saveToProfilePipeline(
       db,
       canonicalLowScore,
@@ -207,6 +226,7 @@ describe('(a) trusted student aid scoring in the trusted band SAVES via the trus
       id: 'opp-openweb',
       record_origin: 'live_crawl',
       __test_canonical_score: 6,
+      __test_canonical_decision: 'ACCEPT',
     }
     const res = await saveToProfilePipeline(db, untrusted, 'p-student', looseTnStudent, 99, 0)
     expect(res.saved).toBe(false)
@@ -225,6 +245,7 @@ describe('(a) trusted student aid scoring in the trusted band SAVES via the trus
       record_origin: 'live_crawl',
       source_trust_tier: 'OFFICIAL_API',
       __test_canonical_score: 6,
+      __test_canonical_decision: 'ACCEPT',
     }
     const res = await saveToProfilePipeline(db, officialLive, 'p-student', looseTnStudent, 99, 0)
     expect(res.saved).toBe(true)
@@ -241,6 +262,7 @@ describe('(a) trusted student aid scoring in the trusted band SAVES via the trus
       record_origin: 'live_crawl',
       source_trust_tier: 'OFFICIAL_API',
       __test_canonical_score: 6,
+      __test_canonical_decision: 'ACCEPT',
     }
     // 6 = inside the trusted band (5–6) on the data-point scale.
     const res = await saveToProfilePipeline(db, officialLive, 'p-student', looseTnStudent, 99)
@@ -255,6 +277,7 @@ describe('(a) trusted student aid scoring in the trusted band SAVES via the trus
       id: 'opp-openweb-2',
       record_origin: 'live_crawl',
       __test_canonical_score: 6,
+      __test_canonical_decision: 'ACCEPT',
     }
     const res = await saveToProfilePipeline(db, untrusted, 'p-student', looseTnStudent, 99)
     expect(res.saved).toBe(false)

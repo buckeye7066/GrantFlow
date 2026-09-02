@@ -59,6 +59,10 @@ import {
   emitMissingInfoAlert,
 } from './hamiltonNotifications.js'
 import { canonicalStage } from '../../../shared/pipelineStages.js'
+import {
+  hamiltonProcessingBlockReason,
+  isHamiltonProtectedPipelineStage,
+} from '../../../shared/hamiltonProcessingPolicy.js'
 import { deriveNamePartsIntoBasicInfo } from '../../../shared/nameParsing.js'
 import { runAutopilot, sanitizeListingSnapshotForPersistence } from './hamiltonAutopilotEngine.js'
 import { decomposeListing } from './listingDecomposition.js'
@@ -332,10 +336,72 @@ async function loadOpportunity(db, id) {
 
 async function loadGrant(db, id) {
   if (!db || !id) return null
-  try {
-    const row = await db.prepare('SELECT * FROM grants WHERE id = ? LIMIT 1').get(String(id))
-    return row || null
-  } catch { return null }
+  const row = await db.prepare('SELECT * FROM grants WHERE id = ? LIMIT 1').get(String(id))
+  return row || null
+}
+
+/**
+ * Resolve the authoritative pipeline grant for a selected source.
+ *
+ * Callers are allowed to identify a source by opportunity_id alone, but the
+ * submission boundary belongs to the profile's grant row. Resolve that row
+ * here so omitting grant_id cannot bypass post-submission protections. When
+ * duplicate grant rows exist for the same opportunity, a protected row wins:
+ * it is safer to reconcile existing submission evidence than to submit twice.
+ */
+function isMissingGrantOpportunityColumn(error, column) {
+  const message = String(error?.message || error || '').toLowerCase()
+  const code = String(error?.code || '')
+  return message.includes(String(column).toLowerCase())
+    && (code === '42703' || message.includes('no such column') || message.includes('does not exist'))
+}
+
+export async function loadAuthoritativeGrantForSource(db, {
+  profileId,
+  grantId = null,
+  opportunityId = null,
+} = {}) {
+  if (!db || !profileId) return null
+  if (grantId) {
+    const grant = await loadGrant(db, grantId)
+    if (!grant || !opportunityId) return grant
+    const linkedOpportunityId = grant.funding_opportunity_id ?? grant.opportunity_id ?? null
+    if (!linkedOpportunityId || String(linkedOpportunityId) !== String(opportunityId)) {
+      const err = new Error('selected grant and opportunity identify different funding sources')
+      err.status = 409
+      err.code = 'source_identity_mismatch'
+      throw err
+    }
+    return grant
+  }
+  if (!opportunityId) return null
+
+  // Production uses funding_opportunity_id; older/local schemas may expose
+  // opportunity_id, or no opportunity-link column at all. Probe only these two
+  // trusted identifiers and treat an absent legacy column as "no linked grant"
+  // rather than failing every opportunity-only Hamilton task.
+  let rows = []
+  let foundOpportunityColumn = false
+  for (const column of ['funding_opportunity_id', 'opportunity_id']) {
+    try {
+      const candidateRows = await db.prepare(
+        `SELECT * FROM grants
+          WHERE profile_id = ?
+            AND ${column} = ?`,
+      ).all(String(profileId), String(opportunityId))
+      foundOpportunityColumn = true
+      if (Array.isArray(candidateRows) && candidateRows.length > 0) {
+        rows = candidateRows
+        break
+      }
+    } catch (error) {
+      if (!isMissingGrantOpportunityColumn(error, column)) throw error
+    }
+  }
+  const candidates = foundOpportunityColumn && Array.isArray(rows) ? rows : []
+  return candidates.find((row) => isHamiltonProtectedPipelineStage(row?.status))
+    || candidates[0]
+    || null
 }
 
 async function loadPortalLink(db, profileId, { opportunityId, grantId }) {
@@ -494,22 +560,22 @@ async function maybeUpdateGrantStage(db, grantId, newStage) {
 }
 
 /**
- * Cross-tenant ownership gate for automateSingleSource. `userId` here is the
- * ACTOR who triggered this run (e.g. getAuthUserId(user) from a route); when
- * it is null the caller is an internal/system driver operating on an
- * already-scoped record (e.g. hamiltonAgentAdapter.js re-processing an
- * existing application_tasks row by its own profile_id) and is trusted, the
- * same "MISSING = NEUTRAL" posture the rest of this codebase uses for
- * internal callers. When a userId IS asserted, it must resolve to either a
- * DB-confirmed admin or one of the profile's owner/creator/allowlisted-email
- * accounts (getUserIdsWithProfileAccess — the same primitive
- * userMayAccessProfile's route-level checks are built on), mirroring the
- * ensureProfileAccess(ctx, profileId) pattern anyaToolRegistry.js's tool
- * handlers already use as a service-level (non-route) ownership gate.
+ * In-process capability for the Hamilton adapter and scheduler. This is a
+ * module-identity Symbol (not Symbol.for), so request JSON cannot construct or
+ * replay it. Missing actor identity is otherwise denied.
  */
-async function isUserAuthorizedForProfile(db, userId, profileId) {
-  if (!userId) return true
+export const HAMILTON_INTERNAL_CALLER = Symbol('grantflow.hamilton.internal-caller')
+
+/**
+ * Cross-tenant ownership gate for automateSingleSource. A real user must be a
+ * DB-confirmed admin or one of the profile's owner/creator/allowlisted-email
+ * accounts. Scheduler-driven work must present the in-process capability above;
+ * a bare null/undefined user is never authorization.
+ */
+async function isUserAuthorizedForProfile(db, userId, profileId, { internalCaller = null } = {}) {
   if (!db || !profileId) return false
+  if (internalCaller === HAMILTON_INTERNAL_CALLER) return true
+  if (!userId) return false
   try {
     const adminRow = await db.prepare('SELECT is_admin FROM users WHERE id = ?').get(String(userId))
     if (adminRow && (adminRow.is_admin === true || adminRow.is_admin === 1)) return true
@@ -587,7 +653,7 @@ async function closeExistingTasksForRefusedSource(db, {
  * `automateSelected`.
  */
 export async function automateSingleSource(db, {
-  profile, profileId, userId = null, source, options = {},
+  profile, profileId, userId = null, internalCaller = null, source, options = {},
 } = {}) {
   if (!profile && !profileId) throw new Error('profile or profileId required')
   const resolvedProfileId = profileId || profile.id
@@ -596,7 +662,12 @@ export async function automateSingleSource(db, {
   // packet generation. loadProfileBundle below is a bare `WHERE id = ?` with
   // no ownership check of its own — this is the ONE place that check must
   // hold regardless of which caller reaches this function.
-  if (!(await isUserAuthorizedForProfile(db, userId, resolvedProfileId))) {
+  if (!(await isUserAuthorizedForProfile(
+    db,
+    userId,
+    resolvedProfileId,
+    { internalCaller },
+  ))) {
     const err = new Error(`user ${userId} is not authorized for profile ${resolvedProfileId}`)
     err.status = 403
     err.code = 'profile_access_denied'
@@ -615,7 +686,8 @@ export async function automateSingleSource(db, {
     }
   }
   const opportunityId = source?.opportunity_id || source?.opportunityId || null
-  const grantId = source?.grant_id || source?.grantId || null
+  const requestedGrantId = source?.grant_id || source?.grantId || null
+  let grantId = requestedGrantId
   if (!opportunityId && !grantId) {
     throw new Error('source must include opportunity_id or grant_id')
   }
@@ -623,7 +695,21 @@ export async function automateSingleSource(db, {
     || (source?.current_stage || source?.currentStage || null)
 
   const opportunity = await loadOpportunity(db, opportunityId)
-  const grant = await loadGrant(db, grantId)
+  const grant = await loadAuthoritativeGrantForSource(db, {
+    profileId: resolvedProfileId,
+    grantId,
+    opportunityId,
+  })
+  if (requestedGrantId && grant && (!grant.profile_id || String(grant.profile_id) !== String(resolvedProfileId))) {
+    const err = new Error('selected grant does not belong to the requested profile')
+    err.status = 403
+    err.code = 'source_profile_mismatch'
+    throw err
+  }
+  // Persist the resolved id on any task created from an opportunity-only
+  // selection so every later worker and the final submit boundary retain the
+  // same authoritative pipeline identity.
+  if (!grantId && grant?.id) grantId = grant.id
   const portalLink = await loadPortalLink(db, resolvedProfileId, { opportunityId, grantId })
 
   // A source id that resolves to NOTHING must not become a task: the task is
@@ -659,6 +745,29 @@ export async function automateSingleSource(db, {
     err.code = 'unresolvable_funding_source'
     err.closed_tasks = closedTasks
     throw err
+  }
+
+  // A grant at or beyond submission is historical evidence, not fresh work.
+  // Refuse before task creation and close only scheduler-pickable leftovers;
+  // drafted or submission-in-flight tasks remain untouched for reconciliation.
+  if (grant && isHamiltonProtectedPipelineStage(grant.status)) {
+    const message = hamiltonProcessingBlockReason(grant.status)
+      || 'Hamilton will not restart this post-submission funding source.'
+    const closedTasks = await closeExistingTasksForRefusedSource(db, {
+      profileId: resolvedProfileId,
+      opportunityId,
+      grantId,
+      reason: 'pipeline_stage_protected',
+      message,
+    })
+    return {
+      task: null,
+      skipped: true,
+      reason: 'pipeline_stage_protected',
+      pipeline_stage: grant.status,
+      message,
+      closed_tasks: closedTasks,
+    }
   }
 
   // 0. Eligibility gate (2026-08-03): a source the canonical engine REJECTS
@@ -798,7 +907,7 @@ export async function automateSingleSource(db, {
 
   if (classification.automation_type === 'portal') {
     return await runPortalPathway(db, {
-      task, profile, opportunity, grant, classification, userId, options,
+      task, profile, opportunity, grant, classification, userId, internalCaller, options,
     })
   }
 
@@ -1571,7 +1680,7 @@ async function runActionPacketPathway(db, {
 }
 
 async function runPortalPathway(db, {
-  task, profile, opportunity, grant, classification, userId, options,
+  task, profile, opportunity, grant, classification, userId, internalCaller = null, options,
 }) {
   // A prior run that reached the irreversible boundary can never be resumed as
   // ordinary form filling. Startup recovery and cancellation both quarantine
@@ -1695,7 +1804,7 @@ async function runPortalPathway(db, {
   // Run Autopilot now (unattended).
   return await runAutopilotPathway(db, {
     task, profile, opportunity, grant, classification,
-    userId, authorizations, options,
+    userId, internalCaller, authorizations, options,
   })
 }
 
@@ -1714,7 +1823,8 @@ async function runPortalPathway(db, {
  *        - failed           engine error
  */
 async function runAutopilotPathway(db, {
-  task, profile, opportunity, grant, classification, userId, authorizations, options = {},
+  task, profile, opportunity, grant, classification, userId, internalCaller = null,
+  authorizations, options = {},
 }) {
   // Never trust an injected authorization object. Re-read the persisted grants
   // at the pathway boundary; submission is re-read again immediately before
@@ -2195,6 +2305,40 @@ async function runAutopilotPathway(db, {
     if (!liveTask || liveTask.status === 'cancelled') {
       return { allow: false, cancelled: true, reason: 'task_cancelled' }
     }
+
+    // Re-read the authoritative pipeline row immediately before the
+    // irreversible click. Portal runs can be minutes old; another worker or a
+    // user may have recorded this grant as submitted while Hamilton was
+    // filling the form. A vanished or unreadable row also fails closed.
+    const liveGrantId = liveTask.grant_id || grant?.id || null
+    const liveOpportunityId = liveTask.opportunity_id || opportunity?.id || null
+    let liveGrant
+    try {
+      liveGrant = await loadAuthoritativeGrantForSource(db, {
+        profileId: task.profile_id,
+        grantId: liveGrantId,
+        opportunityId: liveOpportunityId,
+      })
+    } catch {
+      return { allow: false, reason: 'pipeline_stage_unavailable' }
+    }
+    // A task that names a grant must still resolve that exact grant. A legacy
+    // opportunity-only task may legitimately have no pipeline grant; when it
+    // does have one, the same protected-stage veto applies.
+    if (liveGrantId && !liveGrant) {
+      return { allow: false, reason: 'pipeline_stage_unavailable' }
+    }
+    if (liveGrant && String(liveGrant.profile_id || '') !== String(task.profile_id || '')) {
+      return { allow: false, reason: 'pipeline_stage_unavailable' }
+    }
+    if (liveGrant && isHamiltonProtectedPipelineStage(liveGrant.status)) {
+      return {
+        allow: false,
+        reason: 'pipeline_stage_protected',
+        pipeline_stage: liveGrant.status,
+      }
+    }
+
     const fresh = await resolveSubmissionDecision(db, {
       profileId: task.profile_id,
       fundingSourceId: opportunity?.id || grant?.id || null,
@@ -2974,6 +3118,7 @@ async function runAutopilotPathway(db, {
             profile,
             profileId: task.profile_id,
             userId,
+            internalCaller,
             source: { opportunity_id: opportunityId },
             options: { ...(options || {}), _listingChild: true, allow_auto_submit: true },
           }).catch((err) => ({ autopilot_result: { status: 'failed', blocker_kind: 'apply_error', detail: err?.message || String(err) } }))

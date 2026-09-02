@@ -6,7 +6,7 @@
  * THE PROFILE DECLARED. The decision engine scores need coverage instead of
  * rejecting on it ("a low score alone is not hard ineligibility"), so Gate 1.9
  * is the ONE place conjunct (1) is enforced at admission. Structured
- * declarations only; silence on either side is neutral.
+ * declarations only; admission requires positive evidence on both sides.
  *
  * Same fixture conventions as saveToProfilePipelineGates.test.js: a minimal
  * in-memory better-sqlite3 schema and a focused decision-engine mock so the
@@ -123,7 +123,7 @@ describe('saveToProfilePipeline — NEED_COVERAGE gate', () => {
     expect(countGrants(db)).toBe(1)
   })
 
-  it('stays NEUTRAL when the opportunity states no need vocabulary', async () => {
+  it('refuses when the opportunity states no need vocabulary', async () => {
     const opp = {
       id: 'opp-silent',
       title: 'Murfreesboro Community Scholarship',
@@ -132,12 +132,14 @@ describe('saveToProfilePipeline — NEED_COVERAGE gate', () => {
       application_url: 'https://example-rcf.org/apply',
     }
     const result = await saveToProfilePipeline(db, opp, 'p1', needProfileContext, 90, 55)
-    expect(result.saved).toBe(true)
+    expect(result.saved).toBe(false)
+    expect(result.gate).toBe('NEED_COVERAGE')
   })
 
-  it('stays NEUTRAL when the profile declares no needs', async () => {
+  it('refuses when the profile declares no needs', async () => {
     const result = await saveToProfilePipeline(db, legalOpp('opp-legal-2'), 'p1', silentProfileContext, 90, 55)
-    expect(result.saved).toBe(true)
+    expect(result.saved).toBe(false)
+    expect(result.gate).toBe('NEED_COVERAGE')
   })
 
   it('records the denial as a TERMINAL live_reject for promotion sinks', async () => {

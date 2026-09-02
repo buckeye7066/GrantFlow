@@ -28,7 +28,13 @@ import { runAutopilot, _internal } from '../../backend/services/hamilton/hamilto
 function makeDb() {
   const sqlite = new Database(':memory:')
   sqlite.exec(`
-    CREATE TABLE IF NOT EXISTS profiles (id TEXT PRIMARY KEY, user_id TEXT);
+    CREATE TABLE IF NOT EXISTS profiles (id TEXT PRIMARY KEY, user_id TEXT, primary_type TEXT);
+    CREATE TABLE IF NOT EXISTS profile_sections (
+      profile_id TEXT NOT NULL,
+      section_key TEXT NOT NULL,
+      data TEXT,
+      PRIMARY KEY (profile_id, section_key)
+    );
     CREATE TABLE IF NOT EXISTS documents (id TEXT PRIMARY KEY, profile_id TEXT, name TEXT, type TEXT);
     CREATE TABLE IF NOT EXISTS profile_documents (profile_id TEXT, document_id TEXT, PRIMARY KEY(profile_id, document_id));
     CREATE TABLE IF NOT EXISTS profile_opportunity_matches (
@@ -120,7 +126,7 @@ describe('hamiltonPreflight', () => {
 
   it('passes when profile is complete and portal URL is present', async () => {
     const db = makeDb()
-    db.raw.prepare('INSERT INTO profiles (id) VALUES (?)').run('p-ok')
+    db.raw.prepare("INSERT INTO profiles (id, primary_type) VALUES (?, 'college_student')").run('p-ok')
     seedCrawlerOsMatch(db, { profileId: 'p-ok', opportunityId: 'op-y' })
     const r = await preflightSingleSource(db, {
       profile: {
@@ -143,6 +149,7 @@ describe('hamiltonPreflight', () => {
         source_trust_tier: 'official',
         reality_status: 'allowed',
         reality_reasons: '[]',
+        entity_types_allowed: ['individual', 'student'],
       },
       grant: null,
     })

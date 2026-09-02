@@ -65,15 +65,21 @@ function makeTmpDir(prefix) {
 function makeDb() {
   const sqlite = new Database(':memory:')
   sqlite.exec(`
-    CREATE TABLE profiles (id TEXT PRIMARY KEY, user_id TEXT, created_by TEXT, display_name TEXT);
+    CREATE TABLE profiles (id TEXT PRIMARY KEY, user_id TEXT, created_by TEXT, display_name TEXT, primary_type TEXT);
     CREATE TABLE profile_sections (profile_id TEXT, section_key TEXT, data TEXT);
     CREATE TABLE funding_opportunities (
       id TEXT PRIMARY KEY, profile_id TEXT, title TEXT, description TEXT,
-      application_url TEXT, source_url TEXT
+      opportunity_kind TEXT, entity_types_allowed TEXT,
+      application_url TEXT, source_url TEXT, source TEXT, record_origin TEXT,
+      source_trust_tier TEXT, reality_status TEXT, is_active INTEGER
     );
     CREATE TABLE grants (
       id TEXT PRIMARY KEY, profile_id TEXT, funding_opportunity_id TEXT, title TEXT,
       application_url TEXT, status TEXT, updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE TABLE profile_opportunity_matches (
+      profile_id TEXT, opportunity_id TEXT, match_score REAL, match_decision TEXT,
+      match_explanation TEXT, matcher_version TEXT, updated_at DATETIME, computed_at DATETIME
     );
     CREATE TABLE documents (
       id TEXT PRIMARY KEY,
@@ -94,16 +100,30 @@ function makeDb() {
 }
 
 async function seedFixture(db) {
-  await db.prepare('INSERT INTO profiles (id, user_id, display_name) VALUES (?, ?, ?)')
-    .run(PROFILE, 'user-1', 'Focus Forward Ministry')
+  await db.prepare('INSERT INTO profiles (id, user_id, display_name, primary_type) VALUES (?, ?, ?, ?)')
+    .run(PROFILE, 'user-1', 'Focus Forward Ministry', 'nonprofit')
   await db.prepare('INSERT INTO profile_sections (profile_id, section_key, data) VALUES (?, ?, ?)')
-    .run(PROFILE, 'basic_information', JSON.stringify({ first_name: 'Focus', last_name: 'Forward', email: 'ffm@example.org' }))
+    .run(PROFILE, 'basic_information', JSON.stringify({ first_name: 'Focus', last_name: 'Forward', email: 'ffm@example.org', profile_category: 'nonprofit' }))
   await db.prepare('INSERT INTO profile_sections (profile_id, section_key, data) VALUES (?, ?, ?)')
     .run(PROFILE, 'automation_preferences', JSON.stringify({ automations: { hamilton_auto_submit: true, hamilton_autopilot: true } }))
-  await db.prepare('INSERT INTO funding_opportunities (id, title, description, application_url) VALUES (?, ?, ?, ?)')
-    .run('opp-1', 'Community Ministry Grant', 'Apply through the portal.', 'https://hamilton-submit-fixture.invalid/apply')
+  await db.prepare(`INSERT INTO funding_opportunities
+    (id, title, description, opportunity_kind, entity_types_allowed, application_url,
+     source_url, source, record_origin, source_trust_tier, reality_status, is_active)
+    VALUES (?, ?, ?, 'direct_grant', ?, ?, ?, 'curated_verified', 'curated_verified', 'official', 'real', 1)`)
+    .run(
+      'opp-1',
+      'Community Ministry Grant',
+      'Apply through the portal.',
+      JSON.stringify(['nonprofit']),
+      'https://hamilton-submit-fixture.invalid/apply',
+      'https://hamilton-submit-fixture.invalid/apply',
+    )
   await db.prepare('INSERT INTO grants (id, profile_id, funding_opportunity_id, title) VALUES (?, ?, ?, ?)')
     .run('g-1', PROFILE, 'opp-1', 'Community Ministry Grant')
+  await db.prepare(`INSERT INTO profile_opportunity_matches
+    (profile_id, opportunity_id, match_score, match_decision, matcher_version, updated_at, computed_at)
+    VALUES (?, ?, 90, 'accept', 'crawler-os', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`)
+    .run(PROFILE, 'opp-1')
 }
 
 const savedEnv = {}

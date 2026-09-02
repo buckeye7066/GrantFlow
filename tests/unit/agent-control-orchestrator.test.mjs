@@ -21,6 +21,7 @@ import {
   pauseRun,
   resumeRun,
   stopRun,
+  stopAgent,
   emergencyStopRun,
   cancelRun,
   executeRun,
@@ -37,6 +38,7 @@ import {
   listEvents,
   recordStopRequest,
   latestUnfulfilledStop,
+  listStopRequests,
 } from '../../backend/services/agentControl/agentControlStore.js'
 import { setAdapter, resetRegistry } from '../../backend/services/agentControl/agentAdapters/agentAdapterRegistry.js'
 import { BaseAgentAdapter } from '../../backend/services/agentControl/agentAdapters/baseAgentAdapter.js'
@@ -277,6 +279,8 @@ describe('Agent Control Center — full_cycle ordering', () => {
       const steps = await listSteps(db, run.id)
       const after = steps.find((s) => s.step_name === 'yana_main')
       assert.equal(after.status, 'completed', 'yana should still run when stop_on_agent_failure=false (default)')
+      const finalRun = await getRun(db, run.id)
+      assert.equal(finalRun.status, 'failed', 'a continued cycle must still report its failed step')
     }
     resetRegistry()
     {
@@ -356,6 +360,78 @@ describe('Agent Control Center — stop / pause / resume / emergency-stop', () =
     assert.equal(after.status, 'completed')
   })
 
+  it('a cooperative pause requeues the same durable step on resume', async () => {
+    const db = makeDb()
+    let starts = 0
+    installMockAdapters({
+      robert: {
+        start: async ({ signal }) => {
+          starts += 1
+          if (starts === 1) {
+            for (let i = 0; i < 100; i += 1) {
+              await new Promise((r) => setTimeout(r, 5))
+              if (signal.shouldPause()) {
+                return { ok: true, status: 'paused', summary: { agent: 'robert', paused: true } }
+              }
+            }
+          }
+          return {
+            ok: true,
+            status: 'completed',
+            summary: { agent: 'robert', candidates_inserted: 1 },
+          }
+        },
+      },
+    })
+
+    const { run } = await startRun(db, { runType: 'robert_only', user: adminUser() })
+    await new Promise((r) => setTimeout(r, 25))
+    await pauseRun(db, run.id, { user: adminUser() })
+    await new Promise((r) => setTimeout(r, 140))
+
+    let current = await getRun(db, run.id)
+    let [step] = await listSteps(db, run.id)
+    assert.equal(current.status, 'paused')
+    assert.equal(step.status, 'paused')
+    assert.equal(starts, 1)
+
+    await resumeRun(db, run.id, { user: adminUser() })
+    await new Promise((r) => setTimeout(r, 140))
+
+    current = await getRun(db, run.id)
+    ;[step] = await listSteps(db, run.id)
+    assert.equal(current.status, 'completed')
+    assert.equal(step.status, 'completed')
+    assert.equal(starts, 2)
+  })
+
+  it('an agent-scoped stop halts only that agent and the full cycle continues', async () => {
+    const db = makeDb()
+    installMockAdapters({
+      robert: {
+        start: async ({ signal }) => {
+          for (let i = 0; i < 100; i += 1) {
+            await new Promise((r) => setTimeout(r, 5))
+            if (signal.shouldStop()) {
+              return { ok: true, status: 'stopped', summary: { agent: 'robert', stopped: true } }
+            }
+          }
+          return { ok: true, status: 'completed', summary: { candidates_inserted: 1 } }
+        },
+      },
+    })
+
+    const { run } = await startRun(db, { runType: 'full_cycle', user: adminUser() })
+    await new Promise((r) => setTimeout(r, 35))
+    await stopAgent(db, 'robert', { user: adminUser(), reason: 'stop Robert only' })
+    await new Promise((r) => setTimeout(r, 260))
+
+    const steps = await listSteps(db, run.id)
+    assert.equal(steps.find((s) => s.step_name === 'robert_main')?.status, 'stopped')
+    assert.equal(steps.find((s) => s.step_name === 'yana_main')?.status, 'completed')
+    assert.equal((await getRun(db, run.id)).status, 'completed')
+  })
+
   it('emergency stop marks queued steps stopped immediately', async () => {
     const db = makeDb()
     installMockAdapters({
@@ -379,6 +455,29 @@ describe('Agent Control Center — stop / pause / resume / emergency-stop', () =
     assert.match(queued.status, /stopped|skipped/)
     const events = await listEvents(db, run.id, { limit: 100, eventType: 'control.run.emergency_stop' })
     assert.equal(events.length >= 1, true)
+  })
+
+  it('rejects lifecycle commands after a run is terminal without writing requests', async () => {
+    const db = makeDb()
+    installMockAdapters()
+    const { run } = await startRun(db, { runType: 'sam_only', user: adminUser() })
+    await new Promise((r) => setTimeout(r, 80))
+    assert.equal((await getRun(db, run.id)).status, 'completed')
+
+    const commands = [
+      () => pauseRun(db, run.id, { user: adminUser() }),
+      () => resumeRun(db, run.id, { user: adminUser() }),
+      () => stopRun(db, run.id, { user: adminUser() }),
+      () => emergencyStopRun(db, run.id, { user: adminUser() }),
+      () => cancelRun(db, run.id, { user: adminUser() }),
+    ]
+    for (const command of commands) {
+      await assert.rejects(command, (error) =>
+        error?.status === 409 && error?.code === 'invalid_run_transition',
+      )
+    }
+    assert.equal((await getRun(db, run.id)).status, 'completed')
+    assert.deepEqual(await listStopRequests(db, run.id), [])
   })
 
   it('cancel marks queued steps skipped and finalises the run as cancelled', async () => {
@@ -475,6 +574,51 @@ describe('Agent Control Center — notifications + status', () => {
 })
 
 describe('Agent Control Center — store helpers', () => {
+  it('ensureSchema retries after a transient DDL failure and caches only success', async () => {
+    _resetSchemaCache()
+    let failedOnce = false
+    let runTableAttempts = 0
+    const db = {
+      prepare(sql) {
+        return {
+          async run() {
+            if (/CREATE TABLE IF NOT EXISTS agent_control_runs\s*\(/i.test(sql)) {
+              runTableAttempts += 1
+              if (!failedOnce) {
+                failedOnce = true
+                throw new Error('transient ddl failure')
+              }
+            }
+            return { changes: 0 }
+          },
+        }
+      },
+    }
+
+    await ensureSchema(db)
+    await ensureSchema(db)
+    await ensureSchema(db)
+    assert.equal(runTableAttempts, 2)
+  })
+
+  it('run-wide stop polling ignores an agent-scoped stop', async () => {
+    const db = makeDb()
+    await ensureSchema(db)
+    await recordStopRequest(db, {
+      controlRunId: 'run-scoped-stop',
+      agentName: 'robert',
+      requestType: 'graceful_stop',
+    })
+    assert.equal(
+      await latestUnfulfilledStop(db, 'run-scoped-stop', { runWideOnly: true }),
+      null,
+    )
+    assert.equal(
+      (await latestUnfulfilledStop(db, 'run-scoped-stop', { agentName: 'robert' }))?.request_type,
+      'graceful_stop',
+    )
+  })
+
   it('latestUnfulfilledStop respects priority: emergency > cancel > graceful_stop > pause', async () => {
     const db = makeDb()
     await ensureSchema(db)
@@ -516,6 +660,29 @@ describe('Agent Control Center — adapter signal contract', () => {
 })
 
 describe('Agent Control Center — executeRun is idempotent on re-entry', () => {
+  it('concurrent executor kicks cannot duplicate any sam_only phase', async () => {
+    const db = makeDb()
+    const mocks = installMockAdapters({
+      sam: {
+        start: async () => {
+          await new Promise((r) => setTimeout(r, 120))
+          return { ok: true, status: 'completed', summary: { findings_total: 1 } }
+        },
+      },
+    })
+    const { run } = await startRun(db, { runType: 'sam_only', user: adminUser() })
+    await new Promise((r) => setTimeout(r, 20))
+    await Promise.all([
+      executeRun({ db, runId: run.id }),
+      executeRun({ db, runId: run.id }),
+      executeRun({ db, runId: run.id }),
+    ])
+    await new Promise((r) => setTimeout(r, 160))
+    // sam_only deliberately runs preflight, main, and postflight. Re-entry must
+    // not add a fourth invocation of any phase.
+    assert.equal(mocks.sam.startCallCount, 3)
+  })
+
   it('re-invoking executeRun on a finished run does not re-run steps', async () => {
     const db = makeDb()
     const mocks = installMockAdapters()
