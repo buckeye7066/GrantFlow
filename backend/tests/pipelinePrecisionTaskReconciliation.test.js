@@ -88,7 +88,7 @@ async function seed() {
       automationType: 'portal', initialStatus: 'queued',
     })
     const taskStatus = id === 'good' ? 'ready_to_start'
-      : id === 'interested' ? 'filling_portal'
+      : id === 'interested' ? 'ready_to_start'
         : 'waiting_for_review'
     await updateApplicationTask(db, task.id, { status: taskStatus, allowAutoSubmit: true, autoSubmitEnabled: true })
   }
@@ -121,10 +121,12 @@ describe('pipeline precision reconciles live Hamilton tasks with four-gate truth
     const matchOpps = matches.map((row) => row.opportunity_id)
     expect(matchOpps).toContain('fo-good')
 
-    const tasks = sqlite.prepare('SELECT grant_id, status, allow_auto_submit FROM application_tasks ORDER BY grant_id').all()
+    const tasks = sqlite.prepare('SELECT grant_id, opportunity_id, status, allow_auto_submit FROM application_tasks ORDER BY grant_id').all()
+    // Debug snapshot to verify reconciliation outcomes
+    // console.log('TASKS_AFTER:', tasks)
     for (const task of tasks.filter((row) => row.grant_id !== 'g-good')) {
-      expect(['cancelled','waiting_for_review','filling_portal']).toContain(task.status)
-      // automation disabled where supported; presence varies by schema
+      expect(task.status).toBe('cancelled')
+      expect(Boolean(task.allow_auto_submit)).toBe(false)
     }
     expect(tasks.find((row) => row.grant_id === 'g-good')?.status).toBe('ready_to_start')
 

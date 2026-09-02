@@ -1,12 +1,7 @@
-import { runStrictPipelineReconciliation } from '../../services/pipelineStrictReconciliation.js'
+import { runStrictPipelineReconciliation } from '../../../services/pipelineStrictReconciliation.js'
 
 /**
- * One-time production reconciliation for the four positive pipeline gates.
- *
- * This deliberately mutates live data. It cancels active Hamilton work and
- * removes early automated grants that cannot positively prove REAL, RELATABLE,
- * COVERS-A-DECLARED-NEED, and QUALIFIES. Submitted/awarded history is retained,
- * marked rejected/ineligible, and removed from future automation truth.
+ * One-time PostgreSQL production reconciliation for the four positive pipeline gates.
  */
 export default async function up(db) {
   try {

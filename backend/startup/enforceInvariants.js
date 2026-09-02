@@ -5427,14 +5427,19 @@ export async function enforcePipelinePrecision(db) {
         const ph = TERMINAL_TASK_STATUSES.map(() => '?').join(', ')
         taskRows = await db.prepare(
           `SELECT id FROM application_tasks
-            WHERE profile_id = ?
-              AND ((grant_id IS NOT NULL AND grant_id = ?)
-                OR (opportunity_id IS NOT NULL AND opportunity_id = ?))
+            WHERE
+              (
+                    (grant_id IS NOT NULL AND grant_id = ?)
+                 OR (opportunity_id IS NOT NULL AND opportunity_id = ?)
+                 OR (application_url IS NOT NULL AND application_url = ?)
+                 OR (portal_url IS NOT NULL AND portal_url = ?)
+              )
               AND (status IS NULL OR LOWER(status) NOT IN (${ph}))`,
         ).all(
-          profileId,
           row.grant_id ? String(row.grant_id) : null,
           row.funding_opportunity_id ? String(row.funding_opportunity_id) : null,
+          row.application_url ? String(row.application_url) : null,
+          row.application_url ? String(row.application_url) : null,
           ...TERMINAL_TASK_STATUSES,
         )
       } catch { taskRows = [] }
@@ -5588,6 +5593,43 @@ export async function enforcePipelinePrecision(db) {
               },
             })
           }
+        // Hard-stop any dangling nonterminal tasks tied to this pair
+        try {
+          await db.prepare(
+            `UPDATE application_tasks
+               SET status = 'cancelled',
+                   last_agent_message = ?
+            WHERE
+              (
+                    (grant_id IS NOT NULL AND grant_id = ?)
+                 OR (opportunity_id IS NOT NULL AND opportunity_id = ?)
+                 OR (application_url IS NOT NULL AND application_url = ?)
+                 OR (portal_url IS NOT NULL AND portal_url = ?)
+               )`,
+          ).run(
+            `Pipeline precision — ${reasonKey}`,
+            row.grant_id ?? null,
+            row.funding_opportunity_id ?? null,
+            row.application_url ?? null,
+            row.application_url ?? null,
+          )
+          // Target stubborn in-flight portal fills
+          await db.prepare(
+            `UPDATE application_tasks
+               SET status = 'cancelled',
+                   allow_auto_submit = 0,
+                   last_agent_message = ?
+             WHERE status = 'filling_portal'
+               AND (
+                    (grant_id IS NOT NULL AND grant_id = ?)
+                 OR (opportunity_id IS NOT NULL AND opportunity_id = ?)
+               )`,
+          ).run(
+            `Pipeline precision — ${reasonKey}`,
+            row.grant_id ?? null,
+            row.funding_opportunity_id ?? null,
+          )
+        } catch { /* ignore */ }
           const res = await db.prepare('DELETE FROM grants WHERE id = ?').run(row.grant_id)
           if (changesOf(res) < 1) throw new Error('delete affected 0 rows')
           writes += 1
@@ -5601,6 +5643,33 @@ export async function enforcePipelinePrecision(db) {
           log.warn('pipeline_precision: removal failed (non-fatal)', { grant: row.grant_id, error: String(err?.message || err) })
         }
       }
+
+      // Cancel any dangling application tasks tied to grants just removed for this profile
+      try {
+        await db.prepare(
+          `UPDATE application_tasks
+              SET status = 'cancelled',
+                  last_agent_message = ?
+            WHERE profile_id = ?
+              AND grant_id IS NOT NULL
+              AND NOT EXISTS (SELECT 1 FROM grants g WHERE g.id = application_tasks.grant_id)`,
+        ).run('Pipeline precision — source removed', profileId)
+      } catch { /* ignore */ }
+
+      // Cancel any tasks tied to freshly tombstoned opportunities for this profile
+      try {
+        await db.prepare(
+          `UPDATE application_tasks
+              SET status = 'cancelled',
+                  allow_auto_submit = 0,
+                  last_agent_message = ?
+            WHERE profile_id = ?
+              AND opportunity_id IN (
+                SELECT DISTINCT opportunity_id FROM pipeline_dismissals WHERE profile_id = ?
+              )
+              AND (status IS NULL OR LOWER(status) NOT IN ('submitted','completed','cancelled'))`,
+        ).run('Pipeline precision — source dismissed', profileId, profileId)
+      } catch { /* ignore */ }
     }
 
     const accounted = counts.kept + counts.removed + counts.relabeled + counts.failed
