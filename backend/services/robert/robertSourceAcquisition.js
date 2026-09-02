@@ -49,14 +49,13 @@
  *   #1346 config/pipelineCategory.js + robertFunderLeads.js — the category split.
  */
 
-import crypto from 'crypto'
 import { createLogger } from '../../utils/logger.js'
 import { upsertFundingOpportunity } from '../opportunityInserter.js'
+import { saveToProfilePipeline } from '../opportunityMatcher.js'
 import { decomposeListing as canonicalDecomposeListing, listingHostSponsor } from '../hamilton/listingDecomposition.js'
 import { canonicalOpportunityKey } from '../../crawler-os/contract.js'
 import {
   PIPELINE_CATEGORY,
-  FUNDER_LEAD_STATE,
   hasUsableApplyPath,
 } from '../../config/pipelineCategory.js'
 import { looksLikeApplicationPath } from './robertFunderLeads.js'
@@ -467,31 +466,30 @@ async function grantColumnSet(db) {
  * pipeline_category (apply_ready vs funder_lead) decides whether Hamilton may
  * ever cold-submit it.
  */
-async function autoAddToProfile(db, { profileId, oppRow, facts, category, cols }) {
-  const isLead = category === PIPELINE_CATEGORY.FUNDER_LEAD
-  const noteLine = isLead
-    ? `Robert auto-added (funder lead): ${oppRow.sponsor || oppRow.title} — qualifies for [${[...(facts.needs || [])].slice(0, 6).join(', ')}]. Under investigation — confirm an application path before applying.`
-    : `Robert auto-added (apply-ready): ${oppRow.title} — real, relatable, covers a declared need, and the profile qualifies.`
-  const grantId = crypto.randomUUID()
-  const insCols = ['id', 'profile_id', 'funding_opportunity_id', 'title', 'funder', 'status', 'notes', 'pipeline_category']
-  const insVals = [grantId, profileId, oppRow.id, oppRow.title, oppRow.sponsor || oppRow.title || null,
-    isLead ? 'interested' : 'saved', noteLine, category]
-  const optional = [
-    ['organization_id', facts.profile?.organization_id ?? null],
-    ['funder_lead_state', isLead ? FUNDER_LEAD_STATE.CANDIDATE : null],
-    ['matcher_version', ACQUISITION_MATCHER_VERSION],
-    ['application_url', oppRow.application_url ?? null],
-    // Funder leads must NOT copy research source_url into url — that made
-    // investigation auto-promote on ProPublica pages (see hasPromotableApplyPath).
-    ['url', oppRow.application_url ?? (isLead ? null : oppRow.source_url) ?? null],
-    ['source_url', oppRow.source_url ?? null],
-    ['amount_min', oppRow.amount_min ?? null],
-    ['amount_max', oppRow.amount_max ?? null],
-    ['amount_requested', oppRow.amount_max ?? oppRow.amount_min ?? null],
-  ]
-  for (const [c, v] of optional) if (cols.has(c)) { insCols.push(c); insVals.push(v) }
-  const ph = insCols.map(() => '?').join(', ')
-  await db.prepare(`INSERT INTO grants (${insCols.join(', ')}) VALUES (${ph})`).run(...insVals)
+async function autoAddToProfile(db, { profileId, oppRow, facts, category }) {
+  // Research leads belong in the catalog/investigation queue. They are not
+  // application opportunities and must never be represented as grants.
+  if (category === PIPELINE_CATEGORY.FUNDER_LEAD) {
+    return { saved: false, researchLead: true, reason: 'funder_lead_catalog_only' }
+  }
+
+  // Every apply-ready crawler result passes through the same canonical writer
+  // used by interactive additions. No crawler identity, score, quota, or
+  // pre-check may bypass its positive fundability/need/eligibility verdicts.
+  return saveToProfilePipeline(
+    db,
+    oppRow,
+    profileId,
+    { profile: facts.profile, sections: facts.sections || {} },
+    null,
+    null,
+    {
+      quiet: true,
+      freshRescoreRequired: true,
+      mode: 'live',
+      source: ACQUISITION_MATCHER_VERSION,
+    },
+  )
 }
 
 /**
@@ -511,7 +509,7 @@ export async function parseOpportunitiesAgainstProfiles(db, {
   deps = {},
 } = {}) {
   const out = {
-    scanned: 0, added: 0, addedLeads: 0, wouldAdd: 0, skippedExisting: 0,
+    scanned: 0, added: 0, addedLeads: 0, catalogLeads: 0, wouldAdd: 0, skippedExisting: 0,
     skippedTombstoned: 0, harvestFirst: 0, byReason: {}, perProfileCapped: 0,
     truncated: false, examples: [], skipped: null,
   }
@@ -569,7 +567,7 @@ export async function parseOpportunitiesAgainstProfiles(db, {
       if (linked) { out.skippedExisting += 1; continue }
 
       // Tombstone (a source the user explicitly removed stays gone).
-      try { if (await isDismissed(db, profileId, oppRow)) { out.skippedTombstoned += 1; continue } } catch { /* recall over suppression */ }
+      try { if (await isDismissed(db, profileId, oppRow)) { out.skippedTombstoned += 1; continue } } catch { bump('dismissal_check_error'); continue }
 
       const category = await classifyPipelineCategory(oppRow, { deps })
 
@@ -581,9 +579,17 @@ export async function parseOpportunitiesAgainstProfiles(db, {
       }
 
       try {
-        await autoAddToProfile(db, { profileId, oppRow, facts, category, cols })
-        if (category === PIPELINE_CATEGORY.FUNDER_LEAD) out.addedLeads += 1
-        else out.added += 1
+        const admission = await autoAddToProfile(db, { profileId, oppRow, facts, category })
+        if (admission?.researchLead) {
+          out.catalogLeads += 1
+          bump(admission.reason)
+          continue
+        }
+        if (!admission?.saved) {
+          bump(admission?.reason || 'canonical_writer_rejected')
+          continue
+        }
+        out.added += 1
         perProfileAdded.set(profileId, already + 1)
         if (out.examples.length < 8) out.examples.push(`${category}:${oppRow.title}→${facts.displayName || profileId}`)
       } catch (err) {
