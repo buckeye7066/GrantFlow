@@ -23,7 +23,7 @@ import { getAdapter } from './adapters/index.js';
 import { parse } from './parsers.js';
 import { enforceReality } from './realityGate.js';
 import { normalize } from './normalizer.js';
-import { computeMatchDecision, isRecommendable } from './matchEngine.js';
+import { computeMatchDecision, isRecommendable, isResearchLead } from './matchEngine.js';
 import { buildEvolutionSignals } from './profileEvolution.js';
 import { CRAWLER_OUTCOME, MATCH_DECISION, OPPORTUNITY_KIND, REASON, canonicalOpportunityKey } from './contract.js';
 import {
@@ -91,6 +91,8 @@ export async function runDiscovery(deps, opts = {}) {
   const storedOppIds = new Set();
   const recommendations = [];
   const recommendationKeys = new Set();
+  const researchLeads = [];
+  const researchLeadKeys = new Set();
   const storedRealKeys = new Map(); // real-world opportunity identity -> canonical stored id (cross-source dedup)
   let totalRejected = 0;
   // Per-source ACCEPT/score tally for the DISCOVERING profile. The admin Crawl
@@ -115,6 +117,15 @@ export async function runDiscovery(deps, opts = {}) {
         profileRow: mp._profileContext?.profile ?? null,
         profileSections: mp._profileContext?.sections ?? null,
         signals: mp._profileContext?.signals ?? null,
+        // `enforceReality` also admits safe-but-unverified links for research.
+        // Only a row with evidence captured, hashed, and timestamped in this
+        // crawl may satisfy the REAL truth required for direct funding.
+        realityPassed: Boolean(
+          canonicalOpp.evidence?.url &&
+          canonicalOpp.evidence?.content_hash &&
+          canonicalOpp.evidence?.fetched_at
+        ),
+        enforceFourTruths: true,
       });
       // Crawler-doctor provenance: registry adapters have no query string, but
       // the SOURCE that produced the match is knowable (web lane sets both
@@ -133,7 +144,9 @@ export async function runDiscovery(deps, opts = {}) {
         }
       }
       const recommendationKey = `${mp.profile_id}:${canonicalOpp.id}`;
-      if (isRecommendable(canonicalOpp, decision.decision) && mp.profile_id === thesis.profile_id && !recommendationKeys.has(recommendationKey)) {
+      const truthProof = decision.match_explain?.four_truth_proof ?? null;
+      if (isRecommendable(canonicalOpp, decision.decision) && truthProof?.all_passed === true &&
+          mp.profile_id === thesis.profile_id && !recommendationKeys.has(recommendationKey)) {
         recommendationKeys.add(recommendationKey);
         // topical_evidence: legacy weighted-evidence subscale, retained so Amy's
         // weight-tuning validation can measure where the W_* weights still act
@@ -146,7 +159,22 @@ export async function runDiscovery(deps, opts = {}) {
         // false_positive detector must be able to read the SAME text — a
         // concrete anchor in the description ("rent", "utility") is exactly
         // what rescues a generically-titled row from the cap.
-        recommendations.push({ opportunity_id: canonicalOpp.id, title: canonicalOpp.title, description: canonicalOpp.description ?? null, sponsor: canonicalOpp.sponsor, kind: canonicalOpp.kind ?? null, amount_min: canonicalOpp.funding?.amount_min ?? null, amount_max: canonicalOpp.funding?.amount_max ?? null, amount_status: canonicalOpp.funding?.amount_status ?? null, match_score: decision.match_score, decision: decision.decision, topical_evidence: decision.match_explain?.score_breakdown?.topical_evidence ?? null });
+        recommendations.push({ opportunity_id: canonicalOpp.id, title: canonicalOpp.title, description: canonicalOpp.description ?? null, sponsor: canonicalOpp.sponsor, kind: canonicalOpp.kind ?? null, amount_min: canonicalOpp.funding?.amount_min ?? null, amount_max: canonicalOpp.funding?.amount_max ?? null, amount_status: canonicalOpp.funding?.amount_status ?? null, match_score: decision.match_score, decision: decision.decision, four_truth_proof: truthProof, topical_evidence: decision.match_explain?.score_breakdown?.topical_evidence ?? null });
+      }
+      if (isResearchLead(canonicalOpp, decision.decision) && mp.profile_id === thesis.profile_id &&
+          !researchLeadKeys.has(recommendationKey)) {
+        researchLeadKeys.add(recommendationKey);
+        researchLeads.push({
+          opportunity_id: canonicalOpp.id,
+          title: canonicalOpp.title,
+          description: canonicalOpp.description ?? null,
+          sponsor: canonicalOpp.sponsor,
+          kind: canonicalOpp.kind ?? null,
+          info_url: canonicalOpp.info_url ?? canonicalOpp.apply_url ?? null,
+          match_score: decision.match_score,
+          decision: decision.decision,
+          classification: 'research_lead_not_direct_funding',
+        });
       }
     }
   }
@@ -154,7 +182,7 @@ export async function runDiscovery(deps, opts = {}) {
   if (thePlan.selected_source_ids.length === 0) {
     return finalize({
       store, runId, thesis, thePlan, startedAt, clock,
-      sourceSummaries, storedOppIds, recommendations, totalRejected,
+      sourceSummaries, storedOppIds, recommendations, researchLeads, totalRejected,
       zeroReason: REASON.NO_SOURCES_SELECTED,
     });
   }
@@ -379,7 +407,7 @@ export async function runDiscovery(deps, opts = {}) {
   }
 
   const zeroReason = storedOppIds.size > 0 ? null : diagnoseZeroResult(sourceSummaries, totalRejected);
-  return finalize({ store, runId, thesis, thePlan, startedAt, clock, sourceSummaries, storedOppIds, recommendations, totalRejected, zeroReason });
+  return finalize({ store, runId, thesis, thePlan, startedAt, clock, sourceSummaries, storedOppIds, recommendations, researchLeads, totalRejected, zeroReason });
 }
 
 // ---- helpers --------------------------------------------------------------
@@ -474,7 +502,7 @@ function buildLadder(thesis, thePlan, summaries, zeroReason) {
   };
 }
 
-function finalize({ store, runId, thesis, thePlan, startedAt, clock, sourceSummaries, storedOppIds, recommendations, totalRejected, zeroReason }) {
+function finalize({ store, runId, thesis, thePlan, startedAt, clock, sourceSummaries, storedOppIds, recommendations, researchLeads, totalRejected, zeroReason }) {
   const finishedAt = new Date(clock()).toISOString();
   const ladder = zeroReason ? buildLadder(thesis, thePlan, sourceSummaries, zeroReason) : null;
   const profileEvolution = buildEvolutionSignals({ thesis, plan: thePlan, summaries: sourceSummaries, zeroReason });
@@ -492,6 +520,7 @@ function finalize({ store, runId, thesis, thePlan, startedAt, clock, sourceSumma
     rejected: totalRejected,
     sources: sourceSummaries,
     recommendations: recommendations.sort((a, b) => b.match_score - a.match_score),
+    research_leads: (researchLeads ?? []).sort((a, b) => b.match_score - a.match_score),
     zero_result: ladder,
     profile_evolution: profileEvolution,
     started_at: startedAt,
