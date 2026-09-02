@@ -38,11 +38,18 @@ export function useTierEntitlements(profileId) {
 
   return useMemo(() => {
     const tier = billingQuery.data?.account?.tier || null
+    const entitlements = billingQuery.data?.entitlements?.capabilities || null
     const catalog = catalogQuery.data || null
     const loading = (!isAdmin && billingQuery.isLoading) || catalogQuery.isLoading
     const error = billingQuery.error || catalogQuery.error || null
 
-    const has = (key) => isAdmin || Boolean(tier?.[key])
+    // The server decision is authoritative because it includes payment state,
+    // suspension, promotions and add-ons. Tier flags are only a rolling-deploy
+    // fallback while an older backend is still serving the new frontend.
+    const decisionFor = (key) => entitlements?.[key] || null
+    const has = (key) => isAdmin || (decisionFor(key)
+      ? decisionFor(key).allowed === true
+      : Boolean(tier?.[key]))
 
     // The cheapest tier in the catalog that unlocks a given capability — used to
     // tell the user exactly what to upgrade to.
@@ -55,9 +62,19 @@ export function useTierEntitlements(profileId) {
       if (has(key)) return null
       const target = lowestTierWith(key)
       const feature = labelFor(key)
+      const decision = decisionFor(key)
+      if (decision?.reason === "entitlement_authority_unavailable") {
+        return `GrantFlow couldn’t verify ${feature} access. Nothing will run until billing can be verified.`
+      }
+      if (decision?.payment_required) {
+        return `Payment or an approved waiver is required before ${feature} can run.`
+      }
+      if (String(decision?.reason || "").startsWith("profile_")) {
+        return `This profile is paused. Resolve the account hold before using ${feature}.`
+      }
       return target
-        ? `${feature} isn’t included in your ${tier?.name || "current"} plan. Upgrade to ${target.name} to unlock it.`
-        : `${feature} isn’t included in your current plan.`
+        ? `${feature} isn’t included in your ${tier?.name || "current"} plan. Upgrade to ${target.name} or add ${feature} to unlock it.`
+        : `${feature} requires an active add-on.`
     }
 
     const capabilities = {
@@ -68,6 +85,11 @@ export function useTierEntitlements(profileId) {
     const locked = Object.entries(CAP)
       .filter(([, key]) => !has(key))
       .map(([name, key]) => ({ name, key, label: labelFor(key), upgradeMessage: upgradeMessage(key) }))
+    const addons = [...new Map(
+      Object.values(entitlements || {})
+        .flatMap((decision) => decision?.active_addons || [])
+        .map((addon) => [addon.id, addon]),
+    ).values()]
 
     return {
       loading,
@@ -75,6 +97,8 @@ export function useTierEntitlements(profileId) {
       isAdmin,
       tier,
       billing: billingQuery.data?.billing || null,
+      entitlements,
+      addons,
       capabilities,
       can: (key) => has(key),
       locked,

@@ -50,6 +50,7 @@ import { useDashboardPreferences } from "@/contexts/DashboardPreferencesContext.
 import { useAnyaPageAdapter } from "@/contexts/AnyaContext"
 import { useSettingsStore } from "@/stores/settingsStore"
 import { useAuthStore } from "@/stores/authStore"
+import { useTierEntitlements } from "@/hooks/useTierEntitlements"
 import ProfileFilesPanel from "@/components/profiles/ProfileFilesPanel.jsx"
 import ProfileAppliedFundingPrint from "@/components/profiles/ProfileAppliedFundingPrint.jsx"
 import ProfileInfoPrint from "@/components/profiles/ProfileInfoPrint.jsx"
@@ -1081,7 +1082,8 @@ export default function ProfileDetail() {
 
   // Derived state - computed here (before early returns) using optional chaining so they are
   // safe when `profile` is still undefined (loading / error states).
-  const canDocumentAI = isAdmin || Boolean(profile?.billing?.tier?.enable_document_ai)
+  const profileEntitlements = useTierEntitlements(profileId)
+  const canDocumentAI = profileEntitlements.capabilities.documentAI
 
   const primaryType = String(profile?.primary_type || "").toLowerCase()
   const basicInfo =

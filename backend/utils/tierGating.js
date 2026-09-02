@@ -1,11 +1,11 @@
+import {
+  resolveAllProfileEntitlements,
+  resolveProfileEntitlement,
+} from '../services/billing/entitlementService.js'
 import { ensureBillingAccount, mapAccountRow } from '../services/billingAccounts.js'
-import { isFreeWeekActive } from '../../shared/freeWeek.js'
+import { CAPABILITY_KEYS } from '../../shared/tierCatalog.js'
 
-export const TIER_CAPABILITIES = Object.freeze({
-  PIPELINE_AUTOMATION: 'enable_pipeline_automation',
-  ITEM_FUNDING: 'enable_item_funding',
-  DOCUMENT_AI: 'enable_document_ai',
-})
+export const TIER_CAPABILITIES = Object.freeze({ ...CAPABILITY_KEYS })
 
 export async function getProfileBillingAccount(db, profileId) {
   if (!profileId) return null
@@ -13,29 +13,54 @@ export async function getProfileBillingAccount(db, profileId) {
   return mapAccountRow(row)
 }
 
+export async function getProfileEntitlements(db, req, profileId) {
+  return await resolveAllProfileEntitlements(db, {
+    profileId,
+    isAdmin: req?.ctx?.isAdmin === true,
+  })
+}
+
 export async function hasTierCapability(db, req, profileId, capabilityKey) {
-  if (req.ctx?.isAdmin) return true
-  // Free Week promotion: every capability is unlocked for everyone while active.
-  if (isFreeWeekActive(process.env)) return true
-  const billing = await getProfileBillingAccount(db, profileId)
-  return Boolean(billing?.tier?.[capabilityKey])
+  const decision = await resolveProfileEntitlement(db, {
+    profileId,
+    capabilityKey,
+    isAdmin: req?.ctx?.isAdmin === true,
+  })
+  return decision.allowed === true
 }
 
 export async function requireTierCapability(req, res, profileId, capabilityKey) {
-  if (req.ctx?.isAdmin) return true
-  // Free Week promotion: skip the upgrade gate entirely while active.
-  if (isFreeWeekActive(process.env)) return true
+  const decision = await resolveProfileEntitlement(req.db, {
+    profileId,
+    capabilityKey,
+    isAdmin: req?.ctx?.isAdmin === true,
+  })
+  if (decision.allowed === true) {
+    req.entitlement = decision
+    return true
+  }
 
-  const billing = await getProfileBillingAccount(req.db, profileId)
-  const allowed = Boolean(billing?.tier?.[capabilityKey])
-  if (allowed) return true
-
-  res.status(403).json({
-    error: 'Tier upgrade required',
+  const paymentRequired = decision.payment_required === true
+  const suspended = String(decision.reason || '').startsWith('profile_')
+  const unavailable = decision.unavailable === true
+  res.status(unavailable ? 503 : paymentRequired ? 402 : suspended ? 423 : 403).json({
+    error: unavailable
+      ? 'entitlement_authority_unavailable'
+      : paymentRequired
+        ? 'payment_required'
+        : suspended
+          ? 'profile_access_paused'
+          : 'tier_or_addon_required',
     capability: capabilityKey,
-    message:
-      'Your current billing tier does not include this feature. Please contact the GrantFlow team to adjust your tier.',
+    reason: decision.reason,
+    tier_id: decision.tier_id || null,
+    message: unavailable
+      ? 'GrantFlow could not verify billing entitlements. The feature remains locked until verification succeeds.'
+      : paymentRequired
+        ? 'Payment or an approved waiver is required before this feature can run.'
+        : suspended
+          ? 'This profile is paused. Resolve the account hold before using paid features.'
+          : 'Your tier does not include this feature and no active add-on grants it.',
   })
   return false
 }
-

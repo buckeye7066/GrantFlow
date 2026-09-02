@@ -39,6 +39,14 @@ import {
   banProfileUser,
   unbanProfileUser,
 } from '../services/billing/accountStatus.js'
+import {
+  grantBillingAddon,
+  listActiveBillingAddons,
+  listBillingAddons,
+  publicBillingAddon,
+  resolveAllProfileEntitlements,
+  revokeBillingAddon,
+} from '../services/billing/entitlementService.js'
 
 import { createLogger } from '../utils/logger.js'
 const routeLogger = createLogger('route:billing')
@@ -135,6 +143,10 @@ router.get('/me/:profileId', async (req, res) => {
     const accountRow = await ensureBillingAccount(req.db, profileId)
     const account = mapAccountRow(accountRow)
     const billing = await computeEffectiveBilling(req.db, profileId, account)
+    const entitlements = await resolveAllProfileEntitlements(req.db, {
+      profileId,
+      isAdmin,
+    })
     // Read-only view: tier + capabilities + effective amount. (Internal fields
     // like assigned_by/assigned_reason are admin-only; omit them here.)
     res.json({
@@ -149,6 +161,7 @@ router.get('/me/:profileId', async (req, res) => {
         billing_cadence: normalizeCadence(accountRow.billing_cadence),
       },
       billing,
+      entitlements,
       free_period: describeFreePeriod(accountRow),
       read_only: true,
     })
@@ -162,6 +175,32 @@ async function canAccessProfile(req, profileId) {
   const accessible = await getAccessibleProfileIds(req.db, req.user)
   return accessible === null || accessible.has(String(profileId))
 }
+
+// USER: read only the effective, sanitized add-ons and entitlement decisions
+// for a profile the caller can already access. Internal references, actors and
+// metadata remain admin-only.
+router.get('/me/:profileId/addons', async (req, res, next) => {
+  try {
+    const profileId = String(req.params.profileId)
+    if (!(await canAccessProfile(req, profileId))) {
+      return res.status(403).json({ error: 'Not authorized to view this profile billing' })
+    }
+    const profile = await req.db.prepare('SELECT id FROM profiles WHERE id = ?').get(profileId)
+    if (!profile) return res.status(404).json({ error: 'profile_not_found', profile_id: profileId })
+    const [addons, entitlements] = await Promise.all([
+      listActiveBillingAddons(req.db, profileId),
+      resolveAllProfileEntitlements(req.db, { profileId, isAdmin: req.ctx?.isAdmin === true }),
+    ])
+    return res.json({
+      profile_id: profileId,
+      addons: addons.map(publicBillingAddon),
+      entitlements,
+      read_only: true,
+    })
+  } catch (error) {
+    return next(error)
+  }
+})
 
 // USER: choose / change the billing cadence (weekly | biweekly | semimonthly | monthly).
 // This is the "choose at signup" control — it changes WHEN you're invoiced, not
@@ -321,6 +360,60 @@ router.post('/admin/accounts/:profileId/unban', requireAdmin, async (req, res) =
     res.status(result.ok ? 200 : 400).json(result)
   } catch (error) {
     res.status(500).json(formatError(error))
+  }
+})
+
+// ADMIN: inspect durable add-on entitlements.
+router.get('/admin/accounts/:profileId/addons', requireAdmin, async (req, res, next) => {
+  try {
+    const profileId = String(req.params.profileId)
+    const profile = await req.db.prepare('SELECT id FROM profiles WHERE id = ?').get(profileId)
+    if (!profile) return res.status(404).json({ error: 'profile_not_found', profile_id: profileId })
+    const [addons, entitlements] = await Promise.all([
+      listBillingAddons(req.db, profileId, { includeInactive: true }),
+      resolveAllProfileEntitlements(req.db, { profileId, isAdmin: false }),
+    ])
+    return res.json({ profile_id: profileId, addons, entitlements })
+  } catch (error) {
+    return next(error)
+  }
+})
+
+router.post('/admin/accounts/:profileId/addons', requireAdmin, async (req, res, next) => {
+  try {
+    const profileId = String(req.params.profileId)
+    const actor = req.ctx?.userId ?? req.user?.userId ?? req.user?.email ?? 'admin'
+    const result = await grantBillingAddon(req.db, {
+      profileId,
+      capabilityKey: req.body?.capability_key,
+      source: 'admin',
+      sourceReference: req.body?.source_reference ?? null,
+      startsAt: req.body?.starts_at ?? null,
+      expiresAt: req.body?.expires_at ?? null,
+      grantedBy: actor,
+      reason: req.body?.reason ?? null,
+      metadata: req.body?.metadata ?? null,
+    })
+    return res.status(result.created ? 201 : 200).json(result)
+  } catch (error) {
+    return next(error)
+  }
+})
+
+router.post('/admin/accounts/:profileId/addons/:entitlementId/revoke', requireAdmin, async (req, res, next) => {
+  try {
+    const profileId = String(req.params.profileId)
+    const actor = req.ctx?.userId || req.user?.userId || req.user?.email || 'admin'
+    const result = await revokeBillingAddon(req.db, {
+      profileId,
+      entitlementId: req.params.entitlementId,
+      revokedBy: actor,
+      reason: req.body?.reason || null,
+    })
+    if (result.revoked) return res.json(result)
+    return res.status(result.reason === 'not_found' ? 404 : 409).json(result)
+  } catch (error) {
+    return next(error)
   }
 })
 

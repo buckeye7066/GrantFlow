@@ -477,8 +477,8 @@ export default function ItemFunding() {
     if (!canItemFunding) {
       toast({
         variant: "destructive",
-        title: "Tier upgrade required",
-        description: "Item funding is not enabled for this profile’s billing tier.",
+        title: "Item funding unavailable",
+        description: itemEntitlements.upgradeMessage("enable_item_funding"),
       })
       return
     }
@@ -506,8 +506,8 @@ export default function ItemFunding() {
     if (!canItemFunding) {
       toast({
         variant: "destructive",
-        title: "Tier upgrade required",
-        description: "Item funding is not enabled for this profile’s billing tier.",
+        title: "Item funding unavailable",
+        description: itemEntitlements.upgradeMessage("enable_item_funding"),
       })
       return
     }
@@ -560,8 +560,8 @@ export default function ItemFunding() {
     if (!canItemFunding) {
       toast({
         variant: "destructive",
-        title: "Tier upgrade required",
-        description: "Item funding is not enabled for this profile\u2019s billing tier.",
+        title: "Item funding unavailable",
+        description: itemEntitlements.upgradeMessage("enable_item_funding"),
       })
       return false
     }
