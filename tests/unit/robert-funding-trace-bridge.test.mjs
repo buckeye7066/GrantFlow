@@ -39,10 +39,12 @@ describe('traceFundingIntoCandidates (staging path)', () => {
     entity_type: 'company',
     addability: { min_amount: 25000, max_age_years: 5 },
     sources: [
-      { name: 'Navy', parent_agency: 'Department of Defense', type: 'federal_agency', origin: 'usaspending', total_amount: 1_000_000, award_count: 3, latest_year: 2024, addable: true, sample_url: 'https://www.usaspending.gov/award/A1' },
-      { name: 'Acme Foundation', type: 'foundation', origin: 'ai_synthesis', addable: true, sample_url: 'https://example.org/foundation' },
-      { name: 'No URL Funder', type: 'federal_agency', origin: 'usaspending', total_amount: 500000, latest_year: 2024, addable: true, sample_url: null },
-      { name: 'Below Floor', type: 'federal_agency', origin: 'usaspending', total_amount: 1000, addable: false, sample_url: 'https://www.usaspending.gov/award/B1' },
+      { name: 'Navy', parent_agency: 'Department of Defense', type: 'federal_agency', origin: 'usaspending', evidence_status: 'verified_award_record', recipient_name: 'Acme Corp', total_amount: 1_000_000, award_count: 3, latest_year: 2024, addable: true, sample_url: 'https://www.usaspending.gov/award/A1' },
+      { name: 'No URL Funder', type: 'federal_agency', origin: 'usaspending', evidence_status: 'verified_award_record', recipient_name: 'Acme Corp', total_amount: 500000, latest_year: 2024, addable: true, sample_url: null },
+      { name: 'Below Floor', type: 'federal_agency', origin: 'usaspending', evidence_status: 'verified_award_record', recipient_name: 'Acme Corp', total_amount: 1000, addable: false, sample_url: 'https://www.usaspending.gov/award/B1' },
+    ],
+    research_hypotheses: [
+      { name: 'Acme Foundation', type: 'foundation', origin: 'ai_synthesis', evidence_status: 'unverified_hypothesis', addable: false },
     ],
   })
 
@@ -51,14 +53,11 @@ describe('traceFundingIntoCandidates (staging path)', () => {
     const upsert = async (_db, c) => { staged.push(c); return { id: `id${staged.length}`, inserted: true } }
     const res = await traceFundingIntoCandidates(FAKE_DB, { entity: 'Acme Corp', upsert, traceFn: traceStub })
 
-    assert.equal(res.traced, 4)
-    assert.equal(res.addable, 2)          // Navy + Acme Foundation (No-URL excluded; Below-Floor not addable)
-    assert.equal(res.upserted, 2)
+    assert.equal(res.traced, 3)
+    assert.equal(res.addable, 1)          // Navy only; AI hypothesis never enters sources/staging
+    assert.equal(res.upserted, 1)
     assert.equal(res.skipped_no_url, 1)   // "No URL Funder"
-    assert.deepEqual(staged.map((c) => c.source_name), [
-      'Navy (Department of Defense)',
-      'Acme Foundation',
-    ])
+    assert.deepEqual(staged.map((c) => c.source_name), ['Navy (Department of Defense)'])
   })
 
   it('records trace evidence and trust on the staged candidate', async () => {

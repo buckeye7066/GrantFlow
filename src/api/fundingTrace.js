@@ -4,9 +4,9 @@ import { apiFetch } from "@/api/client"
  * Trace where an entity gets its funding.
  * @param {string} entity      free-text company / public entity / individual
  * @param {string} entityType  'company' | 'nonprofit' | 'foundation' | 'grantmaker' | 'public_entity' | 'individual'
- * @param {boolean} useAi      include AI-synthesized funding channels
+ * @param {boolean} useAi      include separately labeled, non-addable research hypotheses
  */
-export async function traceFunding(entity, { entityType = "company", useAi = true } = {}) {
+export async function traceFunding(entity, { entityType = "company", useAi = false } = {}) {
   return apiFetch("/api/admin/funding-trace", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -15,10 +15,10 @@ export async function traceFunding(entity, { entityType = "company", useAi = tru
 }
 
 /** Add a single traced funding source to the GrantFlow catalog. */
-export async function addTracedSource(source, entity) {
+export async function addTracedSource(source, entity, entityType = "company") {
   return apiFetch("/api/admin/funding-trace/add", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ source, entity }),
+    body: JSON.stringify({ source: { key: source?.key }, entity, entity_type: entityType }),
   })
 }

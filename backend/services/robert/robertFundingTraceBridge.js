@@ -14,7 +14,7 @@
  * Robert never auto-adds anything — candidates land as `status='pending'`.
  */
 
-import { traceFunding } from '../fundingTraceService.js'
+import { isSourceAddable, isVerifiedTraceSource, traceFunding } from '../fundingTraceService.js'
 import { findSimilarOrgsFunders } from '../reverseLookupService.js'
 import { makeSourceCandidate, SOURCE_STATUS } from './robertTypes.js'
 import { createLogger } from '../../utils/logger.js'
@@ -49,20 +49,25 @@ export function classifyTracedSource(source) {
  * @param {object}   args
  * @param {string}   args.entity        free-text entity to trace
  * @param {string}   [args.entityType]  'company' | 'public_entity' | 'individual'
- * @param {boolean}  [args.useAi]       include AI-synthesized channels (default true)
+ * @param {boolean}  [args.useAi]       include separate AI research hypotheses (default false)
  * @param {Function} args.upsert        async (db, candidate) => { id, inserted, updated }
  * @param {string|null} [args.runId]    associate candidates with a Robert run
  * @param {Function} [args.traceFn]     trace implementation (injected for tests)
  * @returns {Promise<object>} summary { entity, traced, addable, upserted, skipped, candidates }
  */
-export async function traceFundingIntoCandidates(db, { entity, entityType = 'company', useAi = true, upsert, runId = null, traceFn = traceFunding } = {}) {
+export async function traceFundingIntoCandidates(db, { entity, entityType = 'company', useAi = false, upsert, runId = null, traceFn = traceFunding } = {}) {
   if (typeof upsert !== 'function') throw new Error('traceFundingIntoCandidates: upsert function required')
 
   const trace = await traceFn(db, { entity, entityType, useAi })
 
   // Only addable funders become candidates; a source MUST have a real URL
   // (Robert rejects sources without one — goal #1: no dead/placeholder links).
-  const addable = (trace.sources || []).filter((s) => s.addable !== false && s.sample_url)
+  const addable = (trace.sources || []).filter((s) =>
+    s.addable === true &&
+    isVerifiedTraceSource(s) &&
+    isSourceAddable(s) &&
+    s.sample_url,
+  )
   const skippedNoUrl = (trace.sources || []).filter((s) => s.addable !== false && !s.sample_url).length
 
   let inserted = 0
@@ -88,6 +93,9 @@ export async function traceFundingIntoCandidates(db, { entity, entityType = 'com
           total_amount: source.total_amount ?? null,
           award_count: source.award_count ?? null,
           latest_year: source.latest_year ?? null,
+          recipient_name: source.recipient_name ?? null,
+          entity_resolution_score: source.entity_resolution_score ?? null,
+          sample_award_id: source.sample_award_id ?? null,
           parent_agency: source.parent_agency ?? null,
           rationale: source.rationale ?? null,
           run_id: runId,
