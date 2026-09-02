@@ -51,13 +51,26 @@ export const CONTACT_SHAPED_KEYS = Object.freeze([
 ])
 const CONTACT_KEY_SET = new Set(CONTACT_SHAPED_KEYS)
 
+// Identity-only keys can auto-settle without a newsletter surface signal.
+// School, organization and message also appear on real short applications, so
+// those require positive contact-surface evidence or stay quarantined.
+const BARE_IDENTITY_KEYS = new Set([
+  'first_name', 'last_name', 'full_name', 'name', 'email', 'phone',
+  'zip', 'zip_code', 'postal_code', 'city', 'state', 'country',
+])
+
+// Mirrors hamiltonAutopilotEngine.isContactOrNewsletterForm without importing
+// the Playwright-heavy engine module into this scheduled sweep.
+const APPLICATION_CONTEXT_RX = /\b(appl(?:y|ication|icant)|scholarship|fellowship|grant|award|nominat|enrol|registration|request (?:for )?(?:funding|assistance|aid))/i
+const APPLICATION_FIELD_SIGNAL_RX = /\b(essay|personal statement|statement of|gpa|grade point|graduat|date of birth|birth ?date|\bdob\b|major|degree|income|household|award|scholarship|applicant|upload|resume|résumé|transcript|reference|recommend|amount requested|budget|project (title|description|summary)|financial need|ssn|social security|student id|enrollment|semester|term|academic|citizenship|ethnicity|gender|veteran|disability|employer|occupation|address line|street)\b/i
+const CONTACT_SURFACE_RX = /newsletter|mailchimp|subscribe|mailing[\s_-]?list|stay\s+informed|contact[\s_-]?us|get\s+updates|keep\s+me\s+(?:posted|informed)/i
+
 /**
- * Was the retained run's submit a contact / newsletter form? Pure. TRUE only
- * when every filled key is contact identity, at most 4 distinct keys were
- * filled, nothing came from a narrative/LLM answer, and the run touched at
- * most 3 pages (a real multi-step application walks further).
+ * Was the retained run's submit unambiguously a contact/newsletter form?
+ * Application context in the task URL, confirmation URL or page text always
+ * wins. School/org/message keys additionally need a positive contact surface.
  */
-export function isContactShapedSubmission(runResult = {}) {
+export function isContactShapedSubmission(runResult = {}, { urls = [] } = {}) {
   const filled = Array.isArray(runResult?.filled_fields) ? runResult.filled_fields : []
   if (filled.length === 0) return false
   const keys = new Set()
@@ -71,6 +84,20 @@ export function isContactShapedSubmission(runResult = {}) {
   if (keys.size > 4) return false
   const pages = Number(runResult?.pages_visited)
   if (Number.isFinite(pages) && pages > 3) return false
+
+  const contextHaystack = [
+    ...(Array.isArray(urls) ? urls : []),
+    runResult?.url,
+    runResult?.confirmation_url,
+    runResult?.confirmation_page_text,
+    runResult?.page_title,
+    runResult?.pageTitle,
+  ].filter(Boolean).join(' | ')
+  if (APPLICATION_CONTEXT_RX.test(contextHaystack)) return false
+  if (APPLICATION_FIELD_SIGNAL_RX.test([...keys].join(' | '))) return false
+
+  const onlyBareIdentity = [...keys].every((key) => BARE_IDENTITY_KEYS.has(key))
+  if (!onlyBareIdentity && !CONTACT_SURFACE_RX.test(contextHaystack)) return false
   return true
 }
 
@@ -118,7 +145,8 @@ export async function resolveContactFormVerifications(db, { limit = 50, logger =
       const runs = await listAutopilotRuns(db, { taskId: task.id, limit: 3 })
       const latest = (runs || []).find((r) => r?.status === 'submission_verification_required' || parseResult(r)?.submit_clicked === true) || (runs || [])[0]
       const result = parseResult(latest)
-      if (!latest || !isContactShapedSubmission(result)) { out.kept += 1; continue }
+      const urls = [task.application_url, task.portal_url].filter(Boolean)
+      if (!latest || !isContactShapedSubmission(result, { urls })) { out.kept += 1; continue }
       const url = task.application_url || task.portal_url || result?.url || 'the page'
       const keys = [...new Set((result.filled_fields || []).map((f) => String(f?.key || '')))].join(', ')
       const message = `The form Hamilton submitted on ${url} was a contact / newsletter sign-up (${keys}), not an application — no application was submitted, so there is nothing to verify on a portal. Closed as a research lead; Hamilton no longer clicks these forms.`
