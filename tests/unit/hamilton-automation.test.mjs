@@ -71,10 +71,14 @@ function makeMemoryDb() {
       funder_name TEXT, deadline TEXT, eligibility_text TEXT,
       result_kind TEXT, opportunity_kind TEXT,
       entity_types_allowed TEXT NOT NULL DEFAULT '["individual","student"]',
+      need_types_supported TEXT NOT NULL DEFAULT '["education"]',
+      categories TEXT NOT NULL DEFAULT '["education"]',
       record_origin TEXT NOT NULL DEFAULT 'verified_real',
       source_trust_tier TEXT NOT NULL DEFAULT 'verified',
       reality_status TEXT NOT NULL DEFAULT 'verified',
-      reality_reasons TEXT NOT NULL DEFAULT '[]'
+      reality_reasons TEXT NOT NULL DEFAULT '[]',
+      link_status TEXT NOT NULL DEFAULT 'ok',
+      last_verified_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
     );
     CREATE TABLE IF NOT EXISTS profile_opportunity_matches (
       profile_id TEXT NOT NULL,
@@ -128,6 +132,12 @@ function makeMemoryDb() {
     INSERT INTO profile_sections (id, profile_id, section_key, data)
       VALUES ('ps-A-essays', 'p-A', 'essays',
               '{"primary":"My personal statement explaining how I came to this point in my education."}');
+    INSERT INTO profile_sections (id, profile_id, section_key, data)
+      VALUES ('ps-A-needs', 'p-A', 'financial_information',
+              '{"needs":["education"]}');
+    INSERT INTO profile_sections (id, profile_id, section_key, data)
+      VALUES ('ps-B-needs', 'p-B', 'financial_information',
+              '{"needs":["education"]}');
   `)
   return {
     dialect: 'sqlite',

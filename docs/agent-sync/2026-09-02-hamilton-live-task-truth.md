@@ -1,7 +1,6 @@
 # Hamilton live task truth — 2026-09-02
 
-Issue: #1475. Production-readiness blocker for profile
-`c4a92724-9cee-416f-ba30-e91b9b5cd885`.
+Issue: #1475. Production-readiness blocker for the incident profile.
 
 ## Invariant
 
@@ -35,10 +34,12 @@ cancelling, deleting, or tombstoning durable work.
 - A policy-refused missing-info stop is cancelled instead of remaining in the
   owner’s “needs you” queue.
 
-Migration `1001_live_hamilton_task_truth.mjs` reconciles the incident profile
-first, then runs the fleet cleanup in both database dialects. The existing
-`pipeline_precision` boot step reruns the unfinished-task audit on every boot
-and fails loud if it is unreadable, unrepaired, or truncated.
+Migration `1001_live_hamilton_task_truth.mjs` runs the fleet cleanup in both
+database dialects without embedding private profile identifiers in source. The
+deployment verification then opens the incident profile's authenticated task
+endpoint, which reruns the same enforced audit for that exact profile. The
+existing `pipeline_precision` boot step also reruns the unfinished-task audit
+on every boot and fails loud if it is unreadable, unrepaired, or truncated.
 
 ## Product surface
 
