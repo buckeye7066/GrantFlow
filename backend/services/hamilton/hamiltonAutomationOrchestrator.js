@@ -3184,13 +3184,11 @@ async function runAutopilotPathway(db, {
         details: { parent_task_id: task.id, parent_run_id: run.id },
       })
     }
-    // A zero-enumeration caused by the LLM being momentarily UNAVAILABLE
-    // (exhausted credits, rate limit, 5xx, or no provider configured) is NOT a
-    // result about the page — parking it as a manual "needs you" card means it
-    // never resumes once credits are funded. Defer it to the retryable
-    // waiting_for_window state so the scheduler re-attempts it, exactly like an
-    // out-of-window run. Only genuine outcomes (real awards, a truly empty
-    // page, an insert/match error) become a waiting_for_review card below.
+    // A zero-enumeration caused by an unavailable LLM, or an enumerated child
+    // whose policy evidence is temporarily unavailable, is NOT a result about
+    // the page or award. Defer the parent to the retryable waiting_for_window
+    // state so the scheduler re-attempts it. Only genuine outcomes become a
+    // waiting_for_review/completed parent below.
     if (
       childPolicyUnavailable > 0
       || (decomposition?.enumeration_unavailable && Number(decomposition?.enumerated || 0) === 0 && childTaskIds.length === 0)
@@ -3210,7 +3208,9 @@ async function runAutopilotPathway(db, {
       const why = creditsOut
         ? `Hamilton's AI reader has NO CREDITS (owner action: add credits to the Anthropic / OpenAI account configured on Railway) — provider said: ${rawWhy.slice(0, 300)}`
         : rawWhy
-      const deferMessage = `Hamilton found a page listing multiple awards but could not read them yet: ${why}. This is not evidence the page is empty — Hamilton will retry automatically (next attempt ${retryAt}).`
+      const deferMessage = childPolicyUnavailable > 0
+        ? `Hamilton found awards on this listing but could not verify current profile/source policy yet: ${why}. No award was discarded — Hamilton will retry automatically (next attempt ${retryAt}).`
+        : `Hamilton found a page listing multiple awards but could not read them yet: ${why}. This is not evidence the page is empty — Hamilton will retry automatically (next attempt ${retryAt}).`
       await appendTaskEvent(db, {
         taskId: task.id, eventType: 'note', status: 'waiting_for_window', step: 'listing_decomposition_deferred',
         message: deferMessage, actorUserId: userId, actorRole: 'agent', details: decomposition,

@@ -171,7 +171,7 @@ export function countTaskBuckets(tasks = []) {
  * rollout can never make real work disappear while Railway is still updating.
  */
 export function partitionHamiltonTasks(payload = {}) {
-  const value = payload?.data && !Array.isArray(payload.data) ? payload.data : payload
+  const value = payload?.data !== undefined ? payload.data : payload
   const complete = Array.isArray(value)
     ? value
     : Array.isArray(value?.tasks)

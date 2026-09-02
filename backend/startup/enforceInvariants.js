@@ -5624,6 +5624,9 @@ export async function enforcePipelinePrecision(db) {
       taskAudit: verificationTaskAudit,
       verificationTaskAudit,
     }
+    await db.prepare(
+      'CREATE TABLE IF NOT EXISTS system_kv (key TEXT PRIMARY KEY, value TEXT, updated_at TEXT)',
+    ).run()
     await db.prepare(`
       INSERT INTO system_kv (key, value, updated_at)
       VALUES (?, ?, ?)

@@ -38,6 +38,11 @@ function asLower(value) {
   return String(value || '').trim().toLowerCase()
 }
 
+function changesOf(result) {
+  const count = Number(result?.changes ?? result?.rowCount ?? 0)
+  return Number.isFinite(count) && count > 0 ? count : 0
+}
+
 function nowFn(db) {
   return db?.dialect === 'postgres' ? 'now()' : 'CURRENT_TIMESTAMP'
 }
@@ -585,7 +590,7 @@ export async function cleanupDisallowedHamiltonTraces(
             updated_at = ${nowFn(db)}
         WHERE id = ?
       `).run(message, String(task.id))
-      cancelledTasks += result?.changes || 0
+      cancelledTasks += changesOf(result)
     } catch {
       try {
         const result = await db.prepare(`
@@ -593,7 +598,7 @@ export async function cleanupDisallowedHamiltonTraces(
           SET status = 'cancelled', updated_at = ${nowFn(db)}
           WHERE id = ?
         `).run(String(task.id))
-        cancelledTasks += result?.changes || 0
+        cancelledTasks += changesOf(result)
       } catch {
         // Keep cleaning other traces.
       }
@@ -608,7 +613,7 @@ export async function cleanupDisallowedHamiltonTraces(
         DELETE FROM application_missing_info
         WHERE task_id IN (${placeholders(taskIds)})
       `).run(...taskIds)
-      removedMissingInfo = result?.changes || 0
+      removedMissingInfo = changesOf(result)
     } catch {
       removedMissingInfo = 0
     }
@@ -633,7 +638,7 @@ export async function cleanupDisallowedHamiltonTraces(
           AND type = 'hamilton_generated_application'
           AND id IN (${placeholders(documentIds)})
       `).run(String(profileId), ...documentIds)
-      removedDocuments = result?.changes || 0
+      removedDocuments = changesOf(result)
     } catch {
       removedDocuments = 0
     }
@@ -645,7 +650,7 @@ export async function cleanupDisallowedHamiltonTraces(
       DELETE FROM application_portal_links
       WHERE ${where.sql}
     `).run(...where.params)
-    removedPortalLinks = result?.changes || 0
+    removedPortalLinks = changesOf(result)
   } catch {
     removedPortalLinks = 0
   }
@@ -676,7 +681,7 @@ export async function cleanupDisallowedHamiltonTraces(
           AND revoked_at IS NULL
           AND (${authClauses.join(' OR ')})
       `).run(`funding_source_policy:${reason}`, ...authParams)
-      revokedAuthorizations = result?.changes || 0
+      revokedAuthorizations = changesOf(result)
     }
   } catch {
     revokedAuthorizations = 0

@@ -105,4 +105,7 @@ test('live queue, readiness metric, watch, and triage share current-task truth',
   })
   assert.deepEqual(legacy.current.map((task) => task.id), ['live'])
   assert.deepEqual(legacy.history.map((task) => task.id), ['old'])
+  const legacyAxios = partitionHamiltonTasks({ data: legacy.current.concat(legacy.history) })
+  assert.deepEqual(legacyAxios.current.map((task) => task.id), ['live'])
+  assert.deepEqual(legacyAxios.history.map((task) => task.id), ['old'])
 })
