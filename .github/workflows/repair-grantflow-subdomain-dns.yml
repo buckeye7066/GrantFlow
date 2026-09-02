@@ -1,0 +1,66 @@
+name: Repair GrantFlow subdomain DNS
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  repair:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Replace and verify only the GrantFlow CNAME
+        env:
+          GODADDY_API_KEY: ${{ secrets.GODADDY_API_KEY }}
+          GODADDY_API_SECRET: ${{ secrets.GODADDY_API_SECRET }}
+        run: |
+          node <<'NODE'
+          const zone = 'axiombiolabs.org'
+          const type = 'CNAME'
+          const name = 'grantflow'
+          const target = '1c6a1a3cb1d745c9.vercel-dns-017.com.'
+          const ttl = 600
+
+          if (!process.env.GODADDY_API_KEY || !process.env.GODADDY_API_SECRET) {
+            throw new Error('GoDaddy API credentials are not configured')
+          }
+
+          const endpoint =
+            'https://api.godaddy.com/v1/domains/' + zone +
+            '/records/' + type + '/' + name
+          const headers = {
+            Authorization:
+              'sso-key ' + process.env.GODADDY_API_KEY +
+              ':' + process.env.GODADDY_API_SECRET,
+            Accept: 'application/json',
+            'Content-Type': 'application/json',
+          }
+
+          const put = await fetch(endpoint, {
+            method: 'PUT',
+            headers,
+            body: JSON.stringify([{ data: target, ttl }]),
+          })
+          if (!put.ok) {
+            throw new Error('GoDaddy update failed: ' + put.status + ' ' + await put.text())
+          }
+
+          const get = await fetch(endpoint, { headers })
+          if (!get.ok) {
+            throw new Error('GoDaddy verification failed: ' + get.status + ' ' + await get.text())
+          }
+          const records = await get.json()
+          const normalize = value => String(value || '').toLowerCase().replace(/\.+$/, '')
+          const expected = normalize(target)
+          const verified =
+            Array.isArray(records) &&
+            records.length === 1 &&
+            normalize(records[0].data) === expected
+
+          if (!verified) {
+            throw new Error('GrantFlow CNAME verification did not match the requested target')
+          }
+          console.log('Verified CNAME grantflow -> ' + expected)
+          NODE
