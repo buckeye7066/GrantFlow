@@ -22,7 +22,7 @@ import { beforeEach, afterEach, describe, expect, it } from 'vitest'
 process.env.RUNTIME_SECRETS_KEY = process.env.RUNTIME_SECRETS_KEY || 'd'.repeat(64)
 
 const { SqliteDb } = await import('../db/index.js')
-const { listReadySources } = await import('../routes/hamiltonAutomation.js')
+const { listReadySources, selectAutoSubmitSources } = await import('../routes/hamiltonAutomation.js')
 
 const PROFILE = 'profile-starve'
 
@@ -115,6 +115,21 @@ describe('listReadySources does not let the LIMIT starve applyable sources', () 
     db = await makeDb({ noise: 120, applyableCount: 5 })
     const ready = await listReadySources(db, PROFILE)
     expect(ready.slice(0, 5).every((r) => r.is_applyable === true)).toBe(true)
+  })
+
+  it('auto-selects only sources with a direct application surface', async () => {
+    db = await makeDb({ noise: 120, applyableCount: 5 })
+    const selected = await selectAutoSubmitSources(db, PROFILE)
+
+    expect(selected).toHaveLength(5)
+    expect(selected.every((row) => row.is_applyable === true)).toBe(true)
+  })
+
+  it('does not fall back to guaranteed hard stops when nothing is applyable', async () => {
+    db = await makeDb({ noise: 12, applyableCount: 0 })
+    const selected = await selectAutoSubmitSources(db, PROFILE)
+
+    expect(selected).toEqual([])
   })
 
   it('is an ORDER BY and not a WHERE — unapplyable rows are still returned', async () => {
