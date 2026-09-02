@@ -40,6 +40,7 @@ function taskTone(status) {
 export default function HamiltonAutomationQueue({ profileId }) {
   const [tasks, setTasks] = useState([])
   const [history, setHistory] = useState([])
+  const [historyTotal, setHistoryTotal] = useState(0)
   const [loading, setLoading] = useState(false)
   const [openTask, setOpenTask] = useState(null)
 
@@ -59,6 +60,7 @@ export default function HamiltonAutomationQueue({ profileId }) {
       const partition = partitionHamiltonTasks(res)
       setTasks(partition.current)
       setHistory(partition.history)
+      setHistoryTotal(partition.historyTotal)
     } catch {
       // Network errors shouldn't tear the panel down — leave the prior list visible.
     } finally {
@@ -143,8 +145,13 @@ export default function HamiltonAutomationQueue({ profileId }) {
         {history.length > 0 && (
           <details className="mt-4 border-t border-current-line pt-3">
             <summary className="cursor-pointer text-xs font-medium text-current-ink/70">
-              History ({history.length})
+              History ({historyTotal})
             </summary>
+            {historyTotal > history.length && (
+              <p className="mt-2 text-[11px] text-current-ink/55">
+                Showing the {history.length} most recent outcomes.
+              </p>
+            )}
             <ul className="mt-2 space-y-2">
               {history.map((t) => (
                 <li key={t.id} className="flex items-center justify-between gap-3 rounded-xl border border-current-line bg-current-card/60 px-3 py-2">

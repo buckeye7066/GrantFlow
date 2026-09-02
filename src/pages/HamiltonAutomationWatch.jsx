@@ -394,6 +394,7 @@ export default function HamiltonAutomationWatch() {
 
   const [tasks, setTasks] = useState([])
   const [history, setHistory] = useState([])
+  const [historyTotal, setHistoryTotal] = useState(0)
   const [loadedAt, setLoadedAt] = useState(null)
   const [loadError, setLoadError] = useState(null)
   const [firstLoadDone, setFirstLoadDone] = useState(false)
@@ -413,6 +414,7 @@ export default function HamiltonAutomationWatch() {
       const partition = partitionHamiltonTasks(res)
       setTasks(partition.current)
       setHistory(partition.history)
+      setHistoryTotal(partition.historyTotal)
       setLoadError(null)
     } catch (err) {
       if (runId !== runIdRef.current) return
@@ -561,8 +563,13 @@ export default function HamiltonAutomationWatch() {
         {history.length > 0 && (
           <details className="mt-6 rounded-xl border border-slate-800 bg-slate-950/30 p-4">
             <summary className="cursor-pointer text-sm font-medium text-slate-300">
-              History ({history.length})
+              History ({historyTotal})
             </summary>
+            {historyTotal > history.length && (
+              <p className="mt-2 text-xs text-slate-400">
+                Showing the {history.length} most recent outcomes.
+              </p>
+            )}
             <ul className="mt-4 space-y-3">
               {[...history]
                 .sort((a, b) => timeValue(b.updated_at) - timeValue(a.updated_at))

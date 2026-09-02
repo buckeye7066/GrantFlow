@@ -185,7 +185,17 @@ export function partitionHamiltonTasks(payload = {}) {
   const history = Array.isArray(value?.history)
     ? value.history
     : complete.filter((task) => bucketForTaskStatus(task?.status) === 'finished')
-  return { current, history }
+  const reportedHistoryTotal = Number(value?.history_total ?? value?.counts?.finished)
+  const historyTotal = Number.isFinite(reportedHistoryTotal) && reportedHistoryTotal >= history.length
+    ? reportedHistoryTotal
+    : history.length
+  return {
+    current,
+    history,
+    historyTotal,
+    historyTruncated: value?.history_truncated === true || historyTotal > history.length,
+    counts: value?.counts ?? null,
+  }
 }
 
 /**
