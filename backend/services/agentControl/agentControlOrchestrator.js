@@ -850,7 +850,7 @@ async function executeRunOnce({ db, runId } = {}) {
     await refreshStepControl()
     const controlPollTimer = setInterval(() => {
       void refreshStepControl().catch(() => {})
-    }, 50)
+    }, 100)
     controlPollTimer.unref?.()
 
     const signal = makeSignal({
@@ -993,7 +993,7 @@ async function executeRunOnce({ db, runId } = {}) {
   }
 
   // Any in-flight step wasn't cleanly ended? Mark it stopped.
-  const stepsAfter = await listSteps(db, runId)
+  let stepsAfter = await listSteps(db, runId)
   const persistedTotalWork = stepsAfter.reduce(
     (sum, step) => sum + (step.status === 'completed' ? countAgentWork(step.agent_name, step.result) : 0),
     0,
@@ -1004,6 +1004,9 @@ async function executeRunOnce({ db, runId } = {}) {
       await setStepStatus(db, s.id, 'skipped', { errorMessage: emergency ? 'emergency_stop' : 'stop_requested' })
     }
   }
+  // Re-read after terminalizing queued steps so the persisted summary reports
+  // their actual final states instead of stale "queued" snapshots.
+  stepsAfter = await listSteps(db, runId)
 
   // Resolve final run status. If a previous command (cancelRun /
   // emergencyStopRun) already set the run to a terminal state, respect
