@@ -24,6 +24,7 @@ import { createLogger } from "@/utils/logger";
 import { useAuthStore } from "@/stores/authStore";
 import { isRealProfileId } from "@/api/profileIdGuards";
 import { useAuthenticatedAvatar } from "@/hooks/useAuthenticatedAvatar";
+import { useTierEntitlements } from "@/hooks/useTierEntitlements";
 import { runProfileAvatarLookup } from "@/services/profileAvatarAI";
 import { matchProfileToGrants } from "@/api/matching";
 
@@ -152,6 +153,9 @@ export default function OrganizationProfile({
   const [manualRetryCount, setManualRetryCount] = React.useState(0);
   const [showDeleteConfirm, setShowDeleteConfirm] = React.useState(false);
   const isPrint = usePrintMode();
+  const organizationEntitlements = useTierEntitlements(organizationId);
+  const canDocumentAI = organizationEntitlements.capabilities.documentAI;
+  const canPipelineAutomation = organizationEntitlements.capabilities.pipelineAutomation;
   // Track a pending "Wait & Retry" timeout so we can clear it on unmount.
   const waitRetryTimeoutRef = useRef(null);
 
@@ -887,6 +891,9 @@ export default function OrganizationProfile({
                  <div className="mb-6">
                    <PipelineAutomationPanel
                      organizationId={organizationId}
+                     profileId={organizationId}
+                     disabled={!canPipelineAutomation}
+                     disabledReason={organizationEntitlements.upgradeMessage("enable_pipeline_automation")}
                    />
                  </div>
                )}
@@ -928,7 +935,7 @@ export default function OrganizationProfile({
               <ProfileFilesPanel
                 profileId={orgData?.id}
                 profileName={orgData?.display_name ?? orgData?.name}
-                canDocumentAI={true}
+                canDocumentAI={canDocumentAI}
                 canDeleteDocuments={true}
               />
             </TabsContent>

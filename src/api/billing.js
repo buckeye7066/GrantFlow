@@ -59,6 +59,32 @@ export async function updateBillingAccount(profileId, payload) {
   })
 }
 
+/** NON-ADMIN: list active add-ons that the signed-in user may see for this profile. */
+export async function listProfileBillingAddons(profileId) {
+  return apiFetch(`/api/billing/me/${profileId}/addons`)
+}
+
+/** ADMIN: list the complete add-on entitlement history for a profile. */
+export async function listAdminBillingAddons(profileId) {
+  return apiFetch(`/api/billing/admin/accounts/${profileId}/addons`)
+}
+
+/** ADMIN: grant a versioned add-on entitlement. */
+export async function grantBillingAddon(profileId, payload) {
+  return apiFetch(`/api/billing/admin/accounts/${profileId}/addons`, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
+}
+
+/** ADMIN: revoke one add-on entitlement and retain its audit history. */
+export async function revokeBillingAddon(profileId, entitlementId, reason = null) {
+  return apiFetch(`/api/billing/admin/accounts/${profileId}/addons/${entitlementId}/revoke`, {
+    method: 'POST',
+    body: JSON.stringify({ reason }),
+  })
+}
+
 /**
  * ADMIN: grant a free period (one week / one month free). The timer starts now.
  *   kind: 'week' | 'month'

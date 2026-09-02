@@ -119,6 +119,28 @@ test('tier enforcement is backend-authoritative (pipeline automation, item fundi
 
     const { ensureBillingSchema } = await import('../../backend/services/billingAccounts.js')
     await ensureBillingSchema(db)
+    // The integration fixture owns its schema explicitly. Production receives
+    // the same table through migration 1002; keeping the fixture local makes
+    // the entitlement behavior test independent of migration-runner timing.
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS billing_addon_entitlements (
+        id TEXT PRIMARY KEY,
+        profile_id TEXT NOT NULL,
+        capability_key TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'active',
+        source TEXT NOT NULL DEFAULT 'admin',
+        source_reference TEXT,
+        starts_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        expires_at DATETIME,
+        granted_by TEXT,
+        revoked_at DATETIME,
+        revoked_by TEXT,
+        reason TEXT,
+        metadata TEXT,
+        created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+      );
+    `)
 
     const adminUserId = '00000000-0000-0000-0000-00000000t001'
     const adminEmail = 'tier-admin@example.com'
@@ -187,7 +209,7 @@ test('tier enforcement is backend-authoritative (pipeline automation, item fundi
       }),
     })
     assert.equal(pipelineDenied.status, 403)
-    assert.equal(pipelineDenied.json?.error, 'Tier upgrade required')
+    assert.equal(pipelineDenied.json?.error, 'tier_or_addon_required')
     assert.equal(pipelineDenied.json?.capability, 'enable_pipeline_automation')
 
     // ITEM_FUNDING: deny non-admin tier.
@@ -201,7 +223,7 @@ test('tier enforcement is backend-authoritative (pipeline automation, item fundi
       }),
     })
     assert.equal(itemDenied.status, 403)
-    assert.equal(itemDenied.json?.error, 'Tier upgrade required')
+    assert.equal(itemDenied.json?.error, 'tier_or_addon_required')
     assert.equal(itemDenied.json?.capability, 'enable_item_funding')
 
     // DOCUMENT_AI: deny non-admin tier (LLM invoke path).
@@ -213,8 +235,35 @@ test('tier enforcement is backend-authoritative (pipeline automation, item fundi
       }),
     })
     assert.equal(aiDenied.status, 403)
-    assert.equal(aiDenied.json?.error, 'Tier upgrade required')
+    assert.equal(aiDenied.json?.error, 'tier_or_addon_required')
     assert.equal(aiDenied.json?.capability, 'enable_document_ai')
+
+    // A durable add-on independently unlocks the named capability without
+    // changing the account's tier.
+    const addonDb = new Database(dbPath)
+    addonDb.pragma('busy_timeout = 5000')
+    addonDb.prepare(`
+      INSERT INTO billing_addon_entitlements
+        (id, profile_id, capability_key, status, source, starts_at)
+      VALUES (?, ?, ?, 'active', 'admin', CURRENT_TIMESTAMP)
+    `).run(
+      '00000000-0000-0000-0000-00000000t030',
+      profileId,
+      'enable_pipeline_automation',
+    )
+    addonDb.close()
+
+    const pipelineAddonAllowed = await fetchJson(`http://127.0.0.1:${port}/api/crawlers/jobs`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${userToken}` },
+      body: JSON.stringify({
+        type: 'pipeline_automation',
+        profile_id: profileId,
+        parameters: { organization_id: null, limit: 2 },
+        force: true,
+      }),
+    })
+    assert.ok([200, 201].includes(pipelineAddonAllowed.status))
 
     // Admin bypass: should be allowed even on low tier.
     const pipelineAdmin = await fetchJson(`http://127.0.0.1:${port}/api/crawlers/jobs`, {

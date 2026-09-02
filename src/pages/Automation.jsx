@@ -1890,23 +1890,23 @@ export default function Automation() {
     const gateByType = {
       pipeline_automation: {
         allowed: canPipelineAutomation,
-        message: "Pipeline automation is not included in this profile’s billing tier.",
+        message: automationEntitlements.upgradeMessage("enable_pipeline_automation"),
       },
       item_search: {
         allowed: canItemFunding,
-        message: "Item funding searches are not included in this profile’s billing tier.",
+        message: automationEntitlements.upgradeMessage("enable_item_funding"),
       },
       profile_enrichment: {
         allowed: canDocumentAI,
-        message: "AI enrichment is not included in this profile’s billing tier.",
+        message: automationEntitlements.upgradeMessage("enable_document_ai"),
       },
       avatar_lookup: {
         allowed: canDocumentAI,
-        message: "AI avatar generation is not included in this profile’s billing tier.",
+        message: automationEntitlements.upgradeMessage("enable_document_ai"),
       },
       document_ingest: {
         allowed: canDocumentAI,
-        message: "AI document parsing is not included in this profile’s billing tier.",
+        message: automationEntitlements.upgradeMessage("enable_document_ai"),
       },
     }
 
@@ -1914,7 +1914,7 @@ export default function Automation() {
     if (gate && !gate.allowed) {
       toast({
         variant: "destructive",
-        title: "Tier upgrade required",
+        title: "Feature unavailable",
         description: gate.message,
       })
       return
@@ -1950,13 +1950,13 @@ export default function Automation() {
       return "Select a profile first."
     }
     const tierGate = {
-      pipeline_automation: canPipelineAutomation,
-      profile_enrichment: canDocumentAI,
-      avatar_lookup: canDocumentAI,
-      document_ingest: canDocumentAI,
+      pipeline_automation: { allowed: canPipelineAutomation, capability: "enable_pipeline_automation" },
+      profile_enrichment: { allowed: canDocumentAI, capability: "enable_document_ai" },
+      avatar_lookup: { allowed: canDocumentAI, capability: "enable_document_ai" },
+      document_ingest: { allowed: canDocumentAI, capability: "enable_document_ai" },
     }[type]
-    if (tierGate === false) {
-      return "Not included in this profile's billing tier."
+    if (tierGate?.allowed === false) {
+      return automationEntitlements.upgradeMessage(tierGate.capability)
     }
     return null
   }
