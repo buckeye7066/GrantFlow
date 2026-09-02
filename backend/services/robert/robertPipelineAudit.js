@@ -404,7 +404,7 @@ export function gateQualifies(row, facts) {
     profile: facts.profile,
     sections: facts.sections,
   })
-  if (applicantEval.decision !== 'pass') {
+  if (applicantEval.decision !== 'pass' || applicantEval.reason !== 'explicit_applicant_types_match') {
     return {
       pass: false,
       reason: REJECTION_REASONS.PROFILE_MISMATCH,

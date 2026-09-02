@@ -45,6 +45,8 @@ import {
   setMissingInfo,
   resolveMissingInfoItem,
   cancelApplicationTask,
+  SUBMISSION_UNCERTAIN_STATUSES,
+  TASK_TERMINAL_STATUSES,
 } from './applicationTaskStore.js'
 import { generateAndSavePacket } from './hamiltonApplicationPacketGenerator.js'
 import {
@@ -522,17 +524,15 @@ async function isUserAuthorizedForProfile(db, userId, profileId) {
   }
 }
 
-/**
- * Idle statuses a pre-task-creation SKIP is allowed to close. This is exactly
- * the scheduler-pickable set (hamiltonAgentAdapter.js) plus nothing else:
- * drafted work (waiting_for_review), in-flight portal steps, and submission-
- * uncertain states are deliberately NOT here — a refusal that arrives while a
- * human-facing draft exists must not silently discard it.
- */
-const SKIP_CLOSEABLE_STATUSES = Object.freeze([
-  'queued', 'ready', 'analyzing', 'ready_to_start', 'blocked',
-  'waiting_for_login', 'waiting_for_2fa', 'waiting_for_captcha',
-  'waiting_for_email_verification', 'waiting_for_window',
+// Protected terminal/external-submit-boundary statuses we will NOT cancel on a policy refusal.
+// Everything else backed by a refused source must be cancelled.
+const POLICY_PROTECTED_TASK_STATUSES = Object.freeze([
+  // Hard terminals
+  ...TASK_TERMINAL_STATUSES,
+  // External-submit uncertain boundary statuses
+  ...SUBMISSION_UNCERTAIN_STATUSES,
+  // Explicit archival/closure markers
+  'archived', 'closed', 'rejected',
 ])
 
 /**
@@ -552,20 +552,22 @@ async function closeExistingTasksForRefusedSource(db, {
 }) {
   const closed = []
   try {
-    const placeholders = SKIP_CLOSEABLE_STATUSES.map(() => '?').join(', ')
+    const placeholders = POLICY_PROTECTED_TASK_STATUSES.map(() => '?').join(', ')
     const rows = await db
       .prepare(
         `SELECT id FROM application_tasks
           WHERE profile_id = ?
-            AND ((opportunity_id IS NOT NULL AND opportunity_id = ?)
-              OR (grant_id IS NOT NULL AND grant_id = ?))
-            AND status IN (${placeholders})`,
+            AND (
+              (opportunity_id IS NOT NULL AND opportunity_id = ?)
+              OR (grant_id IS NOT NULL AND grant_id = ?)
+            )
+            AND (status IS NULL OR status NOT IN (${placeholders}))`,
       )
       .all(
         String(profileId),
         opportunityId ? String(opportunityId) : null,
         grantId ? String(grantId) : null,
-        ...SKIP_CLOSEABLE_STATUSES,
+        ...POLICY_PROTECTED_TASK_STATUSES,
       )
     for (const row of rows || []) {
       try {

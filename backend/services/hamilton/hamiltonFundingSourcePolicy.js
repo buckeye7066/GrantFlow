@@ -291,7 +291,7 @@ export async function assessHamiltonFundingSource(db, { profileId, opportunity =
       message: buildPolicyMessage(reasons),
     }
   }
-  if (!match && profileId && opportunityId && requiresProfileMatch(subject)) {
+  if (!match && profileId && opportunityId) {
     // No stored row ≠ no endorsement — the store is a rolling snapshot (see
     // computeLiveEngineDecision). Ask the engine LIVE before stopping.
     const live = await computeLiveEngineDecision(db, profileId, subject)
@@ -324,7 +324,7 @@ export async function assessHamiltonFundingSource(db, { profileId, opportunity =
         message: buildPolicyMessage(reasons),
       }
     }
-    if (liveDecision === 'reject') {
+    if (liveDecision === 'reject' || !liveDecision) {
       const reasons = ['profile_match_rejected']
       if (live?.explanation) reasons.push(String(live.explanation).slice(0, 180))
       return {
@@ -368,11 +368,11 @@ export async function assessHamiltonFundingSource(db, { profileId, opportunity =
   // it does not re-implement eligibility, and it only ever refuses on an
   // EXPLICIT hard mismatch (`review`/`pass` both continue).
   const applicantVerdict = await assessApplicantTypeForPolicy(db, profileId, subject)
-  if (!applicantVerdict || applicantVerdict.decision !== 'pass') {
-    const reasons = ['profile_match_rejected', `applicant_type:${applicantVerdict.reason}`]
+  if (!applicantVerdict || applicantVerdict.decision !== 'pass' || applicantVerdict.reason !== 'explicit_applicant_types_match') {
+    const reasons = ['profile_match_not_accepted', `applicant_type:${applicantVerdict?.reason ?? 'unknown'}`]
     return {
       ok: false,
-      code: 'funding_source_profile_rejected',
+      code: 'funding_source_profile_not_accepted',
       reasons,
       trust,
       match,

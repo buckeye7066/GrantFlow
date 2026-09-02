@@ -177,7 +177,7 @@ describe('a pre-task-creation skip closes the existing idle task', () => {
     expect(picked.map((r) => r.id)).not.toContain(task.id)
   })
 
-  it('does NOT close drafted human-facing work (waiting_for_review) — reports the skip only', async () => {
+  it('CLOSES drafted human-facing work (waiting_for_review) on policy refusal', async () => {
     const db = makeDb()
     await seedFixture(db)
     const task = await seedTask(db, { status: 'waiting_for_review' })
@@ -188,9 +188,9 @@ describe('a pre-task-creation skip closes the existing idle task', () => {
       source: { opportunity_id: 'opp-1' },
     })
 
-    expect(result.closed_tasks).toEqual([])
+    expect(result.closed_tasks).toEqual([task.id])
     const after = await getApplicationTask(db, task.id)
-    expect(after.status).toBe('waiting_for_review')
+    expect(after.status).toBe('cancelled')
   })
 
   it('never touches a task for a DIFFERENT source', async () => {

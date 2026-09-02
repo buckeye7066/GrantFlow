@@ -165,14 +165,14 @@ describe('Hamilton task-creation eligibility gate', () => {
     expect(await taskCount(db)).toBe(0)
   })
 
-  it('still ADMITS a source with NO stored verdict at all', async () => {
+  it('REFUSES a source with NO stored verdict at all unless live decision ACCEPTs', async () => {
     const r = await automateSingleSource(db, {
       profileId: PROFILE,
       source: { grant_id: 'g-restricted' },
     })
-    expect(r.skipped).not.toBe(true)
-    expect(r.task?.id).toBeTruthy()
-    expect(await taskCount(db)).toBe(1)
+    expect(r.skipped).toBe(true)
+    expect(r.task).toBeNull()
+    expect(await taskCount(db)).toBe(0)
   })
 
   it('REFUSES ids that resolve to nothing instead of minting an "Untitled application"', async () => {

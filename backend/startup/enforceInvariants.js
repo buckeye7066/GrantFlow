@@ -5605,23 +5605,26 @@ export async function enforcePipelinePrecision(db) {
       log.info('pipeline_precision: converged profile pipelines', {
         ...counts, byGate, byReason, profilesAffected: affectedProfiles.size, examples, timestamp: new Date().toISOString(),
       })
-      // Persist a lightweight last-run summary for deployment visibility.
-      try {
-        await db.prepare(
-          `INSERT INTO system_kv (key, value, updated_at)
-           VALUES ('pipeline_precision_last_run', ?, ?)
-           ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`,
-        ).run(JSON.stringify({
-          scanned: counts.scanned,
-          removed: counts.removed,
-          relabeled: counts.relabeled,
-          tasksCancelled: counts.tasksCancelled,
-          matchesRemoved: counts.matchesRemoved,
-          truncated: counts.truncated,
-          timestamp: new Date().toISOString(),
-        }), new Date().toISOString())
-      } catch { /* kv table may not exist on minimal schemas */ }
     }
+    // Persist a lightweight last-run summary for deployment visibility on every run.
+    try {
+      await db.prepare(
+        `INSERT INTO system_kv (key, value, updated_at)
+         VALUES ('pipeline_precision_last_run', ?, ?)
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`,
+      ).run(JSON.stringify({
+        scanned: counts.scanned,
+        removed: counts.removed,
+        relabeled: counts.relabeled,
+        tasksCancelled: counts.tasksCancelled,
+        matchesRemoved: counts.matchesRemoved,
+        failed: counts.failed,
+        profilesAffected: affectedProfiles.size,
+        byGate,
+        truncated: counts.truncated,
+        timestamp: new Date().toISOString(),
+      }), new Date().toISOString())
+    } catch { /* kv table may not exist on minimal schemas */ }
     return {
       ...counts,
       repaired: counts.removed + counts.relabeled,
