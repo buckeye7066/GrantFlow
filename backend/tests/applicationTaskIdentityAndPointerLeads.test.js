@@ -225,7 +225,7 @@ describe('the applicant-type gate runs for EVERY record_origin, not just the cra
     expect(verdict.ok).toBe(true)
   })
 
-  it('an UNREADABLE applicant type never refuses — missing is neutral', async () => {
+  it('refuses automation when applicant type cannot be positively verified', async () => {
     await policyDb.prepare("UPDATE profiles SET primary_type = NULL WHERE id = ?").run(PROFILE)
     await seedOpp(policyDb, {
       id: 'opp-unknown',
@@ -235,6 +235,8 @@ describe('the applicant-type gate runs for EVERY record_origin, not just the cra
       url: 'https://www.nsf.gov/funding/opportunities/developmental-sciences',
     })
     const verdict = await assessHamiltonFundingSource(policyDb, { profileId: PROFILE, grant: { id: 'g-opp-unknown', funding_opportunity_id: 'opp-unknown' } })
-    expect(verdict.ok).toBe(true)
+    expect(verdict.ok).toBe(false)
+    expect(verdict.code).toBe('funding_source_profile_not_accepted')
+    expect(verdict.reasons.join(' ')).toMatch(/applicant_type:not_positively_verified/)
   })
 })

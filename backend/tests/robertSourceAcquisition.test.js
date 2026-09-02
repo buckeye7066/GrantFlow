@@ -157,17 +157,15 @@ describe('robertSourceAcquisition — parse added sources against profiles + aut
     expect(Object.keys(out.byReason).length).toBeGreaterThan(0)
   })
 
-  it('auto-adds a qualifying-but-not-applyable account-portal award as a funder_lead (never apply_ready — the cold-submit safety rule)', async () => {
+  it('keeps a qualifying-but-not-applyable account portal catalog-only (never apply_ready)', async () => {
     insertOpp(sqlite, ACCOUNT_PORTAL_AWARD)
     const out = await parseOpportunitiesAgainstProfiles(db, { opportunityIds: [ACCOUNT_PORTAL_AWARD.id] })
 
-    const studentGrants = grantsFor(sqlite, STUDENT)
-    expect(studentGrants).toHaveLength(1)
-    // #2 (sourceApplyability) rules studentaid.gov an account_portal → funder_lead,
-    // even though the URL path contains "apply". This is the SAFETY guarantee.
-    expect(studentGrants[0].pipeline_category).toBe('funder_lead')
-    expect(studentGrants[0].funder_lead_state).toBe('candidate')
-    expect(out.addedLeads).toBe(1)
+    // An account portal is discovery evidence, not a leaf application. It stays
+    // in the catalog until decomposition finds a real application surface.
+    expect(grantsFor(sqlite, STUDENT)).toHaveLength(0)
+    expect(out.catalogLeads).toBe(1)
+    expect(out.addedLeads).toBe(0)
     expect(out.added).toBe(0)
 
     // The business (need mismatch: business_funding) does not get it.

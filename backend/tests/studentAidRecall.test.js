@@ -81,6 +81,10 @@ const tnHope = {
   state: 'TN',
   requires_student: true,
   url: 'https://www.tn.gov/collegepays/hope',
+  application_url: 'https://www.tn.gov/collegepays/hope',
+  opportunity_kind: 'scholarship',
+  need_types_supported: JSON.stringify(['education', 'student_aid']),
+  amount_max: 5000,
   record_origin: 'curated_catalog',
   source: 'scholarship_crawler',
 }

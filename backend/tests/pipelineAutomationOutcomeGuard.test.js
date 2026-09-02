@@ -30,7 +30,8 @@ describe('pipeline automation lifecycle guard', () => {
   })
 
   it('canonicalizes legacy preparation stages while allowing real forward progress', () => {
-    expect(validateAdvance('drafting', 'portal')).toBe('gathering_documents')
+    expect(validateAdvance('interested', 'portal')).toBe('gathering_documents')
+    expect(validateAdvance('drafting', 'portal')).toBe('drafting')
     expect(validateAdvance('gathering_documents', 'ready_to_submit')).toBe('ready_to_submit')
   })
 
