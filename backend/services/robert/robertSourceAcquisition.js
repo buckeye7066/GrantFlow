@@ -460,11 +460,9 @@ async function grantColumnSet(db) {
 }
 
 /**
- * Auto-add a qualifying opportunity to a profile's pipeline. Raw insert (like
- * robertFunderLeads.admitFunderLeads) so admission is gated on QUALIFICATION,
- * not the fuzzy relevance-score floor that buries grantmaker-style rows. The
- * pipeline_category (apply_ready vs funder_lead) decides whether Hamilton may
- * ever cold-submit it.
+ * Admit a qualifying leaf opportunity through the one canonical pipeline
+ * writer. Research/funder leads remain catalog-only until a real application
+ * path has been decomposed into a fundable leaf opportunity.
  */
 async function autoAddToProfile(db, { profileId, oppRow, facts, category }) {
   // Research leads belong in the catalog/investigation queue. They are not
