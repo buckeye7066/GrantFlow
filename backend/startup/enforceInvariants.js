@@ -5335,8 +5335,15 @@ const NON_CANCELLABLE_TASK_STATUSES = Object.freeze([
  * Bound: PIPELINE_PRECISION_LIMIT (2000) limits WRITES per boot, never
  * discovery — a truncated boot is reported (`truncated: true`).
  */
+let pipelinePrecisionRun = null
+
 export async function enforcePipelinePrecision(db) {
-  return runInvariant('pipeline_precision', async () => {
+  // The boot sweep is intentionally post-listen, while the first link refresh
+  // starts on a timer. Share one in-flight precision pass so those two
+  // maintenance triggers can never race destructive reconciliation or publish
+  // snapshots out of order.
+  if (pipelinePrecisionRun) return pipelinePrecisionRun
+  pipelinePrecisionRun = runInvariant('pipeline_precision', async () => {
     // Invalidate the previous green result before any schema probe, import or
     // evaluator can fail. A failed boot must remain observably unhealthy rather
     // than serving yesterday's successful census from system_kv.
@@ -5748,6 +5755,11 @@ export async function enforcePipelinePrecision(db) {
       enforced: true,
     }
   })
+  try {
+    return await pipelinePrecisionRun
+  } finally {
+    pipelinePrecisionRun = null
+  }
 }
 
 export async function enforceFunderBackfill(db) {

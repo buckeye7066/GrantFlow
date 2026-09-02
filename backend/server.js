@@ -3968,7 +3968,7 @@ if (process.env.NODE_ENV !== 'test') {
           console.log('[link-repair] recurring lifecycle pass:', lifecycle)
           // Link age is retryable evidence debt, not negative evidence. Once
           // the canonical verifier refreshes it, rerun the serialized precision
-          // invariant so the cached task-truth contract can return from
+          // invariant so both pipeline rows and task truth return from
           // pending_reverification to verified without requiring a restart.
           const { enforcePipelinePrecision } = await import('./startup/enforceInvariants.js')
           const precision = await enforcePipelinePrecision(dbInstance)

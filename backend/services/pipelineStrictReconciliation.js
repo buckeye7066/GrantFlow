@@ -12,10 +12,7 @@ import {
   cleanupDisallowedHamiltonTraces,
 } from './hamilton/hamiltonFundingSourcePolicy.js'
 import { bucketForTaskStatus } from '../../shared/hamiltonTaskLifecycle.js'
-import {
-  persistHamiltonTaskTruthSnapshot,
-  readHamiltonTaskTruthSnapshot,
-} from './hamilton/hamiltonTaskTruthSnapshot.js'
+import { persistHamiltonTaskTruthSnapshot } from './hamilton/hamiltonTaskTruthSnapshot.js'
 
 const log = createLogger('pipeline-strict-reconciliation')
 
@@ -480,78 +477,6 @@ export async function auditUnfinishedHamiltonTasks(db, {
     out.failed += Math.abs(out.scanned - accounted) || 1
   }
   return out
-}
-
-/**
- * Refresh the cached task-truth read-back after the canonical recurring link
- * verifier has updated liveness evidence. This is deliberately narrower than
- * the boot pipeline sweep: it may advance only an already complete/readable
- * boot snapshot, and it never converts a failed or missing boot census green.
- */
-export async function refreshHamiltonTaskTruthAfterLinkVerification(db, {
-  limit = 100000,
-  now = new Date(),
-  actor = 'system:recurring-link-verification',
-} = {}) {
-  const prior = await readHamiltonTaskTruthSnapshot(db)
-  if (!prior.available || !prior.queueReadable || !prior.cleanup) {
-    throw new Error(`Hamilton task truth cannot refresh from boot status ${prior.status || 'unavailable'}`)
-  }
-
-  const taskRepairAudit = await auditUnfinishedHamiltonTasks(db, {
-    enforce: true,
-    limit,
-    now,
-    actor,
-  })
-  if (taskRepairAudit.failed > 0 || taskRepairAudit.repairFailed > 0 || taskRepairAudit.truncated) {
-    throw new Error(
-      `Hamilton link-refresh repair incomplete: failed=${taskRepairAudit.failed}, repair_failed=${taskRepairAudit.repairFailed}, truncated=${taskRepairAudit.truncated}`,
-    )
-  }
-
-  const verificationTaskAudit = await auditUnfinishedHamiltonTasks(db, {
-    enforce: false,
-    limit,
-    now,
-    actor: `${actor}:readback`,
-  })
-  if (
-    verificationTaskAudit.invalid > 0
-    || verificationTaskAudit.failed > 0
-    || verificationTaskAudit.repairFailed > 0
-    || verificationTaskAudit.truncated
-  ) {
-    throw new Error(
-      `Hamilton link-refresh verification incomplete: invalid=${verificationTaskAudit.invalid}, failed=${verificationTaskAudit.failed}, repair_failed=${verificationTaskAudit.repairFailed}, truncated=${verificationTaskAudit.truncated}`,
-    )
-  }
-
-  const deferred = Math.max(
-    Number(taskRepairAudit.deferred || 0),
-    Number(verificationTaskAudit.deferred || 0),
-  )
-  const summary = {
-    timestamp: new Date().toISOString(),
-    status: deferred > 0 ? 'pending_reverification' : 'verified',
-    scanned: prior.cleanup.scanned,
-    kept: prior.cleanup.kept,
-    removed: prior.cleanup.removed,
-    relabeled: prior.cleanup.relabeled,
-    deferred,
-    tasksCancelled: prior.cleanup.tasksCancelled + Number(taskRepairAudit.tasksCancelled || 0),
-    matchesRemoved: prior.cleanup.matchesRemoved + Number(taskRepairAudit.matchesRemoved || 0),
-    failed: 0,
-    truncated: false,
-    profiles: prior.cleanup.profiles,
-    profilesAffected: prior.cleanup.profilesAffected,
-    byGate: prior.cleanup.byGate,
-    taskRepairAudit,
-    taskAudit: verificationTaskAudit,
-    verificationTaskAudit,
-  }
-  await persistHamiltonTaskTruthSnapshot(db, summary)
-  return summary
 }
 
 function finiteCount(value) {

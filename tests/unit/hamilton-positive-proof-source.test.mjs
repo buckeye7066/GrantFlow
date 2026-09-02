@@ -131,6 +131,7 @@ test('live queue, readiness metric, watch, and triage share current-task truth',
   const repairAudit = startupSource.indexOf('const taskRepairAudit = await auditUnfinishedHamiltonTasks')
   assert.ok(cacheInvalidation > 0 && repairAudit > cacheInvalidation, 'old green cache must be invalidated before the boot audit can fail')
   assert.match(startupSource, /persistHamiltonTaskTruthSnapshot\(db, precisionSummary\)/)
+  assert.match(startupSource, /if \(pipelinePrecisionRun\) return pipelinePrecisionRun/)
   assert.match(startupSource, /SUBMISSION_UNCERTAIN_TASK_STATUSES/)
   assert.match(startupSource, /NON_CANCELLABLE_TASK_STATUSES/)
   assert.match(strictReconciliationSource, /hasSubmissionUncertainTask[\s\S]*?relabelProtectedHistory/)
