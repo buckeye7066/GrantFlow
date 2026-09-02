@@ -301,6 +301,80 @@ describe('startup SQL-only link quarantine', () => {
     }
   })
 
+  it('quarantines stale visible successes and restores them only after a current successful probe', async () => {
+    const db = makeDb()
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue({
+      status: 200,
+      url: 'https://8.8.8.8/stale',
+    })
+
+    try {
+      insertOpportunity(db, { id: 'stale-visible', url: 'https://8.8.8.8/stale', status: 'ok' })
+      insertOpportunity(db, { id: 'fresh-visible', url: 'https://8.8.8.8/fresh', status: 'ok' })
+      insertOpportunity(db, {
+        id: 'independently-hidden',
+        url: 'https://8.8.8.8/hidden',
+        status: 'ok',
+        hidden: 1,
+      })
+
+      const staleAt = new Date(Date.now() - 45 * 24 * 60 * 60 * 1000).toISOString()
+      const freshAt = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString()
+      db.prepare('UPDATE funding_opportunities SET last_verified_at = ? WHERE id = ?')
+        .run(staleAt, 'stale-visible')
+      db.prepare('UPDATE funding_opportunities SET last_verified_at = ? WHERE id IN (?, ?)')
+        .run(freshAt, 'fresh-visible', 'independently-hidden')
+
+      const quarantine = await quarantineUnverifiedDirectOpportunities(db)
+
+      expect(quarantine).toMatchObject({ ok: true, quarantined: 1, deactivated: 0 })
+      expect(readRow(db, 'stale-visible')).toMatchObject({
+        link_status: 'unverified',
+        is_hidden: 1,
+        is_active: 1,
+      })
+      expect(readRow(db, 'stale-visible').verification_error)
+        .toMatch(/^stale_reverification_required:/)
+      expect(readRow(db, 'fresh-visible')).toMatchObject({
+        link_status: 'ok',
+        is_hidden: 0,
+        is_active: 1,
+      })
+      expect(readRow(db, 'independently-hidden')).toMatchObject({
+        link_status: 'ok',
+        is_hidden: 1,
+        is_active: 1,
+      })
+      expect(fetchSpy).not.toHaveBeenCalled()
+
+      const verified = await runLinkVerification(db, {
+        fetchImpl: globalThis.fetch,
+        limit: 10,
+        verifiedBy: 'test-stale-reverification',
+      })
+
+      expect(verified).toMatchObject({ checked: 1, ok: 1, restored: 1 })
+      expect(readRow(db, 'stale-visible')).toMatchObject({
+        link_status: 'ok',
+        link_status_code: 200,
+        is_hidden: 0,
+        is_active: 1,
+        verification_error: null,
+      })
+      expect(readRow(db, 'fresh-visible')).toMatchObject({
+        link_status: 'ok',
+        is_hidden: 0,
+      })
+      expect(readRow(db, 'independently-hidden')).toMatchObject({
+        link_status: 'ok',
+        is_hidden: 1,
+      })
+    } finally {
+      fetchSpy.mockRestore()
+      db.close()
+    }
+  })
+
   it('fails closed without fetching, preserves resources, and restores proven rows', async () => {
     const db = makeDb()
     const fetchSpy = vi.spyOn(globalThis, 'fetch')
