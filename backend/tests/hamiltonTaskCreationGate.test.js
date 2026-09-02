@@ -1,22 +1,12 @@
 /**
- * Hamilton task-CREATION eligibility gate (2026-08-03, the Demo College Student Persona class):
- * ~200 auto-populated application cards landed on a student profile, including
- * UNCF / Hispanic Scholarship Fund / Society of Women Engineers / veteran and
- * disability programs the profile's KNOWN facts exclude. The policy check ran
- * only inside the autopilot run — AFTER ensureApplicationTask — so an
- * engine-REJECTED source still became an "In Progress" card.
+ * Hamilton task-CREATION positive-proof gate.
  *
- * Pins:
- *   1. A source whose stored (surfaced) engine verdict is REJECT is refused
- *      BEFORE a task row exists — automateSingleSource returns
- *      { skipped, reason: 'ineligible_profile' } and application_tasks stays
- *      empty.
- *   2. G4 still holds — a REVIEW verdict (or no verdict at all) ADMITS the
- *      source: missing profile facts are neutral, review is an allowed
- *      decision, and the task is created exactly as before.
- *   3. A source whose ids resolve to NOTHING is refused with
- *      code 'unresolvable_funding_source' instead of persisting a task that
- *      renders as a permanent "Untitled application" card (320 in prod).
+ * Pins the production contract at the point where an application task would
+ * otherwise become an owner-visible "In Progress" card:
+ *   1. REJECT, REVIEW, unknown, and missing canonical decisions create no task.
+ *   2. A stored ACCEPT creates a task only when applicant type is explicitly
+ *      supported by the source.
+ *   3. Unresolvable and pointer-only sources create no task.
  */
 
 import { describe, it, expect, beforeEach, vi } from 'vitest'
@@ -24,8 +14,6 @@ import Database from 'better-sqlite3'
 
 process.env.RUNTIME_SECRETS_KEY = process.env.RUNTIME_SECRETS_KEY || 'b'.repeat(64)
 
-// Keep the post-creation pathways tame: preflight passes, the browser engine
-// is a stub. The gate under test runs BEFORE either is reached.
 vi.mock('../services/hamilton/hamiltonAutopilotEngine.js', async (importOriginal) => {
   const mod = await importOriginal()
   return {
@@ -60,7 +48,8 @@ function makeDb() {
       id TEXT PRIMARY KEY,
       user_id TEXT,
       created_by TEXT,
-      display_name TEXT
+      display_name TEXT,
+      primary_type TEXT
     );
     CREATE TABLE profile_sections (
       profile_id TEXT,
@@ -75,7 +64,8 @@ function makeDb() {
       opportunity_kind TEXT,
       application_url TEXT,
       source_url TEXT,
-      evidence_url TEXT
+      evidence_url TEXT,
+      entity_types_allowed TEXT
     );
     CREATE TABLE grants (
       id TEXT PRIMARY KEY,
@@ -104,12 +94,12 @@ function makeDb() {
 }
 
 async function seedFixture(db) {
-  await db.prepare('INSERT INTO profiles (id, user_id, display_name) VALUES (?, ?, ?)')
-    .run(PROFILE, 'user-1', 'Robert Michael White')
+  await db.prepare('INSERT INTO profiles (id, user_id, display_name, primary_type) VALUES (?, ?, ?, ?)')
+    .run(PROFILE, 'user-1', 'Robert Michael White', 'college_student')
   await db.prepare('INSERT INTO profile_sections (profile_id, section_key, data) VALUES (?, ?, ?)')
     .run(PROFILE, 'basic_information', JSON.stringify({ first_name: 'Robert', last_name: 'White', email: 'r@example.org' }))
-  await db.prepare('INSERT INTO funding_opportunities (id, title, description, application_url) VALUES (?, ?, ?, ?)')
-    .run('opp-restricted', 'UNCF Scholarship', 'Apply through the portal.', 'https://portal.uncf-fixture.org/apply')
+  await db.prepare('INSERT INTO funding_opportunities (id, title, description, application_url, entity_types_allowed) VALUES (?, ?, ?, ?, ?)')
+    .run('opp-restricted', 'UNCF Scholarship', 'Apply through the portal.', 'https://portal.uncf-fixture.org/apply', JSON.stringify(['student', 'individual']))
   await db.prepare('INSERT INTO grants (id, profile_id, funding_opportunity_id, title, application_url) VALUES (?, ?, ?, ?, ?)')
     .run('g-restricted', PROFILE, 'opp-restricted', 'UNCF Scholarship', 'https://portal.uncf-fixture.org/apply')
 }
@@ -119,9 +109,6 @@ async function taskCount(db) {
     const row = await db.prepare('SELECT COUNT(*) AS n FROM application_tasks').get()
     return Number(row?.n ?? 0)
   } catch {
-    // The store creates its schema lazily on first ensureApplicationTask —
-    // a refusal BEFORE any task was ever created leaves no table at all,
-    // which is the strongest possible "zero tasks".
     return 0
   }
 }
@@ -141,54 +128,66 @@ describe('Hamilton task-creation eligibility gate', () => {
     await seedFixture(db)
   })
 
-  it('REFUSES to create a task for a source the engine REJECTED for this profile', async () => {
+  it('refuses a canonical REJECT before a task row exists', async () => {
     await storeDecision(db, 'reject')
-    const r = await automateSingleSource(db, {
+    const result = await automateSingleSource(db, {
       profileId: PROFILE,
       source: { grant_id: 'g-restricted' },
     })
-    expect(r.skipped).toBe(true)
-    expect(r.reason).toBe('ineligible_profile')
-    expect(r.task).toBeNull()
-    expect(r.policy?.code).toBe('funding_source_profile_rejected')
+    expect(result.skipped).toBe(true)
+    expect(result.reason).toBe('ineligible_profile')
+    expect(result.task).toBeNull()
+    expect(result.policy?.code).toBe('funding_source_profile_rejected')
     expect(await taskCount(db)).toBe(0)
   })
 
-  it('still ADMITS a REVIEW verdict — missing facts stay neutral (G4)', async () => {
+  it('refuses a REVIEW because uncertainty is not qualification', async () => {
     await storeDecision(db, 'review')
-    const r = await automateSingleSource(db, {
+    const result = await automateSingleSource(db, {
       profileId: PROFILE,
       source: { grant_id: 'g-restricted' },
     })
-    expect(r.skipped).not.toBe(true)
-    expect(r.task?.id).toBeTruthy()
-    expect(await taskCount(db)).toBe(1)
+    expect(result.skipped).toBe(true)
+    expect(result.reason).toBe('funding_source_profile_not_accepted')
+    expect(result.task).toBeNull()
+    expect(await taskCount(db)).toBe(0)
   })
 
-  it('still ADMITS a source with NO stored verdict at all', async () => {
-    const r = await automateSingleSource(db, {
+  it('refuses a source with no stored or live ACCEPT', async () => {
+    const result = await automateSingleSource(db, {
       profileId: PROFILE,
       source: { grant_id: 'g-restricted' },
     })
-    expect(r.skipped).not.toBe(true)
-    expect(r.task?.id).toBeTruthy()
+    expect(result.skipped).toBe(true)
+    expect(result.task).toBeNull()
+    expect(await taskCount(db)).toBe(0)
+  })
+
+  it('admits a stored ACCEPT when applicant type is positively supported', async () => {
+    await storeDecision(db, 'accept')
+    const result = await automateSingleSource(db, {
+      profileId: PROFILE,
+      source: { grant_id: 'g-restricted' },
+    })
+    expect(result.skipped).not.toBe(true)
+    expect(result.task?.id).toBeTruthy()
     expect(await taskCount(db)).toBe(1)
   })
 
-  it('REFUSES ids that resolve to nothing instead of minting an "Untitled application"', async () => {
-    let err = null
+  it('refuses ids that resolve to nothing instead of minting an Untitled application', async () => {
+    let error = null
     try {
       await automateSingleSource(db, {
         profileId: PROFILE,
         source: { grant_id: 'g-vanished', opportunity_id: 'opp-vanished' },
       })
-    } catch (e) { err = e }
-    expect(err?.code).toBe('unresolvable_funding_source')
-    expect(err?.status).toBe(422)
+    } catch (caught) { error = caught }
+    expect(error?.code).toBe('unresolvable_funding_source')
+    expect(error?.status).toBe(422)
     expect(await taskCount(db)).toBe(0)
   })
 
-  it('returns an explicit manual research handoff for a URL-less pointer without creating a task', async () => {
+  it('returns a research handoff for a URL-less pointer without creating a task', async () => {
     await db.prepare(
       `INSERT INTO funding_opportunities (id, title, description, opportunity_kind)
        VALUES (?, ?, ?, ?)`,
@@ -198,19 +197,19 @@ describe('Hamilton task-creation eligibility gate', () => {
        VALUES (?, ?, ?, ?)`,
     ).run('g-pointer', PROFILE, 'opp-pointer', 'County Assistance Directory')
 
-    const r = await automateSingleSource(db, {
+    const result = await automateSingleSource(db, {
       profileId: PROFILE,
       source: { grant_id: 'g-pointer' },
     })
 
-    expect(r).toMatchObject({
+    expect(result).toMatchObject({
       skipped: true,
       reason: 'pointer_research_lead',
       task: null,
       policy: { code: 'pointer_research_lead' },
     })
-    expect(r.manual_handoff?.instructions).toMatch(/directory/i)
-    expect(r.policy?.handoff?.instructions).toBe(r.manual_handoff?.instructions)
+    expect(result.manual_handoff?.instructions).toMatch(/directory/i)
+    expect(result.policy?.handoff?.instructions).toBe(result.manual_handoff?.instructions)
     expect(await taskCount(db)).toBe(0)
   })
 })
