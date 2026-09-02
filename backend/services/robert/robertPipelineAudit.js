@@ -78,6 +78,7 @@ import { stageOfLifeConflictForSections } from '../../config/stageOfLifeEligibil
 import {
   declaredNeedsFrom,
   evaluateDeclaredNeedCoverage,
+  NEED_COVERAGE_DETAIL,
   parseMaybeJson,
 } from '../pipelinePrecision.js'
 import { recordDismissal, reconcileDismissedGrants } from '../pipelineDismissals.js'
@@ -483,7 +484,9 @@ export function gateCoversNeed(row, facts) {
   // admission gate and the boot sweep. Silence on either side is neutral and
   // REPORTED through `detail`, never folded into a bare "kept".
   const verdict = evaluateDeclaredNeedCoverage(row, facts?.needs)
-  if (verdict.pass) {
+  const neutralSilence = verdict.detail === NEED_COVERAGE_DETAIL.PROFILE_DECLARES_NO_NEEDS ||
+    verdict.detail === NEED_COVERAGE_DETAIL.OPPORTUNITY_STATES_NO_NEEDS
+  if (verdict.pass || neutralSilence) {
     return {
       pass: true,
       reason: null,

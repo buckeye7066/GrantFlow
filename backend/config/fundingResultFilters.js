@@ -699,17 +699,6 @@ export function isRelevantGeo(row, { states = null } = {}) {
       .map((state) => normalizeState(state))
       .filter(Boolean),
   )]
-  const persistedState = normalizeState(row?.state)
-  const isNational = row?.is_national === true || row?.is_national === 1 ||
-    String(row?.is_national ?? '').toLowerCase() === 'true'
-  if (persistedState && !isNational && profileStates.length > 0 && !profileStates.includes(persistedState)) {
-    return {
-      relevant: false,
-      reason: `persisted_state_out_of_state:${persistedState}`,
-      jurisdiction: { state: persistedState, source: 'persisted_state' },
-    }
-  }
-
   const jurisdiction = resolvedUsOpportunityJurisdiction(row)
   const restrictiveEvidence = jurisdiction.source === 'canonical_funder' ||
     jurisdiction.source === 'declared_title'
