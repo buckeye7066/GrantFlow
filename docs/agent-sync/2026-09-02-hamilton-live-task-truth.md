@@ -48,19 +48,22 @@ runs repair and an independent read-back audit on every boot, then publishes the
 `numeric_boot_verified_task_truth_v4` contract. It stays unhealthy if either
 pass is unreadable, unrepaired, deferred, or truncated. A retryable stale-link
 deferment can leave the existing queue readable while every writer remains
-closed until fresh evidence is available. The serialized recurring link
-verification then reruns `pipeline_precision`, allowing the same cached
-contract to return to `verified` without a process restart.
+closed until fresh evidence is available. After the serialized recurring link
+verifier refreshes liveness, `refreshHamiltonTaskTruthAfterLinkVerification()`
+repairs and reads back unfinished tasks and may advance only an already-readable
+boot snapshot. A missing, failed, or truncated boot census can never be turned
+green by that background refresh.
 
 ## Product surface
 
-`GET /api/hamilton/automation/tasks` now returns explicit unfinished `current`
-and terminal `history` collections, plus total bucket counts. Its legacy
-complete `tasks` collection remains for calendar/pipeline compatibility. The
-queue, watch window, and triage page consume the explicit partition without
-presenting finished history as current work. The response includes only the
-numeric cached task-truth summary; it never exposes profile or task identity in
-the public readiness surface.
+`GET /api/hamilton/automation/tasks` now filters unfinished `current` work in
+SQL before any limit, so newer terminal history cannot hide an old active row.
+It returns a bounded recent `history` page, exact total bucket counts, and a
+rolling-deploy `tasks` compatibility union containing every current row plus
+that history page. Queue/watch surfaces display the exact history total and say
+when only the newest outcomes are shown. The response includes only the numeric
+cached task-truth summary; it never exposes profile or task identity in the
+public readiness surface.
 
 ## Verification contract
 

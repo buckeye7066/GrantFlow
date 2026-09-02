@@ -3978,22 +3978,20 @@ if (process.env.NODE_ENV !== 'test') {
             verifiedBy: `recurring-link-repair:pid=${process.pid}`,
           })
           console.log('[link-repair] recurring lifecycle pass:', lifecycle)
-          // Link age is retryable evidence debt, not negative evidence. Once
-          // the canonical verifier refreshes it, rerun the serialized precision
-          // invariant so both pipeline rows and task truth return from
-          // pending_reverification to verified without requiring a restart.
-          const { enforcePipelinePrecision } = await import('./startup/enforceInvariants.js')
-          const precision = await enforcePipelinePrecision(dbInstance)
-          if (precision?.ok !== true || precision?.status !== 'verified') {
-            throw new Error(
-              `Hamilton task-truth refresh did not verify: ${precision?.error || precision?.status || precision?.skipped || 'unknown error'}`,
-            )
-          }
-          console.log('[hamilton-task-truth] post-link-verification refresh:', {
-            invariant: precision.name,
-            scanned: Number(precision.taskAudit?.scanned || 0),
-            invalid: Number(precision.taskAudit?.invalid || 0),
-            deferred: Number(precision.taskAudit?.deferred || 0),
+          // Link freshness can leave the boot census intentionally pending.
+          // Refresh only that already-readable snapshot here, after the
+          // canonical verifier and repair pass have completed under one lock.
+          const { refreshHamiltonTaskTruthAfterLinkVerification } = await import(
+            './services/pipelineStrictReconciliation.js'
+          )
+          const taskTruth = await refreshHamiltonTaskTruthAfterLinkVerification(dbInstance, {
+            limit: 100000,
+            actor: 'system:recurring-link-verification',
+          })
+          console.log('[hamilton-task-truth] recurring refresh:', {
+            status: taskTruth.status,
+            current: taskTruth.verificationTaskAudit?.scanned ?? 0,
+            deferred: taskTruth.verificationTaskAudit?.deferred ?? 0,
           })
       } catch (err) {
         console.warn('[link-verify] failed:', err.message)
