@@ -2243,6 +2243,31 @@ async function runAutopilotPathway(db, {
     if (!liveTask || liveTask.status === 'cancelled') {
       return { allow: false, cancelled: true, reason: 'task_cancelled' }
     }
+
+    // Re-read the authoritative pipeline row immediately before the
+    // irreversible click. Portal runs can be minutes old; another worker or a
+    // user may have recorded this grant as submitted while Hamilton was
+    // filling the form. A vanished or unreadable row also fails closed.
+    const liveGrantId = liveTask.grant_id || grant?.id || null
+    if (liveGrantId) {
+      let liveGrant
+      try {
+        liveGrant = await loadGrant(db, liveGrantId)
+      } catch {
+        return { allow: false, reason: 'pipeline_stage_unavailable' }
+      }
+      if (!liveGrant || String(liveGrant.profile_id || '') !== String(task.profile_id || '')) {
+        return { allow: false, reason: 'pipeline_stage_unavailable' }
+      }
+      if (isHamiltonProtectedPipelineStage(liveGrant.status)) {
+        return {
+          allow: false,
+          reason: 'pipeline_stage_protected',
+          pipeline_stage: liveGrant.status,
+        }
+      }
+    }
+
     const fresh = await resolveSubmissionDecision(db, {
       profileId: task.profile_id,
       fundingSourceId: opportunity?.id || grant?.id || null,
