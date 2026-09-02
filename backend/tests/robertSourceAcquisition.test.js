@@ -69,6 +69,22 @@ function makeDb() {
       amount_requested REAL, amount_min REAL, amount_max REAL, amount_awarded REAL,
       match_score REAL, match_decision TEXT, updated_at DATETIME, created_at DATETIME DEFAULT CURRENT_TIMESTAMP
     );
+    CREATE TABLE profile_opportunity_matches (
+      id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
+      profile_id TEXT NOT NULL,
+      opportunity_id TEXT NOT NULL,
+      match_score REAL,
+      match_confidence REAL,
+      match_decision TEXT,
+      match_explanation TEXT,
+      match_reasons TEXT,
+      match_explain_json TEXT,
+      matcher_version TEXT,
+      computed_at DATETIME,
+      updated_at DATETIME,
+      evaluated_at DATETIME,
+      UNIQUE (profile_id, opportunity_id)
+    );
     CREATE TABLE system_kv (key TEXT PRIMARY KEY, value TEXT, updated_at DATETIME);
   `)
   const p = sqlite.prepare('INSERT INTO profiles (id, display_name, primary_type, status, tags) VALUES (?, ?, ?, ?, ?)')

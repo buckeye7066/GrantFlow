@@ -139,6 +139,14 @@ async function profileMatchColumns(db) {
 async function persistFreshCanonicalDecision(db, profileId, opportunityId, decision) {
   if (!profileId || !opportunityId || !decision) return 0
   const columns = await profileMatchColumns(db)
+  for (const required of ['profile_id', 'opportunity_id', 'match_score', 'match_decision']) {
+    if (!columns.has(required)) {
+      const error = new Error(`profile_opportunity_matches lacks required column ${required}`)
+      error.canonicalMatchPersistenceFailed = true
+      throw error
+    }
+  }
+
   const now = new Date().toISOString()
   const explain = {
     ...(decision.match_explain ?? {}),
@@ -150,7 +158,7 @@ async function persistFreshCanonicalDecision(db, profileId, opportunityId, decis
       null,
     canonical_decision: String(decision.decision ?? '').toUpperCase() || null,
   }
-  const candidates = [
+  const decisionValues = [
     ['match_score', Number.isFinite(Number(decision.score)) ? Number(decision.score) : null],
     ['match_confidence', Number.isFinite(Number(decision.confidence)) ? Number(decision.confidence) : null],
     ['match_decision', String(decision.decision ?? '').toLowerCase() || null],
@@ -163,21 +171,25 @@ async function persistFreshCanonicalDecision(db, profileId, opportunityId, decis
     ['evaluated_at', decision.evaluatedAt ?? now],
   ].filter(([column]) => columns.has(column))
 
-  if (!candidates.some(([column]) => column === 'match_score') ||
-      !candidates.some(([column]) => column === 'match_decision')) {
-    const error = new Error('profile_opportunity_matches lacks canonical score/decision columns')
-    error.canonicalMatchPersistenceFailed = true
-    throw error
-  }
-
+  const insertValues = [
+    ['profile_id', profileId],
+    ['opportunity_id', opportunityId],
+    ...decisionValues,
+  ]
+  const updateAssignments = decisionValues
+    .map(([column]) => `${column} = excluded.${column}`)
+    .join(', ')
   const result = await db.prepare(
-    `UPDATE profile_opportunity_matches
-        SET ${candidates.map(([column]) => `${column} = ?`).join(', ')}
-      WHERE profile_id = ? AND opportunity_id = ?`,
-  ).run(...candidates.map(([, value]) => value), profileId, opportunityId)
+    `INSERT INTO profile_opportunity_matches
+       (${insertValues.map(([column]) => column).join(', ')})
+     VALUES (${insertValues.map(() => '?').join(', ')})
+     ON CONFLICT (profile_id, opportunity_id) DO UPDATE SET
+       ${updateAssignments}`,
+  ).run(...insertValues.map(([, value]) => value))
+
   const changed = Number(result?.changes ?? result?.rowCount ?? 0)
   if (!Number.isFinite(changed) || changed < 1) {
-    const error = new Error('fresh canonical rescore did not update its persisted profile/opportunity pair')
+    const error = new Error('fresh canonical rescore did not persist its profile/opportunity pair')
     error.canonicalMatchPersistenceFailed = true
     throw error
   }

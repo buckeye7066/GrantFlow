@@ -1,4 +1,4 @@
-import { runStrictPipelineReconciliation } from '../../../services/pipelineStrictReconciliation.js'
+import { runStrictPipelineReconciliation } from '../../services/pipelineStrictReconciliation.js'
 
 /**
  * Retry the resumable four-gate pass after adding fail-closed Hamilton task
