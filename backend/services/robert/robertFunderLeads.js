@@ -304,19 +304,10 @@ export async function admitFunderLeads(db, {
     let addedThisProfile = 0
     for (const { opp, fit } of qualified) {
       if (addedThisProfile >= perProfileCap) { out.perProfileCapped += 1; break }
-      if (out.added + out.wouldAdd >= writeLimit) { out.truncated = true; break }
+      if (out.added + out.catalogOnly + out.wouldAdd >= writeLimit) { out.truncated = true; break }
 
       // Tombstone: a funder the user explicitly removed stays gone (manual re-add clears it).
-      try { if (await isDismissed(db, profileId, opp)) { out.skippedTombstoned += 1; continue } } catch { /* recall over suppression */ }
-
-      // Informational score only — admission does NOT gate on it.
-      let score = null
-      let decisionStr = 'review'
-      try {
-        const d = deps.computeMatchDecision(ctx.profile, opp, { profileSections: ctx.sections })
-        if (Number.isFinite(Number(d?.score))) score = Math.round(Number(d.score))
-        if (d?.decision) decisionStr = String(d.decision).toLowerCase()
-      } catch { /* score stays null; funder gates already passed */ }
+      try { if (await isDismissed(db, profileId, opp)) { out.skippedTombstoned += 1; continue } } catch { bump('dismissal_check_error'); continue }
 
       if (countOnly) {
         out.wouldAdd += 1
@@ -324,12 +315,6 @@ export async function admitFunderLeads(db, {
         addedThisProfile += 1
         continue
       }
-
-      const noteLine =
-        `Robert funder lead: ${opp.sponsor ?? opp.title} — demonstrated giving for ` +
-        `[${[...needs].slice(0, 6).join(', ')}] in ${fit.distinctStates} state(s)` +
-        `${fit.inState ? ' incl. in-state' : ''}${fit.nationalFootprint ? ` (national footprint >= ${NATIONAL_FOOTPRINT_MIN_STATES})` : ''}` +
-        `${fit.fundsIndividuals ? '; funds individuals' : ''}. Under investigation — confirm an application path before applying.`
 
       // A funder record is research evidence, not an application. Keep it in
       // funding_opportunities for investigation and do not manufacture a grants
