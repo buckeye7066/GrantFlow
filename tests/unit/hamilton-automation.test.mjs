@@ -161,7 +161,7 @@ before(() => {
 describe('hamiltonAutomationClassifier — every pathway', () => {
   it('classifies explicit application_mode=portal as portal', () => {
     const r = classifyFundingSource({
-      opportunity: { application_mode: 'portal', application_url: 'https://example.com/apply' },
+      opportunity: { application_mode: 'portal', application_url: 'https://www.mtsu.edu/financial-aid/apply' },
     })
     assert.equal(r.automation_type, 'portal')
     assert.ok(r.confidence >= 0.9)
@@ -216,7 +216,7 @@ describe('hamiltonAutomationClassifier — every pathway', () => {
 
   it('classifies http URLs without obvious format as portal', () => {
     const r = classifyFundingSource({
-      opportunity: { application_url: 'https://example.com/apply' },
+      opportunity: { application_url: 'https://www.mtsu.edu/financial-aid/apply' },
     })
     assert.equal(r.automation_type, 'portal')
   })
@@ -359,7 +359,7 @@ describe('hamiltonAutomationOrchestrator — multi-source dispatch', () => {
     resetCaches()
     const db = makeMemoryDb()
     db.raw.prepare(`INSERT INTO funding_opportunities (id, title, description, mailing_address, application_mode, funder_name, application_url)
-                    VALUES ('opp-mail', 'County Aid', 'Mail-in form', '1 Main St', 'mail', 'County Foundation', 'https://example.org/county-aid')`).run()
+                    VALUES ('opp-mail', 'County Aid', 'Mail-in form', '1 Main St', 'mail', 'County Foundation', 'https://www.mtsu.edu/financial-aid/county-aid')`).run()
     const result = await automateSelected(db, {
       profileId: 'p-A',
       userId: 'u-A',
@@ -380,7 +380,7 @@ describe('hamiltonAutomationOrchestrator — multi-source dispatch', () => {
     resetCaches()
     const db = makeMemoryDb()
     db.raw.prepare(`INSERT INTO funding_opportunities (id, title, description, apply_email, application_mode, funder_name, application_url)
-                    VALUES ('opp-email', 'Local Foundation', 'Email completed packet', 'grants@local.org', 'email', 'Local Foundation', 'https://example.org/local-foundation')`).run()
+                    VALUES ('opp-email', 'Local Foundation', 'Email completed packet', 'grants@local.org', 'email', 'Local Foundation', 'https://www.mtsu.edu/financial-aid/local-foundation')`).run()
     const result = await automateSingleSource(db, {
       profileId: 'p-A',
       userId: 'u-A',
@@ -422,7 +422,7 @@ describe('hamiltonAutomationOrchestrator — multi-source dispatch', () => {
     resetCaches()
     const db = makeMemoryDb()
     db.raw.prepare(`INSERT INTO funding_opportunities (id, title, description, application_mode, funder_name, application_url)
-                    VALUES ('opp-noapp', 'Automatic Tuition Waiver', 'Awarded from institutional records; no application is accepted.', 'no_application', 'TN Dept of Ed', 'https://example.org/waiver')`).run()
+                    VALUES ('opp-noapp', 'Automatic Tuition Waiver', 'Awarded from institutional records; no application is accepted.', 'no_application', 'TN Dept of Ed', 'https://www.mtsu.edu/financial-aid/automatic-tuition-waiver')`).run()
     const result = await automateSingleSource(db, {
       profileId: 'p-A',
       userId: 'u-A',
@@ -471,7 +471,7 @@ describe('hamiltonAutomationOrchestrator — multi-source dispatch', () => {
     resetCaches()
     const db = makeMemoryDb()
     db.raw.prepare(`INSERT INTO funding_opportunities (id, title, application_url, application_mode, funder_name)
-                    VALUES ('opp-portal', 'Scholarship Portal', 'https://example.com/apply', 'portal', 'Funder')`).run()
+                    VALUES ('opp-portal', 'Scholarship Portal', 'https://www.mtsu.edu/financial-aid/apply', 'portal', 'Funder')`).run()
     const prev = process.env.HAMILTON_ENABLE_BROWSER_AUTOMATION
     delete process.env.HAMILTON_ENABLE_BROWSER_AUTOMATION
     try {
@@ -482,7 +482,7 @@ describe('hamiltonAutomationOrchestrator — multi-source dispatch', () => {
       })
       assert.equal(result.task.automation_type, 'portal')
       assert.equal(result.task.status, 'ready_to_start')
-      assert.equal(result.task.portal_url, 'https://example.com/apply')
+      assert.equal(result.task.portal_url, 'https://www.mtsu.edu/financial-aid/apply')
     } finally {
       if (prev !== undefined) process.env.HAMILTON_ENABLE_BROWSER_AUTOMATION = prev
     }
@@ -508,7 +508,7 @@ describe('hamiltonAutomationOrchestrator — multi-source dispatch', () => {
     resetCaches()
     const db = makeMemoryDb()
     db.raw.prepare(`INSERT INTO funding_opportunities (id, title, mailing_address, application_mode, funder_name, application_url)
-                    VALUES ('opp-anytime', 'Stage-agnostic award', '1 Main', 'mail', 'F', 'https://example.org/stage-agnostic-award')`).run()
+                    VALUES ('opp-anytime', 'Stage-agnostic award', '1 Main', 'mail', 'F', 'https://www.mtsu.edu/financial-aid/stage-agnostic-award')`).run()
     const stages = ['discovered', 'saved', 'interested', 'gathering_documents', 'drafting', 'ready_to_submit', 'submitted', 'follow_up', 'awarded']
     for (const stage of stages) {
       const r = await automateSingleSource(db, {
@@ -571,7 +571,7 @@ describe('hamiltonAutomationOrchestrator — multi-source dispatch', () => {
     resetCaches()
     const db = makeMemoryDb()
     db.raw.prepare(`INSERT INTO funding_opportunities (id, title, mailing_address, application_mode, funder_name, application_url)
-                    VALUES ('opp-pm', 'X', '1', 'mail', 'F', 'https://example.org/profile-scope-award')`).run()
+                    VALUES ('opp-pm', 'MTSU Profile-Scoped Scholarship', '1 MTSU Blvd', 'mail', 'Middle Tennessee State University', 'https://www.mtsu.edu/financial-aid/profile-scope-award')`).run()
     await automateSingleSource(db, {
       profileId: 'p-A', userId: 'u-A',
       source: { opportunity_id: 'opp-pm', current_stage: 'discovered' },
@@ -586,7 +586,7 @@ describe('hamiltonAutomationOrchestrator — multi-source dispatch', () => {
     resetCaches()
     const db = makeMemoryDb()
     db.raw.prepare(`INSERT INTO funding_opportunities (id, title, mailing_address, application_mode, funder_name, application_url)
-                    VALUES ('opp-audit', 'Award', '1', 'mail', 'F', 'https://example.org/audit-award')`).run()
+                    VALUES ('opp-audit', 'MTSU Audit Scholarship', '1 MTSU Blvd', 'mail', 'Middle Tennessee State University', 'https://www.mtsu.edu/financial-aid/audit-award')`).run()
     const r = await automateSingleSource(db, {
       profileId: 'p-A', userId: 'u-A',
       source: { opportunity_id: 'opp-audit', current_stage: 'discovered' },
@@ -602,9 +602,9 @@ describe('hamiltonAutomationOrchestrator — multi-source dispatch', () => {
     resetCaches()
     const db = makeMemoryDb()
     db.raw.prepare(`INSERT INTO funding_opportunities (id, title, application_url, application_mode, funder_name)
-                    VALUES ('o-portal', 'P', 'https://example.org/apply', 'portal', 'F')`).run()
+                    VALUES ('o-portal', 'MTSU Portal Scholarship', 'https://www.mtsu.edu/financial-aid/portal-application', 'portal', 'Middle Tennessee State University')`).run()
     db.raw.prepare(`INSERT INTO funding_opportunities (id, title, mailing_address, application_mode, funder_name, application_url)
-                    VALUES ('o-mail', 'M', '1', 'mail', 'F', 'https://example.org/mail-award')`).run()
+                    VALUES ('o-mail', 'MTSU Mail Scholarship', '1 MTSU Blvd', 'mail', 'Middle Tennessee State University', 'https://www.mtsu.edu/financial-aid/mail-award')`).run()
     db.raw.prepare(`INSERT INTO funding_opportunities (id, title, description, result_kind, funder_name)
                     VALUES ('o-dir', 'Scholarship Directory', 'directory', 'directory', 'F')`).run()
     delete process.env.HAMILTON_ENABLE_BROWSER_AUTOMATION

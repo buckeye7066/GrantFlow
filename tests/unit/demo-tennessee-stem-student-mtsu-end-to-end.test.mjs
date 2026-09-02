@@ -128,6 +128,7 @@ function makeDb() {
       severity TEXT,
       data TEXT,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      read INTEGER NOT NULL DEFAULT 0,
       read_at DATETIME
     );
     CREATE TABLE documents (

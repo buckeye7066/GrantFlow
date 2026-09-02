@@ -286,7 +286,8 @@ test('opportunityMatcher: dismissed opportunities are NOT re-added by saveToProf
     },
     sections: {
       basic_information: { state: 'TN', profile_category: 'college_student' },
-      education: { current_student: true },
+      education: { currently_enrolled: true, school_name: 'Middle Tennessee State University' },
+      financial_information: { is_low_income: true, household_income: 18000 },
     },
     match_reasons: ['MTSU off-campus housing scholarship'],
   }
