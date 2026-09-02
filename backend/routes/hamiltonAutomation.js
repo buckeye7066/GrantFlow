@@ -67,6 +67,7 @@ import { cancelActiveHamiltonTaskRun } from '../services/hamilton/hamiltonRunCan
 import {
   automateSelected,
   automateSingleSource,
+  loadAuthoritativeGrantForSource,
 } from '../services/hamilton/hamiltonAutomationOrchestrator.js'
 import { getLiveFrame } from '../services/hamilton/hamiltonLiveView.js'
 import { generateAndSavePacket } from '../services/hamilton/hamiltonApplicationPacketGenerator.js'
@@ -1140,7 +1141,7 @@ router.post('/preflight', async (req, res) => {
     if (selectedSources.length === 0) {
       return res.status(409).json({
         error: 'no_ready_sources',
-        message: 'Nothing in this profile pipeline is ready to work. Add a funding source first.',
+        message: 'No source in this profile currently has a verified direct application surface for Hamilton to work.',
       })
     }
   }
@@ -1304,22 +1305,17 @@ async function listReadySources(db, profileId) {
 }
 
 /**
- * The set Hamilton's AUTO-SUBMIT ("all_ready_sources") expands to. It PREFERS
- * applyable sources — an account_portal login or an info_only description page
- * is never a thing Hamilton can cold-submit, and putting one in front of the
- * auto-submit gate is exactly the "13 runs, 1 completed application" failure
- * this addresses. When at least one applyable (online_form / mail_or_pdf) source
- * exists, ONLY those are handed to auto-submit; when a profile has none, the
- * full ranked list is returned unchanged (the per-source Hamilton gate still
- * refuses the unworkable ones) so behaviour never regresses and no source is
- * hidden from the owner's own view. Set HAMILTON_APPLYABLE_ONLY_AUTOSUBMIT=0 to
- * fall back to the old "all ready rows" behaviour.
+ * The set Hamilton's AUTO-SUBMIT ("all_ready_sources") expands to.
+ *
+ * Only sources with a real application surface are eligible. Falling back to
+ * account portals and info-only pages when none were applyable manufactured a
+ * queue of guaranteed hard stops and made "full automation" look active while
+ * completing nothing. Those sources remain visible through listReadySources;
+ * they are simply never cold-enqueued as applications.
  */
-async function selectAutoSubmitSources(db, profileId) {
+export async function selectAutoSubmitSources(db, profileId) {
   const ready = await listReadySources(db, profileId)
-  if (String(process.env.HAMILTON_APPLYABLE_ONLY_AUTOSUBMIT ?? '1') === '0') return ready
-  const applyable = ready.filter((s) => s.is_applyable === true)
-  return applyable.length ? applyable : ready
+  return ready.filter((source) => source.is_applyable === true)
 }
 
 /** What "Select all sources" will pick, so the count shown is the count run. */
@@ -1330,7 +1326,7 @@ router.get('/ready-sources', async (req, res) => {
   if (!profileId) return res.status(400).json({ error: 'profile_id_required' })
   if (!(await userMayAccessProfile(req, user, profileId))) return res.status(403).json({ error: 'forbidden' })
   try {
-    const sources = await listReadySources(req.db, profileId)
+    const sources = await selectAutoSubmitSources(req.db, profileId)
     return res.json({ ok: true, count: sources.length, sources })
   } catch (err) {
     return res.status(500).json({ error: 'ready_sources_failed', message: err?.message || String(err) })
@@ -1359,7 +1355,7 @@ router.post('/start-autopilot', startLimiter, async (req, res) => {
     if (selectedSources.length === 0) {
       return res.status(409).json({
         error: 'no_ready_sources',
-        message: 'Nothing in this profile pipeline is ready to work. Add a funding source first.',
+        message: 'No source in this profile currently has a verified direct application surface for Hamilton to work.',
       })
     }
   }
@@ -1372,6 +1368,44 @@ router.post('/start-autopilot', startLimiter, async (req, res) => {
       error: 'pipeline_stage_protected',
       message: 'Hamilton will not restart submitted or post-submission funding sources. Verify their existing submission history instead.',
       protected_count: protectedSources.length,
+    })
+  }
+
+  // Client stage snapshots are advisory. Resolve the profile's grant from
+  // grant_id OR opportunity_id before accepting the run, so omitting grant_id
+  // or spoofing current_stage cannot bypass the post-submission boundary.
+  try {
+    const authoritativeProtected = []
+    for (const source of selectedSources) {
+      const grantId = source?.grant_id || source?.grantId || null
+      const opportunityId = source?.opportunity_id || source?.opportunityId || null
+      const authoritativeGrant = await loadAuthoritativeGrantForSource(req.db, {
+        profileId,
+        grantId,
+        opportunityId,
+      })
+      if (grantId && (
+        !authoritativeGrant?.profile_id
+        || String(authoritativeGrant.profile_id) !== String(profileId)
+      )) {
+        return res.status(403).json({ error: 'source_profile_mismatch' })
+      }
+      if (authoritativeGrant && isHamiltonProtectedPipelineStage(authoritativeGrant.status)) {
+        authoritativeProtected.push(authoritativeGrant)
+      }
+    }
+    if (authoritativeProtected.length > 0) {
+      return res.status(409).json({
+        error: 'pipeline_stage_protected',
+        message: 'Hamilton will not restart submitted or post-submission funding sources. Verify their existing submission history instead.',
+        protected_count: authoritativeProtected.length,
+      })
+    }
+  } catch (err) {
+    log.error('pipeline_stage_validation_failed', { err: err?.message, profileId })
+    return res.status(503).json({
+      error: 'pipeline_stage_unavailable',
+      message: 'Hamilton could not verify the current pipeline stage, so the run was not started.',
     })
   }
   // Web callers may reference saved sessions/documents only by opaque,
