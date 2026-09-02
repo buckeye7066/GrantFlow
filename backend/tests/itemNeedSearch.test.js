@@ -130,6 +130,12 @@ describe('the PHRASE-ENDORSEMENT gate', () => {
     expect(phrases.every((p) => p.includes(' '))).toBe(true)
   })
 
+  it('keeps an exact concrete one-word item searchable without admitting generic funding words', () => {
+    expect(buildEndorsementPhrases('bus', expandNeed('bus'))).toContain('bus')
+    expect(buildEndorsementPhrases('DME', expandNeed('DME'))).toContain('dme')
+    expect(buildEndorsementPhrases('grant', expandNeed('grant'))).not.toContain('grant')
+  })
+
   it('ADMITS the real on-topic rows (the gate is not a blanket refusal)', () => {
     expect(statesEndorsingPhrase(`${REAL_CPEP.title} ${REAL_CPEP.description}`, phrases)).toBe('probe ethics')
     for (const row of REAL_CATALOG) {
@@ -357,13 +363,14 @@ describe('the whole-request behaviour', () => {
     expect(out.unclassified_count).toBe(0)
     expect(out.results[0].result_bucket).toBe('resource')
     // Every one of the 5 refusals is ATTRIBUTED, so "5 dropped" is explainable:
-    //   Merriam-Webster  -> need-score floor (states only 'probe' = 5 pts; it
-    //                       used to clear 10 by also crediting the stopword
-    //                       'for', which is the defect the taxonomy fix closed)
-    //   CBC, LinkedIn    -> phrase gate (scattered words, no adjacency)
+    //   CBC, LinkedIn,
+    //   Merriam-Webster  -> phrase gate (scattered/single words, no requested
+    //                       phrase). Merriam also has a low need score, but the
+    //                       phrase gate runs first so every refusal has one
+    //                       stable, owner-visible reason.
     //   NASA, aiwolfie   -> funding-intent gate (state 'probe class' verbatim,
     //                       mention no money at all)
-    expect(out.lanes.web.refused_no_phrase).toBe(2)
+    expect(out.lanes.web.refused_no_phrase).toBe(3)
     expect(out.lanes.web.refused_no_funding_intent).toBe(2)
     expect(out.lanes.web.raw_results).toBe(6)
     vi.doUnmock('../services/shared/liveWebSearch.js')
@@ -691,6 +698,129 @@ describe('the forensic-item audit: RANKING — item relevance dominates profile 
       profileContext: { profile: { id: 'p1', primary_type: 'individual' }, sections: {} },
     })
     expect(out.results.map((r) => r.id)).toEqual(['high-affinity', 'low-affinity'])
+    vi.doUnmock('../services/shared/liveWebSearch.js')
+    vi.resetModules()
+  })
+
+  it('searches an unknown concrete one-word item instead of forcing a two-word taxonomy match', async () => {
+    vi.resetModules()
+    vi.doMock('../services/shared/liveWebSearch.js', () => ({
+      searchNeedWebLeads: async () => ({ opportunities: [], debug: { queries: [], raw: 0 } }),
+    }))
+    const { searchItemNeed } = await import('../services/itemNeedSearch.js')
+    const proof = {
+      direct_funding: true,
+      real: {
+        passed: true,
+        reality_status: 'VERIFIED',
+        content_hash_present: true,
+        evidence_captured_at: '2026-09-02T19:00:00.000Z',
+      },
+      relatable: { passed: true, canonical_decision: 'ACCEPT' },
+      meets_profile_need: {
+        passed: true,
+        profile_needs_defaulted: false,
+        matched_needs: ['transportation'],
+      },
+      profile_qualifies: { passed: true, eligibility: 'yes' },
+      all_passed: true,
+    }
+    const db = { dialect: 'sqlite', prepare: () => ({ all: async () => [{
+      id: 'bus-grant',
+      title: 'Passenger Bus Grant',
+      description: 'Funding for an eligible nonprofit to purchase a bus.',
+      categories: '[]',
+      keywords: '[]',
+      opportunity_kind: 'grant',
+      match_decision: 'ACCEPT',
+      match_score: 92,
+      matcher_version: 'crawler-os',
+      match_explain_json: JSON.stringify({ four_truth_proof: proof }),
+    }] }) }
+
+    const out = await searchItemNeed(db, {
+      profileId: 'p-bus',
+      item: 'bus',
+      profileContext: { profile: { id: 'p-bus', primary_type: 'nonprofit' }, sections: {} },
+    })
+
+    expect(out.funding_matches.map((row) => row.id)).toEqual(['bus-grant'])
+    vi.doUnmock('../services/shared/liveWebSearch.js')
+    vi.resetModules()
+  })
+
+  it('separates four-truth funding matches from review and unproven research leads', async () => {
+    vi.resetModules()
+    vi.doMock('../services/shared/liveWebSearch.js', () => ({
+      searchNeedWebLeads: async () => ({ opportunities: [], debug: { queries: [], raw: 0 } }),
+    }))
+    const { hasPositiveFourTruthProof, searchItemNeed } = await import('../services/itemNeedSearch.js')
+    const itemRow = (id, overrides = {}) => ({
+      id,
+      title: 'Wheelchair Accessible Van Assistance Program',
+      description: 'Grant funding for a wheelchair accessible passenger van.',
+      categories: '[]',
+      keywords: '[]',
+      opportunity_kind: 'grant',
+      match_decision: 'ACCEPT',
+      match_score: 91,
+      matcher_version: 'crawler-os',
+      ...overrides,
+    })
+    const positiveProof = {
+      direct_funding: true,
+      real: {
+        passed: true,
+        reality_status: 'VERIFIED',
+        content_hash_present: true,
+        evidence_captured_at: '2026-09-02T19:00:00.000Z',
+      },
+      relatable: { passed: true, canonical_decision: 'ACCEPT' },
+      meets_profile_need: {
+        passed: true,
+        profile_needs_defaulted: false,
+        matched_needs: ['transportation'],
+      },
+      profile_qualifies: { passed: true, eligibility: 'yes' },
+      all_passed: true,
+    }
+    expect(hasPositiveFourTruthProof(positiveProof)).toBe(true)
+    expect(hasPositiveFourTruthProof({
+      ...positiveProof,
+      profile_qualifies: { passed: false },
+    })).toBe(false)
+    const rows = [
+      itemRow('proved', { match_explain_json: JSON.stringify({ four_truth_proof: positiveProof }) }),
+      itemRow('failed-proof', {
+        match_explain_json: JSON.stringify({
+          // Contradictory aggregate is deliberately hostile: all_passed must
+          // never override one failed truth leg.
+          four_truth_proof: { ...positiveProof, profile_qualifies: { passed: false } },
+        }),
+      }),
+      itemRow('legacy-no-proof'),
+      itemRow('directory', {
+        opportunity_kind: 'directory',
+        match_explain_json: JSON.stringify({ four_truth_proof: positiveProof }),
+      }),
+    ]
+    const db = { dialect: 'sqlite', prepare: () => ({ all: async () => rows }) }
+    const out = await searchItemNeed(db, {
+      profileId: 'p-mobility',
+      item: 'wheelchair accessible van',
+      profileContext: { profile: { id: 'p-mobility', primary_type: 'individual' }, sections: {} },
+    })
+
+    expect(out.funding_matches.map((r) => r.id)).toEqual(['proved'])
+    expect(out.research_leads.map((r) => r.id).sort()).toEqual(['directory', 'failed-proof', 'legacy-no-proof'])
+    expect(out.direct_funding_count).toBe(1)
+    expect(out.research_lead_count).toBe(3)
+    expect(out.awardable_count).toBe(1)
+    expect(out.lanes.catalog.held_for_four_truth_review).toBe(3)
+    expect(out.results.find((r) => r.id === 'legacy-no-proof')).toMatchObject({
+      classification: 'research_lead_not_direct_funding',
+      is_lead: true,
+    })
     vi.doUnmock('../services/shared/liveWebSearch.js')
     vi.resetModules()
   })

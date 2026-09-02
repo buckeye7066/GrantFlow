@@ -420,6 +420,8 @@ router.post('/:profileId/search', ensureAuth, mutationRateLimiter, async (req, r
         searched_count: 0,
         truncated: 0,
         total_found: 0,
+        total_direct_funding: 0,
+        total_research_leads: 0,
         total_awardable: 0,
         total_pointer: 0,
         items: [],
@@ -443,11 +445,14 @@ router.post('/:profileId/search', ensureAuth, mutationRateLimiter, async (req, r
       items,
       profileContext: ctx,
       variant: body.variant === 'gift' ? 'gift' : 'funding',
+      maxResults: Math.max(1, Math.min(Number(body.max_results) || 12, 40)),
     })
     return res.json({
       success: true,
       subject,
+      profile_type: ctx.profile?.primary_type ?? ctx.profile?.applicant_type ?? null,
       max_items_per_run: ITEM_SEARCH_MAX_ITEMS,
+      max_results_per_item: Math.max(1, Math.min(Number(body.max_results) || 12, 40)),
       search_backends: buildSearchBackendsBlock(backends),
       ...report,
     })

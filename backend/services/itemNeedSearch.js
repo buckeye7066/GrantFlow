@@ -36,8 +36,9 @@
  * TWO LANES, HONESTLY SEPARATED.
  *   CATALOG  — rows ALREADY surfaced to THIS profile by the canonical engine
  *              (`profile_opportunity_matches`, `SURFACED_MATCHER_VERSIONS_SQL`)
- *              whose own text states the item. These carry a real engine
- *              decision; we re-rank, we never re-decide.
+ *              whose own text states the item. Only an explicitly classified
+ *              non-pointer ACCEPT carrying all four positive truth proofs is
+ *              direct funding; every weaker row is a named research lead.
  *   WEB      — live search leads. Display-only, `record_origin='web_search'`,
  *              never ingested from here and never given an `application_url`
  *              (canonical G0: no invented facts).
@@ -111,6 +112,42 @@ function parseArrayField(v) {
   try { const p = JSON.parse(v); return Array.isArray(p) ? p : [] } catch { return [] }
 }
 
+function parseObjectField(v) {
+  if (v && typeof v === 'object' && !Array.isArray(v)) return v
+  if (typeof v !== 'string' || !v.trim()) return null
+  try {
+    const parsed = JSON.parse(v)
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : null
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Aggregate flags are evidence summaries, not substitutes for the evidence.
+ * A malformed/stale payload with `all_passed: true` but one failed leg must
+ * therefore fail closed exactly like a missing payload.
+ */
+export function hasPositiveFourTruthProof(proof) {
+  const realityStatus = String(proof?.real?.reality_status ?? '').trim().toUpperCase()
+  const capturedAt = Date.parse(String(proof?.real?.evidence_captured_at ?? ''))
+  const matchedNeeds = proof?.meets_profile_need?.matched_needs
+  const eligibility = String(proof?.profile_qualifies?.eligibility ?? '').trim().toLowerCase()
+  return proof?.direct_funding === true &&
+    proof?.all_passed === true &&
+    proof?.real?.passed === true &&
+    (realityStatus === 'VERIFIED' || realityStatus === 'ROLLING') &&
+    proof?.real?.content_hash_present === true &&
+    Number.isFinite(capturedAt) &&
+    proof?.relatable?.passed === true &&
+    String(proof?.relatable?.canonical_decision ?? '').trim().toUpperCase() === 'ACCEPT' &&
+    proof?.meets_profile_need?.passed === true &&
+    proof?.meets_profile_need?.profile_needs_defaulted === false &&
+    Array.isArray(matchedNeeds) && matchedNeeds.length > 0 &&
+    proof?.profile_qualifies?.passed === true &&
+    ['yes', 'eligible', 'qualified', 'true'].includes(eligibility)
+}
+
 /** The row's kind, or null when it declares none (empty/whitespace count as none). */
 function declaredKind(kind) {
   const k = String(kind ?? '').trim()
@@ -154,6 +191,17 @@ const PHRASE_STOPWORDS = new Set([
   'your', 'me', 'i', 'is', 'are', 'be', 'in', 'on', 'at', 'or',
 ])
 
+// Exact one-word physical requests are legitimate item queries. The old
+// two-word-only endorsement gate made an unknown `bus`, `DME`, `wheelchair`,
+// or `generator` mathematically unable to produce a result. Generic workflow
+// words remain blocked so this path cannot turn "grant" or "help" into an
+// endorsement.
+const SINGLE_ITEM_TOKEN_BLOCKLIST = new Set([
+  ...PHRASE_STOPWORDS,
+  'grant', 'grants', 'funding', 'assistance', 'program', 'programs', 'support',
+  'service', 'services', 'money', 'cost', 'costs', 'item', 'items',
+])
+
 /**
  * THE PHRASE-ENDORSEMENT GATE — the precision rule of this whole lane.
  *
@@ -195,6 +243,9 @@ export function buildEndorsementPhrases(itemText, expanded) {
 
   // Bigrams of the raw request, stopword-free.
   const tokens = norm(itemText).split(' ').filter(Boolean)
+  if (tokens.length === 1 && tokens[0].length >= 3 && !SINGLE_ITEM_TOKEN_BLOCKLIST.has(tokens[0])) {
+    phrases.add(tokens[0])
+  }
   for (let i = 0; i + 1 < tokens.length; i += 1) {
     const a = tokens[i]
     const b = tokens[i + 1]
@@ -203,6 +254,15 @@ export function buildEndorsementPhrases(itemText, expanded) {
     phrases.add(`${a} ${b}`)
   }
   return [...phrases]
+}
+
+function effectiveNeedScore(needMatch, endorsingPhrase, itemText) {
+  const measured = Number(needMatch?.score ?? 0)
+  const tokens = norm(itemText).split(' ').filter(Boolean)
+  const exactSingleItem = tokens.length === 1 &&
+    endorsingPhrase === tokens[0] &&
+    !SINGLE_ITEM_TOKEN_BLOCKLIST.has(tokens[0])
+  return exactSingleItem ? Math.max(measured, ITEM_NEED_MIN_SCORE) : measured
 }
 
 /** Does this row's own text state one of the endorsing phrases? */
@@ -444,7 +504,8 @@ async function searchCatalogLane(db, { profileId, itemText, expanded, phrases, p
       `SELECT fo.id, fo.title, fo.sponsor, fo.description, fo.keywords, fo.categories,
               fo.application_url, fo.source_url, fo.opportunity_kind, fo.deadline,
               fo.amount_min, fo.amount_max, fo.state, fo.record_origin,
-              m.match_score, m.match_decision, m.match_explanation, m.matcher_version
+              m.match_score, m.match_decision, m.match_explanation,
+              m.match_explain_json, m.matcher_version
          FROM funding_opportunities fo
          LEFT JOIN profile_opportunity_matches m
                 ON m.opportunity_id = fo.id
@@ -475,6 +536,7 @@ async function searchCatalogLane(db, { profileId, itemText, expanded, phrases, p
   let refusedNotAGrant = 0
   let refusedGeo = 0
   let liveScored = 0
+  let heldForFourTruthReview = 0
   for (const row of rows ?? []) {
     const junkVerdict = classifyFundingResult(row)
     if (junkVerdict.bucket === RESULT_BUCKETS.NOT_A_GRANT) { refusedNotAGrant += 1; continue }
@@ -485,18 +547,20 @@ async function searchCatalogLane(db, { profileId, itemText, expanded, phrases, p
       { name: row.title, description: row.description, categories: rowCategories },
       expanded,
     )
-    const score = needMatch?.score ?? 0
-    if (score < ITEM_NEED_MIN_SCORE) continue
     const phrase = statesEndorsingPhrase(`${row.title ?? ''} ${row.description ?? ''} ${row.keywords ?? ''}`, phrases)
     if (!phrase) { refusedNoPhrase += 1; continue }
+    const score = effectiveNeedScore(needMatch, phrase, itemText)
+    if (score < ITEM_NEED_MIN_SCORE) continue
 
-    // A STORED verdict wins; otherwise the engine decides LIVE. A REJECT is
-    // dropped either way — an item search must never surface a row the
-    // canonical engine says this profile cannot receive.
+    // A stored decision is retained as evidence; otherwise the engine decides
+    // live. A REJECT is dropped either way. ACCEPT alone is still not enough
+    // for direct funding: the four-truth proof below is a second fail-closed
+    // requirement, and legacy/live rows without it remain research leads.
     let decision = row.match_decision ?? null
     let matchScore = row.match_score ?? null
     let explanation = row.match_explanation ?? null
     let matcherVersion = row.matcher_version ?? null
+    let matchExplain = parseObjectField(row.match_explain_json)
     if (!decision) {
       if (!profileContext?.profile) { refusedByEngine += 1; continue }
       let live = null
@@ -513,8 +577,16 @@ async function searchCatalogLane(db, { profileId, itemText, expanded, phrases, p
       matchScore = live.score ?? null
       explanation = live.explanation ?? null
       matcherVersion = 'live-item-search'
+      matchExplain = live.match_explain ?? null
     }
     if (String(decision).toUpperCase() === 'REJECT') { refusedByEngine += 1; continue }
+
+    const kind = declaredKind(row.opportunity_kind)
+    const pointerVerdict = kind === null ? null : isPointerKind(kind)
+    const fourTruthProof = matchExplain?.four_truth_proof ?? null
+    const isDirectFundingMatch = String(decision).toUpperCase() === 'ACCEPT' &&
+      kind !== null && pointerVerdict === false && hasPositiveFourTruthProof(fourTruthProof)
+    if (!isDirectFundingMatch) heldForFourTruthReview += 1
 
     results.push({
       endorsing_phrase: phrase,
@@ -538,17 +610,20 @@ async function searchCatalogLane(db, { profileId, itemText, expanded, phrases, p
       // NULL `opportunity_kind` (all six license-reinstatement rows this search
       // returns), so folding them into `awardable_count` would overstate what
       // the profile can actually receive.
-      is_pointer: declaredKind(row.opportunity_kind) === null
-        ? null
-        : isPointerKind(row.opportunity_kind),
+      is_pointer: pointerVerdict,
       match_score: matchScore,
       match_decision: decision,
       match_explanation: explanation,
+      four_truth_proof: fourTruthProof,
       matcher_version: matcherVersion,
       need_score: score,
       matched_terms: needMatch?.matchedTerms ?? [],
       result_source: 'catalog',
       record_origin: row.record_origin ?? null,
+      classification: isDirectFundingMatch
+        ? 'direct_funding_match'
+        : 'research_lead_not_direct_funding',
+      is_lead: !isDirectFundingMatch,
     })
   }
   results.sort(byItemRelevance)
@@ -561,6 +636,7 @@ async function searchCatalogLane(db, { profileId, itemText, expanded, phrases, p
     refusedNotAGrant,
     refusedGeo,
     liveScored,
+    heldForFourTruthReview,
   }
 }
 
@@ -617,11 +693,11 @@ async function searchWebLane({ itemText, expanded, profileContext, variant, time
       { name: lead.title, description: lead.description, categories: lead.categories || [] },
       expanded,
     )
-    const score = needMatch?.score ?? 0
-    if (score < ITEM_NEED_MIN_SCORE) continue
     const leadText = `${lead.title ?? ''} ${lead.description ?? ''}`
     const phrase = statesEndorsingPhrase(leadText, phrases)
     if (!phrase) { refusedNoPhrase += 1; continue }
+    const score = effectiveNeedScore(needMatch, phrase, itemText)
+    if (score < ITEM_NEED_MIN_SCORE) continue
     const intent = statesFundingIntent(leadText)
     if (!intent) { refusedNoFundingIntent += 1; continue }
     results.push({
@@ -655,6 +731,7 @@ async function searchWebLane({ itemText, expanded, profileContext, variant, time
       result_source: 'web_search',
       record_origin: 'web_search',
       is_lead: true,
+      classification: 'research_lead_not_direct_funding',
     })
   }
   results.sort(byItemRelevance)
@@ -772,20 +849,15 @@ export async function searchItemNeed(db, {
     .sort(byItemRelevance)
     .slice(0, Math.max(1, Math.min(Number(maxResults) || ITEM_SEARCH_MAX_RESULTS, 40)))
 
-  // AWARDABLE vs POINTER, from the registry (`isPointerKind`), never a
-  // hand-typed kind list. A row whose kind was never classified — a catalog row
-  // with a NULL `opportunity_kind` — is counted SEPARATELY as `unclassified`,
-  // never folded into either bucket: an unmeasured value must not be published
-  // as a measurement.
-  //
-  // WEB LEADS ARE NO LONGER IN THAT BUCKET (2026-08-13). They are not
-  // unmeasured: `searchWebLane` runs the canonical `classifyFundingResult` on
-  // every one of them and now publishes that verdict instead of discarding it.
-  // Before this, `unclassified` silently meant "the entire web lane", so the
-  // per-item counts could never describe an open-web answer.
-  const awardable = merged.filter((r) => r.is_pointer === false).length
-  const pointer = merged.filter((r) => r.is_pointer === true).length
-  const unclassified = merged.filter((r) => r.is_pointer === null || r.is_pointer === undefined).length
+  // A page shape does not make a recommendation. Direct funding requires the
+  // canonical ACCEPT plus positive proof for real, relatable, profile need,
+  // and profile qualification. REVIEW rows, web pages, pointers, and rows with
+  // missing proof stay useful but live in the separate research-lead contract.
+  const fundingMatches = merged.filter((r) => r.classification === 'direct_funding_match')
+  const researchLeads = merged.filter((r) => r.classification !== 'direct_funding_match')
+  const awardable = fundingMatches.length
+  const pointer = researchLeads.filter((r) => r.is_pointer === true).length
+  const unclassified = researchLeads.filter((r) => r.is_pointer === null || r.is_pointer === undefined).length
 
   return {
     item: itemText,
@@ -801,10 +873,14 @@ export async function searchItemNeed(db, {
     },
     endorsement_phrases: phrases,
     found: merged.length,
+    direct_funding_count: fundingMatches.length,
+    research_lead_count: researchLeads.length,
     awardable_count: awardable,
     pointer_count: pointer,
     unclassified_count: unclassified,
     results: merged,
+    funding_matches: fundingMatches,
+    research_leads: researchLeads,
     lanes: {
       catalog: {
         scanned: catalog.scanned,
@@ -814,6 +890,7 @@ export async function searchItemNeed(db, {
         refused_not_a_grant: catalog.refusedNotAGrant ?? 0,
         refused_geo: catalog.refusedGeo ?? 0,
         live_scored: catalog.liveScored ?? 0,
+        held_for_four_truth_review: catalog.heldForFourTruthReview ?? 0,
         like_terms: catalog.terms,
         error: catalog.error ?? null,
       },
@@ -850,6 +927,7 @@ export async function searchItemNeeds(db, {
   profileContext = null,
   variant = 'funding',
   timeoutMs = 12000,
+  maxResults = ITEM_SEARCH_MAX_RESULTS,
 } = {}) {
   // An item is either a bare STRING (the free-text box, `/specific-need`) or a
   // `{item, code}` pair from the needs plan, where `code` names the curated
@@ -871,16 +949,20 @@ export async function searchItemNeeds(db, {
   for (const { item, code } of searched) {
     try {
       results.push(await searchItemNeed(db, {
-        profileId, item, needCode: code, blueprintKey, profileContext, variant, timeoutMs,
+        profileId, item, needCode: code, blueprintKey, profileContext, variant, timeoutMs, maxResults,
       }))
     } catch (err) {
       results.push({
         item,
         found: 0,
         awardable_count: 0,
+        direct_funding_count: 0,
+        research_lead_count: 0,
         pointer_count: 0,
         unclassified_count: 0,
         results: [],
+        funding_matches: [],
+        research_leads: [],
         error: err?.message ?? String(err),
         searched_at: new Date().toISOString(),
       })
@@ -893,6 +975,8 @@ export async function searchItemNeeds(db, {
     searched_count: searched.length,
     truncated: Math.max(0, unique.length - searched.length),
     total_found: results.reduce((n, r) => n + (r.found ?? 0), 0),
+    total_direct_funding: results.reduce((n, r) => n + (r.direct_funding_count ?? 0), 0),
+    total_research_leads: results.reduce((n, r) => n + (r.research_lead_count ?? 0), 0),
     total_awardable: results.reduce((n, r) => n + (r.awardable_count ?? 0), 0),
     total_pointer: results.reduce((n, r) => n + (r.pointer_count ?? 0), 0),
     total_unclassified: results.reduce((n, r) => n + (r.unclassified_count ?? 0), 0),
@@ -910,6 +994,7 @@ export default {
   statesFundingIntent,
   statesNonFundingSignal,
   nonFundingLeadHost,
+  hasPositiveFourTruthProof,
   FUNDING_INTENT_TERMS,
   WEAK_FUNDING_INTENT_TERMS,
   NON_FUNDING_PAGE_SIGNALS,
