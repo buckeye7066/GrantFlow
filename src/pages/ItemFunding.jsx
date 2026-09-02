@@ -27,16 +27,14 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/u
 import { Progress } from "@/components/ui/progress"
 import { Skeleton } from "@/components/ui/skeleton"
 import { useToast } from "@/components/ui/use-toast"
-import { listOpportunities, listOpportunityStates } from "@/api/opportunities"
+import { listOpportunityStates } from "@/api/opportunities"
 import ProfileSelect from "@/components/shared/ProfileSelect"
-import { getItemSuggestions } from "@/api/items"
+import { getItemSuggestions, searchProfileItemNeeds } from "@/api/items"
 import NeedsDiscoveryPanel from "@/components/ai/NeedsDiscoveryPanel"
 import NeedsPlanCard from "@/components/funding/NeedsPlanCard"
 
 const NOT_AVAILABLE = 'N/A'
 import { getProfile } from "@/api/profiles"
-import { searchSpecificNeed } from "@/api/crawlers"
-import { MODERATE_MATCH_SCORE, SCORE_FLOOR } from "@/lib/matchDisplayThresholds"
 import { cn } from "@/lib/utils"
 import { useAuthStore } from "@/stores/authStore"
 import { useTierEntitlements } from "@/hooks/useTierEntitlements"
@@ -102,88 +100,6 @@ function formatDeadline(deadline, type) {
       console.warn("Failed to parse deadline:", deadline, error)
     }
     return typeof deadline === "string" ? deadline : "Deadline TBD"
-  }
-}
-
-function computeProfileSignals(profile) {
-  if (!profile) return { tags: new Set(), strings: [] }
-  const tags = new Set((profile.tags ?? []).map((tag) => tag.toLowerCase()))
-  const strings = []
-
-  ;(profile.sections ?? []).forEach((section) => {
-    Object.entries(section.data ?? {}).forEach(([key, value]) => {
-      if (typeof value === "boolean" && value) {
-        tags.add(key.toLowerCase().replace(/_/g, " "))
-      } else if (typeof value === "string" && value.trim()) {
-        strings.push(value.toLowerCase())
-      } else if (Array.isArray(value)) {
-        value.forEach((entry) => {
-          if (typeof entry === "string") strings.push(entry.toLowerCase())
-        })
-      }
-    })
-  })
-
-  return { tags, strings }
-}
-
-function scoreItemMatch(opportunity, itemQuery, profileDetail) {
-  const normalizedQuery = itemQuery.toLowerCase().trim()
-  const queryTokens = normalizedQuery.split(/\s+/).filter(Boolean)
-  const description = (opportunity.description || "").toLowerCase()
-  const title = (opportunity.title || "").toLowerCase()
-
-  let score = 40
-  const reasons = []
-  const overlap = []
-
-  if (queryTokens.some((token) => title.includes(token))) {
-    score += 20
-    reasons.push("Item appears in title")
-  }
-  if (queryTokens.some((token) => description.includes(token))) {
-    score += 15
-    reasons.push("Item keywords appear in description")
-  }
-
-  if (opportunity.categories?.some((category) => /equipment|capital|vehicle|transport/i.test(category))) {
-    score += 10
-    reasons.push("Categorised as equipment/capital funding")
-  }
-
-  if (profileDetail) {
-    const { tags, strings } = computeProfileSignals(profileDetail)
-    const matchedTokens = queryTokens.filter(
-      (token) => tags.has(token) || strings.some((entry) => entry.includes(token)),
-    )
-    if (matchedTokens.length) {
-      score += 10
-      overlap.push(...matchedTokens)
-      reasons.push(`Profile mentions: ${matchedTokens.slice(0, 3).join(", ")}`)
-    }
-  }
-
-  if (opportunity.deadline_type === "rolling") {
-    score += 5
-    reasons.push("Rolling deadline suitable for procurement")
-  }
-
-  const requiresMatch = opportunity.requires_match === true || toNumberOrNull(opportunity.match_percentage) > 0
-  const requiresRepayment = /loan|debt|lease|matching/i.test(opportunity.opportunity_type || "")
-  const isDisqualified = requiresMatch || requiresRepayment
-
-  if (isDisqualified) {
-    score = Math.max(10, score - 25)
-    reasons.push("This opportunity requires match funding or repayment")
-  } else {
-    reasons.push("This record does not indicate a match or repayment requirement; verify the official source")
-  }
-
-  return {
-    score: Math.min(100, Math.round(score)),
-    reasons,
-    overlap,
-    disqualified: isDisqualified,
   }
 }
 
@@ -345,11 +261,11 @@ function ItemResultDetail({ opportunity, match, open, onClose, profileName }) {
           {applicationUrl ? (
             <section className="space-y-2">
               <h3 className="text-sm font-semibold uppercase tracking-wide text-slate-900">
-                {opportunity.record_origin === "web_search" ? "Source Page (verify before applying)" : "Application Portal"}
+                {opportunity.classification === "direct_funding_match" ? "Application Portal" : "Source Page (research lead — verify first)"}
               </h3>
               <Button asChild variant="default" className="gap-2">
                 <a href={applicationUrl} target="_blank" rel="noopener noreferrer">
-                  {opportunity.record_origin === "web_search" ? "Visit source" : "Visit portal"}
+                  {opportunity.classification === "direct_funding_match" ? "Visit portal" : "Visit source"}
                   <ExternalLink className="w-4 h-4" aria-hidden="true" />
                 </a>
               </Button>
@@ -384,11 +300,10 @@ export default function ItemFunding() {
   const [includeDisqualified, setIncludeDisqualified] = useState(false)
   const [selectedOpportunity, setSelectedOpportunity] = useState(null)
   const [submittedItem, setSubmittedItem] = useState("")
-  // Live-search options: the "deeper sweep" action lowers the item-relevance floor,
-  // the "donation or gift programs" action flips the web-query variant. Both
-  // re-run the SAME live endpoint (the old item_search/item_gift_search crawler
-  // jobs were retired with the legacy crawlers and no longer exist server-side).
-  const [liveOptions, setLiveOptions] = useState({ minItemRelevance: MODERATE_MATCH_SCORE, variant: "funding" })
+  // Live-search options: the "deeper sweep" action expands the bounded result
+  // window, while the donation action flips the canonical web-query variant.
+  // Both re-run the same profile-scoped item engine; no dead legacy job is queued.
+  const [liveOptions, setLiveOptions] = useState({ maxResults: 12, variant: "funding" })
 
   const statesQuery = useQuery({
     queryKey: ["opportunity-states"],
@@ -414,52 +329,41 @@ export default function ItemFunding() {
     enabled: Boolean(filters.profileId) && filters.profileId !== "all",
   })
 
-  const opportunitiesQuery = useQuery({
-    queryKey: ["item-funding", submittedItem, filters.state, filters.includeNational],
-    queryFn: () =>
-      listOpportunities({
-        search: submittedItem || undefined,
-        state: filters.state !== "all" ? filters.state : undefined,
-        is_national: filters.includeNational ? undefined : "false",
-        limit: 50,
-      }),
-    enabled: submittedItem.trim().length > 0,
-  })
-
-  // Live web + curated search via /specific-need (only when profile selected)
-  const liveSearchQuery = useQuery({
-    queryKey: ["item-live-search", submittedItem, filters.profileId, liveOptions.minItemRelevance, liveOptions.variant],
-    queryFn: () =>
-      searchSpecificNeed({
-        profileId: filters.profileId,
-        needText: submittedItem,
-        minItemRelevance: liveOptions.minItemRelevance,
-        maxResults: 40,
-        variant: liveOptions.variant,
-      }),
-    enabled: submittedItem.trim().length > 0 && Boolean(filters.profileId) && filters.profileId !== "all",
-    retry: 1,
-    staleTime: 5 * 60 * 1000,
-  })
-
-  const selectedProfile = selectedProfileQuery.data ?? null
   const itemEntitlements = useTierEntitlements(
     filters.profileId && filters.profileId !== "all" ? filters.profileId : null,
   )
   const canItemFunding = itemEntitlements.capabilities.itemFunding
   const hasSelectedProfile = Boolean(filters.profileId && filters.profileId !== "all")
-  const opportunitiesResponse = opportunitiesQuery.data ?? null
-  const opportunities = opportunitiesResponse?.data ?? []
 
-  // Live search results from specific-need endpoint
-  const liveResults = liveSearchQuery.data?.opportunities ?? []
-  const liveWebCount = liveSearchQuery.data?.web_search_results ?? 0
+  // Canonical profile-scoped catalog + live-web item search. This is the same
+  // evidence-preserving engine used by the profile's whole-item-list action;
+  // free text is passed verbatim and never reduced to a generic crawler job.
+  const liveSearchQuery = useQuery({
+    queryKey: ["item-live-search", submittedItem, filters.profileId, liveOptions.maxResults, liveOptions.variant],
+    queryFn: () =>
+      searchProfileItemNeeds({
+        profileId: filters.profileId,
+        items: [submittedItem],
+        variant: liveOptions.variant,
+        maxResults: liveOptions.maxResults,
+      }),
+    enabled: submittedItem.trim().length > 0 && hasSelectedProfile && canItemFunding,
+    retry: 1,
+    staleTime: 5 * 60 * 1000,
+  })
+
+  const selectedProfile = selectedProfileQuery.data ?? null
+  const liveItemReport = liveSearchQuery.data?.items?.[0] ?? null
+  const liveResults = liveItemReport?.results ?? []
+  const liveDirectCount = liveItemReport?.direct_funding_count ?? 0
+  const liveResearchCount = liveItemReport?.research_lead_count ?? 0
+  const liveWebCount = liveItemReport?.lanes?.web?.matched ?? 0
   // Honest web-lane telemetry: distinguish "searched the web, found nothing"
   // from "live web search unavailable/disabled on the server".
-  const webSearchAttempted = liveSearchQuery.data?.web_search?.attempted ?? false
-  const liveSearchPartial = Boolean(liveSearchQuery.data?.timed_out)
+  const webSearchAttempted = liveItemReport?.lanes?.web?.attempted ?? false
+  const liveSearchPartial = Boolean(liveItemReport?.lanes?.web?.error)
   // Applicant type detected from the selected profile (drives profile-aware funder picks)
-  const applicantType = liveSearchQuery.data?.applicant_type ?? null
+  const applicantType = liveSearchQuery.data?.profile_type ?? null
   const applicantTypeLabel = APPLICANT_TYPE_LABELS[applicantType] ?? null
 
   const scoredResults = useMemo(() => {
@@ -473,9 +377,10 @@ export default function ItemFunding() {
       const urlKey = (opp.url || opp.application_url || '').toLowerCase().replace(/\/$/, '')
       if (urlKey && seenUrls.has(urlKey)) continue
       if (urlKey) seenUrls.add(urlKey)
-      const isNationalValue =
-        opp.is_national === undefined || opp.is_national === null ? false : Boolean(opp.is_national)
-      const itemRelevanceScore = toNumberOrNull(opp.item_relevance_score)
+      const isNationalValue = Boolean(opp.is_national) || !opp.state || /^(national|nationwide)$/i.test(String(opp.state))
+      if (!filters.includeNational && isNationalValue) continue
+      if (filters.state !== "all" && !isNationalValue && String(opp.state || "").toUpperCase() !== String(filters.state).toUpperCase()) continue
+      const itemRelevanceScore = toNumberOrNull(opp.need_score ?? opp.item_relevance_score)
       const disqualified = opp.requires_match === true ||
         toNumberOrNull(opp.match_percentage) > 0 ||
         /loan|debt|lease|matching/i.test(opp.opportunity_type || opp.type || '')
@@ -495,16 +400,23 @@ export default function ItemFunding() {
           deadline_type: opp.deadline_type || null,
           state: opp.state,
           is_national: isNationalValue,
-          opportunity_type: opp.opportunity_type || opp.type || 'program',
+          opportunity_type: opp.classification === 'direct_funding_match'
+            ? 'verified funding match'
+            : 'research lead',
           requires_match: opp.requires_match,
           match_percentage: opp.match_percentage,
           sponsor: opp.sponsor || opp.source,
           record_origin: opp.record_origin || null,
+          classification: opp.classification || 'research_lead_not_direct_funding',
         },
         match: {
           score: itemRelevanceScore,
           reasons: [
-            ...(opp.need_match?.matchedTerms || []),
+            ...(opp.matched_terms || opp.need_match?.matchedTerms || []),
+            ...(opp.match_explanation ? [opp.match_explanation] : []),
+            opp.classification === 'direct_funding_match'
+              ? 'Passed all four funding truths for this profile'
+              : 'Research lead only; not yet proven as direct funding for this profile',
             opp.result_source === 'web_search' ? 'Found via live web search' :
             opp.result_source === 'item_catalog' ? 'Known item source' :
             'Matched from curated data',
@@ -515,26 +427,8 @@ export default function ItemFunding() {
       })
     }
 
-    // Static DB results (deduped against live)
-    for (const opp of opportunities) {
-      const urlKey = (opp.url || opp.application_url || opp.source_url || '').toLowerCase().replace(/\/$/, '')
-      if (urlKey && seenUrls.has(urlKey)) continue
-      if (urlKey) seenUrls.add(urlKey)
-      const match = scoreItemMatch(opp, submittedItem, selectedProfile)
-      const reasons =
-        match.reasons?.length > 0
-          ? match.reasons
-          : Array.isArray(opp.match_reasons)
-          ? opp.match_reasons
-          : []
-      merged.push({
-        opportunity: opp,
-        match: { ...match, reasons },
-      })
-    }
-
     return merged.sort((a, b) => (b.match.score ?? -1) - (a.match.score ?? -1))
-  }, [liveResults, opportunities, submittedItem, selectedProfile])
+  }, [liveResults, submittedItem, filters.includeNational, filters.state])
 
   const results = useMemo(() => {
     if (!scoredResults.length) return []
@@ -557,14 +451,11 @@ export default function ItemFunding() {
       const oppUrl = matchKey(opportunity.url || opportunity.application_url || opportunity.source_url)
       return Boolean(selUrl) && oppUrl === selUrl
     })
-    if (found) return found.match
-    return scoreItemMatch(selectedOpportunity, submittedItem, selectedProfile)
-  }, [selectedOpportunity, submittedItem, scoredResults, selectedProfile])
+    return found?.match ?? null
+  }, [selectedOpportunity, submittedItem, scoredResults])
 
-  const isLoading = (opportunitiesQuery.isLoading || liveSearchQuery.isLoading) && submittedItem
-  const hasSearchError = Boolean(
-    opportunitiesQuery.isError || (hasSelectedProfile && liveSearchQuery.isError),
-  )
+  const isLoading = liveSearchQuery.isLoading && submittedItem
+  const hasSearchError = Boolean(hasSelectedProfile && liveSearchQuery.isError)
 
   const handleSearch = () => {
     if (!filters.item.trim()) {
@@ -575,7 +466,23 @@ export default function ItemFunding() {
       })
       return
     }
-    setLiveOptions({ minItemRelevance: MODERATE_MATCH_SCORE, variant: "funding" })
+    if (!filters.profileId || filters.profileId === "all" || filters.profileId === "__admin__") {
+      toast({
+        variant: "destructive",
+        title: "Select a profile first",
+        description: "Item funding must be checked against a real profile's needs, location, and eligibility.",
+      })
+      return
+    }
+    if (!canItemFunding) {
+      toast({
+        variant: "destructive",
+        title: "Tier upgrade required",
+        description: "Item funding is not enabled for this profile’s billing tier.",
+      })
+      return
+    }
+    setLiveOptions({ maxResults: 12, variant: "funding" })
     setSubmittedItem(filters.item.trim())
     // CLEAR the input after submit (owner QA 2026-08-03). The submitted query
     // stays visible in the "Showing results for ..." line; leaving the old
@@ -588,8 +495,24 @@ export default function ItemFunding() {
   const applySuggestedItem = (name) => {
     const next = String(name || "").trim()
     if (!next) return
+    if (!hasSelectedProfile) {
+      toast({
+        variant: "destructive",
+        title: "Select a profile first",
+        description: "Item funding must be checked against a real profile's needs, location, and eligibility.",
+      })
+      return
+    }
+    if (!canItemFunding) {
+      toast({
+        variant: "destructive",
+        title: "Tier upgrade required",
+        description: "Item funding is not enabled for this profile’s billing tier.",
+      })
+      return
+    }
     setFilters((prev) => ({ ...prev, item: next }))
-    setLiveOptions({ minItemRelevance: MODERATE_MATCH_SCORE, variant: "funding" })
+    setLiveOptions({ maxResults: 12, variant: "funding" })
     setSubmittedItem(next)
   }
 
@@ -601,7 +524,7 @@ export default function ItemFunding() {
     // follow-up search returned 0 with "Live web search: Needs a profile".
     // A reset clears WHAT is searched, never WHO it is searched for.
     setFilters(resetFiltersPreservingProfile)
-    setLiveOptions({ minItemRelevance: MODERATE_MATCH_SCORE, variant: "funding" })
+    setLiveOptions({ maxResults: 12, variant: "funding" })
     setSubmittedItem("")
   }
 
@@ -646,15 +569,14 @@ export default function ItemFunding() {
   }
 
   // The old item_search / item_gift_search crawler jobs were retired with the
-  // legacy crawlers (the backend rejects those job types), so these actions now
-  // re-run the LIVE specific-need search with different knobs instead of
-  // pretending to queue a job that would never run.
+  // legacy crawlers (the backend rejects those job types), so these actions
+  // rerun the canonical item engine instead of pretending to queue dead work.
   const handleRequestItemCrawler = () => {
     if (!canRunDeeperSearch("running a deeper sweep")) return
-    setLiveOptions((prev) => ({ ...prev, minItemRelevance: SCORE_FLOOR }))
+    setLiveOptions((prev) => ({ ...prev, maxResults: 40 }))
     toast({
       title: "Deeper live search running",
-      description: `Searching more sources for ${submittedItem} with a broader item-relevance threshold.`,
+      description: `Expanding the evidence window for ${submittedItem} to as many as 40 profile-checked results.`,
     })
   }
 
@@ -689,8 +611,8 @@ export default function ItemFunding() {
             </p>
             <ul className="list-disc list-inside space-y-1 text-xs">
               <li>Loans, lease-to-own offers, and match-required programs are hidden by default (toggle &ldquo;Show match/loan results&rdquo; to review them).</li>
-              <li>Stored catalog results are re-ranked for the item wording and profile context; that ranking is not an eligibility decision.</li>
-              <li>Live web results are labeled as leads &mdash; real pages found right now; always verify the source before applying.</li>
+              <li>Direct funding matches require positive proof that the source is real, relatable, meets this profile&apos;s need, and the profile qualifies.</li>
+              <li>Review rows and live web pages stay separated and labeled as research leads; they are never presented as approved funding.</li>
             </ul>
           </div>
         </div>
@@ -817,9 +739,15 @@ export default function ItemFunding() {
                       <span className="text-amber-600 ml-1">(live web search unavailable)</span>
                     ) : null}
                     {liveSearchPartial ? (
-                      <span className="text-amber-600 ml-1">(deep crawl still running &mdash; check back shortly)</span>
+                      <span className="text-amber-600 ml-1">(live web search incomplete &mdash; catalog results may still be shown)</span>
                     ) : null}
                   </p>
+                  {liveSearchQuery.isSuccess ? (
+                    <p>
+                      {liveDirectCount} four-truth funding match{liveDirectCount === 1 ? "" : "es"};{" "}
+                      {liveResearchCount} research lead{liveResearchCount === 1 ? "" : "s"} kept separate.
+                    </p>
+                  ) : null}
                   {hasSelectedProfile && applicantTypeLabel ? (
                     <p className="inline-flex items-center gap-1 text-slate-500">
                       <Target className="w-3 h-3 text-emerald-500" />
@@ -854,7 +782,7 @@ export default function ItemFunding() {
           profileId={filters.profileId}
           onSearchItem={(searchText) => {
             setFilters((prev) => ({ ...prev, item: searchText }))
-            setLiveOptions({ minItemRelevance: MODERATE_MATCH_SCORE, variant: "funding" })
+            setLiveOptions({ maxResults: 12, variant: "funding" })
             setSubmittedItem(searchText)
           }}
         />
@@ -871,7 +799,6 @@ export default function ItemFunding() {
               size="sm"
               className="mt-3"
               onClick={() => {
-                opportunitiesQuery.refetch()
                 if (hasSelectedProfile) liveSearchQuery.refetch()
               }}
             >
@@ -953,7 +880,7 @@ export default function ItemFunding() {
                 {
                   kind: "crawler",
                   label: "Run a deeper live search",
-                  description: "Broaden the item-relevance threshold and re-search stored sources plus the live web for this exact item.",
+                  description: "Expand the bounded result window and re-search stored sources plus the live web for this exact item.",
                   onClick: handleRequestItemCrawler,
                   disabled: !hasSelectedProfile || liveSearchQuery.isLoading,
                   variant: hasSelectedProfile ? "default" : "outline",

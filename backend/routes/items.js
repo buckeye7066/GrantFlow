@@ -1,6 +1,6 @@
 import express from 'express'
 import { requireAuthenticatedUser, ensureProfileAccess } from '../utils/accessControl.js'
-import { suggestItemsForProfile, discoverNewCatalogItems, ensureItemCatalogSeeded } from '../services/itemCatalogService.js'
+import { discoverNewCatalogItems, ensureItemCatalogSeeded } from '../services/itemCatalogService.js'
 import { loadProfileContext } from '../services/profileHelpers.js'
 import { deriveProfileItemNeeds } from '../config/profileItemNeeds.js'
 import { formatError } from '../middleware/errorHandler.js'
@@ -70,21 +70,17 @@ router.get('/suggestions', async (req, res) => {
       })
     }
 
-    // Derivation unavailable (the profile could not be READ) — fall back to the
-    // legacy catalog scorer rather than returning nothing. But SAY SO: that
-    // scorer is the nine-row fixture described above, which offered hearing
-    // aids to a building-supplies ministry. Handing those back silently, in the
-    // exact response shape the derived (evidence-carrying) answer uses, makes a
-    // failed read indistinguishable from a real reading of the profile. The
-    // caller now gets the flag and the reason.
-    const response = await suggestItemsForProfile(req.db, { profileId, limit: safeLimit })
-    return res.json({
-      ...response,
+    // A failed profile read is not permission to substitute the old nine-item
+    // generic scorer. Fail closed so the UI cannot present guesses as needs the
+    // profile declared.
+    return res.status(503).json({
+      error: 'profile_item_derivation_unavailable',
+      message: 'GrantFlow could not read this profile well enough to derive item needs. Retry after the profile service is available.',
+      profile_id: String(profileId),
+      suggestions: [],
       derivation_failed: true,
       derivation_error: derivationError,
-      suggestion_basis: 'legacy_catalog_scorer',
-      warning:
-        'These are generic catalog suggestions, not facts read from this profile: the profile could not be loaded. Do not treat them as declared needs.',
+      suggestion_basis: 'none',
     })
   } catch (error) {
     routeLogger.error('[items/suggestions] error', error)
@@ -123,4 +119,3 @@ router.post('/seed', async (req, res) => {
 })
 
 export default router
-
