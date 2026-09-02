@@ -1402,6 +1402,12 @@ router.post('/start-autopilot', startLimiter, async (req, res) => {
       })
     }
   } catch (err) {
+    if (err?.code === 'source_identity_mismatch') {
+      return res.status(409).json({
+        error: 'source_identity_mismatch',
+        message: 'The selected grant and opportunity do not identify the same funding source.',
+      })
+    }
     log.error('pipeline_stage_validation_failed', { err: err?.message, profileId })
     return res.status(503).json({
       error: 'pipeline_stage_unavailable',
