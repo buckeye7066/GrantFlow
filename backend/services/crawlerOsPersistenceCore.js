@@ -33,6 +33,7 @@ import { stampMatchConfidenceProvenance } from './matching/matchConfidenceProven
 import { syncOpportunityContractProjection } from './opportunityRepository.js';
 import { grantsGovDetailIdFromUrl } from '../../shared/grantsGovProtocol.js';
 import { withIdentityTxn } from './opportunityIdentityStore.js';
+import { buildCrawlerProfileRoute } from './profileTypeRegistry.js';
 
 const nowIso = () => new Date().toISOString();
 const PROTECTED = new Set(PROTECTED_PIPELINE_STATUSES);
@@ -305,19 +306,45 @@ export function profileContextToThesisInput(ctx = {}) {
   const sections = ctx.sections ?? {};
   const signals = ctx.signals ?? {};
   const org = ctx.organization ?? null;
+  const rawProfileType = profile.primary_type ?? profile.applicant_type ?? profile.profile_type ?? null;
+  const profileRoute = buildCrawlerProfileRoute(rawProfileType);
 
   const sectionList = Object.entries(sections).map(([key, data]) => ({
     title: key,
     body: typeof data === 'string' ? data : sectionSignalText(data),
   }));
 
-  const needCategories = [
-    ...asList(signals.needs),
-    ...asList(signals.needCategories),
+  const signalNeedsDefaulted = signals.needsDefaulted === true;
+  const explicitNeedCategories = [
+    // loadProfileContext can retain the registry/type fallback in both
+    // signals.needs and signals.needCategories. Once provenance says those
+    // signals were defaulted, neither collection is a user declaration.
+    ...(signalNeedsDefaulted ? [] : asList(signals.needCategories)),
+    ...(signalNeedsDefaulted ? [] : asList(signals.needs)),
     ...asList(profile.needs),
     ...asList(profile.need_categories),
     ...asList(ctx.facets?.intent?.primary_need_category),
-    ...asList(ctx.normalized?.needCategories),
+  ].filter(Boolean);
+  const inferredNeedCategories = signalNeedsDefaulted
+    ? []
+    : [
+        ...asList(ctx.profileNorm?.needCategories),
+        ...asList(ctx.profileNorm?.needs),
+        // Rolling compatibility for snapshots created before loadProfileContext
+        // standardized on profileNorm. Never prefer this legacy key.
+        ...asList(ctx.normalized?.needCategories),
+      ].filter(Boolean);
+  const needsSource = explicitNeedCategories.length > 0
+    ? 'profile_declared_or_faceted'
+    : inferredNeedCategories.length > 0
+      ? 'whole_profile_inference'
+      : profileRoute.default_needs.length > 0
+        ? 'profile_type_default'
+        : 'unknown';
+  const needCategories = [
+    ...explicitNeedCategories,
+    ...inferredNeedCategories,
+    ...(needsSource === 'profile_type_default' ? profileRoute.default_needs : []),
   ];
   const keywordTerms = [
     ...asList(profile.interests),
@@ -355,7 +382,15 @@ export function profileContextToThesisInput(ctx = {}) {
 
   return {
     id: profile.id ?? ctx.profileId ?? null,
-    profile_type: profile.primary_type ?? profile.applicant_type ?? null,
+    profile_type: profileRoute.canonical_profile_type ?? rawProfileType,
+    profile_route: {
+      ...profileRoute,
+      needs_source: needsSource,
+      sections_considered: Object.keys(sections).sort(),
+      document_count: Array.isArray(ctx.documents) ? ctx.documents.length : 0,
+      organization_considered: Boolean(org),
+      profile_norm_considered: Boolean(ctx.profileNorm ?? ctx.normalized),
+    },
     // Structured age for the engine's hard eligibility gates (age-restricted
     // and age-contradicted programs) — the thesis is the OS match path's only
     // profile representation, so the fact must ride on it.
@@ -396,8 +431,11 @@ export function profileContextToThesisInput(ctx = {}) {
       ...asList(signals.health_conditions),
       ...asList(signals.health_support),
     ].map((t) => String(t ?? '').trim()).filter(Boolean))],
-    applicant_types: Array.isArray(signals.applicantTypes) ? signals.applicantTypes
-      : (signals.applicantTypes ? [...signals.applicantTypes] : []),
+    applicant_types: [...new Set([
+      ...profileRoute.applicant_types,
+      ...(Array.isArray(signals.applicantTypes) ? signals.applicantTypes
+        : (signals.applicantTypes ? [...signals.applicantTypes] : [])),
+    ].map((value) => String(value ?? '').trim()).filter(Boolean))],
     name: profile.display_name ?? null,
     tags: [...new Set([...asList(profile.tags), ...keywordTerms].filter(Boolean))],
     need_categories: [...new Set(needCategories.filter(Boolean))],
@@ -408,6 +446,10 @@ export function profileContextToThesisInput(ctx = {}) {
       : [],
     location: {
       state: location.state ?? profile.state ?? null,
+      states: [...new Set([
+        location.state,
+        ...asList(signals.states),
+      ].map((value) => String(value ?? '').trim().toUpperCase()).filter(Boolean))],
       county: location.county ?? null,
       zip: location.zip ?? profile.postal_code ?? profile.zip_code ?? null,
       city: location.city ?? profile.city ?? null,

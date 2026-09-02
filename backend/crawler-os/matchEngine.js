@@ -81,14 +81,85 @@ const OPPORTUNITY_APPLICANT_TYPE_TO_ALLOWED = Object.freeze({
 });
 
 /**
- * Does this pair belong in a run's recommendation list?
- * Direct funding requires ACCEPT. A directory locator is separately reachable
- * at REVIEW because it is a place to search, not an award.
+ * Does this pair belong in the direct-funding recommendation list?
+ * A pointer/directory is never a funding recommendation; it is returned through
+ * the separate research_leads collection at REVIEW.
  */
 export function isRecommendable(opportunity, decision) {
-  if (decision === MATCH_DECISION.ACCEPT) return true;
-  const isDirectoryLocator = String(opportunity?.kind ?? '').toUpperCase() === OPPORTUNITY_KIND.DIRECTORY;
-  return isDirectoryLocator && decision === MATCH_DECISION.REVIEW;
+  return !isPointerOpportunity(opportunity) && decision === MATCH_DECISION.ACCEPT;
+}
+
+export function isResearchLead(opportunity, decision) {
+  return isPointerOpportunity(opportunity) && decision === MATCH_DECISION.REVIEW;
+}
+
+function isPointerOpportunity(opportunity) {
+  const kind = String(opportunity?.kind ?? '').toUpperCase();
+  return kind === OPPORTUNITY_KIND.DIRECTORY || kind === OPPORTUNITY_KIND.PAST_AWARD_INTEL;
+}
+
+function positiveEligibility(value) {
+  return ['yes', 'eligible', 'qualified', 'true'].includes(String(value ?? '').trim().toLowerCase());
+}
+
+function hasPositiveRealityEvidence(opportunity, realityPassed) {
+  const status = String(opportunity?.reality_status ?? '').trim().toUpperCase();
+  const evidence = opportunity?.evidence ?? {};
+  return realityPassed === true &&
+    (status === 'VERIFIED' || status === 'ROLLING') &&
+    Boolean(evidence.url && evidence.content_hash && evidence.fetched_at);
+}
+
+/**
+ * Positive, inspectable proof for the four truths required before a direct
+ * source may be returned as funding. No score or stored historical decision
+ * substitutes for one of these booleans.
+ */
+export function buildFourTruthProof(opportunity, thesis, canonical, {
+  realityPassed = false,
+} = {}) {
+  const matchedNeeds = uniqueStrings([
+    ...(canonical?.matchedNeeds ?? []),
+    ...(canonical?.match_explain?.matchedNeeds ?? []),
+  ]);
+  const eligibility = canonical?.eligible ?? 'maybe';
+  const directFunding = !isPointerOpportunity(opportunity);
+  const proof = {
+    direct_funding: directFunding,
+    real: {
+      // A safe URL is not proof that an opportunity is real. The reality gate
+      // deliberately admits LINK_UNVERIFIED rows so they can be researched;
+      // direct funding additionally requires evidence captured during this
+      // crawl, its integrity hash, and the capture timestamp.
+      passed: hasPositiveRealityEvidence(opportunity, realityPassed),
+      gate: 'crawler_os.realityGate.enforceReality',
+      reality_status: opportunity?.reality_status ?? null,
+      evidence_url: opportunity?.evidence?.url ?? opportunity?.info_url ?? opportunity?.apply_url ?? null,
+      evidence_captured_at: opportunity?.evidence?.fetched_at ?? null,
+      content_hash_present: Boolean(opportunity?.evidence?.content_hash),
+    },
+    relatable: {
+      passed: String(canonical?.decision ?? '').toUpperCase() === 'ACCEPT',
+      canonical_decision: canonical?.decision ?? 'REVIEW',
+      score: Number.isFinite(Number(canonical?.score)) ? Math.round(Number(canonical.score)) : 0,
+    },
+    meets_profile_need: {
+      // Type-shaped fallback needs are search breadth, not proof the profile
+      // declared a need. They may find research leads, but cannot authorize a
+      // direct funding recommendation.
+      passed: matchedNeeds.length > 0 && thesis?.needs_defaulted === false,
+      matched_needs: matchedNeeds,
+      profile_needs_defaulted: thesis?.needs_defaulted === true,
+    },
+    profile_qualifies: {
+      passed: positiveEligibility(eligibility),
+      eligibility,
+      missing_eligibility_fields: canonical?.missingEligibilityFields ?? [],
+    },
+  };
+  proof.all_passed = directFunding && proof.real.passed && proof.relatable.passed &&
+    proof.meets_profile_need.passed && proof.profile_qualifies.passed;
+  return proof;
 }
 
 /**
@@ -111,6 +182,21 @@ export function computeMatchDecision(opportunity, thesis = {}, opts = {}) {
     : 0;
   let decision = toCrawlerDecision(canonical?.decision);
   const warnings = collectWarnings(canonical);
+  const fourTruthProof = buildFourTruthProof(opportunity, thesis, canonical, {
+    realityPassed: opts.realityPassed === true,
+  });
+
+  if (opts.enforceFourTruths === true && fourTruthProof.direct_funding &&
+      decision === MATCH_DECISION.ACCEPT && !fourTruthProof.all_passed) {
+    decision = MATCH_DECISION.REVIEW;
+    const failedTruths = [
+      ['real', fourTruthProof.real.passed],
+      ['relatable', fourTruthProof.relatable.passed],
+      ['meets_profile_need', fourTruthProof.meets_profile_need.passed],
+      ['profile_qualifies', fourTruthProof.profile_qualifies.passed],
+    ].filter(([, passed]) => !passed).map(([name]) => name);
+    warnings.push(`four-truth gate held at REVIEW: ${failedTruths.join(', ')}`);
+  }
 
   // A program/listing with no direct apply target cannot be an apply-now ACCEPT.
   // Directory locators are exempt because their contract is the information link.
@@ -160,6 +246,7 @@ export function computeMatchDecision(opportunity, thesis = {}, opts = {}) {
       dataPointEvidence: canonical?.match_explain?.dataPointEvidence ?? {},
       score_breakdown: canonical?.match_explain?.scoreBreakdown ?? canonical?.match_explain?.score_breakdown ?? {},
       need_first_policy: canonical?.match_explain?.needFirstPolicy ?? null,
+      four_truth_proof: fourTruthProof,
       scoring_policy_version: NEED_FIRST_SCORING_VERSION,
       canonical_decision: canonical?.decision ?? 'REVIEW',
       canonical_score: score,
