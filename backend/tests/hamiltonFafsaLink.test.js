@@ -21,10 +21,20 @@
  *      needs_you entry in the profile summary / action plan.
  */
 
-import { describe, expect, it, beforeEach } from 'vitest'
+import { describe, expect, it, beforeEach, vi } from 'vitest'
 import Database from 'better-sqlite3'
 
 process.env.RUNTIME_SECRETS_KEY = process.env.RUNTIME_SECRETS_KEY || 'b'.repeat(64)
+
+// FAFSA-link lifecycle is downstream of funding-source admission. Admit the
+// fixture explicitly so this suite measures that lifecycle and nothing else.
+vi.mock('../services/hamilton/hamiltonFundingSourcePolicy.js', async (importOriginal) => {
+  const mod = await importOriginal()
+  return {
+    ...mod,
+    assessHamiltonFundingSource: vi.fn(async () => ({ ok: true, reasons: [] })),
+  }
+})
 
 const { wrapSqlite } = await import('../../tests/helpers/sqliteTestDb.mjs')
 const { classifyFundingSource, detectFafsaLinkRequirement } = await import('../services/hamilton/hamiltonAutomationClassifier.js')

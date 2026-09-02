@@ -39,6 +39,17 @@ vi.mock('../services/hamilton/hamiltonPreflight.js', async (importOriginal) => {
   return { ...mod, preflightSingleSource: vi.fn(async () => ({ ok: true, blockers: [], warnings: [] })) }
 })
 
+// This suite begins after funding-source admission and verifies durable portal
+// proof. Keep that boundary explicit so policy fixture changes cannot prevent
+// the confirmation path from running.
+vi.mock('../services/hamilton/hamiltonFundingSourcePolicy.js', async (importOriginal) => {
+  const mod = await importOriginal()
+  return {
+    ...mod,
+    assessHamiltonFundingSource: vi.fn(async () => ({ ok: true, reasons: [] })),
+  }
+})
+
 const { wrapSqlite } = await import('../../tests/helpers/sqliteTestDb.mjs')
 const { runAutopilot, _internal: engineInternal } = await import('../services/hamilton/hamiltonAutopilotEngine.js')
 const { automateSingleSource } = await import('../services/hamilton/hamiltonAutomationOrchestrator.js')

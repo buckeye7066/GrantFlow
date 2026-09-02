@@ -22,6 +22,12 @@ import { normalizeFafsaStatus, deriveFafsaCompleted } from '../college/fafsaStat
 import { assessTaskSubmissionProof, SUBMISSION_PROOF_STATE } from './submissionProofPredicate.js'
 import { assessPointerResearchLead } from './hamiltonFundingSourcePolicy.js'
 import {
+  TASK_STATUS_BUCKET,
+  TASK_STATUS_ALIASES,
+  bucketForTaskStatus,
+  isRecognisedTaskStatus,
+} from '../../../shared/hamiltonTaskLifecycle.js'
+import {
   assessDuplicateApplicationRisk,
   DuplicateApplicationRiskError,
 } from './priorCycleApplicationGuard.js'
@@ -103,11 +109,9 @@ export const AUTOMATION_TYPES = Object.freeze([
   'email',
   'no_application',
   'auto_profile',
-  // A pointer-kind source that decomposition cannot reach (no usable URL):
-  // not an application at all — a labeled research lead carrying owner
-  // handoff instructions (owner directive 2026-08-04; the manual-handoff
-  // rule). Reclassified by the enforcePointerTaskReclassification boot net;
-  // new creates are refused at the policy gate instead.
+  // A pointer-kind source is not an application at all, even with a usable
+  // discovery URL. It remains a labeled research lead; decomposition creates
+  // only independently verified leaf tasks (owner directive 2026-09-02).
   'research_lead',
   'unknown',
 ])
@@ -124,6 +128,18 @@ export const TASK_TERMINAL_STATUSES = Object.freeze([
   'submitted',
   'failed',
   'cancelled',
+])
+
+// SQL has to partition the queue before applying its limit. Derive the
+// finished vocabulary from the same lifecycle map used by every UI surface so
+// an older unfinished row can never disappear behind newer history.
+const FINISHED_TASK_STATUS_VALUES = Object.freeze([
+  ...Object.entries(TASK_STATUS_BUCKET)
+    .filter(([, bucket]) => bucket === 'finished')
+    .map(([status]) => status),
+  ...Object.entries(TASK_STATUS_ALIASES)
+    .filter(([, canonical]) => TASK_STATUS_BUCKET[canonical] === 'finished')
+    .map(([alias]) => alias),
 ])
 
 export const MISSING_INFO_KINDS = Object.freeze([
@@ -597,8 +613,8 @@ export async function assessApplicationTaskPointerSource(db, {
     ...opportunity,
     title: opportunity.title ?? grant?.title ?? null,
     // Give the policy the combined, evidence-backed task surface without
-    // mutating either source row. Any real URL keeps listing decomposition
-    // reachable; no URL means there is literally nothing to apply through.
+    // mutating either source row. The URL is useful in the research handoff,
+    // but never turns a listing surface into an application.
     url: usableUrl ?? opportunity.url ?? null,
   })
 }
@@ -862,10 +878,12 @@ export async function getApplicationTask(db, taskId, { profileId = null, withSub
   return withSubmissionProof ? attachSubmissionProof(db, task) : task
 }
 
-export async function listApplicationTasks(db, { profileId, status = null, limit = 100, withSubmissionProof = true } = {}) {
-  await ensureApplicationTaskSchema(db)
-  const params = []
-  let sql = 'SELECT * FROM application_tasks WHERE 1=1 '
+function appendApplicationTaskFilters(sql, params, {
+  profileId,
+  status = null,
+  automationType = null,
+  taskBucket = null,
+} = {}) {
   if (profileId) {
     sql += ' AND profile_id = ?'
     params.push(String(profileId))
@@ -874,8 +892,47 @@ export async function listApplicationTasks(db, { profileId, status = null, limit
     sql += ' AND status = ?'
     params.push(String(status))
   }
-  sql += ' ORDER BY updated_at DESC LIMIT ?'
-  params.push(Math.max(1, Math.min(500, Number(limit) || 100)))
+  if (automationType) {
+    sql += ' AND automation_type = ?'
+    params.push(String(automationType))
+  }
+  if (taskBucket) {
+    if (taskBucket !== 'current' && taskBucket !== 'finished') {
+      throw new TypeError(`Unknown Hamilton task bucket: ${taskBucket}`)
+    }
+    const placeholders = FINISHED_TASK_STATUS_VALUES.map(() => '?').join(', ')
+    sql += taskBucket === 'finished'
+      ? ` AND LOWER(COALESCE(status, '')) IN (${placeholders})`
+      : ` AND LOWER(COALESCE(status, '')) NOT IN (${placeholders})`
+    params.push(...FINISHED_TASK_STATUS_VALUES)
+  }
+  return sql
+}
+
+export async function listApplicationTasks(db, {
+  profileId,
+  status = null,
+  automationType = null,
+  taskBucket = null,
+  limit = 100,
+  withSubmissionProof = true,
+} = {}) {
+  await ensureApplicationTaskSchema(db)
+  const params = []
+  let sql = appendApplicationTaskFilters('SELECT * FROM application_tasks WHERE 1=1', params, {
+    profileId,
+    status,
+    automationType,
+    taskBucket,
+  })
+  sql += ' ORDER BY updated_at DESC'
+  // `null` is reserved for the authorised current-task endpoint, which must
+  // return every unfinished row. All ordinary callers retain the bounded
+  // default so this does not turn historical reads into unbounded queries.
+  if (limit !== null) {
+    sql += ' LIMIT ?'
+    params.push(Math.max(1, Math.min(500, Number(limit) || 100)))
+  }
   const rows = await db.prepare(sql).all(...params)
   const tasks = (rows || []).map(rowToTask)
   if (!withSubmissionProof) return tasks
@@ -883,6 +940,31 @@ export async function listApplicationTasks(db, { profileId, status = null, limit
   // so lists of mostly non-terminal tasks pay ~no extra cost.
   for (const task of tasks) await attachSubmissionProof(db, task)
   return tasks
+}
+
+/** Exact lifecycle counts, independent of the bounded history page. */
+export async function countApplicationTaskBuckets(db, {
+  profileId,
+  status = null,
+  automationType = null,
+} = {}) {
+  await ensureApplicationTaskSchema(db)
+  const params = []
+  const sql = appendApplicationTaskFilters(`
+    SELECT LOWER(COALESCE(status, '')) AS status, COUNT(*) AS task_count
+      FROM application_tasks
+     WHERE 1=1
+  `, params, { profileId, status, automationType }) + ' GROUP BY LOWER(COALESCE(status, \'\'))'
+  const rows = await db.prepare(sql).all(...params)
+  const counts = { needs_you: 0, working: 0, waiting: 0, finished: 0, total: 0, unrecognised: 0 }
+  for (const row of rows || []) {
+    const count = Number(row?.task_count ?? row?.TASK_COUNT ?? row?.count ?? 0) || 0
+    const rowStatus = row?.status ?? row?.STATUS ?? ''
+    counts[bucketForTaskStatus(rowStatus)] += count
+    if (!isRecognisedTaskStatus(rowStatus)) counts.unrecognised += count
+    counts.total += count
+  }
+  return counts
 }
 
 /**

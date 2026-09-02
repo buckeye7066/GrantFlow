@@ -67,19 +67,18 @@ describe('ensureApplicationTask pointer creation choke point', () => {
     expect(db.prepare('SELECT COUNT(*) AS count FROM application_tasks').get().count).toBe(0)
   })
 
-  it('preserves the listing-decomposition lane for a pointer with a usable URL', async () => {
+  it('refuses a URL-carrying pointer because a discovery page is not a leaf application', async () => {
     db.prepare(
       `INSERT INTO funding_opportunities (id, title, opportunity_kind, source_url)
        VALUES ('pointer-with-url', 'Official Scholarship Directory', 'directory', 'https://www.tn.gov/collegepays/')`,
     ).run()
 
-    const task = await ensureApplicationTask(db, {
+    await expect(ensureApplicationTask(db, {
       profileId: PROFILE_ID,
       opportunityId: 'pointer-with-url',
       automationType: 'portal',
-    })
-    expect(task.id).toBeTruthy()
-    expect(db.prepare('SELECT COUNT(*) AS count FROM application_tasks').get().count).toBe(1)
+    })).rejects.toMatchObject({ code: 'pointer_research_lead' })
+    expect(db.prepare('SELECT COUNT(*) AS count FROM application_tasks').get().count).toBe(0)
   })
 
   it('preserves direct, kindless, and manual grant behavior', async () => {
@@ -107,7 +106,7 @@ describe('ensureApplicationTask pointer creation choke point', () => {
     expect(db.prepare('SELECT COUNT(*) AS count FROM application_tasks').get().count).toBe(2)
   })
 
-  it('uses the grant-linked catalog kind, while a real grant URL keeps the task applyable', async () => {
+  it('uses the grant-linked catalog kind even when the grant copied a directory URL', async () => {
     db.prepare(
       `INSERT INTO funding_opportunities (id, title, opportunity_kind)
        VALUES ('linked-pointer', 'Referral Locator', 'referral')`,
@@ -126,12 +125,11 @@ describe('ensureApplicationTask pointer creation choke point', () => {
     db.prepare(
       `UPDATE grants SET application_url = 'https://www.tn.gov/apply' WHERE id = 'grant-pointer'`,
     ).run()
-    const task = await ensureApplicationTask(db, {
+    await expect(ensureApplicationTask(db, {
       profileId: PROFILE_ID,
       grantId: 'grant-pointer',
       automationType: 'portal',
-    })
-    expect(task.id).toBeTruthy()
+    })).rejects.toMatchObject({ code: 'pointer_research_lead' })
   })
 
   it('fails closed when an existing grant belongs to another profile', async () => {
@@ -236,9 +234,9 @@ describe('legacy pointer task repair', () => {
 
     expect(report).toMatchObject({
       scanned: 5,
-      non_applyable: 3,
-      applyable: 2,
-      would_repair: 1,
+      non_applyable: 5,
+      applyable: 0,
+      would_repair: 3,
       repaired: 0,
       protected_terminal: 1,
       already_repaired: 1,
@@ -250,7 +248,7 @@ describe('legacy pointer task repair', () => {
     expect(db.prepare('SELECT COUNT(*) AS count FROM application_task_events').get().count).toBe(0)
   })
 
-  it('blocks only non-applyable legacy pointers, preserves evidence, and appends an idempotent audit receipt', async () => {
+  it('blocks every legacy pointer, preserves evidence, and appends an idempotent audit receipt', async () => {
     const report = await repairLegacyPointerApplicationTasks(db, {
       actorUserId: 'audit-owner',
       actorRole: 'admin',
@@ -258,10 +256,10 @@ describe('legacy pointer task repair', () => {
 
     expect(report).toMatchObject({
       scanned: 5,
-      non_applyable: 3,
-      applyable: 2,
-      would_repair: 1,
-      repaired: 1,
+      non_applyable: 5,
+      applyable: 0,
+      would_repair: 3,
+      repaired: 3,
       protected_terminal: 1,
       already_repaired: 1,
       conflicts: 0,
@@ -302,12 +300,12 @@ describe('legacy pointer task repair', () => {
 
     expect(db.prepare('SELECT status, output_document_id FROM application_tasks WHERE id = ?').get('task-terminal'))
       .toMatchObject({ status: 'submitted', output_document_id: 'submission-proof-must-survive' })
-    expect(db.prepare('SELECT status FROM application_tasks WHERE id = ?').get('task-listing').status).toBe('ready_to_start')
-    expect(db.prepare('SELECT status FROM application_tasks WHERE id = ?').get('task-grant-url').status).toBe('queued')
+    expect(db.prepare('SELECT status FROM application_tasks WHERE id = ?').get('task-listing').status).toBe('blocked')
+    expect(db.prepare('SELECT status FROM application_tasks WHERE id = ?').get('task-grant-url').status).toBe('blocked')
     expect(db.prepare('SELECT status FROM application_tasks WHERE id = ?').get('task-direct').status).toBe('queued')
 
     const second = await repairLegacyPointerApplicationTasks(db)
-    expect(second).toMatchObject({ would_repair: 0, repaired: 0, already_repaired: 2 })
+    expect(second).toMatchObject({ would_repair: 0, repaired: 0, already_repaired: 4 })
     expect(db.prepare('SELECT COUNT(*) AS count FROM application_task_events WHERE task_id = ?').get('task-repair').count).toBe(1)
   })
 })

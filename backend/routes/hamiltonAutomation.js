@@ -39,6 +39,7 @@ import { isReservedSyntheticUserId } from '../middleware/syntheticServiceTokens.
 import {
   getApplicationTask,
   listApplicationTasks,
+  countApplicationTaskBuckets,
   updateApplicationTask,
   cancelApplicationTask,
   appendTaskEvent,
@@ -63,6 +64,9 @@ import {
 } from '../services/hamilton/hamiltonFullAutomationMode.js'
 import { isAutoSubmitGloballyEnabled } from '../services/hamiltonApplicationAgent.js'
 import { attachTaskPresentation } from '../services/hamilton/hamiltonTaskPresentation.js'
+import { assessHamiltonFundingSource } from '../services/hamilton/hamiltonFundingSourcePolicy.js'
+import { readHamiltonTaskTruthSnapshot } from '../services/hamilton/hamiltonTaskTruthSnapshot.js'
+import { bucketForTaskStatus } from '../../shared/hamiltonTaskLifecycle.js'
 import { cancelActiveHamiltonTaskRun } from '../services/hamilton/hamiltonRunCancellation.js'
 import {
   automateSelected,
@@ -510,30 +514,75 @@ router.get('/tasks', async (req, res) => {
   if (!user) return
   const status = req.query.status ? String(req.query.status) : null
   const automationType = req.query.automation_type ? String(req.query.automation_type) : null
-  const profileIdParam = req.query.profile_id || req.query.profileId || null
+  const profileIdParam = req.query.profile_id || req.query.profileId || req.query.profile || null
 
   try {
     const accessibleProfileIds = req.ctx?.isAdmin === true
       ? null
       : await getAccessibleProfileIds(req.db, user)
 
-    const scoped = await listScopedHamiltonTasks({
+    // The exact evaluator runs during boot and its numeric result is cached in
+    // system_kv. Polling this route every few seconds must remain a read: if the
+    // latest boot found invalid/incomplete work, return no queue instead of
+    // launching a 100k-row destructive repair from every browser. A retryable
+    // link recheck may keep the read-only queue visible, but writers still fail
+    // closed until the verifier refreshes that source.
+    const taskTruth = await readHamiltonTaskTruthSnapshot(req.db)
+    const publicTaskTruth = {
+      available: taskTruth.available,
+      healthy: taskTruth.healthy,
+      queue_readable: taskTruth.queueReadable,
+      contract: taskTruth.contract,
+      status: taskTruth.status,
+      as_of: taskTruth.asOf,
+      invalid: taskTruth.verification?.invalid ?? null,
+      deferred: taskTruth.verification?.deferred ?? null,
+      failed: taskTruth.verification?.failed ?? null,
+      repair_failed: taskTruth.verification?.repairFailed ?? null,
+      truncated: taskTruth.verification?.truncated ?? null,
+    }
+    if (!taskTruth.queueReadable) {
+      log.error('cached_task_truth_not_verified', publicTaskTruth)
+      return res.status(503).json({
+        error: 'task_truth_not_verified',
+        message: 'Hamilton task truth has not completed a clean boot verification.',
+        task_truth: publicTaskTruth,
+      })
+    }
+
+    const loadScoped = ({ taskBucket = null, limit = 500 } = {}) => listScopedHamiltonTasks({
       isAdmin: req.ctx?.isAdmin === true,
       requestedProfileId: profileIdParam,
       accessibleProfileIds,
       status,
-      limit: 200,
-      listTasks: (opts) => listApplicationTasks(req.db, opts),
+      limit,
+      listTasks: (opts) => listApplicationTasks(req.db, {
+        ...opts,
+        automationType,
+        taskBucket,
+        limit,
+      }),
     })
 
-    if (scoped.forbidden) {
-      return res.status(403).json({ error: 'forbidden' })
-    }
+    // Partition in SQL before either collection is limited. In production the
+    // historical fleet is already larger than 500 rows; taking one mixed
+    // newest-first slice first can hide old work that is still unfinished.
+    const currentScoped = await loadScoped({
+      taskBucket: status ? null : 'current',
+      limit: null,
+    })
+    if (currentScoped.forbidden) return res.status(403).json({ error: 'forbidden' })
+    const historyScoped = status
+      ? { forbidden: false, tasks: [] }
+      : await loadScoped({ taskBucket: 'finished', limit: 500 })
+    if (historyScoped.forbidden) return res.status(403).json({ error: 'forbidden' })
 
-    let tasks = scoped.tasks
-    if (automationType) {
-      tasks = (tasks || []).filter((t) => t.automation_type === automationType)
-    }
+    let current = status
+      ? (currentScoped.tasks || []).filter((task) => bucketForTaskStatus(task.status) !== 'finished')
+      : (currentScoped.tasks || [])
+    let history = status
+      ? (currentScoped.tasks || []).filter((task) => bucketForTaskStatus(task.status) === 'finished')
+      : (historyScoped.tasks || [])
     // `application_tasks` carries no title — the funder's name lives on the
     // grant/opportunity row it points at. Resolving it HERE is what stops
     // every card on the run dashboard reading "Untitled funding source"; the
@@ -542,11 +591,48 @@ router.get('/tasks', async (req, res) => {
     // Best-effort by construction: a failure leaves the raw rows intact rather
     // than 500-ing a list the caller can still partly use.
     try {
-      tasks = await attachTaskPresentation(req.db, tasks)
+      const presented = await attachTaskPresentation(req.db, [...current, ...history])
+      current = presented.slice(0, current.length)
+      history = presented.slice(current.length)
     } catch (err) {
       log.warn('task_presentation_failed', { err: err?.message })
     }
-    return res.json({ ok: true, tasks })
+
+    const emptyCounts = () => ({ needs_you: 0, working: 0, waiting: 0, finished: 0, total: 0, unrecognised: 0 })
+    const addCounts = (target, source) => {
+      for (const key of Object.keys(target)) target[key] += Number(source?.[key] || 0)
+      return target
+    }
+    let counts = emptyCounts()
+    const countOptions = { status, automationType }
+    if (req.ctx?.isAdmin === true) {
+      counts = await countApplicationTaskBuckets(req.db, {
+        ...countOptions,
+        ...(profileIdParam ? { profileId: profileIdParam } : {}),
+      })
+    } else {
+      const profileIds = profileIdParam
+        ? [String(profileIdParam)]
+        : [...(accessibleProfileIds || [])].map(String)
+      for (const profileId of profileIds) {
+        addCounts(counts, await countApplicationTaskBuckets(req.db, { ...countOptions, profileId }))
+      }
+    }
+
+    // `tasks` remains the rolling-deploy compatibility collection. It now
+    // contains every current row plus the bounded history page; new clients use
+    // the explicit collections and exact counts.
+    const tasks = [...current, ...history]
+    return res.json({
+      ok: true,
+      tasks,
+      current,
+      history,
+      counts,
+      history_total: counts.finished,
+      history_truncated: counts.finished > history.length,
+      task_truth: publicTaskTruth,
+    })
   } catch (err) {
     log.error('list_tasks_failed', { err: err?.message })
     return res.status(500).json({ error: 'list_failed' })
@@ -1136,7 +1222,20 @@ router.post('/preflight', async (req, res) => {
   if (selectedSources.length === 0 && req.body?.all_ready_sources === true) {
     // Same helper the "Select all sources" button reads, so the count the
     // owner is shown is exactly the set that runs.
-    for (const src of await selectAutoSubmitSources(req.db, profileId)) selectedSources.push(src)
+    try {
+      for (const src of await selectAutoSubmitSources(req.db, profileId)) selectedSources.push(src)
+    } catch (err) {
+      if (err?.code === 'funding_source_policy_unavailable') {
+        return res.status(503).json({
+          error: 'funding_source_policy_unavailable',
+          message: 'Hamilton could not verify current funding-source policy, so preflight was not inferred.',
+        })
+      }
+      return res.status(503).json({
+        error: 'ready_sources_unavailable',
+        message: 'Hamilton could not verify the current ready-source set.',
+      })
+    }
     // An empty pipeline is a REASON, not a silent no-op run that reports queued.
     if (selectedSources.length === 0) {
       return res.status(409).json({
@@ -1313,9 +1412,54 @@ async function listReadySources(db, profileId) {
  * completing nothing. Those sources remain visible through listReadySources;
  * they are simply never cold-enqueued as applications.
  */
-export async function selectAutoSubmitSources(db, profileId) {
-  const ready = await listReadySources(db, profileId)
-  return ready.filter((source) => source.is_applyable === true)
+export async function selectAutoSubmitSources(db, profileId, { assess = assessHamiltonFundingSource } = {}) {
+  let ready
+  try {
+    ready = await listReadySources(db, profileId)
+  } catch (cause) {
+    const error = new Error('Hamilton could not verify the current ready-source set.', { cause })
+    error.code = 'funding_source_policy_unavailable'
+    error.status = 503
+    throw error
+  }
+  const selected = []
+  for (const source of ready) {
+    if (source.is_applyable !== true) continue
+    let grant = null
+    let opportunity = null
+    try {
+      grant = await db.prepare('SELECT * FROM grants WHERE id = ? AND profile_id = ? LIMIT 1')
+        .get(String(source.grant_id), String(profileId))
+      const opportunityId = source.opportunity_id || grant?.funding_opportunity_id || null
+      if (opportunityId) {
+        opportunity = await db.prepare('SELECT * FROM funding_opportunities WHERE id = ? LIMIT 1')
+          .get(String(opportunityId))
+      }
+      const assessment = await assess(db, { profileId, opportunity, grant })
+      if (assessment?.unavailable === true || assessment?.retryable === true) {
+        const error = new Error('Hamilton could not verify current funding-source policy.')
+        error.code = 'funding_source_policy_unavailable'
+        error.status = 503
+        throw error
+      }
+      if (assessment.ok) selected.push(source)
+    } catch (err) {
+      // A ready-source census is a writer precursor. Missing policy evidence
+      // cannot become permission; keep the source visible in Discovery and do
+      // not create Hamilton work for it.
+      log.warn('ready_source_policy_unavailable', {
+        profileId,
+        grantId: source.grant_id,
+        error: err?.message,
+      })
+      if (err?.code === 'funding_source_policy_unavailable') throw err
+      const error = new Error('Hamilton could not verify current funding-source policy.', { cause: err })
+      error.code = 'funding_source_policy_unavailable'
+      error.status = 503
+      throw error
+    }
+  }
+  return selected
 }
 
 /** What "Select all sources" will pick, so the count shown is the count run. */
@@ -1329,7 +1473,13 @@ router.get('/ready-sources', async (req, res) => {
     const sources = await selectAutoSubmitSources(req.db, profileId)
     return res.json({ ok: true, count: sources.length, sources })
   } catch (err) {
-    return res.status(500).json({ error: 'ready_sources_failed', message: err?.message || String(err) })
+    const unavailable = err?.code === 'funding_source_policy_unavailable'
+    return res.status(unavailable ? 503 : 500).json({
+      error: unavailable ? 'funding_source_policy_unavailable' : 'ready_sources_failed',
+      message: unavailable
+        ? 'Hamilton could not verify current funding-source policy. No ready-source result was inferred.'
+        : 'Hamilton could not load ready sources.',
+    })
   }
 })
 
@@ -1350,7 +1500,16 @@ router.post('/start-autopilot', startLimiter, async (req, res) => {
   // selected_sources_required guarantee: an empty selection must never
   // silently become "all of them".
   if (selectedSources.length === 0 && req.body?.all_ready_sources === true) {
-    for (const src of await selectAutoSubmitSources(req.db, profileId)) selectedSources.push(src)
+    try {
+      for (const src of await selectAutoSubmitSources(req.db, profileId)) selectedSources.push(src)
+    } catch (err) {
+      return res.status(503).json({
+        error: err?.code === 'funding_source_policy_unavailable'
+          ? 'funding_source_policy_unavailable'
+          : 'ready_sources_unavailable',
+        message: 'Hamilton could not verify the current ready-source set, so the run was not started.',
+      })
+    }
     // An empty pipeline is a REASON, not a silent no-op that reports queued.
     if (selectedSources.length === 0) {
       return res.status(409).json({

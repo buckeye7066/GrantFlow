@@ -117,6 +117,12 @@ export const TASK_STATUS_BUCKET = Object.freeze({
  */
 export const TASK_STATUS_ALIASES = Object.freeze({
   completed_draft: 'draft_completed',
+  complete: 'completed',
+  done: 'completed',
+  canceled: 'cancelled',
+  archived: 'completed',
+  rejected: 'failed',
+  closed: 'completed',
 })
 
 /**
@@ -156,6 +162,40 @@ export function countTaskBuckets(tasks = []) {
     counts.total += 1
   }
   return counts
+}
+
+/**
+ * Read either side of the rolling API deployment safely. New backends return
+ * explicit `current` / `history` arrays; the previous contract returned only
+ * `tasks`. Partition that legacy complete collection locally so a Vercel-first
+ * rollout can never make real work disappear while Railway is still updating.
+ */
+export function partitionHamiltonTasks(payload = {}) {
+  const value = payload?.data !== undefined ? payload.data : payload
+  const complete = Array.isArray(value)
+    ? value
+    : Array.isArray(value?.tasks)
+      ? value.tasks
+      : Array.isArray(value?.items)
+        ? value.items
+        : []
+  const current = Array.isArray(value?.current)
+    ? value.current
+    : complete.filter((task) => bucketForTaskStatus(task?.status) !== 'finished')
+  const history = Array.isArray(value?.history)
+    ? value.history
+    : complete.filter((task) => bucketForTaskStatus(task?.status) === 'finished')
+  const reportedHistoryTotal = Number(value?.history_total ?? value?.counts?.finished)
+  const historyTotal = Number.isFinite(reportedHistoryTotal) && reportedHistoryTotal >= history.length
+    ? reportedHistoryTotal
+    : history.length
+  return {
+    current,
+    history,
+    historyTotal,
+    historyTruncated: value?.history_truncated === true || historyTotal > history.length,
+    counts: value?.counts ?? null,
+  }
 }
 
 /**
@@ -203,6 +243,7 @@ export default {
   bucketForTaskStatus,
   isRecognisedTaskStatus,
   countTaskBuckets,
+  partitionHamiltonTasks,
   normaliseTaskStatus,
   terminalOutcome,
 }

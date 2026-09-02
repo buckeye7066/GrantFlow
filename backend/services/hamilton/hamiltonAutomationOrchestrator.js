@@ -770,18 +770,19 @@ export async function automateSingleSource(db, {
     }
   }
 
-  // 0. Eligibility gate (2026-08-03): a source the canonical engine REJECTS
-  // for this profile (an explicitly-exclusive restriction against a KNOWN
-  // conflicting profile fact — the UNCF-for-a-white-student class) is refused
-  // BEFORE a task exists. The task IS the "In Progress" application card, so
-  // create-then-block still showed the profile an ineligible application.
-  // ONLY the engine's reject refuses creation: review/unknown still admits
-  // (G4 — missing profile facts are neutral), and every other policy stop
-  // (trust, missing match) keeps the existing create-then-preflight-block
-  // behaviour so recoverable stops stay visible and recheckable.
+  // 0. Positive task-truth gate (tightened 2026-09-02): canonical ACCEPT plus
+  // current REAL, RELATABLE/APPLYABLE, COVERS-DECLARED-NEED, and QUALIFIES
+  // evidence must all exist BEFORE a task does. REVIEW, unknown, silence, and
+  // every negative gate remain Discovery evidence, never an application card.
   const eligibility = await assessHamiltonFundingSource(db, {
     profileId: resolvedProfileId, opportunity, grant,
   })
+  if (eligibility?.unavailable) {
+    const error = new Error(eligibility.message || 'Hamilton funding policy is temporarily unavailable.')
+    error.code = eligibility.code || 'funding_source_policy_unavailable'
+    error.status = 503
+    throw error
+  }
   if (eligibility?.ok === false || (eligibility?.code && eligibility?.ok !== true)) {
     const pointerLead = eligibility?.code === 'pointer_research_lead'
     const profileRejected = eligibility?.code === 'funding_source_profile_rejected'
@@ -3133,8 +3134,38 @@ async function runAutopilotPathway(db, {
 
     engineResult.listing_decomposition = decomposition
     const childTaskIds = []
+    let childPolicyUnavailable = 0
     for (const item of decomposition?.items || []) {
       if (item.outcome !== 'accepted_apply_deferred' || !item.opportunity_id) continue
+      let childOpportunity = null
+      let childEligibility = null
+      try {
+        childOpportunity = await db.prepare('SELECT * FROM funding_opportunities WHERE id = ? LIMIT 1')
+          .get(String(item.opportunity_id))
+        childEligibility = await assessHamiltonFundingSource(db, {
+          profileId: task.profile_id,
+          opportunity: childOpportunity,
+        })
+      } catch (error) {
+        item.outcome = 'policy_unavailable_retry'
+        item.rejection_gate = 'policy_unavailable'
+        item.rejection_reasons = [String(error?.message || error).slice(0, 180)]
+        childPolicyUnavailable += 1
+        continue
+      }
+      if (childEligibility.unavailable) {
+        item.outcome = 'policy_unavailable_retry'
+        item.rejection_gate = childEligibility.gate || 'canonical_accept'
+        item.rejection_reasons = childEligibility.reasons || []
+        childPolicyUnavailable += 1
+        continue
+      }
+      if (!childEligibility.ok) {
+        item.outcome = 'rejected_current_policy'
+        item.rejection_gate = childEligibility.gate || childEligibility.code || 'unknown'
+        item.rejection_reasons = childEligibility.reasons || []
+        continue
+      }
       const child = await ensureApplicationTask(db, {
         profileId: task.profile_id,
         userId: task.user_id || userId,
@@ -3161,14 +3192,15 @@ async function runAutopilotPathway(db, {
         details: { parent_task_id: task.id, parent_run_id: run.id },
       })
     }
-    // A zero-enumeration caused by the LLM being momentarily UNAVAILABLE
-    // (exhausted credits, rate limit, 5xx, or no provider configured) is NOT a
-    // result about the page — parking it as a manual "needs you" card means it
-    // never resumes once credits are funded. Defer it to the retryable
-    // waiting_for_window state so the scheduler re-attempts it, exactly like an
-    // out-of-window run. Only genuine outcomes (real awards, a truly empty
-    // page, an insert/match error) become a waiting_for_review card below.
-    if (decomposition?.enumeration_unavailable && Number(decomposition?.enumerated || 0) === 0 && childTaskIds.length === 0) {
+    // A zero-enumeration caused by an unavailable LLM, or an enumerated child
+    // whose policy evidence is temporarily unavailable, is NOT a result about
+    // the page or award. Defer the parent to the retryable waiting_for_window
+    // state so the scheduler re-attempts it. Only genuine outcomes become a
+    // waiting_for_review/completed parent below.
+    if (
+      childPolicyUnavailable > 0
+      || (decomposition?.enumeration_unavailable && Number(decomposition?.enumerated || 0) === 0 && childTaskIds.length === 0)
+    ) {
       // Escalating backoff (15m → 1h → 4h → 12h → 24h): an exhausted-credits
       // outage lasts hours, and every retry opens a real browser. Named
       // plainly when the provider says the account is out of credits — that
@@ -3176,20 +3208,32 @@ async function runAutopilotPathway(db, {
       const priorDeferrals = Number((await reload(db, task.id))?.retry_count) || 0
       const backoffMins = AUTH_BACKOFF_MINUTES[Math.min(priorDeferrals, AUTH_BACKOFF_MINUTES.length - 1)]
       const retryAt = new Date(Date.now() + Math.max(DECOMPOSITION_RETRY_DELAY_MS, backoffMins * 60_000)).toISOString()
-      const rawWhy = (Array.isArray(decomposition?.notFound) ? decomposition.notFound.filter(Boolean) : []).join('; ')
-        || (decomposition.enumeration_transient ? 'the AI provider was momentarily unavailable' : 'no AI provider is configured')
+      const rawWhy = childPolicyUnavailable > 0
+        ? `the current funding-source policy could not verify ${childPolicyUnavailable} accepted award${childPolicyUnavailable === 1 ? '' : 's'}`
+        : (Array.isArray(decomposition?.notFound) ? decomposition.notFound.filter(Boolean) : []).join('; ')
+          || (decomposition.enumeration_transient ? 'the AI provider was momentarily unavailable' : 'no AI provider is configured')
       const creditsOut = /credit balance|no credits|insufficient_quota|exceeded your current quota|billing/i.test(rawWhy)
       const why = creditsOut
         ? `Hamilton's AI reader has NO CREDITS (owner action: add credits to the Anthropic / OpenAI account configured on Railway) — provider said: ${rawWhy.slice(0, 300)}`
         : rawWhy
-      const deferMessage = `Hamilton found a page listing multiple awards but could not read them yet: ${why}. This is not evidence the page is empty — Hamilton will retry automatically (next attempt ${retryAt}).`
+      const deferMessage = childPolicyUnavailable > 0
+        ? `Hamilton found awards on this listing but could not verify current profile/source policy yet: ${why}. No award was discarded — Hamilton will retry automatically (next attempt ${retryAt}).`
+        : `Hamilton found a page listing multiple awards but could not read them yet: ${why}. This is not evidence the page is empty — Hamilton will retry automatically (next attempt ${retryAt}).`
       await appendTaskEvent(db, {
         taskId: task.id, eventType: 'note', status: 'waiting_for_window', step: 'listing_decomposition_deferred',
         message: deferMessage, actorUserId: userId, actorRole: 'agent', details: decomposition,
       }).catch(() => {})
       await updateAutopilotRun(db, run.id, {
         status: 'deferred',
-        result: { ...engineResult, deferred: true, reason: decomposition.enumeration_transient ? 'llm_unavailable_transient' : 'llm_provider_unconfigured' },
+        result: {
+          ...engineResult,
+          deferred: true,
+          reason: childPolicyUnavailable > 0
+            ? 'child_policy_unavailable'
+            : decomposition.enumeration_transient
+              ? 'llm_unavailable_transient'
+              : 'llm_provider_unconfigured',
+        },
         blockerKind: null, blockerDetail: null,
         finishedAt: new Date().toISOString(),
       }).catch(() => {})

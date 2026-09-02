@@ -37,6 +37,7 @@ import {
 } from '../../backend/services/hamilton/hamiltonAutomationOrchestrator.js'
 import {
   listApplicationTasks,
+  countApplicationTaskBuckets,
   getApplicationTask,
   _resetSchemaCache,
 } from '../../backend/services/hamilton/applicationTaskStore.js'
@@ -65,16 +66,20 @@ function makeMemoryDb() {
       data TEXT NOT NULL
     );
     CREATE TABLE IF NOT EXISTS funding_opportunities (
-      id TEXT PRIMARY KEY, title TEXT, description TEXT,
+      id TEXT PRIMARY KEY, profile_id TEXT, title TEXT, description TEXT,
       application_url TEXT, application_mode TEXT,
       mailing_address TEXT, apply_email TEXT, apply_fax TEXT,
       funder_name TEXT, deadline TEXT, eligibility_text TEXT,
       result_kind TEXT, opportunity_kind TEXT,
       entity_types_allowed TEXT NOT NULL DEFAULT '["individual","student"]',
+      need_types_supported TEXT NOT NULL DEFAULT '["education"]',
+      categories TEXT NOT NULL DEFAULT '["education"]',
       record_origin TEXT NOT NULL DEFAULT 'verified_real',
       source_trust_tier TEXT NOT NULL DEFAULT 'verified',
       reality_status TEXT NOT NULL DEFAULT 'verified',
-      reality_reasons TEXT NOT NULL DEFAULT '[]'
+      reality_reasons TEXT NOT NULL DEFAULT '[]',
+      link_status TEXT NOT NULL DEFAULT 'ok',
+      last_verified_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
     );
     CREATE TABLE IF NOT EXISTS profile_opportunity_matches (
       profile_id TEXT NOT NULL,
@@ -128,6 +133,15 @@ function makeMemoryDb() {
     INSERT INTO profile_sections (id, profile_id, section_key, data)
       VALUES ('ps-A-essays', 'p-A', 'essays',
               '{"primary":"My personal statement explaining how I came to this point in my education."}');
+    INSERT INTO profile_sections (id, profile_id, section_key, data)
+      VALUES ('ps-A-needs', 'p-A', 'financial_information',
+              '{"needs":["education"]}');
+    INSERT INTO profile_sections (id, profile_id, section_key, data)
+      VALUES ('ps-A-education', 'p-A', 'education',
+              '{"current_institution":"Middle Tennessee State University","intended_major":"Biology","gpa":3.8}');
+    INSERT INTO profile_sections (id, profile_id, section_key, data)
+      VALUES ('ps-B-needs', 'p-B', 'financial_information',
+              '{"needs":["education"]}');
   `)
   return {
     dialect: 'sqlite',
@@ -358,8 +372,8 @@ describe('hamiltonAutomationOrchestrator — multi-source dispatch', () => {
   it('automates a mail source: creates a task, generates DOCX, sets ready_to_print_mail, with mailing instructions', async () => {
     resetCaches()
     const db = makeMemoryDb()
-    db.raw.prepare(`INSERT INTO funding_opportunities (id, title, description, mailing_address, application_mode, funder_name, application_url)
-                    VALUES ('opp-mail', 'County Aid', 'Mail-in form', '1 Main St', 'mail', 'County Foundation', 'https://www.mtsu.edu/financial-aid/county-aid')`).run()
+    db.raw.prepare(`INSERT INTO funding_opportunities (id, title, description, mailing_address, application_mode, funder_name, application_url, eligibility_text)
+                    VALUES ('opp-mail', 'MTSU County Education Scholarship', 'A direct education scholarship for eligible Tennessee college students enrolled at Middle Tennessee State University; submit the application by mail.', '1 Main St', 'mail', 'County Foundation', 'https://www.mtsu.edu/financial-aid/county-aid', 'Eligible Tennessee college students at Middle Tennessee State University may apply.')`).run()
     const result = await automateSelected(db, {
       profileId: 'p-A',
       userId: 'u-A',
@@ -379,8 +393,8 @@ describe('hamiltonAutomationOrchestrator — multi-source dispatch', () => {
   it('automates an email source: ready_to_email + apply_email captured', async () => {
     resetCaches()
     const db = makeMemoryDb()
-    db.raw.prepare(`INSERT INTO funding_opportunities (id, title, description, apply_email, application_mode, funder_name, application_url)
-                    VALUES ('opp-email', 'Local Foundation', 'Email completed packet', 'grants@local.org', 'email', 'Local Foundation', 'https://www.mtsu.edu/financial-aid/local-foundation')`).run()
+    db.raw.prepare(`INSERT INTO funding_opportunities (id, title, description, apply_email, application_mode, funder_name, application_url, eligibility_text)
+                    VALUES ('opp-email', 'MTSU Local Foundation Scholarship', 'A direct education scholarship for eligible Tennessee college students enrolled at Middle Tennessee State University; email the completed packet.', 'grants@local.org', 'email', 'Local Foundation', 'https://www.mtsu.edu/financial-aid/local-foundation', 'Eligible Tennessee college students at Middle Tennessee State University may apply.')`).run()
     const result = await automateSingleSource(db, {
       profileId: 'p-A',
       userId: 'u-A',
@@ -421,8 +435,8 @@ describe('hamiltonAutomationOrchestrator — multi-source dispatch', () => {
   it('automates a no_application source: marks completed without generating files', async () => {
     resetCaches()
     const db = makeMemoryDb()
-    db.raw.prepare(`INSERT INTO funding_opportunities (id, title, description, application_mode, funder_name, application_url)
-                    VALUES ('opp-noapp', 'Automatic Tuition Waiver', 'Awarded from institutional records; no application is accepted.', 'no_application', 'TN Dept of Ed', 'https://www.mtsu.edu/financial-aid/automatic-tuition-waiver')`).run()
+    db.raw.prepare(`INSERT INTO funding_opportunities (id, title, description, application_mode, funder_name, application_url, eligibility_text)
+                    VALUES ('opp-noapp', 'MTSU Automatic Tuition Waiver', 'A direct education tuition award for eligible Tennessee college students at Middle Tennessee State University, awarded from student records with no separate application.', 'no_application', 'TN Dept of Ed', 'https://www.mtsu.edu/financial-aid/automatic-tuition-waiver', 'Eligible Tennessee college students at Middle Tennessee State University qualify automatically.')`).run()
     const result = await automateSingleSource(db, {
       profileId: 'p-A',
       userId: 'u-A',
@@ -470,8 +484,8 @@ describe('hamiltonAutomationOrchestrator — multi-source dispatch', () => {
   it('handles a portal source: when browser automation is disabled, marks ready_to_start with portal_url', async () => {
     resetCaches()
     const db = makeMemoryDb()
-    db.raw.prepare(`INSERT INTO funding_opportunities (id, title, application_url, application_mode, funder_name)
-                    VALUES ('opp-portal', 'Scholarship Portal', 'https://www.mtsu.edu/financial-aid/apply', 'portal', 'Funder')`).run()
+    db.raw.prepare(`INSERT INTO funding_opportunities (id, title, description, application_url, application_mode, funder_name, eligibility_text)
+                    VALUES ('opp-portal', 'MTSU Student Scholarship Portal', 'A direct education scholarship for eligible Tennessee college students enrolled at Middle Tennessee State University.', 'https://www.mtsu.edu/financial-aid/apply', 'portal', 'Funder', 'Eligible Tennessee college students at Middle Tennessee State University may apply.')`).run()
     const prev = process.env.HAMILTON_ENABLE_BROWSER_AUTOMATION
     delete process.env.HAMILTON_ENABLE_BROWSER_AUTOMATION
     try {
@@ -507,8 +521,8 @@ describe('hamiltonAutomationOrchestrator — multi-source dispatch', () => {
   it('does NOT block based on selected pipeline stage — accepts every stage from discovered through awarded', async () => {
     resetCaches()
     const db = makeMemoryDb()
-    db.raw.prepare(`INSERT INTO funding_opportunities (id, title, mailing_address, application_mode, funder_name, application_url)
-                    VALUES ('opp-anytime', 'Stage-agnostic award', '1 Main', 'mail', 'F', 'https://www.mtsu.edu/financial-aid/stage-agnostic-award')`).run()
+    db.raw.prepare(`INSERT INTO funding_opportunities (id, title, description, mailing_address, application_mode, funder_name, application_url, eligibility_text)
+                    VALUES ('opp-anytime', 'MTSU Stage-Agnostic Education Scholarship', 'A direct education scholarship for eligible Tennessee college students enrolled at Middle Tennessee State University.', '1 Main', 'mail', 'F', 'https://www.mtsu.edu/financial-aid/stage-agnostic-award', 'Eligible Tennessee college students at Middle Tennessee State University may apply.')`).run()
     const stages = ['discovered', 'saved', 'interested', 'gathering_documents', 'drafting', 'ready_to_submit', 'submitted', 'follow_up', 'awarded']
     for (const stage of stages) {
       const r = await automateSingleSource(db, {
@@ -570,8 +584,8 @@ describe('hamiltonAutomationOrchestrator — multi-source dispatch', () => {
   it('keeps tasks scoped to the profile (no cross-profile leak)', async () => {
     resetCaches()
     const db = makeMemoryDb()
-    db.raw.prepare(`INSERT INTO funding_opportunities (id, title, mailing_address, application_mode, funder_name, application_url)
-                    VALUES ('opp-pm', 'MTSU Profile-Scoped Scholarship', '1 MTSU Blvd', 'mail', 'Middle Tennessee State University', 'https://www.mtsu.edu/financial-aid/profile-scope-award')`).run()
+    db.raw.prepare(`INSERT INTO funding_opportunities (id, title, description, mailing_address, application_mode, funder_name, application_url, eligibility_text)
+                    VALUES ('opp-pm', 'MTSU Profile-Scoped Scholarship', 'A direct education scholarship for eligible Tennessee college students enrolled at Middle Tennessee State University.', '1 MTSU Blvd', 'mail', 'Middle Tennessee State University', 'https://www.mtsu.edu/financial-aid/profile-scope-award', 'Eligible Tennessee college students at Middle Tennessee State University may apply.')`).run()
     await automateSingleSource(db, {
       profileId: 'p-A', userId: 'u-A',
       source: { opportunity_id: 'opp-pm', current_stage: 'discovered' },
@@ -585,8 +599,8 @@ describe('hamiltonAutomationOrchestrator — multi-source dispatch', () => {
   it('appends audit events for every classification + outcome', async () => {
     resetCaches()
     const db = makeMemoryDb()
-    db.raw.prepare(`INSERT INTO funding_opportunities (id, title, mailing_address, application_mode, funder_name, application_url)
-                    VALUES ('opp-audit', 'MTSU Audit Scholarship', '1 MTSU Blvd', 'mail', 'Middle Tennessee State University', 'https://www.mtsu.edu/financial-aid/audit-award')`).run()
+    db.raw.prepare(`INSERT INTO funding_opportunities (id, title, description, mailing_address, application_mode, funder_name, application_url, eligibility_text)
+                    VALUES ('opp-audit', 'MTSU Audit Scholarship', 'A direct education scholarship for eligible Tennessee college students enrolled at Middle Tennessee State University.', '1 MTSU Blvd', 'mail', 'Middle Tennessee State University', 'https://www.mtsu.edu/financial-aid/audit-award', 'Eligible Tennessee college students at Middle Tennessee State University may apply.')`).run()
     const r = await automateSingleSource(db, {
       profileId: 'p-A', userId: 'u-A',
       source: { opportunity_id: 'opp-audit', current_stage: 'discovered' },
@@ -601,10 +615,10 @@ describe('hamiltonAutomationOrchestrator — multi-source dispatch', () => {
   it('returns one row per source for bulk select-many (mixed pathways)', async () => {
     resetCaches()
     const db = makeMemoryDb()
-    db.raw.prepare(`INSERT INTO funding_opportunities (id, title, application_url, application_mode, funder_name)
-                    VALUES ('o-portal', 'MTSU Portal Scholarship', 'https://www.mtsu.edu/financial-aid/portal-application', 'portal', 'Middle Tennessee State University')`).run()
-    db.raw.prepare(`INSERT INTO funding_opportunities (id, title, mailing_address, application_mode, funder_name, application_url)
-                    VALUES ('o-mail', 'MTSU Mail Scholarship', '1 MTSU Blvd', 'mail', 'Middle Tennessee State University', 'https://www.mtsu.edu/financial-aid/mail-award')`).run()
+    db.raw.prepare(`INSERT INTO funding_opportunities (id, title, description, application_url, application_mode, funder_name, eligibility_text)
+                    VALUES ('o-portal', 'MTSU Portal Scholarship', 'A direct education scholarship for eligible Tennessee college students enrolled at Middle Tennessee State University.', 'https://www.mtsu.edu/financial-aid/portal-application', 'portal', 'Middle Tennessee State University', 'Eligible Tennessee college students at Middle Tennessee State University may apply.')`).run()
+    db.raw.prepare(`INSERT INTO funding_opportunities (id, title, description, mailing_address, application_mode, funder_name, application_url, eligibility_text)
+                    VALUES ('o-mail', 'MTSU Mail Scholarship', 'A direct education scholarship for eligible Tennessee college students enrolled at Middle Tennessee State University.', '1 MTSU Blvd', 'mail', 'Middle Tennessee State University', 'https://www.mtsu.edu/financial-aid/mail-award', 'Eligible Tennessee college students at Middle Tennessee State University may apply.')`).run()
     db.raw.prepare(`INSERT INTO funding_opportunities (id, title, description, result_kind, funder_name)
                     VALUES ('o-dir', 'Scholarship Directory', 'directory', 'directory', 'F')`).run()
     delete process.env.HAMILTON_ENABLE_BROWSER_AUTOMATION
@@ -632,5 +646,52 @@ describe('hamiltonAutomationOrchestrator — multi-source dispatch', () => {
       assert.equal(fresh.id, r.task.id)
       assert.ok(fresh.automation_type)
     }
+  })
+
+  it('does not hide an old unfinished task behind more than 500 newer history rows', async () => {
+    resetCaches()
+    const db = makeMemoryDb()
+    // Bootstrap the task schema, then model the production shape that exposed
+    // the bug: recent terminal history outnumbers the mixed-list limit.
+    await listApplicationTasks(db, { profileId: 'p-A', withSubmissionProof: false })
+    const insert = db.raw.prepare(`
+      INSERT INTO application_tasks
+        (id, profile_id, opportunity_id, status, updated_at)
+      VALUES (?, 'p-A', ?, ?, ?)
+    `)
+    const seed = db.raw.transaction(() => {
+      for (let i = 0; i < 501; i += 1) {
+        insert.run(`history-${i}`, `history-opportunity-${i}`, 'completed', '2026-09-02T12:00:00.000Z')
+      }
+      insert.run('old-current', 'old-current-opportunity', 'queued', '2020-01-01T00:00:00.000Z')
+    })
+    seed()
+
+    const mixedSlice = await listApplicationTasks(db, {
+      profileId: 'p-A',
+      limit: 500,
+      withSubmissionProof: false,
+    })
+    assert.equal(mixedSlice.some((task) => task.id === 'old-current'), false)
+
+    const current = await listApplicationTasks(db, {
+      profileId: 'p-A',
+      taskBucket: 'current',
+      limit: null,
+      withSubmissionProof: false,
+    })
+    const history = await listApplicationTasks(db, {
+      profileId: 'p-A',
+      taskBucket: 'finished',
+      limit: 500,
+      withSubmissionProof: false,
+    })
+    const counts = await countApplicationTaskBuckets(db, { profileId: 'p-A' })
+
+    assert.deepEqual(current.map((task) => task.id), ['old-current'])
+    assert.equal(history.length, 500)
+    assert.equal(counts.working, 1)
+    assert.equal(counts.finished, 501)
+    assert.equal(counts.total, 502)
   })
 })

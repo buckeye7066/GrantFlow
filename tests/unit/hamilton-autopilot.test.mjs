@@ -127,6 +127,8 @@ describe('hamiltonPreflight', () => {
   it('passes when profile is complete and portal URL is present', async () => {
     const db = makeDb()
     db.raw.prepare("INSERT INTO profiles (id, primary_type) VALUES (?, 'college_student')").run('p-ok')
+    db.raw.prepare('INSERT INTO profile_sections (profile_id, section_key, data) VALUES (?, ?, ?)')
+      .run('p-ok', 'financial_information', JSON.stringify({ needs: ['education'] }))
     seedCrawlerOsMatch(db, { profileId: 'p-ok', opportunityId: 'op-y' })
     const r = await preflightSingleSource(db, {
       profile: {
@@ -150,6 +152,10 @@ describe('hamiltonPreflight', () => {
         reality_status: 'allowed',
         reality_reasons: '[]',
         entity_types_allowed: ['individual', 'student'],
+        need_types_supported: ['education'],
+        categories: ['education'],
+        link_status: 'ok',
+        last_verified_at: new Date().toISOString(),
       },
       grant: null,
     })

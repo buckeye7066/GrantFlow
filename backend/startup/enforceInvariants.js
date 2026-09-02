@@ -80,6 +80,7 @@ import {
 } from '../services/matching/matchDecisionIntegrity.js'
 import { buildPersistedMatchExplain } from '../services/matching/matchExplainPersistence.js'
 import { hasFarmIdentity } from '../services/eligibility/farmIdentity.js'
+import { persistHamiltonTaskTruthSnapshot } from '../services/hamilton/hamiltonTaskTruthSnapshot.js'
 
 const log = createLogger('startup:enforceInvariants')
 
@@ -5286,6 +5287,13 @@ const TERMINAL_TASK_STATUSES = Object.freeze([
   'submitted', 'completed', 'complete', 'done',
   'cancelled', 'canceled', 'archived', 'rejected', 'closed',
 ])
+const SUBMISSION_UNCERTAIN_TASK_STATUSES = Object.freeze([
+  'submit_attempt_started', 'submit_evidence_pending', 'submission_verification_required',
+])
+const NON_CANCELLABLE_TASK_STATUSES = Object.freeze([
+  ...TERMINAL_TASK_STATUSES,
+  ...SUBMISSION_UNCERTAIN_TASK_STATUSES,
+])
 
 /**
  * INVARIANT: every pipeline row MEETS A DECLARED NEED, comes from a REAL,
@@ -5327,8 +5335,51 @@ const TERMINAL_TASK_STATUSES = Object.freeze([
  * Bound: PIPELINE_PRECISION_LIMIT (2000) limits WRITES per boot, never
  * discovery — a truncated boot is reported (`truncated: true`).
  */
+let pipelinePrecisionRun = null
+
 export async function enforcePipelinePrecision(db) {
-  return runInvariant('pipeline_precision', async () => {
+  // The boot sweep is intentionally post-listen, while the first link refresh
+  // starts on a timer. Share one in-flight precision pass so those two
+  // maintenance triggers can never race destructive reconciliation or publish
+  // snapshots out of order.
+  if (pipelinePrecisionRun) return pipelinePrecisionRun
+  pipelinePrecisionRun = runInvariant('pipeline_precision', async () => {
+    // Invalidate the previous green result before any schema probe, import or
+    // evaluator can fail. A failed boot must remain observably unhealthy rather
+    // than serving yesterday's successful census from system_kv.
+    const attemptTimestamp = new Date().toISOString()
+    const pendingTaskAudit = {
+      scanned: 0,
+      valid: 0,
+      invalid: 0,
+      deferred: 0,
+      protected: 0,
+      failed: 1,
+      repairFailed: 0,
+      truncated: false,
+      byGate: {},
+      byBucket: {},
+    }
+    await persistHamiltonTaskTruthSnapshot(db, {
+      timestamp: attemptTimestamp,
+      status: 'running',
+      scanned: 0,
+      kept: 0,
+      removed: 0,
+      relabeled: 0,
+      deferred: 0,
+      tasksCancelled: 0,
+      matchesRemoved: 0,
+      failed: 1,
+      truncated: false,
+      profiles: 0,
+      profilesAffected: 0,
+      byGate: {},
+      taskRepairAudit: pendingTaskAudit,
+      taskAudit: pendingTaskAudit,
+      verificationTaskAudit: pendingTaskAudit,
+    })
+
     const grantCols = await listGrantColumns(db)
     if (!grantCols.has('profile_id') || !grantCols.has('title') || !grantCols.has('status')) {
       return { scanned: 0, repaired: 0, enforced: true, skipped: 'schema' }
@@ -5407,10 +5458,34 @@ export async function enforcePipelinePrecision(db) {
       if ((awarded.get(String(row.grant_id)) || 0) > 0) return true
       return false
     }
+    const hasSubmissionUncertainTask = async (profileId, row) => {
+      if (!hasTasks) return false
+      const statuses = SUBMISSION_UNCERTAIN_TASK_STATUSES
+      const placeholders = statuses.map(() => '?').join(', ')
+      // audit:allow dynamic-sql -- placeholders are derived only from the
+      // module-level frozen status registry; every row identity remains bound.
+      const task = await db.prepare(`
+        SELECT id
+          FROM application_tasks
+         WHERE profile_id = ?
+           AND ((grant_id IS NOT NULL AND grant_id = ?)
+             OR (opportunity_id IS NOT NULL AND opportunity_id = ?))
+           AND LOWER(COALESCE(status, '')) IN (${placeholders})
+         LIMIT 1
+      `).get(
+        String(profileId),
+        row?.grant_id ? String(row.grant_id) : null,
+        row?.funding_opportunity_id ? String(row.funding_opportunity_id) : null,
+        ...statuses,
+      )
+      return Boolean(task?.id)
+    }
 
     for (const profileId of profileIds) {
       let facts
       try { facts = await loadProfileFacts(db, profileId) } catch (err) {
+        counts.loadFailures += 1
+        if (!counts.firstLoadError) counts.firstLoadError = String(err?.message || err)
         log.warn('pipeline_precision: profile facts failed (non-fatal)', { profileId, error: String(err?.message || err) })
         continue
       }
@@ -5464,7 +5539,20 @@ export async function enforcePipelinePrecision(db) {
           continue
         }
 
-        if (isProtectedRow(row, awarded)) {
+        let submissionUncertain = false
+        try {
+          submissionUncertain = await hasSubmissionUncertainTask(profileId, row)
+        } catch (err) {
+          // Losing the evidence lookup must never authorize destructive cleanup.
+          counts.failed += 1
+          log.warn('pipeline_precision: submission evidence lookup failed', {
+            grant: row.grant_id,
+            error: String(err?.message || err),
+          })
+          continue
+        }
+
+        if (submissionUncertain || isProtectedRow(row, awarded)) {
           try {
             if (hasEligStatus && hasIneligReasons) {
               let existing = []
@@ -5499,20 +5587,27 @@ export async function enforcePipelinePrecision(db) {
         // Early/discovery row: cancel open tasks, tombstone, delete.
         try {
           if (hasTasks && cancelApplicationTask) {
-            let taskRows = []
-            try {
-              const ph = TERMINAL_TASK_STATUSES.map(() => '?').join(', ')
-              taskRows = await db
-                .prepare(`SELECT id FROM application_tasks WHERE profile_id = ? AND grant_id = ? AND (status IS NULL OR status NOT IN (${ph}))`)
-                .all(profileId, row.grant_id, ...TERMINAL_TASK_STATUSES)
-            } catch { taskRows = [] }
+            const ph = NON_CANCELLABLE_TASK_STATUSES.map(() => '?').join(', ')
+            const taskRows = await db
+              .prepare(`SELECT id FROM application_tasks WHERE profile_id = ? AND grant_id = ? AND (status IS NULL OR LOWER(status) NOT IN (${ph}))`)
+              .all(profileId, row.grant_id, ...NON_CANCELLABLE_TASK_STATUSES)
+            let taskCancelFailures = 0
             for (const t of taskRows || []) {
               try {
                 await cancelApplicationTask(db, t.id, { actorRole: 'system', reason: `Pipeline precision — ${reasonKey}` })
                 counts.tasksCancelled += 1
               } catch (err) {
+                taskCancelFailures += 1
                 log.warn('pipeline_precision: task cancel failed (non-fatal)', { task: t.id, error: String(err?.message || err) })
               }
+            }
+            if (taskCancelFailures > 0) {
+              throw new Error(`${taskCancelFailures} Hamilton task cancellations failed`)
+            }
+            // Close the race where a worker reaches submission-uncertain after
+            // the first protection check but before source deletion.
+            if (await hasSubmissionUncertainTask(profileId, row)) {
+              throw new Error('submission evidence appeared during pipeline cleanup')
             }
           }
           if (recordDismissalFn) {
@@ -5559,6 +5654,85 @@ export async function enforcePipelinePrecision(db) {
         `pipeline_precision could not load any pipeline rows (${counts.loadFailures} profile loads failed): ${counts.firstLoadError}`,
       )
     }
+
+    // The pipeline table is not the Hamilton queue. Opportunity-only tasks and
+    // tasks created from a stale persisted ACCEPT can survive every grant-row
+    // sweep above. Audit every unfinished task with the SAME live evaluator
+    // used at task creation and represented by /api/version's cached snapshot;
+    // fail loud on any unreadable or truncated remainder so boot can never
+    // record a false green.
+    let auditUnfinishedHamiltonTasks
+    try {
+      ({ auditUnfinishedHamiltonTasks } = await import('../services/pipelineStrictReconciliation.js'))
+    } catch (err) {
+      throw new Error(`pipeline_precision Hamilton task audit unavailable: ${String(err?.message || err)}`)
+    }
+    const taskRepairAudit = await auditUnfinishedHamiltonTasks(db, {
+      enforce: true,
+      limit,
+      actor: 'system_pipeline_precision_boot',
+    })
+    if (taskRepairAudit.failed > 0 || taskRepairAudit.repairFailed > 0 || taskRepairAudit.truncated) {
+      throw new Error(
+        `pipeline_precision Hamilton task audit incomplete: failed=${taskRepairAudit.failed}, repair_failed=${taskRepairAudit.repairFailed}, truncated=${taskRepairAudit.truncated}`,
+      )
+    }
+    counts.tasksCancelled += Number(taskRepairAudit.tasksCancelled || 0)
+
+    // Read back after enforcement. The repair audit counts rows that were
+    // invalid before it fixed them; readiness needs the post-repair census.
+    // This expensive exact evaluator runs once at boot, never on public
+    // /api/version health polling.
+    const verificationTaskAudit = await auditUnfinishedHamiltonTasks(db, {
+      enforce: false,
+      limit,
+      actor: 'system_pipeline_precision_boot_verify',
+    })
+    if (
+      verificationTaskAudit.invalid > 0
+      || verificationTaskAudit.failed > 0
+      || verificationTaskAudit.repairFailed > 0
+      || verificationTaskAudit.truncated
+    ) {
+      throw new Error(
+        `pipeline_precision Hamilton verification incomplete: invalid=${verificationTaskAudit.invalid}, failed=${verificationTaskAudit.failed}, repair_failed=${verificationTaskAudit.repairFailed}, truncated=${verificationTaskAudit.truncated}`,
+      )
+    }
+
+    // Replace any stale migration snapshot with this successful boot result.
+    // /api/version exposes this numeric-only cache instead of walking the full
+    // task table on every unauthenticated health request.
+    const precisionTimestamp = new Date().toISOString()
+    const precisionFailed = counts.failed + counts.loadFailures
+    const precisionDeferred = Math.max(
+      Number(taskRepairAudit.deferred || 0),
+      Number(verificationTaskAudit.deferred || 0),
+    )
+    const precisionSummary = {
+      timestamp: precisionTimestamp,
+      status: precisionFailed > 0 || counts.truncated
+        ? 'incomplete'
+        : precisionDeferred > 0
+          ? 'pending_reverification'
+          : 'verified',
+      scanned: counts.scanned,
+      kept: counts.kept,
+      removed: counts.removed,
+      relabeled: counts.relabeled,
+      deferred: precisionDeferred,
+      tasksCancelled: counts.tasksCancelled,
+      matchesRemoved: Number(taskRepairAudit.matchesRemoved || 0),
+      failed: precisionFailed,
+      truncated: counts.truncated,
+      profiles: profileIds.length,
+      profilesAffected: affectedProfiles.size,
+      byGate,
+      taskRepairAudit,
+      taskAudit: verificationTaskAudit,
+      verificationTaskAudit,
+    }
+    await persistHamiltonTaskTruthSnapshot(db, precisionSummary)
+
     if (counts.scanned === 0) {
       log.warn('pipeline_precision: no pipeline rows scanned', { profiles: profileIds.length })
     } else if (counts.removed === 0 && counts.relabeled === 0) {
@@ -5570,14 +5744,22 @@ export async function enforcePipelinePrecision(db) {
     }
     return {
       ...counts,
+      status: precisionSummary.status,
       repaired: counts.removed + counts.relabeled,
       byGate,
       byReason,
       profiles: profileIds.length,
       profilesAffected: affectedProfiles.size,
+      taskRepairAudit,
+      taskAudit: verificationTaskAudit,
       enforced: true,
     }
   })
+  try {
+    return await pipelinePrecisionRun
+  } finally {
+    pipelinePrecisionRun = null
+  }
 }
 
 export async function enforceFunderBackfill(db) {

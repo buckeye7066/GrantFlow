@@ -3,9 +3,33 @@ import { assessOpportunityTrust } from '../opportunityTrust.js'
 import { SURFACED_MATCHER_VERSIONS_SQL } from '../../config/matchSurfacing.js'
 import { isPointerKind } from '../../config/opportunityKindClasses.js'
 import { isClearlyExpiredProgram, SEARCH_SURFACE_TITLE_RX, aggregatorBrandSurface } from '../../config/fundingResultFilters.js'
+import { evaluateApplicantTypeEligibility } from '../applicantTypeGate.js'
+import {
+  loadProfileFacts,
+  gateRelatable,
+  gateQualifies,
+  gateCoversNeed,
+  gateRealOffline,
+} from '../robert/robertPipelineAudit.js'
 
-const ALLOWED_MATCH_DECISIONS = new Set(['accept'])
-const TERMINAL_TASK_STATUSES = new Set(['submitted', 'completed', 'cancelled'])
+// Finished outcomes plus submission-evidence states whose external side effect
+// may already have happened. Precision cleanup must never rewrite those into a
+// confident cancellation.
+const TERMINAL_TASK_STATUSES = new Set([
+  'submitted', 'draft_completed', 'completed_draft', 'completed', 'complete', 'done',
+  'failed', 'cancelled', 'canceled', 'archived', 'rejected', 'closed',
+  'submit_attempt_started', 'submit_evidence_pending', 'submission_verification_required',
+])
+const EVIDENCE_PROTECTED_TASK_STATUSES = new Set([
+  'submitted', 'submit_attempt_started', 'submit_evidence_pending',
+  'submission_verification_required', 'draft_completed', 'completed_draft',
+  'completed', 'complete', 'done', 'archived', 'rejected', 'closed',
+])
+const POSITIVE_LINK_STATUSES = new Set([
+  'ok', 'redirect', 'verified', 'alive', 'live', 'valid', 'active', 'reachable',
+  'success', '200',
+])
+const LINK_VERIFICATION_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000
 const TRUST_BLOCK_FLAGS = new Set([
   'loan',
   'matching_funds',
@@ -17,6 +41,11 @@ const TRUST_BLOCK_FLAGS = new Set([
 
 function asLower(value) {
   return String(value || '').trim().toLowerCase()
+}
+
+function changesOf(result) {
+  const count = Number(result?.changes ?? result?.rowCount ?? 0)
+  return Number.isFinite(count) && count > 0 ? count : 0
 }
 
 function nowFn(db) {
@@ -38,11 +67,19 @@ async function loadOpportunityForPolicy(db, profileId, opportunity, grant) {
   if (!linkedOpportunityId) return null
 
   try {
+    // A catalog row's profile_id is discovery provenance, not ownership. A
+    // grant-backed task is already scoped by grants.profile_id at its caller,
+    // so it may use a shared catalog row first discovered for another profile.
+    if (grant) {
+      return await db.prepare(
+        'SELECT * FROM funding_opportunities WHERE id = ? LIMIT 1',
+      ).get(String(linkedOpportunityId))
+    }
     return profileId
-      ? db.prepare(
+      ? await db.prepare(
           'SELECT * FROM funding_opportunities WHERE id = ? AND (profile_id IS NULL OR profile_id = ?) LIMIT 1',
         ).get(String(linkedOpportunityId), String(profileId))
-      : db.prepare(
+      : await db.prepare(
           'SELECT * FROM funding_opportunities WHERE id = ? AND profile_id IS NULL LIMIT 1',
         ).get(String(linkedOpportunityId))
   } catch {
@@ -54,7 +91,7 @@ async function loadProfileMatch(db, profileId, opportunityId) {
   if (!profileId || !opportunityId) return null
 
   try {
-    return db.prepare(`
+    return await db.prepare(`
       SELECT match_score, match_decision, match_explanation, matcher_version, updated_at, computed_at
       FROM profile_opportunity_matches
       WHERE profile_id = ?
@@ -96,25 +133,19 @@ function buildPolicyMessage(reasons) {
 }
 
 /**
- * Pointer-kind rows and the application queue (owner directive 2026-08-04,
- * building on the 2026-08-03 decomposition work):
+ * Pointer-kind rows and the application queue (owner directive 2026-09-02,
+ * tightening the 2026-08-03 decomposition work):
  *
- *   - A pointer WITH a usable web URL stays ALLOWED — the classifier routes it
- *     to portal listing-decomposition (`HAMILTON_DECOMPOSE_POINTER_LISTINGS`),
- *     which mints real per-award candidates through the canonical inserter.
- *   - A pointer WITHOUT one can never become an application: there is nothing
- *     to fill and nothing to submit, so a task minted for it dies silently —
- *     exactly the failure the manual-handoff directive names. It is refused
- *     here as a RESEARCH LEAD with generated handoff instructions the caller
- *     surfaces to the profile owner.
+ *   - A pointer is NEVER an application task, even when it has a usable URL.
+ *     The URL is a discovery surface, not proof that the page is a leaf award.
+ *     Decomposition may discover real children without keeping a parent task
+ *     alive; every child must independently pass this policy before creation.
+ *   - The pointer is returned as a RESEARCH LEAD with generated handoff
+ *     instructions the caller surfaces to the profile owner.
  *
  * The kind is read from the CATALOG row only (grants carry no kind column);
  * a grant-only subject is never refused by this gate.
  */
-function decomposePointerListingsEnabled() {
-  return String(process.env.HAMILTON_DECOMPOSE_POINTER_LISTINGS ?? 'true').toLowerCase() !== 'false'
-}
-
 function usableWebUrl(subject) {
   const candidates = [subject?.application_url, subject?.apply_url, subject?.source_url, subject?.url, subject?.evidence_url]
   for (const c of candidates) {
@@ -140,7 +171,6 @@ export function assessPointerResearchLead(subject, { profileNeeds = [] } = {}) {
   if (!isPointerKind(kind) && !titleIsSearchSurface) return null
   const effectiveKind = isPointerKind(kind) ? kind : 'directory'
   const url = usableWebUrl(subject)
-  if (url && decomposePointerListingsEnabled()) return null
   const needsLine = (Array.isArray(profileNeeds) ? profileNeeds : [])
     .filter(Boolean)
     .slice(0, 6)
@@ -181,17 +211,156 @@ async function computeLiveEngineDecision(db, profileId, subject) {
       signals: ctx?.signals ?? null,
     })
   } catch {
-    return null
+    return { unavailable: true }
   }
 }
 
-export async function assessHamiltonFundingSource(db, { profileId, opportunity = null, grant = null } = {}) {
+function unavailablePolicyAssessment(
+  reason = 'canonical_engine_unavailable',
+  { gate = 'canonical_accept', retryable = false, evidence = null } = {},
+) {
+  return {
+    ok: false,
+    unavailable: true,
+    retryable,
+    gate,
+    code: 'funding_source_policy_unavailable',
+    reasons: [reason],
+    ...(evidence ? { evidence } : {}),
+    message: 'Hamilton could not verify current funding-source policy. No task was created or removed.',
+  }
+}
+
+function mergePolicySubject(opportunity, grant) {
+  if (!opportunity) return grant
+  if (!grant) return opportunity
+  // Catalog evidence is authoritative for eligibility; the profile grant row
+  // fills operational fields the catalog may not carry. Never let nullish
+  // catalog columns erase a positive link/deadline/application fact on grant.
+  const merged = { ...grant }
+  for (const [key, value] of Object.entries(opportunity)) {
+    if (value !== null && value !== undefined && value !== '') merged[key] = value
+  }
+  merged.id = opportunity.id || grant.id
+  return merged
+}
+
+function positiveApplicantProof(subject, facts) {
+  const verdict = evaluateApplicantTypeEligibility(subject, facts?.applicantType, {
+    profile: facts?.profile,
+    sections: facts?.sections,
+  })
+  const pass = verdict?.decision === 'pass' && verdict?.reason === 'explicit_applicant_types_match'
+  return {
+    pass,
+    reason: pass ? null : `applicant_type:${verdict?.reason || verdict?.decision || 'not_positively_verified'}`,
+    evidence: verdict ?? null,
+  }
+}
+
+function positiveRealityProof(subject, now) {
+  const offline = gateRealOffline(subject, { now })
+  if (offline?.pass === false) return offline
+  const status = asLower(subject?.link_status)
+  if (!POSITIVE_LINK_STATUSES.has(status)) {
+    return {
+      pass: false,
+      reason: `real:link_not_positively_verified:${status || 'missing'}`,
+      evidence: { link_status: status || null },
+    }
+  }
+  const verifiedAtRaw = subject?.last_verified_at || subject?.link_verified_at || null
+  const verifiedAt = verifiedAtRaw ? Date.parse(verifiedAtRaw) : Number.NaN
+  const nowMs = now instanceof Date ? now.getTime() : Date.parse(now)
+  if (!Number.isFinite(verifiedAt) || !Number.isFinite(nowMs)) {
+    return {
+      pass: false,
+      reason: 'real:link_verification_missing',
+      evidence: { link_status: status, last_verified_at: verifiedAtRaw },
+    }
+  }
+  if (verifiedAt < nowMs - LINK_VERIFICATION_MAX_AGE_MS) {
+    // Age is not negative liveness evidence. The canonical link verifier owns
+    // that determination; treating a routine recheck becoming due as a dead
+    // link let the boot audit cancel tasks and tombstone grants before the
+    // verifier's delayed startup pass could probe them. Preserve all work and
+    // surface a retryable policy outage until a current probe is available.
+    return {
+      pass: false,
+      unavailable: true,
+      retryable: true,
+      reason: 'real:link_reverification_required',
+      evidence: { link_status: status, last_verified_at: verifiedAtRaw },
+    }
+  }
+  return {
+    pass: true,
+    reason: null,
+    evidence: { link_status: status, last_verified_at: new Date(verifiedAt).toISOString() },
+  }
+}
+
+/**
+ * The single positive task-truth evaluator. Creation, the boot reconciliation,
+ * and the public readiness metric all consume this exact function.
+ */
+export function evaluateHamiltonPositiveGates(subject, facts, { now = new Date() } = {}) {
+  const relatable = gateRelatable(subject, { now })
+  if (!relatable?.pass) return { pass: false, gate: 'relatable', reason: relatable?.reason, evidence: relatable?.evidence }
+
+  const applicant = positiveApplicantProof(subject, facts)
+  if (!applicant.pass) return { pass: false, gate: 'qualifies', reason: applicant.reason, evidence: applicant.evidence }
+
+  const qualifies = gateQualifies(subject, facts)
+  if (!qualifies?.pass) return { pass: false, gate: 'qualifies', reason: qualifies?.reason, evidence: qualifies?.evidence }
+
+  const covers = gateCoversNeed(subject, facts)
+  if (!covers?.pass || !Array.isArray(covers?.evidence?.matched) || covers.evidence.matched.length === 0) {
+    return {
+      pass: false,
+      gate: 'covers_need',
+      reason: covers?.reason || 'covers_need:no_positive_declared_match',
+      evidence: covers?.evidence,
+    }
+  }
+
+  const real = positiveRealityProof(subject, now)
+  if (!real.pass) {
+    return {
+      pass: false,
+      gate: 'real',
+      reason: real.reason,
+      evidence: real.evidence,
+      unavailable: real.unavailable === true,
+      retryable: real.retryable === true,
+    }
+  }
+
+  return {
+    pass: true,
+    gates: {
+      relatable: relatable.evidence,
+      qualifies: { applicant: applicant.evidence, canonical: qualifies.evidence },
+      covers_need: covers.evidence,
+      real: real.evidence,
+    },
+  }
+}
+
+export async function assessHamiltonFundingSource(db, {
+  profileId,
+  opportunity = null,
+  grant = null,
+  profileFacts = null,
+  now = new Date(),
+} = {}) {
   const policyOpportunity = await loadOpportunityForPolicy(db, profileId, opportunity, grant)
-  const subject = policyOpportunity || grant
+  const subject = mergePolicySubject(policyOpportunity, grant)
 
   if (!subject?.id) {
     return {
       ok: false,
+      gate: 'source_scope',
       code: 'missing_funding_source',
       reasons: ['missing_funding_source'],
       message: 'Funding source could not be found for Hamilton automation.',
@@ -207,6 +376,7 @@ export async function assessHamiltonFundingSource(db, { profileId, opportunity =
   if (researchLead) {
     return {
       ok: false,
+      gate: 'relatable',
       code: 'pointer_research_lead',
       reasons: ['pointer_research_lead'],
       handoff: researchLead,
@@ -219,6 +389,7 @@ export async function assessHamiltonFundingSource(db, { profileId, opportunity =
   if (!trust?.display || trustReasons.length) {
     return {
       ok: false,
+      gate: 'real',
       code: 'funding_source_disallowed',
       reasons: trustReasons.length ? trustReasons : ['trust_policy'],
       trust,
@@ -233,6 +404,7 @@ export async function assessHamiltonFundingSource(db, { profileId, opportunity =
     const reasons = ['funding_source_expired', String(expiredLabel)]
     return {
       ok: false,
+      gate: 'real',
       code: 'funding_source_expired',
       reasons,
       trust,
@@ -244,6 +416,7 @@ export async function assessHamiltonFundingSource(db, { profileId, opportunity =
     const reasons = ['missing_profile_context']
     return {
       ok: false,
+      gate: 'canonical_accept',
       code: 'funding_source_missing_profile_match',
       reasons,
       trust,
@@ -252,100 +425,74 @@ export async function assessHamiltonFundingSource(db, { profileId, opportunity =
   }
 
   const opportunityId = policyOpportunity?.id || grant?.funding_opportunity_id || grant?.opportunity_id || null
-  let match = await loadProfileMatch(db, profileId, opportunityId)
-  const decision = asLower(match?.match_decision)
-
-  if (decision === 'reject') {
-    const reasons = ['profile_match_rejected']
-    if (match?.match_explanation) reasons.push(String(match.match_explanation).slice(0, 180))
-    return {
-      ok: false,
-      code: 'funding_source_profile_rejected',
-      reasons,
-      trust,
-      match,
-      message: buildPolicyMessage(reasons),
-    }
-  }
-
-  if (match && !ALLOWED_MATCH_DECISIONS.has(decision)) {
-    const reasons = ['profile_match_not_accepted']
-    return {
-      ok: false,
-      code: 'funding_source_profile_not_accepted',
-      reasons,
-      trust,
-      match,
-      message: buildPolicyMessage(reasons),
-    }
-  }
-
-  if (!match) {
-    // No stored row is not permission. Ask the canonical engine live for every
-    // origin, then continue through applicant-type proof rather than returning
-    // success from this block.
-    const live = await computeLiveEngineDecision(db, profileId, subject)
-    const liveDecision = asLower(live?.decision)
-    if (liveDecision === 'accept') {
-      match = {
-        live: true,
-        match_decision: liveDecision,
-        match_score: Number.isFinite(Number(live?.score)) ? Number(live.score) : null,
-        match_explanation: live?.explanation ?? null,
-        matcher_version: 'live-recheck',
-      }
-    } else if (liveDecision === 'reject') {
-      const reasons = ['profile_match_rejected']
-      if (live?.explanation) reasons.push(String(live.explanation).slice(0, 180))
-      return {
-        ok: false,
-        code: 'funding_source_profile_rejected',
-        reasons,
-        trust,
-        match: { live: true, match_decision: 'reject', match_explanation: live?.explanation ?? null },
-        message: buildPolicyMessage(reasons),
-      }
-    } else {
-      const reasons = [
-        liveDecision ? 'profile_match_not_accepted' : 'missing_profile_crawler_match',
-        ...(liveDecision ? [`live_decision:${liveDecision}`] : []),
-      ]
-      return {
-        ok: false,
-        code: liveDecision
-          ? 'funding_source_profile_not_accepted'
-          : 'funding_source_missing_profile_match',
-        reasons,
-        trust,
-        match: liveDecision
-          ? { live: true, match_decision: liveDecision, match_explanation: live?.explanation ?? null }
-          : null,
-        message: buildPolicyMessage(reasons),
-      }
-    }
-  }
-
-  // HARD APPLICANT-TYPE GATE, RUN FOR EVERY ORIGIN AND AFTER LIVE ACCEPT.
-  // A negative-only "no mismatch found" verdict is not positive qualification.
-  const applicantVerdict = await assessApplicantTypeForPolicy(db, profileId, subject)
-  const positiveApplicantProof =
-    applicantVerdict?.decision === 'pass'
-    && applicantVerdict?.reason === 'explicit_applicant_types_match'
-  if (!positiveApplicantProof) {
-    const hardMismatch = applicantVerdict?.decision === 'mismatch'
+  const storedMatch = await loadProfileMatch(db, profileId, opportunityId)
+  // A durable task must never inherit permission from a stale rolling snapshot.
+  // Recompute canonical ACCEPT every time this evaluator runs.
+  const live = await computeLiveEngineDecision(db, profileId, subject)
+  if (live?.unavailable) return unavailablePolicyAssessment()
+  const liveDecision = asLower(live?.decision)
+  const match = liveDecision ? {
+    live: true,
+    match_decision: liveDecision,
+    match_score: Number.isFinite(Number(live?.score)) ? Number(live.score) : null,
+    match_explanation: live?.explanation ?? null,
+    matcher_version: 'live-recheck',
+    stored_match_decision: storedMatch?.match_decision ?? null,
+  } : null
+  if (liveDecision !== 'accept') {
+    const rejected = liveDecision === 'reject'
     const reasons = [
-      hardMismatch ? 'profile_match_rejected' : 'profile_match_not_accepted',
-      `applicant_type:${applicantVerdict?.reason || 'not_positively_verified'}`,
+      rejected ? 'profile_match_rejected' : (liveDecision ? 'profile_match_not_accepted' : 'canonical_accept_unavailable'),
+      ...(liveDecision ? [`live_decision:${liveDecision}`] : []),
     ]
+    if (live?.explanation) reasons.push(String(live.explanation).slice(0, 180))
     return {
       ok: false,
-      code: hardMismatch
-        ? 'funding_source_profile_rejected'
-        : 'funding_source_profile_not_accepted',
+      gate: 'canonical_accept',
+      code: rejected ? 'funding_source_profile_rejected' : 'funding_source_profile_not_accepted',
       reasons,
       trust,
       match,
-      applicant_type: applicantVerdict ?? { decision: 'review', reason: 'unavailable' },
+      stored_match: storedMatch,
+      message: buildPolicyMessage(reasons),
+    }
+  }
+
+  let facts = profileFacts
+  if (!facts) {
+    try {
+      facts = await loadProfileFacts(db, profileId, { strict: true })
+    } catch {
+      return unavailablePolicyAssessment('profile_evidence_unavailable')
+    }
+  }
+  const gates = evaluateHamiltonPositiveGates(subject, facts, { now })
+  if (!gates.pass) {
+    const reason = String(gates.reason || 'not_positively_verified')
+    if (gates.unavailable || gates.retryable) {
+      return unavailablePolicyAssessment(reason, {
+        gate: gates.gate || 'real',
+        retryable: gates.retryable === true,
+        evidence: gates.evidence ?? null,
+      })
+    }
+    const reasons = [`${gates.gate}:${reason}`]
+    const hardProfileMismatch = gates.gate === 'qualifies'
+      && (gates.evidence?.decision === 'mismatch' || gates.evidence?.gate)
+    return {
+      ok: false,
+      gate: gates.gate,
+      code: gates.gate === 'real' || gates.gate === 'relatable'
+        ? 'funding_source_disallowed'
+        : hardProfileMismatch
+          ? 'funding_source_profile_rejected'
+          : 'funding_source_profile_not_accepted',
+      reasons,
+      trust,
+      match,
+      stored_match: storedMatch,
+      applicant_type: gates.gate === 'qualifies' ? gates.evidence ?? null : undefined,
+      evidence: gates.evidence ?? null,
       message: buildPolicyMessage(reasons),
     }
   }
@@ -353,47 +500,14 @@ export async function assessHamiltonFundingSource(db, { profileId, opportunity =
   return {
     ok: true,
     reasons: [],
-    warnings: match?.live ? ['live_engine_endorsed'] : [],
+    warnings: ['live_engine_endorsed'],
     trust,
     match,
-    applicant_type: applicantVerdict,
+    stored_match: storedMatch,
+    gates: gates.gates,
+    applicant_type: gates.gates?.qualifies?.applicant ?? null,
     opportunityId,
     grantId: grant?.id || null,
-  }
-}
-
-/**
- * The applicant-type verdict for a (profile, subject) pair, using the canonical
- * gate. Returns null when the profile cannot be read; the caller treats null as
- * unverified and refuses automation.
- */
-async function assessApplicantTypeForPolicy(db, profileId, subject) {
-  if (!db || !profileId || !subject) return null
-  try {
-    const [{ loadProfileContext }, { evaluateApplicantTypeEligibility }] = await Promise.all([
-      import('../profileHelpers.js'),
-      import('../applicantTypeGate.js'),
-    ])
-    const ctx = await loadProfileContext(db, profileId)
-    const profileRow = ctx?.profile ?? ctx
-    const sections = ctx?.sections ?? {}
-    const basic = sections.basic_information ?? sections.basic_info ?? {}
-    const applicantType = profileRow?.applicant_type || profileRow?.primary_type ||
-      basic?.profile_category || basic?.applicant_type || null
-    // Academic STAGE-OF-LIFE hard mismatch: a pre-college award is provably
-    // impossible for an enrolled college student. The canonical gate reads
-    // only the source's eligibility text and website-purpose locks.
-    try {
-      const { stageOfLifeConflictForSections } = await import('../../config/stageOfLifeEligibility.js')
-      const stageConflict = stageOfLifeConflictForSections(sections, subject)
-      if (stageConflict) {
-        return { decision: 'mismatch', reason: stageConflict.reason, matched_bucket: stageConflict.classId }
-      }
-    } catch { /* stage gate unavailable → fall through to applicant-type only */ }
-    if (!applicantType) return null
-    return evaluateApplicantTypeEligibility(subject, applicantType, { profile: profileRow, sections })
-  } catch {
-    return null
   }
 }
 
@@ -403,7 +517,8 @@ export async function assertHamiltonFundingSourceAllowed(db, args = {}) {
 
   const error = new Error(assessment.message)
   error.code = assessment.code || 'funding_source_disallowed'
-  error.status = 422
+  error.status = assessment.unavailable ? 503 : 422
+  error.unavailable = assessment.unavailable === true
   error.reasons = assessment.reasons || []
   error.assessment = assessment
   throw error
@@ -439,7 +554,7 @@ async function loadGeneratedDocumentIds(db, profileId, tasks) {
     }
 
     try {
-      const rows = db.prepare(`
+      const rows = await db.prepare(`
         SELECT id
         FROM documents
         WHERE profile_id = ?
@@ -456,7 +571,7 @@ async function loadGeneratedDocumentIds(db, profileId, tasks) {
 
 async function insertTaskCancellationEvent(db, taskId, message, details) {
   try {
-    db.prepare(`
+    await db.prepare(`
       INSERT INTO application_task_events (
         id, task_id, event_type, status, step, message, details_json, actor_role, created_at
       )
@@ -478,47 +593,61 @@ export async function cleanupDisallowedHamiltonTraces(
     removed_portal_links: 0,
     revoked_authorizations: 0,
   }
+  if (reason === 'funding_source_policy_unavailable') return empty
   if (!db || !profileId || (!opportunityId && !grantId)) return empty
 
   const where = sourceWhereClause({ profileId, opportunityId, grantId })
   if (!where) return empty
 
-  let tasks = []
-  try {
-    tasks = db.prepare(`
-      SELECT *
-      FROM application_tasks
-      WHERE ${where.sql}
-    `).all(...where.params) || []
-  } catch {
-    return empty
+  // This lookup is the evidence-protection boundary. Let failures propagate:
+  // treating an unreadable task table as "no protected submissions" could
+  // authorize destructive source cleanup during a transient database failure.
+  const tasks = await db.prepare(`
+    SELECT *
+    FROM application_tasks
+    WHERE ${where.sql}
+  `).all(...where.params) || []
+
+  const protectedEvidenceTask = tasks.find((task) =>
+    EVIDENCE_PROTECTED_TASK_STATUSES.has(asLower(task.status)),
+  )
+  if (protectedEvidenceTask) {
+    return {
+      ...empty,
+      protected_submission_evidence: true,
+      protected_task_status: asLower(protectedEvidenceTask.status),
+    }
   }
 
   const activeTasks = tasks.filter((task) => !TERMINAL_TASK_STATUSES.has(asLower(task.status)))
-  const taskIds = unique(tasks.map((task) => task.id))
+  // Evidence attached to submitted/finished history must survive cleanup of a
+  // different unfinished task for the same source.
+  const taskIds = unique(activeTasks.map((task) => task.id))
   const message = buildPolicyMessage([String(reason)])
 
   let cancelledTasks = 0
   for (const task of activeTasks) {
     try {
-      const result = db.prepare(`
+      const result = await db.prepare(`
         UPDATE application_tasks
         SET status = 'cancelled',
+            allow_auto_submit = FALSE,
+            auto_submit_enabled = FALSE,
             cancelled_at = ${nowFn(db)},
             completed_at = COALESCE(completed_at, ${nowFn(db)}),
             last_agent_message = ?,
             updated_at = ${nowFn(db)}
         WHERE id = ?
       `).run(message, String(task.id))
-      cancelledTasks += result?.changes || 0
+      cancelledTasks += changesOf(result)
     } catch {
       try {
-        const result = db.prepare(`
+        const result = await db.prepare(`
           UPDATE application_tasks
           SET status = 'cancelled', updated_at = ${nowFn(db)}
           WHERE id = ?
         `).run(String(task.id))
-        cancelledTasks += result?.changes || 0
+        cancelledTasks += changesOf(result)
       } catch {
         // Keep cleaning other traces.
       }
@@ -529,21 +658,21 @@ export async function cleanupDisallowedHamiltonTraces(
   let removedMissingInfo = 0
   if (taskIds.length) {
     try {
-      const result = db.prepare(`
+      const result = await db.prepare(`
         DELETE FROM application_missing_info
         WHERE task_id IN (${placeholders(taskIds)})
       `).run(...taskIds)
-      removedMissingInfo = result?.changes || 0
+      removedMissingInfo = changesOf(result)
     } catch {
       removedMissingInfo = 0
     }
   }
 
-  const documentIds = await loadGeneratedDocumentIds(db, profileId, tasks)
+  const documentIds = await loadGeneratedDocumentIds(db, profileId, activeTasks)
   let removedDocuments = 0
   if (documentIds.length) {
     try {
-      db.prepare(`
+      await db.prepare(`
         DELETE FROM profile_documents
         WHERE profile_id = ? AND document_id IN (${placeholders(documentIds)})
       `).run(String(profileId), ...documentIds)
@@ -552,13 +681,13 @@ export async function cleanupDisallowedHamiltonTraces(
     }
 
     try {
-      const result = db.prepare(`
+      const result = await db.prepare(`
         DELETE FROM documents
         WHERE profile_id = ?
           AND type = 'hamilton_generated_application'
           AND id IN (${placeholders(documentIds)})
       `).run(String(profileId), ...documentIds)
-      removedDocuments = result?.changes || 0
+      removedDocuments = changesOf(result)
     } catch {
       removedDocuments = 0
     }
@@ -566,11 +695,11 @@ export async function cleanupDisallowedHamiltonTraces(
 
   let removedPortalLinks = 0
   try {
-    const result = db.prepare(`
+    const result = await db.prepare(`
       DELETE FROM application_portal_links
       WHERE ${where.sql}
     `).run(...where.params)
-    removedPortalLinks = result?.changes || 0
+    removedPortalLinks = changesOf(result)
   } catch {
     removedPortalLinks = 0
   }
@@ -593,7 +722,7 @@ export async function cleanupDisallowedHamiltonTraces(
     }
 
     if (authClauses.length) {
-      const result = db.prepare(`
+      const result = await db.prepare(`
         UPDATE hamilton_authorizations
         SET revoked_at = ${nowFn(db)},
             revoked_reason = ?
@@ -601,7 +730,7 @@ export async function cleanupDisallowedHamiltonTraces(
           AND revoked_at IS NULL
           AND (${authClauses.join(' OR ')})
       `).run(`funding_source_policy:${reason}`, ...authParams)
-      revokedAuthorizations = result?.changes || 0
+      revokedAuthorizations = changesOf(result)
     }
   } catch {
     revokedAuthorizations = 0

@@ -13,13 +13,13 @@ import client from '@/api/client'
 import { Button } from '@/components/ui/button'
 import { useToast } from '@/components/ui/use-toast'
 import { showInfoToast, showErrorToast } from '@/components/shared/toastHelpers'
-import { Loader2, RefreshCw, CheckCircle2, Trash2, Sparkles, ChevronDown, ChevronRight, Archive } from 'lucide-react'
+import { Loader2, RefreshCw, CheckCircle2, Trash2, Sparkles, ChevronDown, ChevronRight } from 'lucide-react'
 import { categorizeHamiltonTask, HAMILTON_TASK_CATEGORIES } from '../../shared/hamiltonTaskCategory.js'
+import { bucketForTaskStatus, partitionHamiltonTasks } from '../../shared/hamiltonTaskLifecycle.js'
 
 const ORDER = HAMILTON_TASK_CATEGORIES.map((c) => c.key)
 // Finished/terminal statuses live on the ARCHIVE tab; everything else is ACTIVE.
-const ARCHIVED_STATUSES = new Set(['submitted', 'completed', 'completed_draft', 'failed', 'cancelled'])
-const isArchived = (t) => ARCHIVED_STATUSES.has(String(t?.status || '').toLowerCase())
+const isArchived = (t) => bucketForTaskStatus(t?.status) === 'finished'
 
 export default function HamiltonTaskTriage() {
   const [params] = useSearchParams()
@@ -38,7 +38,8 @@ export default function HamiltonTaskTriage() {
     setLoading(true)
     try {
       const res = await client.get(`/api/hamilton/automation/tasks?profile=${encodeURIComponent(profileId)}`)
-      const list = Array.isArray(res?.data) ? res.data : (res?.data?.tasks || res?.data?.items || [])
+      const partition = partitionHamiltonTasks(res)
+      const list = [...partition.current, ...partition.history]
       setTasks(list)
       setSelected(new Set())
     } catch (err) {

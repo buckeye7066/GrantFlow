@@ -64,11 +64,21 @@ function makeMemoryDb() {
     INSERT INTO profile_sections (id, profile_id, section_key, data)
       VALUES ('ps-4', 'p-other', 'university_applications',
               '{"applications":[{"name":"University of New Haven","status":"submitted"}]}');
+    INSERT INTO profile_sections (id, profile_id, section_key, data)
+      VALUES ('ps-5', 'p-mtsu', 'financial_information',
+              '{"needs":["education"]}');
+    INSERT INTO profile_sections (id, profile_id, section_key, data)
+      VALUES ('ps-6', 'p-other', 'financial_information',
+              '{"needs":["education"]}');
     CREATE TABLE IF NOT EXISTS funding_opportunities (
       id TEXT PRIMARY KEY, title TEXT, description TEXT, application_url TEXT,
       funding_source_type TEXT, category TEXT, profile_id TEXT, record_origin TEXT,
       opportunity_kind TEXT, source_trust_tier TEXT, reality_status TEXT, reality_reasons TEXT,
-      entity_types_allowed TEXT NOT NULL DEFAULT '["individual","student"]'
+      entity_types_allowed TEXT NOT NULL DEFAULT '["individual","student"]',
+      need_types_supported TEXT NOT NULL DEFAULT '["education"]',
+      categories TEXT NOT NULL DEFAULT '["education"]',
+      link_status TEXT NOT NULL DEFAULT 'ok',
+      last_verified_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
     );
     INSERT INTO funding_opportunities (id, title, description, application_url, funding_source_type, category, record_origin, opportunity_kind, source_trust_tier, reality_status, reality_reasons)
       VALUES ('opp-mtsu-merit', 'MTSU Presidential Scholarship',
@@ -81,10 +91,10 @@ function makeMemoryDb() {
                'https://www.mtsu.edu/financial-aid/', 'university',
                'live_crawl', 'PROGRAM', 'official', 'VERIFIED', '[]');
     INSERT INTO funding_opportunities (id, title, description, application_url, record_origin, opportunity_kind, source_trust_tier, reality_status, reality_reasons)
-      VALUES ('opp-external', 'Going Merry General Scholarship',
-               'A scholarship marketplace listing.',
-               'https://www.goingmerry.com/scholarships/',
-               'live_crawl', 'PROGRAM', 'verified', 'VERIFIED', '[]');
+      VALUES ('opp-external', 'Tennessee Community Foundation Student Scholarship',
+               'A direct education scholarship for eligible Tennessee college students.',
+               'https://www.tn.gov/collegepays/money-for-college.html',
+               'live_crawl', 'PROGRAM', 'official', 'VERIFIED', '[]');
     CREATE TABLE IF NOT EXISTS profile_opportunity_matches (
       profile_id TEXT NOT NULL,
       opportunity_id TEXT NOT NULL,

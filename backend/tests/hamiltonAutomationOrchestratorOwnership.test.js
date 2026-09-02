@@ -33,6 +33,16 @@ vi.mock('../services/hamilton/hamiltonPreflight.js', async (importOriginal) => {
   }
 })
 
+// The ownership boundary is the subject of this suite. Four-truth policy has
+// its own functional tests and is admitted here only after ownership succeeds.
+vi.mock('../services/hamilton/hamiltonFundingSourcePolicy.js', async (importOriginal) => {
+  const mod = await importOriginal()
+  return {
+    ...mod,
+    assessHamiltonFundingSource: vi.fn(async () => ({ ok: true, reasons: [] })),
+  }
+})
+
 const { wrapSqlite } = await import('../../tests/helpers/sqliteTestDb.mjs')
 const {
   automateSingleSource,
