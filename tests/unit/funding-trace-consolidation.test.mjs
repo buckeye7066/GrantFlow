@@ -4,17 +4,57 @@ import {
   FUNDING_TRACE_ENTITY_TYPES,
   consolidateFundingSources,
   isSourceAddable,
+  isVerifiedTraceSource,
+  resolveOrganizationIdentity,
+  resolveRecipientIdentity,
   traceSourceToOpportunity,
   ADDABILITY_DEFAULTS,
 } from '../../backend/services/fundingTraceService.js'
 
 const row = (overrides = {}) => ({
+  'Recipient Name': 'Acme Corporation',
   'Awarding Agency': 'Department of Defense',
   'Awarding Sub Agency': 'Navy',
   'Award Amount': '1000000',
   'Start Date': '2023-01-01',
   'Award ID': 'A1',
   ...overrides,
+})
+
+describe('recipient identity resolution', () => {
+  it('resolves one exact recipient and excludes broad text hits', () => {
+    const resolved = resolveRecipientIdentity('Acme Corp', [
+      row({ 'Recipient Name': 'Acme Corporation' }),
+      row({ 'Recipient Name': 'Acme Community Foundation', 'Award ID': 'OTHER' }),
+    ])
+    assert.equal(resolved.status, 'resolved')
+    assert.equal(resolved.recipient_name, 'Acme Corporation')
+    assert.equal(resolved.score, 98)
+  })
+
+  it('fails closed when a broad name resolves to multiple subsidiaries', () => {
+    const resolved = resolveRecipientIdentity('Lockheed Martin', [
+      row({ 'Recipient Name': 'Lockheed Martin Corporation' }),
+      row({ 'Recipient Name': 'Lockheed Martin Company' }),
+    ])
+    assert.equal(resolved.status, 'ambiguous')
+    assert.equal(resolved.recipient_name, null)
+  })
+
+  it('does not accept a merely related recipient name', () => {
+    const resolved = resolveRecipientIdentity('Ford Foundation', [
+      row({ 'Recipient Name': 'Ford Motor Company Fund' }),
+    ])
+    assert.equal(resolved.status, 'no_exact_identity_match')
+  })
+
+  it('does not take the first ProPublica result unless the name resolves', () => {
+    const wrongFirst = { name: 'Acme Community Network', state: 'OH' }
+    const exactSecond = { name: 'Acme Foundation', state: 'NY' }
+    const resolved = resolveOrganizationIdentity('Acme Foundation', [wrongFirst, exactSecond])
+    assert.equal(resolved.status, 'resolved')
+    assert.equal(resolved.match, exactSecond)
+  })
 })
 
 describe('consolidateFundingSources', () => {
@@ -88,40 +128,68 @@ describe('FUNDING_TRACE_ENTITY_TYPES', () => {
 
 describe('isSourceAddable', () => {
   const now = new Date('2026-06-18T00:00:00Z')
+  const verified = (overrides = {}) => ({
+    origin: 'usaspending',
+    evidence_status: 'verified_award_record',
+    recipient_name: 'Acme Corporation',
+    sample_url: 'https://www.usaspending.gov/award/A1',
+    total_amount: 5_000_000,
+    latest_year: 2025,
+    ...overrides,
+  })
 
   it('rejects federal sources below the dollar floor', () => {
-    const src = { total_amount: 10_000, latest_year: 2025 }
+    const src = verified({ total_amount: 10_000 })
     assert.equal(isSourceAddable(src, { now }), false)
   })
 
   it('accepts federal sources at or above the floor and recent', () => {
-    const src = { total_amount: ADDABILITY_DEFAULTS.minAmount, latest_year: 2025 }
+    const src = verified({ total_amount: ADDABILITY_DEFAULTS.minAmount })
     assert.equal(isSourceAddable(src, { now }), true)
   })
 
   it('rejects stale federal sources older than maxAgeYears', () => {
-    const src = { total_amount: 5_000_000, latest_year: 2018 }
+    const src = verified({ latest_year: 2018 })
     assert.equal(isSourceAddable(src, { now }), false)
   })
 
   it('respects custom thresholds', () => {
-    const src = { total_amount: 50_000, latest_year: 2020 }
+    const src = verified({ total_amount: 50_000, latest_year: 2020 })
     assert.equal(isSourceAddable(src, { minAmount: 100_000, maxAgeYears: 5, now }), false)
     assert.equal(isSourceAddable(src, { minAmount: 10_000, maxAgeYears: 10, now }), true)
   })
 
-  it('does not apply the dollar floor to sources with no amount (AI channels)', () => {
-    assert.equal(isSourceAddable({ total_amount: null, addable: true }, { now }), true)
-    assert.equal(isSourceAddable({ total_amount: null, addable: false }, { now }), false)
+  it('never makes AI hypotheses addable', () => {
+    assert.equal(isSourceAddable({
+      origin: 'ai_synthesis', evidence_status: 'unverified_hypothesis', total_amount: null,
+    }, { now }), false)
   })
 
-  it('fails open on missing year when dollars clear the floor', () => {
-    const src = { total_amount: 5_000_000, latest_year: null }
-    assert.equal(isSourceAddable(src, { now }), true)
+  it('fails closed on missing year when dollars clear the floor', () => {
+    assert.equal(isSourceAddable(verified({ latest_year: null }), { now }), false)
+  })
+
+  it('requires an official evidence URL and resolved recipient', () => {
+    assert.equal(isVerifiedTraceSource(verified()), true)
+    assert.equal(isSourceAddable(verified({ sample_url: 'https://example.com/award/A1' }), { now }), false)
+    assert.equal(isSourceAddable(verified({ recipient_name: null }), { now }), false)
   })
 })
 
 describe('traceSourceToOpportunity', () => {
+  it('fails closed when a caller omits the server addability verdict', () => {
+    assert.throws(() => traceSourceToOpportunity({
+      key: 'usaspending:x',
+      name: 'Navy',
+      origin: 'usaspending',
+      evidence_status: 'verified_award_record',
+      recipient_name: 'Acme Corp',
+      total_amount: 1_000_000,
+      latest_year: 2025,
+      sample_url: 'https://www.usaspending.gov/award/A1',
+    }, 'Acme Corp'), /verified, addable/i)
+  })
+
   it('maps a federal source to a catalog opportunity payload', () => {
     const src = {
       key: 'usaspending:Department of Defense::Navy',
@@ -132,6 +200,9 @@ describe('traceSourceToOpportunity', () => {
       award_count: 2,
       latest_year: 2024,
       origin: 'usaspending',
+      evidence_status: 'verified_award_record',
+      recipient_name: 'Acme Corp',
+      addable: true,
       sample_url: 'https://www.usaspending.gov/award/A1',
     }
     const opp = traceSourceToOpportunity(src, 'Acme Corp')

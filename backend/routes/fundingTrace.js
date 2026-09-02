@@ -8,7 +8,12 @@
  */
 
 import express from 'express'
-import { FUNDING_TRACE_ENTITY_TYPES, traceFunding, traceSourceToOpportunity } from '../services/fundingTraceService.js'
+import {
+  FUNDING_TRACE_ENTITY_TYPES,
+  isSourceAddable,
+  traceFunding,
+  traceSourceToOpportunity,
+} from '../services/fundingTraceService.js'
 import { upsertFundingOpportunity } from '../services/opportunityInserter.js'
 import { ensureAuth, ensureAdmin } from '../middleware/auth.js'
 import { createLogger } from '../utils/logger.js'
@@ -23,7 +28,7 @@ router.use(ensureAdmin)
 const VALID_ENTITY_TYPES = new Set(FUNDING_TRACE_ENTITY_TYPES)
 
 router.post('/', async (req, res) => {
-  const { entity, entity_type: entityType = 'company', use_ai: useAi = true } = req.body || {}
+  const { entity, entity_type: entityType = 'company', use_ai: useAi = false } = req.body || {}
 
   if (!entity || !String(entity).trim()) {
     return res.status(400).json({ error: 'entity is required' })
@@ -33,7 +38,7 @@ router.post('/', async (req, res) => {
   }
 
   try {
-    const result = await traceFunding(req.db, { entity: String(entity), entityType, useAi: useAi !== false })
+    const result = await traceFunding(req.db, { entity: String(entity), entityType, useAi: useAi === true })
     return res.json(result)
   } catch (error) {
     routeLogger.error('[funding-trace] failed', error?.message)
@@ -53,13 +58,41 @@ router.post('/', async (req, res) => {
  * allowDirectories is passed explicitly even though it already defaults true.
  */
 router.post('/add', async (req, res) => {
-  const { source, entity } = req.body || {}
-  if (!source || !source.name) {
-    return res.status(400).json({ error: 'source (with a name) is required' })
+  const { source, entity, entity_type: entityType = 'company' } = req.body || {}
+  if (!source?.key) {
+    return res.status(400).json({ error: 'source (with its trace key) is required' })
+  }
+  if (!entity || !String(entity).trim()) {
+    return res.status(400).json({ error: 'entity is required so official evidence can be revalidated' })
+  }
+  if (!VALID_ENTITY_TYPES.has(entityType)) {
+    return res.status(400).json({ error: `entity_type must be one of: ${[...VALID_ENTITY_TYPES].join(', ')}` })
   }
 
   try {
-    const payload = traceSourceToOpportunity(source, entity || source.name)
+    // Browser-returned source fields are untrusted. Re-run the official trace
+    // and select by the opaque server-derived key so a caller cannot turn an AI
+    // hypothesis or edited amount/year/status into an addable catalog row.
+    const retraced = await traceFunding(req.db, {
+      entity: String(entity),
+      entityType,
+      useAi: false,
+    })
+    if (retraced.data_sources?.usaspending?.status === 'unavailable') {
+      return res.status(503).json({
+        error: 'funding_trace_evidence_unavailable',
+        message: 'USASpending evidence could not be revalidated. Nothing was added; retry when the official source is available.',
+      })
+    }
+    const verifiedSource = (retraced.sources || []).find((candidate) => candidate.key === source.key)
+    if (!verifiedSource || !isSourceAddable(verifiedSource)) {
+      return res.status(422).json({
+        error: 'unverified_trace_source',
+        message: 'The requested source was not present as current, verified award evidence for the resolved recipient.',
+      })
+    }
+
+    const payload = traceSourceToOpportunity(verifiedSource, retraced.entity)
     const result = await upsertFundingOpportunity(req.db, payload, { allowDirectories: true })
 
     if (result.skipped) {
