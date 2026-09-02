@@ -196,11 +196,91 @@ async function cancelActiveTasks(db, profileId, row, reason) {
 
   let cancelled = 0
   for (const task of rows || []) {
-    await cancelApplicationTask(db, task.id, {
+    cancelled += await cancelTaskFailClosed(db, task.id, reason)
+  }
+  return cancelled
+}
+
+async function cancelTaskFailClosed(db, taskId, reason) {
+  try {
+    await cancelApplicationTask(db, taskId, {
       actorRole: 'system',
       reason,
     })
-    cancelled += 1
+    return 1
+  } catch (transitionError) {
+    // A stale/legacy status must not keep unsafe Hamilton work active. Preserve
+    // the task as cancelled history even when the normal transition service
+    // cannot interpret its old state.
+    let updated
+    try {
+      updated = await db.prepare(`
+        UPDATE application_tasks
+           SET status = 'cancelled',
+               allow_auto_submit = FALSE,
+               auto_submit_enabled = FALSE,
+               last_agent_message = ?
+         WHERE id = ?
+      `).run(reason, taskId)
+    } catch {
+      updated = await db.prepare(
+        "UPDATE application_tasks SET status = 'cancelled', last_agent_message = ? WHERE id = ?",
+      ).run(reason, taskId)
+    }
+    if (changesOf(updated) !== 1) throw transitionError
+    return 1
+  }
+}
+
+export async function cancelInvalidActiveHamiltonTasks(db, {
+  reason = 'Hamilton task cancelled because its funding source is missing or rejected.',
+} = {}) {
+  const placeholders = TASK_HISTORY_STATUSES.map(() => '?').join(', ')
+  let rows
+  try {
+    rows = await db.prepare(`
+      SELECT t.id
+        FROM application_tasks t
+       WHERE LOWER(COALESCE(t.status, '')) NOT IN (${placeholders})
+         AND (
+           (t.grant_id IS NULL AND t.opportunity_id IS NULL)
+           OR (
+             t.grant_id IS NOT NULL
+             AND NOT EXISTS (SELECT 1 FROM grants g WHERE g.id = t.grant_id)
+           )
+           OR (
+             t.opportunity_id IS NOT NULL
+             AND NOT EXISTS (SELECT 1 FROM funding_opportunities fo WHERE fo.id = t.opportunity_id)
+           )
+           OR EXISTS (
+             SELECT 1 FROM grants rejected
+              WHERE rejected.id = t.grant_id
+                AND (
+                  LOWER(COALESCE(rejected.eligibility_status, '')) = 'ineligible'
+                  OR LOWER(COALESCE(rejected.match_decision, '')) = 'reject'
+                )
+           )
+           OR EXISTS (
+             SELECT 1 FROM grants rejected_pair
+              WHERE rejected_pair.profile_id = t.profile_id
+                AND rejected_pair.funding_opportunity_id = t.opportunity_id
+                AND (
+                  LOWER(COALESCE(rejected_pair.eligibility_status, '')) = 'ineligible'
+                  OR LOWER(COALESCE(rejected_pair.match_decision, '')) = 'reject'
+                )
+           )
+         )
+    `).all(...TASK_HISTORY_STATUSES)
+  } catch (error) {
+    log.warn('invalid Hamilton task sweep could not load candidates', {
+      error: String(error?.message || error),
+    })
+    return 0
+  }
+
+  let cancelled = 0
+  for (const task of rows || []) {
+    cancelled += await cancelTaskFailClosed(db, task.id, reason)
   }
   return cancelled
 }
@@ -365,6 +445,10 @@ export async function runStrictPipelineReconciliation(db, {
     }
     if (result.truncated) break
   }
+
+  // Reconcile tasks orphaned by earlier partial passes too. A task can outlive
+  // the grant row that made the original pair-scoped cancellation discoverable.
+  result.tasksCancelled += await cancelInvalidActiveHamiltonTasks(db)
 
   result.profilesAffected = affected.size
   const accounted = result.kept + result.removed + result.relabeled + result.failed
