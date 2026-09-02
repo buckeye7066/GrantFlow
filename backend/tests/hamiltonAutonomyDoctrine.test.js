@@ -209,8 +209,10 @@ describe('resolveContactFormVerifications', () => {
 
   it('isContactShapedSubmission mirrors the engine vocabulary and refuses anything application-shaped', () => {
     expect(CONTACT_SHAPED_KEYS).toContain('first_name')
-    expect(isContactShapedSubmission({ filled_fields: [{ key: 'first_name' }, { key: 'last_name' }, { key: 'email' }], pages_visited: 1 })).toBe(true)
-    expect(isContactShapedSubmission({ filled_fields: [{ key: 'zip' }], pages_visited: 1 })).toBe(true)
+    // Identity/contact field shape alone is never proof that the surface was
+    // a newsletter; short real applications can contain exactly these fields.
+    expect(isContactShapedSubmission({ filled_fields: [{ key: 'first_name' }, { key: 'last_name' }, { key: 'email' }], pages_visited: 1 })).toBe(false)
+    expect(isContactShapedSubmission({ filled_fields: [{ key: 'zip' }], pages_visited: 1 })).toBe(false)
     expect(isContactShapedSubmission({ filled_fields: [{ key: 'first_name' }, { key: 'essay', source: 'narrative' }], pages_visited: 1 })).toBe(false)
     expect(isContactShapedSubmission({ filled_fields: [{ key: 'first_name' }, { key: 'id_ssn', source: 'identity_vault' }], pages_visited: 1 })).toBe(false)
     expect(isContactShapedSubmission({ filled_fields: [{ key: 'first_name' }, { key: 'email' }], pages_visited: 6 })).toBe(false)
@@ -242,7 +244,12 @@ describe('resolveContactFormVerifications', () => {
     await seedTask(db, 'news', 'submission_verification_required', { url: 'https://www.familypromisebradleytn.org/' })
     await seedRun(db, 'news', {
       status: 'submission_verification_required', blockerKind: 'submission_verification_required',
-      result: { submit_clicked: true, pages_visited: 1, filled_fields: [{ key: 'first_name', fid: 'f1' }, { key: 'last_name', fid: 'f2' }, { key: 'email', fid: 'f3' }] },
+      result: {
+        submit_clicked: true,
+        pages_visited: 1,
+        filled_fields: [{ key: 'first_name', fid: 'f1' }, { key: 'last_name', fid: 'f2' }, { key: 'email', fid: 'f3' }],
+        confirmation_page_text: 'Thanks for joining our newsletter',
+      },
     })
     await seedTask(db, 'real', 'submission_verification_required', { url: 'https://portal.example.org/apply' })
     await seedRun(db, 'real', {
