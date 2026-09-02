@@ -10,6 +10,10 @@ import {
   resolveReleaseCommit,
 } from '../../shared/releaseIdentity.js'
 import { createLogger } from '../utils/logger.js'
+import {
+  PIPELINE_PRECISION_SNAPSHOT_CONTRACT,
+  readHamiltonTaskTruthSnapshot,
+} from '../services/hamilton/hamiltonTaskTruthSnapshot.js'
 
 const routeLogger = createLogger('route:version')
 const router = express.Router()
@@ -99,67 +103,49 @@ function sanitizeCountMap(value) {
  * "live bad work removed" without exposing private pipeline data.
  */
 async function getPipelinePrecisionVerification(db) {
-  let cleanup = null
-  let evaluator = null
-  try {
-    const row = await db
-      .prepare('SELECT value FROM system_kv WHERE key = ? LIMIT 1')
-      .get('pipeline_precision_last_run')
-    const parsed = typeof row?.value === 'string' ? JSON.parse(row.value) : null
-    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-      const repairAudit = parsed.taskRepairAudit ?? parsed.taskAudit ?? null
-      const verifiedAudit = parsed.verificationTaskAudit ?? parsed.taskAudit ?? null
-      cleanup = {
-        timestamp: typeof parsed.timestamp === 'string' ? parsed.timestamp : null,
-        scanned: finiteCount(parsed.scanned),
-        kept: finiteCount(parsed.kept),
-        removed: finiteCount(parsed.removed),
-        relabeled: finiteCount(parsed.relabeled),
-        tasks_cancelled: finiteCount(parsed.tasksCancelled ?? parsed.tasks_cancelled),
-        matches_removed: finiteCount(parsed.matchesRemoved ?? parsed.matches_removed),
-        failed: finiteCount(parsed.failed),
-        truncated: parsed.truncated === true,
-        profiles: finiteCount(parsed.profiles),
-        profiles_affected: finiteCount(parsed.profilesAffected ?? parsed.profiles_affected),
-        by_gate: sanitizeCountMap(parsed.byGate ?? parsed.by_gate),
-        task_failed: finiteCount(repairAudit?.failed),
-        task_repair_failed: finiteCount(repairAudit?.repairFailed),
-        task_truncated: repairAudit?.truncated === true,
+  const truth = await readHamiltonTaskTruthSnapshot(db)
+  const cleanup = truth.cleanup
+    ? {
+        status: truth.status,
+        timestamp: truth.asOf,
+        scanned: finiteCount(truth.cleanup.scanned),
+        kept: finiteCount(truth.cleanup.kept),
+        removed: finiteCount(truth.cleanup.removed),
+        relabeled: finiteCount(truth.cleanup.relabeled),
+        deferred: finiteCount(truth.cleanup.deferred),
+        tasks_cancelled: finiteCount(truth.cleanup.tasksCancelled),
+        matches_removed: finiteCount(truth.cleanup.matchesRemoved),
+        failed: finiteCount(truth.cleanup.failed),
+        truncated: truth.cleanup.truncated === true,
+        profiles: finiteCount(truth.cleanup.profiles),
+        profiles_affected: finiteCount(truth.cleanup.profilesAffected),
+        by_gate: sanitizeCountMap(truth.cleanup.byGate),
+        task_failed: finiteCount(truth.repair?.failed),
+        task_repair_failed: finiteCount(truth.repair?.repairFailed),
+        task_deferred: finiteCount(truth.repair?.deferred),
+        task_truncated: truth.repair?.truncated === true,
       }
-      if (verifiedAudit && typeof verifiedAudit === 'object') {
-        evaluator = {
-          as_of: cleanup.timestamp,
-          scanned: finiteCount(verifiedAudit.scanned),
-          valid: finiteCount(verifiedAudit.valid),
-          invalid: finiteCount(verifiedAudit.invalid),
-          protected: finiteCount(verifiedAudit.protected),
-          failed: finiteCount(verifiedAudit.failed),
-          repair_failed: finiteCount(verifiedAudit.repairFailed),
-          truncated: verifiedAudit.truncated === true,
-          by_gate: sanitizeCountMap(verifiedAudit.byGate),
-          by_bucket: sanitizeCountMap(verifiedAudit.byBucket),
-        }
+    : null
+  const evaluator = truth.verification
+    ? {
+        as_of: truth.asOf,
+        scanned: finiteCount(truth.verification.scanned),
+        valid: finiteCount(truth.verification.valid),
+        invalid: finiteCount(truth.verification.invalid),
+        deferred: finiteCount(truth.verification.deferred),
+        protected: finiteCount(truth.verification.protected),
+        failed: finiteCount(truth.verification.failed),
+        repair_failed: finiteCount(truth.verification.repairFailed),
+        truncated: truth.verification.truncated === true,
+        by_gate: sanitizeCountMap(truth.verification.byGate),
+        by_bucket: sanitizeCountMap(truth.verification.byBucket),
       }
-    }
-  } catch {
-    cleanup = null
-    evaluator = null
-  }
+    : null
 
   return {
-    available: cleanup !== null && evaluator !== null,
-    healthy:
-      cleanup !== null
-      && cleanup.failed === 0
-      && cleanup.truncated === false
-      && cleanup.task_failed === 0
-      && cleanup.task_repair_failed === 0
-      && cleanup.task_truncated === false
-      && evaluator !== null
-      && evaluator.failed === 0
-      && evaluator.repair_failed === 0
-      && evaluator.truncated === false
-      && evaluator.invalid === 0,
+    available: truth.available,
+    healthy: truth.healthy,
+    status: truth.status,
     cleanup,
     evaluator,
     invalid_active_hamilton_tasks: evaluator?.invalid ?? null,
@@ -192,7 +178,7 @@ router.get('/', async (req, res) => {
         geo_crawl_unknown_run: '200_missing_payload',
         release_identity: releaseIdentity.contract,
         database_migrations: databaseMigrations.contract || null,
-        pipeline_precision: 'numeric_boot_verified_task_truth_v3',
+        pipeline_precision: PIPELINE_PRECISION_SNAPSHOT_CONTRACT,
       },
     })
   } catch (error) {

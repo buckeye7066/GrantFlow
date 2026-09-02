@@ -8,7 +8,12 @@ const {
   runStrictPipelineReconciliation,
   cancelInvalidActiveHamiltonTasks,
   auditUnfinishedHamiltonTasks,
+  refreshHamiltonTaskTruthAfterLinkVerification,
 } = await import('../services/pipelineStrictReconciliation.js')
+const {
+  persistHamiltonTaskTruthSnapshot,
+  readHamiltonTaskTruthSnapshot,
+} = await import('../services/hamilton/hamiltonTaskTruthSnapshot.js')
 const {
   ensureApplicationTask,
   ensureApplicationTaskSchema,
@@ -401,9 +406,131 @@ describe('strict production pipeline reconciliation', () => {
     expect(report.tasksCancelled).toBe(0)
     expect(report.grantsRemoved).toBe(0)
     expect(report.matchesRemoved).toBe(0)
-    expect(sqlite.prepare("SELECT status FROM application_tasks WHERE grant_id = 'g-saved'").get().status).toBe('waiting_for_login')
+    expect(sqlite.prepare("SELECT status FROM application_tasks WHERE grant_id = 'g-saved'").get().status).toBe('waiting_for_review')
     expect(sqlite.prepare("SELECT COUNT(*) AS n FROM grants WHERE profile_id = ?").get(PROFILE_ID).n).toBe(7)
     expect(sqlite.prepare("SELECT COUNT(*) AS n FROM profile_opportunity_matches WHERE profile_id = ?").get(PROFILE_ID).n).toBe(7)
+  })
+
+  it('defers stale positive liveness evidence without cancelling or deleting it', async () => {
+    const { sqlite, db } = await seed()
+    sqlite.prepare(
+      "UPDATE funding_opportunities SET last_verified_at = '2026-07-01T00:00:00.000Z' WHERE id = 'fo-good'",
+    ).run()
+
+    const report = await auditUnfinishedHamiltonTasks(db, {
+      enforce: true,
+      now: new Date('2026-09-02T00:00:00.000Z'),
+    })
+
+    expect(report).toMatchObject({
+      scanned: 6,
+      valid: 0,
+      invalid: 5,
+      deferred: 1,
+      failed: 0,
+      repairFailed: 0,
+      truncated: false,
+      tasksCancelled: 5,
+    })
+    expect(report.byReason['real:link_reverification_required']).toBe(1)
+    expect(sqlite.prepare("SELECT COUNT(*) AS n FROM grants WHERE id = 'g-good'").get().n).toBe(1)
+    expect(sqlite.prepare("SELECT status FROM application_tasks WHERE grant_id = 'g-good'").get().status).toBe('waiting_for_login')
+    expect(sqlite.prepare("SELECT COUNT(*) AS n FROM profile_opportunity_matches WHERE opportunity_id = 'fo-good'").get().n).toBe(1)
+  })
+
+  it('refreshes a pending boot snapshot after the recurring link verifier supplies fresh evidence', async () => {
+    const { sqlite, db } = await seed()
+    const initialRepair = await auditUnfinishedHamiltonTasks(db, {
+      enforce: true,
+      now: new Date('2026-09-02T00:00:00.000Z'),
+    })
+    expect(initialRepair).toMatchObject({ tasksCancelled: 5, failed: 0, repairFailed: 0 })
+    sqlite.prepare(
+      "UPDATE funding_opportunities SET last_verified_at = '2026-07-01T00:00:00.000Z' WHERE id = 'fo-good'",
+    ).run()
+    const pendingAudit = {
+      scanned: 1,
+      valid: 0,
+      invalid: 0,
+      deferred: 1,
+      protected: 0,
+      failed: 0,
+      repairFailed: 0,
+      truncated: false,
+      byGate: { real: 1 },
+      byBucket: { needs_you: 1 },
+    }
+    await persistHamiltonTaskTruthSnapshot(db, {
+      timestamp: '2026-09-02T00:00:00.000Z',
+      status: 'pending_reverification',
+      scanned: 1,
+      kept: 1,
+      removed: 0,
+      relabeled: 0,
+      deferred: 1,
+      tasksCancelled: 0,
+      matchesRemoved: 0,
+      failed: 0,
+      truncated: false,
+      profiles: 1,
+      profilesAffected: 0,
+      byGate: { real: 1 },
+      taskRepairAudit: pendingAudit,
+      taskAudit: pendingAudit,
+      verificationTaskAudit: pendingAudit,
+    })
+    sqlite.prepare(
+      "UPDATE funding_opportunities SET last_verified_at = '2026-09-02T00:00:00.000Z' WHERE id = 'fo-good'",
+    ).run()
+
+    const refreshed = await refreshHamiltonTaskTruthAfterLinkVerification(db, {
+      now: new Date('2026-09-02T00:00:01.000Z'),
+    })
+    const truth = await readHamiltonTaskTruthSnapshot(db)
+
+    expect(refreshed.status).toBe('verified')
+    expect(truth).toMatchObject({ available: true, healthy: true, queueReadable: true, status: 'verified' })
+    expect(truth.verification).toMatchObject({ invalid: 0, deferred: 0, failed: 0, truncated: false })
+    expect(sqlite.prepare("SELECT COUNT(*) AS n FROM grants WHERE id = 'g-good'").get().n).toBe(1)
+  })
+
+  it('preserves every trace for submission-uncertain work while relabeling its grant', async () => {
+    const { sqlite, db } = await seed()
+    sqlite.prepare(
+      "UPDATE application_tasks SET status = 'submit_attempt_started' WHERE grant_id = 'g-saved'",
+    ).run()
+
+    const result = await runStrictPipelineReconciliation(db)
+
+    expect(result).toMatchObject({
+      kept: 1,
+      removed: 4,
+      relabeled: 2,
+      tasksCancelled: 4,
+      matchesRemoved: 5,
+      failed: 0,
+      truncated: false,
+    })
+    expect(result.taskAudit).toMatchObject({ protected: 1, repairFailed: 0, failed: 0 })
+    expect(sqlite.prepare("SELECT status FROM application_tasks WHERE grant_id = 'g-saved'").get().status).toBe('submit_attempt_started')
+    expect(sqlite.prepare("SELECT eligibility_status, match_decision FROM grants WHERE id = 'g-saved'").get()).toEqual({
+      eligibility_status: 'ineligible',
+      match_decision: 'REJECT',
+    })
+    expect(sqlite.prepare("SELECT COUNT(*) AS n FROM profile_opportunity_matches WHERE opportunity_id = 'fo-saved'").get().n).toBe(1)
+    expect(sqlite.prepare("SELECT COUNT(*) AS n FROM pipeline_dismissals WHERE opportunity_id = 'fo-saved'").get().n).toBe(0)
+  })
+
+  it('never cancels a submission-uncertain task whose grant is temporarily missing', async () => {
+    const { sqlite, db } = await seed()
+    sqlite.prepare(
+      "UPDATE application_tasks SET status = 'submission_verification_required' WHERE grant_id = 'g-good'",
+    ).run()
+    sqlite.prepare("DELETE FROM grants WHERE id = 'g-good'").run()
+
+    expect(await cancelInvalidActiveHamiltonTasks(db)).toBe(0)
+    expect(sqlite.prepare("SELECT status FROM application_tasks WHERE grant_id = 'g-good'").get().status)
+      .toBe('submission_verification_required')
   })
 
 })

@@ -12,6 +12,10 @@ import {
   cleanupDisallowedHamiltonTraces,
 } from './hamilton/hamiltonFundingSourcePolicy.js'
 import { bucketForTaskStatus } from '../../shared/hamiltonTaskLifecycle.js'
+import {
+  persistHamiltonTaskTruthSnapshot,
+  readHamiltonTaskTruthSnapshot,
+} from './hamilton/hamiltonTaskTruthSnapshot.js'
 
 const log = createLogger('pipeline-strict-reconciliation')
 
@@ -21,6 +25,10 @@ const TASK_HISTORY_STATUSES = Object.freeze([
 ])
 const SUBMISSION_UNCERTAIN_TASK_STATUSES = new Set([
   'submit_attempt_started', 'submit_evidence_pending', 'submission_verification_required',
+])
+const NON_CANCELLABLE_TASK_STATUSES = Object.freeze([
+  ...TASK_HISTORY_STATUSES,
+  ...SUBMISSION_UNCERTAIN_TASK_STATUSES,
 ])
 
 function changesOf(result) {
@@ -102,7 +110,7 @@ async function cancelActiveTasks(db, profileId, row, reason) {
 
   let rows = []
   try {
-    const placeholders = TASK_HISTORY_STATUSES.map(() => '?').join(', ')
+    const placeholders = NON_CANCELLABLE_TASK_STATUSES.map(() => '?').join(', ')
     rows = await db.prepare(`
       SELECT id
         FROM application_tasks
@@ -110,7 +118,7 @@ async function cancelActiveTasks(db, profileId, row, reason) {
          AND ((grant_id IS NOT NULL AND grant_id = ?)
            OR (opportunity_id IS NOT NULL AND opportunity_id = ?))
          AND LOWER(COALESCE(status, '')) NOT IN (${placeholders})
-    `).all(...pairParams, ...TASK_HISTORY_STATUSES)
+    `).all(...pairParams, ...NON_CANCELLABLE_TASK_STATUSES)
   } catch {
     return 0
   }
@@ -156,7 +164,7 @@ async function cancelTaskFailClosed(db, taskId, reason) {
 export async function cancelInvalidActiveHamiltonTasks(db, {
   reason = 'Hamilton task cancelled because its funding source is missing or rejected.',
 } = {}) {
-  const placeholders = TASK_HISTORY_STATUSES.map(() => '?').join(', ')
+  const placeholders = NON_CANCELLABLE_TASK_STATUSES.map(() => '?').join(', ')
   let rows
   try {
     rows = await db.prepare(`
@@ -191,7 +199,7 @@ export async function cancelInvalidActiveHamiltonTasks(db, {
                 )
            )
          )
-    `).all(...TASK_HISTORY_STATUSES)
+    `).all(...NON_CANCELLABLE_TASK_STATUSES)
   } catch (error) {
     log.warn('invalid Hamilton task sweep could not load candidates', {
       error: String(error?.message || error),
@@ -212,6 +220,33 @@ async function loadTaskSource(db, table, id) {
   return await db.prepare(`SELECT * FROM ${table} WHERE id = ? LIMIT 1`).get(String(id))
 }
 
+async function hasSubmissionUncertainTask(db, profileId, row) {
+  const statuses = [...SUBMISSION_UNCERTAIN_TASK_STATUSES]
+  const placeholders = statuses.map(() => '?').join(', ')
+  try {
+    const task = await db.prepare(`
+      SELECT id
+        FROM application_tasks
+       WHERE profile_id = ?
+         AND ((grant_id IS NOT NULL AND grant_id = ?)
+           OR (opportunity_id IS NOT NULL AND opportunity_id = ?))
+         AND LOWER(COALESCE(status, '')) IN (${placeholders})
+       LIMIT 1
+    `).get(
+      String(profileId),
+      row?.grant_id ? String(row.grant_id) : null,
+      row?.funding_opportunity_id ? String(row.funding_opportunity_id) : null,
+      ...statuses,
+    )
+    return Boolean(task?.id)
+  } catch (error) {
+    // This predicate protects evidence around a possibly completed external
+    // submission. A schema/query failure must stop cleanup, never be mistaken
+    // for proof that no protected task exists.
+    throw new Error('could not verify submission-uncertain task protection', { cause: error })
+  }
+}
+
 /**
  * Audit every unfinished Hamilton task with the exact evaluator used before
  * creation. `enforce:false` is the read-only public metric; `enforce:true` is
@@ -230,6 +265,7 @@ export async function auditUnfinishedHamiltonTasks(db, {
     scanned: 0,
     valid: 0,
     invalid: 0,
+    deferred: 0,
     protected: 0,
     failed: 0,
     repairFailed: 0,
@@ -276,8 +312,18 @@ export async function auditUnfinishedHamiltonTasks(db, {
   for (const task of tasks || []) {
     out.scanned += 1
     const taskProfileId = String(task?.profile_id || '')
+    const taskStatus = String(task?.status || '').trim().toLowerCase()
     let classified = false
     try {
+      // Submission-uncertain states are evidence-resolution work, not fresh
+      // applications. An external side effect may already have happened, so
+      // neither the task, its source/grant, nor its portal traces may be
+      // rewritten by a funding-policy cleanup.
+      if (SUBMISSION_UNCERTAIN_TASK_STATUSES.has(taskStatus)) {
+        out.protected += 1
+        classified = true
+        continue
+      }
       const grant = await loadTaskSource(db, 'grants', task?.grant_id)
       const opportunityId = task?.opportunity_id || grant?.funding_opportunity_id || null
       const opportunity = await loadTaskSource(db, 'funding_opportunities', opportunityId)
@@ -321,6 +367,17 @@ export async function auditUnfinishedHamiltonTasks(db, {
         })
       }
 
+      if (assessment.retryable) {
+        out.deferred += 1
+        classified = true
+        const gate = String(assessment.gate || assessment.code || 'unknown')
+        const reason = String(assessment.reasons?.[0] || assessment.code || 'retryable_policy_check')
+        const bucket = bucketForTaskStatus(task?.status)
+        out.byGate[gate] = (out.byGate[gate] || 0) + 1
+        out.byBucket[bucket] = (out.byBucket[bucket] || 0) + 1
+        out.byReason[reason] = (out.byReason[reason] || 0) + 1
+        continue
+      }
       if (assessment.unavailable) {
         throw new Error(`Hamilton policy unavailable: ${assessment.reasons?.[0] || assessment.code}`)
       }
@@ -351,9 +408,12 @@ export async function auditUnfinishedHamiltonTasks(db, {
           reason: `task_precision:${gate}:${reason}`,
         })
         out.tasksCancelled += finiteCount(cleanup?.cancelled_tasks)
-        out.matchesRemoved += await removePersistedMatch(db, taskProfileId, opportunityId, { failClosed: true })
+        const sourceEvidenceProtected = cleanup?.protected_submission_evidence === true
+        if (!sourceEvidenceProtected) {
+          out.matchesRemoved += await removePersistedMatch(db, taskProfileId, opportunityId, { failClosed: true })
+        }
 
-        if (grant && !isProtectedHistory(grant)) {
+        if (!sourceEvidenceProtected && grant && !isProtectedHistory(grant)) {
           await recordDismissal(db, {
             profileId: taskProfileId,
             grantRow: grant,
@@ -365,7 +425,7 @@ export async function auditUnfinishedHamiltonTasks(db, {
           const deleted = await db.prepare('DELETE FROM grants WHERE id = ? AND profile_id = ?')
             .run(String(grant.id), taskProfileId)
           out.grantsRemoved += changesOf(deleted)
-        } else if (!grant && opportunity) {
+        } else if (!sourceEvidenceProtected && !grant && opportunity) {
           await recordDismissal(db, {
             profileId: taskProfileId,
             opportunity,
@@ -398,7 +458,12 @@ export async function auditUnfinishedHamiltonTasks(db, {
           'SELECT status FROM application_tasks WHERE id = ? LIMIT 1',
         ).get(String(task.id))
       }
-      if (!repairedTask || !TASK_HISTORY_STATUSES.includes(String(repairedTask.status || '').trim().toLowerCase())) {
+      const finalStatus = String(repairedTask?.status || '').trim().toLowerCase()
+      if (
+        !repairedTask
+        || (!TASK_HISTORY_STATUSES.includes(finalStatus)
+          && !SUBMISSION_UNCERTAIN_TASK_STATUSES.has(finalStatus))
+      ) {
         throw new Error(`task ${task.id} remained unfinished after precision cleanup`)
       }
     } catch (error) {
@@ -410,11 +475,83 @@ export async function auditUnfinishedHamiltonTasks(db, {
       })
     }
   }
-  const accounted = out.valid + out.invalid + out.protected + out.failed
+  const accounted = out.valid + out.invalid + out.deferred + out.protected + out.failed
   if (accounted !== out.scanned) {
     out.failed += Math.abs(out.scanned - accounted) || 1
   }
   return out
+}
+
+/**
+ * Refresh the cached task-truth read-back after the canonical recurring link
+ * verifier has updated liveness evidence. This is deliberately narrower than
+ * the boot pipeline sweep: it may advance only an already complete/readable
+ * boot snapshot, and it never converts a failed or missing boot census green.
+ */
+export async function refreshHamiltonTaskTruthAfterLinkVerification(db, {
+  limit = 100000,
+  now = new Date(),
+  actor = 'system:recurring-link-verification',
+} = {}) {
+  const prior = await readHamiltonTaskTruthSnapshot(db)
+  if (!prior.available || !prior.queueReadable || !prior.cleanup) {
+    throw new Error(`Hamilton task truth cannot refresh from boot status ${prior.status || 'unavailable'}`)
+  }
+
+  const taskRepairAudit = await auditUnfinishedHamiltonTasks(db, {
+    enforce: true,
+    limit,
+    now,
+    actor,
+  })
+  if (taskRepairAudit.failed > 0 || taskRepairAudit.repairFailed > 0 || taskRepairAudit.truncated) {
+    throw new Error(
+      `Hamilton link-refresh repair incomplete: failed=${taskRepairAudit.failed}, repair_failed=${taskRepairAudit.repairFailed}, truncated=${taskRepairAudit.truncated}`,
+    )
+  }
+
+  const verificationTaskAudit = await auditUnfinishedHamiltonTasks(db, {
+    enforce: false,
+    limit,
+    now,
+    actor: `${actor}:readback`,
+  })
+  if (
+    verificationTaskAudit.invalid > 0
+    || verificationTaskAudit.failed > 0
+    || verificationTaskAudit.repairFailed > 0
+    || verificationTaskAudit.truncated
+  ) {
+    throw new Error(
+      `Hamilton link-refresh verification incomplete: invalid=${verificationTaskAudit.invalid}, failed=${verificationTaskAudit.failed}, repair_failed=${verificationTaskAudit.repairFailed}, truncated=${verificationTaskAudit.truncated}`,
+    )
+  }
+
+  const deferred = Math.max(
+    Number(taskRepairAudit.deferred || 0),
+    Number(verificationTaskAudit.deferred || 0),
+  )
+  const summary = {
+    timestamp: new Date().toISOString(),
+    status: deferred > 0 ? 'pending_reverification' : 'verified',
+    scanned: prior.cleanup.scanned,
+    kept: prior.cleanup.kept,
+    removed: prior.cleanup.removed,
+    relabeled: prior.cleanup.relabeled,
+    deferred,
+    tasksCancelled: prior.cleanup.tasksCancelled + Number(taskRepairAudit.tasksCancelled || 0),
+    matchesRemoved: prior.cleanup.matchesRemoved + Number(taskRepairAudit.matchesRemoved || 0),
+    failed: 0,
+    truncated: false,
+    profiles: prior.cleanup.profiles,
+    profilesAffected: prior.cleanup.profilesAffected,
+    byGate: prior.cleanup.byGate,
+    taskRepairAudit,
+    taskAudit: verificationTaskAudit,
+    verificationTaskAudit,
+  }
+  await persistHamiltonTaskTruthSnapshot(db, summary)
+  return summary
 }
 
 function finiteCount(value) {
@@ -463,12 +600,7 @@ async function relabelProtectedHistory(db, row, tag) {
 
 async function persistSummary(db, summary) {
   try {
-    const now = new Date().toISOString()
-    await db.prepare(`
-      INSERT INTO system_kv (key, value, updated_at)
-      VALUES (?, ?, ?)
-      ON CONFLICT (key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
-    `).run('pipeline_precision_last_run', JSON.stringify(summary), now)
+    await persistHamiltonTaskTruthSnapshot(db, summary)
   } catch (error) {
     log.warn('strict reconciliation summary could not be persisted', {
       error: String(error?.message || error),
@@ -488,6 +620,7 @@ export async function runStrictPipelineReconciliation(db, {
     relabeled: 0,
     tasksCancelled: 0,
     matchesRemoved: 0,
+    deferred: 0,
     failed: 0,
     truncated: false,
     profiles: 0,
@@ -529,6 +662,15 @@ export async function runStrictPipelineReconciliation(db, {
           profileFacts: facts,
           now,
         })
+        if (assessment.retryable) {
+          const reason = String(assessment.reasons?.[0] || assessment.code || 'retryable_policy_check')
+          const gate = String(assessment.gate || assessment.code || 'unknown')
+          result.deferred += 1
+          result.byGate[gate] = (result.byGate[gate] || 0) + 1
+          result.byReason[`strict_pipeline:${gate}:${reason}`] =
+            (result.byReason[`strict_pipeline:${gate}:${reason}`] || 0) + 1
+          continue
+        }
         if (assessment.unavailable) {
           throw new Error(`Hamilton policy unavailable: ${assessment.reasons?.[0] || assessment.code}`)
         }
@@ -543,6 +685,16 @@ export async function runStrictPipelineReconciliation(db, {
         result.byGate[gate] = (result.byGate[gate] || 0) + 1
         result.byReason[tag] = (result.byReason[tag] || 0) + 1
         affected.add(profileId)
+
+        // Submission evidence outranks cleanup. Preserve the grant, source,
+        // portal links, and task while clearly relabeling the grant so it can
+        // never seed new work. The task audit below counts the evidence hold as
+        // protected rather than trying to force it into terminal history.
+        if (await hasSubmissionUncertainTask(db, profileId, row)) {
+          await relabelProtectedHistory(db, row, tag)
+          result.relabeled += 1
+          continue
+        }
 
         result.tasksCancelled += await cancelActiveTasks(
           db,
@@ -595,7 +747,7 @@ export async function runStrictPipelineReconciliation(db, {
   }
 
   result.profilesAffected = affected.size
-  const accounted = result.kept + result.removed + result.relabeled + result.failed
+  const accounted = result.kept + result.removed + result.relabeled + result.deferred + result.failed
   if (accounted !== result.scanned) {
     throw new Error(`strict pipeline accounting mismatch: scanned=${result.scanned}, accounted=${accounted}`)
   }
@@ -612,6 +764,10 @@ export async function runStrictPipelineReconciliation(db, {
 
   const summary = {
     timestamp: new Date().toISOString(),
+    // The migration repairs durable rows but the boot invariant performs the
+    // independent read-back census. Never label a migration-only snapshot as a
+    // verified queue contract.
+    status: 'migration_reconciled',
     ...result,
     errors: result.errors.slice(0, 5),
   }

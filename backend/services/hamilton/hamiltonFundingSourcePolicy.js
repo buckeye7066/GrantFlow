@@ -20,6 +20,11 @@ const TERMINAL_TASK_STATUSES = new Set([
   'failed', 'cancelled', 'canceled', 'archived', 'rejected', 'closed',
   'submit_attempt_started', 'submit_evidence_pending', 'submission_verification_required',
 ])
+const EVIDENCE_PROTECTED_TASK_STATUSES = new Set([
+  'submitted', 'submit_attempt_started', 'submit_evidence_pending',
+  'submission_verification_required', 'draft_completed', 'completed_draft',
+  'completed', 'complete', 'done', 'archived', 'rejected', 'closed',
+])
 const POSITIVE_LINK_STATUSES = new Set([
   'ok', 'redirect', 'verified', 'alive', 'live', 'valid', 'active', 'reachable',
   'success', '200',
@@ -210,13 +215,18 @@ async function computeLiveEngineDecision(db, profileId, subject) {
   }
 }
 
-function unavailablePolicyAssessment(reason = 'canonical_engine_unavailable') {
+function unavailablePolicyAssessment(
+  reason = 'canonical_engine_unavailable',
+  { gate = 'canonical_accept', retryable = false, evidence = null } = {},
+) {
   return {
     ok: false,
     unavailable: true,
-    gate: 'canonical_accept',
+    retryable,
+    gate,
     code: 'funding_source_policy_unavailable',
     reasons: [reason],
+    ...(evidence ? { evidence } : {}),
     message: 'Hamilton could not verify current funding-source policy. No task was created or removed.',
   }
 }
@@ -262,10 +272,24 @@ function positiveRealityProof(subject, now) {
   const verifiedAtRaw = subject?.last_verified_at || subject?.link_verified_at || null
   const verifiedAt = verifiedAtRaw ? Date.parse(verifiedAtRaw) : Number.NaN
   const nowMs = now instanceof Date ? now.getTime() : Date.parse(now)
-  if (!Number.isFinite(verifiedAt) || !Number.isFinite(nowMs) || verifiedAt < nowMs - LINK_VERIFICATION_MAX_AGE_MS) {
+  if (!Number.isFinite(verifiedAt) || !Number.isFinite(nowMs)) {
     return {
       pass: false,
-      reason: `real:link_verification_${Number.isFinite(verifiedAt) ? 'stale' : 'missing'}`,
+      reason: 'real:link_verification_missing',
+      evidence: { link_status: status, last_verified_at: verifiedAtRaw },
+    }
+  }
+  if (verifiedAt < nowMs - LINK_VERIFICATION_MAX_AGE_MS) {
+    // Age is not negative liveness evidence. The canonical link verifier owns
+    // that determination; treating a routine recheck becoming due as a dead
+    // link let the boot audit cancel tasks and tombstone grants before the
+    // verifier's delayed startup pass could probe them. Preserve all work and
+    // surface a retryable policy outage until a current probe is available.
+    return {
+      pass: false,
+      unavailable: true,
+      retryable: true,
+      reason: 'real:link_reverification_required',
       evidence: { link_status: status, last_verified_at: verifiedAtRaw },
     }
   }
@@ -301,7 +325,16 @@ export function evaluateHamiltonPositiveGates(subject, facts, { now = new Date()
   }
 
   const real = positiveRealityProof(subject, now)
-  if (!real.pass) return { pass: false, gate: 'real', reason: real.reason, evidence: real.evidence }
+  if (!real.pass) {
+    return {
+      pass: false,
+      gate: 'real',
+      reason: real.reason,
+      evidence: real.evidence,
+      unavailable: real.unavailable === true,
+      retryable: real.retryable === true,
+    }
+  }
 
   return {
     pass: true,
@@ -436,6 +469,13 @@ export async function assessHamiltonFundingSource(db, {
   const gates = evaluateHamiltonPositiveGates(subject, facts, { now })
   if (!gates.pass) {
     const reason = String(gates.reason || 'not_positively_verified')
+    if (gates.unavailable || gates.retryable) {
+      return unavailablePolicyAssessment(reason, {
+        gate: gates.gate || 'real',
+        retryable: gates.retryable === true,
+        evidence: gates.evidence ?? null,
+      })
+    }
     const reasons = [`${gates.gate}:${reason}`]
     const hardProfileMismatch = gates.gate === 'qualifies'
       && (gates.evidence?.decision === 'mismatch' || gates.evidence?.gate)
@@ -566,8 +606,22 @@ export async function cleanupDisallowedHamiltonTraces(
       FROM application_tasks
       WHERE ${where.sql}
     `).all(...where.params) || []
-  } catch {
-    return empty
+  } catch (error) {
+    // This lookup is the evidence-protection boundary. Treating an unreadable
+    // task table as "no protected submissions" could authorize destructive
+    // source cleanup during a transient database failure.
+    throw error
+  }
+
+  const protectedEvidenceTask = tasks.find((task) =>
+    EVIDENCE_PROTECTED_TASK_STATUSES.has(asLower(task.status)),
+  )
+  if (protectedEvidenceTask) {
+    return {
+      ...empty,
+      protected_submission_evidence: true,
+      protected_task_status: asLower(protectedEvidenceTask.status),
+    }
   }
 
   const activeTasks = tasks.filter((task) => !TERMINAL_TASK_STATUSES.has(asLower(task.status)))

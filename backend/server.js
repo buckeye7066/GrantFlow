@@ -3966,6 +3966,23 @@ if (process.env.NODE_ENV !== 'test') {
             verifiedBy: `recurring-link-repair:pid=${process.pid}`,
           })
           console.log('[link-repair] recurring lifecycle pass:', lifecycle)
+          // Link age is retryable evidence debt, not negative evidence. Once
+          // the canonical verifier refreshes it, rerun the serialized precision
+          // invariant so the cached task-truth contract can return from
+          // pending_reverification to verified without requiring a restart.
+          const { enforcePipelinePrecision } = await import('./startup/enforceInvariants.js')
+          const precision = await enforcePipelinePrecision(dbInstance)
+          if (precision?.ok !== true || precision?.status !== 'verified') {
+            throw new Error(
+              `Hamilton task-truth refresh did not verify: ${precision?.error || precision?.status || precision?.skipped || 'unknown error'}`,
+            )
+          }
+          console.log('[hamilton-task-truth] post-link-verification refresh:', {
+            invariant: precision.name,
+            scanned: Number(precision.taskAudit?.scanned || 0),
+            invalid: Number(precision.taskAudit?.invalid || 0),
+            deferred: Number(precision.taskAudit?.deferred || 0),
+          })
       } catch (err) {
         console.warn('[link-verify] failed:', err.message)
       }

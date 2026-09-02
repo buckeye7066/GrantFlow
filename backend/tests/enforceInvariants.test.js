@@ -2153,7 +2153,9 @@ describe('enforceHamiltonStopRecheck', () => {
 
     // Canonical-shaped stub: persists the verdict like verifyOpportunityLinkNow.
     const verifyLink = async (dbi, opp) => {
-      await dbi.prepare("UPDATE funding_opportunities SET link_status = 'ok' WHERE id = ?").run(opp.id)
+      await dbi.prepare(
+        "UPDATE funding_opportunities SET link_status = 'ok', last_verified_at = CURRENT_TIMESTAMP WHERE id = ?",
+      ).run(opp.id)
       return { status: 'ok', code: 200, updated: true }
     }
     const res = await __testables.enforceHamiltonStopRecheck(db, { verifyLink })

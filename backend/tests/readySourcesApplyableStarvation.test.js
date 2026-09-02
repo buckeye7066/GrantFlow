@@ -132,6 +132,22 @@ describe('listReadySources does not let the LIMIT starve applyable sources', () 
     expect(selected).toEqual([])
   })
 
+  it('propagates a live-policy outage instead of misreporting zero ready sources', async () => {
+    db = await makeDb({ noise: 0, applyableCount: 1 })
+
+    await expect(selectAutoSubmitSources(db, PROFILE, {
+      assess: async () => ({
+        ok: false,
+        unavailable: true,
+        retryable: true,
+        code: 'funding_source_policy_unavailable',
+      }),
+    })).rejects.toMatchObject({
+      code: 'funding_source_policy_unavailable',
+      status: 503,
+    })
+  })
+
   it('is an ORDER BY and not a WHERE — unapplyable rows are still returned', async () => {
     db = await makeDb({ noise: 120, applyableCount: 5 })
     const ready = await listReadySources(db, PROFILE)
