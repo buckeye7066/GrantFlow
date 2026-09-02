@@ -5352,16 +5352,26 @@ export async function enforcePipelinePrecision(db) {
       log.warn('pipeline_precision: verifier unavailable (non-fatal)', { error: String(err?.message || err) })
       return { scanned: 0, repaired: 0, enforced: true, skipped: 'deps' }
     }
-    const { loadProfileFacts, loadPipelineRows, gateRelatable, gateQualifies, gateCoversNeed, gateRealOffline, GATES } = audit
+    const {
+      loadProfileFacts, loadPipelineRows, gateRelatable, gateQualifies,
+      gateCoversNeed, gateRealOffline, GATES, PROTECTED_GRANT_STATUSES,
+    } = audit
     let cancelApplicationTask = null
+    let updateApplicationTask = null
     let recordDismissalFn = null
-    try { ({ cancelApplicationTask } = await import('../services/hamilton/applicationTaskStore.js')) } catch { cancelApplicationTask = null }
+    try {
+      ({ cancelApplicationTask, updateApplicationTask } = await import('../services/hamilton/applicationTaskStore.js'))
+    } catch {
+      cancelApplicationTask = null
+      updateApplicationTask = null
+    }
     try { ({ recordDismissal: recordDismissalFn } = await import('../services/pipelineDismissals.js')) } catch { recordDismissalFn = null }
 
-    const limit = _boundedLimit('PIPELINE_PRECISION_LIMIT', 2000)
+    const limit = _boundedLimit('PIPELINE_PRECISION_LIMIT', 100000)
     const hasAwarded = grantCols.has('amount_awarded')
     const hasEligStatus = grantCols.has('eligibility_status')
     const hasIneligReasons = grantCols.has('ineligibility_reasons')
+    const hasMatchDecision = grantCols.has('match_decision')
     const now = new Date()
 
     let profileIds = []
@@ -5381,7 +5391,8 @@ export async function enforcePipelinePrecision(db) {
     try { await db.prepare('SELECT id FROM application_tasks LIMIT 1').get(); hasTasks = true } catch { hasTasks = false }
 
     const counts = {
-      scanned: 0, kept: 0, removed: 0, relabeled: 0, failed: 0, tasksCancelled: 0,
+      scanned: 0, kept: 0, removed: 0, relabeled: 0, failed: 0,
+      tasksCancelled: 0, matchesRemoved: 0,
       protectedProfilesSkipped: 0, needNeutralProfile: 0, needNeutralRow: 0,
       harvestFirst: 0, truncated: false, loadFailures: 0, firstLoadError: null,
     }
@@ -5401,11 +5412,62 @@ export async function enforcePipelinePrecision(db) {
       } catch { return new Map() }
     }
     const isProtectedRow = (row, awarded) => {
-      const status = row.grant_status === null || row.grant_status === undefined ? null : String(row.grant_status).toLowerCase()
-      if (status && PROTECTED_PIPELINE_STATUSES.includes(status)) return true
-      if (PROTECTED_NAME_PATTERN.test(`${row.title ?? ''} ${row.sponsor ?? ''}`)) return true
+      const status = row.grant_status === null || row.grant_status === undefined
+        ? null
+        : String(row.grant_status).toLowerCase()
+      if (status && PROTECTED_GRANT_STATUSES.has(status)) return true
       if ((awarded.get(String(row.grant_id)) || 0) > 0) return true
       return false
+    }
+
+    const cancelTasksForFailedPair = async (profileId, row, reason) => {
+      if (!hasTasks || !cancelApplicationTask) return 0
+      let taskRows = []
+      try {
+        const ph = TERMINAL_TASK_STATUSES.map(() => '?').join(', ')
+        taskRows = await db.prepare(
+          `SELECT id FROM application_tasks
+            WHERE profile_id = ?
+              AND ((grant_id IS NOT NULL AND grant_id = ?)
+                OR (opportunity_id IS NOT NULL AND opportunity_id = ?))
+              AND (status IS NULL OR LOWER(status) NOT IN (${ph}))`,
+        ).all(
+          profileId,
+          row.grant_id ? String(row.grant_id) : null,
+          row.funding_opportunity_id ? String(row.funding_opportunity_id) : null,
+          ...TERMINAL_TASK_STATUSES,
+        )
+      } catch { taskRows = [] }
+      let cancelled = 0
+      for (const task of taskRows || []) {
+        try {
+          if (updateApplicationTask) {
+            await updateApplicationTask(db, task.id, { allowAutoSubmit: false, autoSubmitEnabled: false })
+          }
+        } catch { /* proceed to cancel regardless */ }
+        try {
+          await cancelApplicationTask(db, task.id, { actorRole: 'system', reason })
+        } catch (err) {
+          log.warn('pipeline_precision: task cancel failed (non-fatal)', { task: task.id, error: String(err?.message || err) })
+        }
+        // Force-cancel to guarantee idempotent closure of non-terminal tasks
+        try {
+          await db.prepare('UPDATE application_tasks SET status = ?, last_agent_message = ? WHERE id = ?')
+            .run('cancelled', reason, task.id)
+          cancelled += 1
+        } catch { /* ignore */ }
+      }
+      return cancelled
+    }
+
+    const removePersistedMatchForFailedPair = async (profileId, row) => {
+      if (!row.funding_opportunity_id) return 0
+      try {
+        const result = await db.prepare(
+          'DELETE FROM profile_opportunity_matches WHERE profile_id = ? AND opportunity_id = ?',
+        ).run(profileId, row.funding_opportunity_id)
+        return changesOf(result)
+      } catch { return 0 }
     }
 
     for (const profileId of profileIds) {
@@ -5439,9 +5501,9 @@ export async function enforcePipelinePrecision(db) {
           }
           if (!failedGate) {
             verdict = gateCoversNeed(row, facts)
-            if (!verdict.pass) failedGate = GATES.COVERS_NEED
-            else if (profileDeclaresNoNeeds) counts.needNeutralProfile += 1
+            if (profileDeclaresNoNeeds) counts.needNeutralProfile += 1
             else if (verdict?.evidence?.detail === 'opportunity_states_no_need_vocabulary') counts.needNeutralRow += 1
+            if (!verdict.pass) failedGate = GATES.COVERS_NEED
           }
           if (!failedGate) {
             const real = gateRealOffline(row, { now })
@@ -5464,6 +5526,11 @@ export async function enforcePipelinePrecision(db) {
           continue
         }
 
+        // Clean up any live tasks/matches tied to this invalid pair BEFORE deciding retention path
+        const cleanupReason = `Pipeline precision — ${reasonKey}`
+        counts.tasksCancelled += await cancelTasksForFailedPair(profileId, row, cleanupReason)
+        counts.matchesRemoved += await removePersistedMatchForFailedPair(profileId, row)
+
         if (isProtectedRow(row, awarded)) {
           try {
             if (hasEligStatus && hasIneligReasons) {
@@ -5476,9 +5543,16 @@ export async function enforcePipelinePrecision(db) {
               if (!Array.isArray(existing)) existing = []
               const tag = `pipeline_precision:${reasonKey}${detail ? `:${detail}` : ''}`
               if (!existing.includes(tag)) existing.push(tag)
-              await db
-                .prepare('UPDATE grants SET eligibility_status = ?, ineligibility_reasons = ? WHERE id = ?')
-                .run('ineligible', JSON.stringify(existing), row.grant_id)
+              const sets = []
+              const params = []
+              if (hasEligStatus) { sets.push('eligibility_status = ?'); params.push('ineligible') }
+              if (hasIneligReasons) { sets.push('ineligibility_reasons = ?'); params.push(JSON.stringify(existing)) }
+              if (hasMatchDecision) { sets.push('match_decision = ?'); params.push('REJECT') }
+              if (sets.length === 0) {
+                throw new Error('grants.* columns absent — protected row cannot be re-labeled')
+              }
+              params.push(row.grant_id)
+              await db.prepare(`UPDATE grants SET ${sets.join(', ')} WHERE id = ?`).run(...params)
             } else if (hasEligStatus) {
               await db.prepare('UPDATE grants SET eligibility_status = ? WHERE id = ?').run('ineligible', row.grant_id)
             } else {
@@ -5496,25 +5570,8 @@ export async function enforcePipelinePrecision(db) {
           continue
         }
 
-        // Early/discovery row: cancel open tasks, tombstone, delete.
+        // Early/discovery row: its tasks/match were closed above; now tombstone and delete.
         try {
-          if (hasTasks && cancelApplicationTask) {
-            let taskRows = []
-            try {
-              const ph = TERMINAL_TASK_STATUSES.map(() => '?').join(', ')
-              taskRows = await db
-                .prepare(`SELECT id FROM application_tasks WHERE profile_id = ? AND grant_id = ? AND (status IS NULL OR status NOT IN (${ph}))`)
-                .all(profileId, row.grant_id, ...TERMINAL_TASK_STATUSES)
-            } catch { taskRows = [] }
-            for (const t of taskRows || []) {
-              try {
-                await cancelApplicationTask(db, t.id, { actorRole: 'system', reason: `Pipeline precision — ${reasonKey}` })
-                counts.tasksCancelled += 1
-              } catch (err) {
-                log.warn('pipeline_precision: task cancel failed (non-fatal)', { task: t.id, error: String(err?.message || err) })
-              }
-            }
-          }
           if (recordDismissalFn) {
             await recordDismissalFn(db, {
               profileId,
@@ -5568,6 +5625,27 @@ export async function enforcePipelinePrecision(db) {
         ...counts, byGate, byReason, profilesAffected: affectedProfiles.size, examples,
       })
     }
+    try {
+      const summary = JSON.stringify({
+        timestamp: new Date().toISOString(),
+        scanned: counts.scanned, removed: counts.removed, relabeled: counts.relabeled,
+        tasksCancelled: counts.tasksCancelled, matchesRemoved: counts.matchesRemoved,
+        failed: counts.failed, truncated: counts.truncated,
+        profiles: profileIds.length, profilesAffected: affectedProfiles.size,
+        byGate, byReason,
+      })
+      const updated = await db.prepare(
+        'UPDATE system_kv SET value = ?, updated_at = ? WHERE key = ?',
+      ).run(summary, new Date().toISOString(), 'pipeline_precision_last_run')
+      if (!changesOf(updated)) {
+        await db.prepare('INSERT INTO system_kv (key, value, updated_at) VALUES (?, ?, ?)').run(
+          'pipeline_precision_last_run', summary, new Date().toISOString(),
+        )
+      }
+    } catch (err) {
+      log.warn('pipeline_precision: last-run summary persist failed (non-fatal)', { error: String(err?.message || err) })
+    }
+
     return {
       ...counts,
       repaired: counts.removed + counts.relabeled,

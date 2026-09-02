@@ -529,10 +529,12 @@ async function isUserAuthorizedForProfile(db, userId, profileId) {
  * uncertain states are deliberately NOT here — a refusal that arrives while a
  * human-facing draft exists must not silently discard it.
  */
-const SKIP_CLOSEABLE_STATUSES = Object.freeze([
-  'queued', 'ready', 'analyzing', 'ready_to_start', 'blocked',
-  'waiting_for_login', 'waiting_for_2fa', 'waiting_for_captcha',
-  'waiting_for_email_verification', 'waiting_for_window',
+const REFUSAL_PROTECTED_TASK_STATUSES = Object.freeze([
+  'submitted', 'completed', 'complete', 'done',
+  'cancelled', 'canceled', 'archived', 'rejected', 'closed',
+  // Never erase an uncertain external-submission boundary. These remain visible
+  // for confirmation, but no new automation may be created for the source.
+  'submit_attempt_started', 'submit_evidence_pending', 'submission_verification_required',
 ])
 
 /**
@@ -552,20 +554,20 @@ async function closeExistingTasksForRefusedSource(db, {
 }) {
   const closed = []
   try {
-    const placeholders = SKIP_CLOSEABLE_STATUSES.map(() => '?').join(', ')
+    const placeholders = REFUSAL_PROTECTED_TASK_STATUSES.map(() => '?').join(', ')
     const rows = await db
       .prepare(
         `SELECT id FROM application_tasks
           WHERE profile_id = ?
             AND ((opportunity_id IS NOT NULL AND opportunity_id = ?)
               OR (grant_id IS NOT NULL AND grant_id = ?))
-            AND status IN (${placeholders})`,
+            AND (status IS NULL OR status NOT IN (${placeholders}))`,
       )
       .all(
         String(profileId),
         opportunityId ? String(opportunityId) : null,
         grantId ? String(grantId) : null,
-        ...SKIP_CLOSEABLE_STATUSES,
+        ...REFUSAL_PROTECTED_TASK_STATUSES,
       )
     for (const row of rows || []) {
       try {
@@ -671,53 +673,36 @@ export async function automateSingleSource(db, {
   const eligibility = await assessHamiltonFundingSource(db, {
     profileId: resolvedProfileId, opportunity, grant,
   })
-  if (eligibility?.code === 'funding_source_profile_rejected') {
+  if (eligibility?.ok === false || (eligibility?.code && eligibility?.ok !== true)) {
+    const pointerLead = eligibility?.code === 'pointer_research_lead'
+    const profileRejected = eligibility?.code === 'funding_source_profile_rejected'
+    const reason = pointerLead
+      ? 'pointer_research_lead'
+      : profileRejected
+        ? 'ineligible_profile'
+        : (eligibility?.code || 'funding_source_disallowed')
+    const message = eligibility?.message
+      || (pointerLead
+        ? 'This source is a research lead, not an application. Hamilton closed the task.'
+        : 'This source does not have the positive GrantFlow evidence required for Hamilton automation. Hamilton closed the task.')
     const closedTasks = await closeExistingTasksForRefusedSource(db, {
       profileId: resolvedProfileId,
       opportunityId,
       grantId,
-      reason: 'ineligible_profile',
-      message: `The matching engine determined this profile is not eligible for this funding source${
-        Array.isArray(eligibility.reasons) && eligibility.reasons.length
-          ? ` (${eligibility.reasons.slice(0, 3).join('; ')})`
-          : ''
-      }. Hamilton closed the task so eligible work is not blocked behind it.`,
+      reason,
+      message,
     })
     return {
       task: null,
       skipped: true,
-      reason: 'ineligible_profile',
+      reason,
       closed_tasks: closedTasks,
+      ...(eligibility?.handoff ? { manual_handoff: eligibility.handoff } : {}),
       policy: {
-        code: eligibility.code,
-        reasons: eligibility.reasons || [],
-        message: eligibility.message || null,
-      },
-    }
-  }
-  // Pointer-kind catalog rows without a usable listing/application URL are
-  // research leads. Return the policy handoff before task creation so callers
-  // can surface the next human research step instead of receiving the task
-  // store's typed refusal as an automation failure.
-  if (eligibility?.code === 'pointer_research_lead') {
-    const closedTasks = await closeExistingTasksForRefusedSource(db, {
-      profileId: resolvedProfileId,
-      opportunityId,
-      grantId,
-      reason: 'pointer_research_lead',
-      message: 'This source is a research lead (a pointer with no direct application surface), not an application. Hamilton closed the task; the lead is surfaced through the research-lead handoff instead.',
-    })
-    return {
-      task: null,
-      skipped: true,
-      reason: 'pointer_research_lead',
-      closed_tasks: closedTasks,
-      manual_handoff: eligibility.handoff || null,
-      policy: {
-        code: eligibility.code,
-        reasons: eligibility.reasons || [],
-        message: eligibility.message || null,
-        handoff: eligibility.handoff || null,
+        code: eligibility?.code || 'funding_source_disallowed',
+        reasons: eligibility?.reasons || [],
+        message,
+        ...(eligibility?.handoff ? { handoff: eligibility.handoff } : {}),
       },
     }
   }

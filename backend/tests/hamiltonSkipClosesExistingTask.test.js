@@ -128,7 +128,7 @@ describe('a pre-task-creation skip closes the existing idle task', () => {
 
     const after = await getApplicationTask(db, task.id)
     expect(after.status).toBe('cancelled')
-    expect(after.last_agent_message).toMatch(/not eligible/i)
+    expect(after.last_agent_message).toMatch(/closed the task|GrantFlow evidence required/i)
     const events = await listTaskEvents(db, task.id)
     expect(events.some((e) => e.event_type === 'cancelled')).toBe(true)
   })
@@ -177,7 +177,7 @@ describe('a pre-task-creation skip closes the existing idle task', () => {
     expect(picked.map((r) => r.id)).not.toContain(task.id)
   })
 
-  it('does NOT close drafted human-facing work (waiting_for_review) — reports the skip only', async () => {
+  it('closes drafted waiting_for_review work when the source fails policy', async () => {
     const db = makeDb()
     await seedFixture(db)
     const task = await seedTask(db, { status: 'waiting_for_review' })
@@ -188,9 +188,9 @@ describe('a pre-task-creation skip closes the existing idle task', () => {
       source: { opportunity_id: 'opp-1' },
     })
 
-    expect(result.closed_tasks).toEqual([])
+    expect(result.closed_tasks).toEqual([task.id])
     const after = await getApplicationTask(db, task.id)
-    expect(after.status).toBe('waiting_for_review')
+    expect(after.status).toBe('cancelled')
   })
 
   it('never touches a task for a DIFFERENT source', async () => {
@@ -268,7 +268,7 @@ describe('a pre-task-creation skip closes the existing idle task', () => {
     expect(picked.map((r) => r.id)).not.toContain(task.id)
   })
 
-  it('unresolvable-source close does NOT touch drafted human-facing work (waiting_for_review)', async () => {
+  it('unresolvable-source close cancels drafted waiting_for_review work', async () => {
     const db = makeDb()
     await seedFixture(db)
     const task = await seedTask(db, { status: 'waiting_for_review' })
@@ -281,8 +281,8 @@ describe('a pre-task-creation skip closes the existing idle task', () => {
       thrown = err
     }
     expect(thrown?.code).toBe('unresolvable_funding_source')
-    expect(thrown?.closed_tasks).toEqual([])
+    expect(thrown?.closed_tasks).toEqual([task.id])
     const after = await getApplicationTask(db, task.id)
-    expect(after.status).toBe('waiting_for_review')
+    expect(after.status).toBe('cancelled')
   })
 })

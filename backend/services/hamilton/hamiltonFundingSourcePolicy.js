@@ -4,7 +4,7 @@ import { SURFACED_MATCHER_VERSIONS_SQL } from '../../config/matchSurfacing.js'
 import { isPointerKind } from '../../config/opportunityKindClasses.js'
 import { isClearlyExpiredProgram, SEARCH_SURFACE_TITLE_RX, aggregatorBrandSurface } from '../../config/fundingResultFilters.js'
 
-const ALLOWED_MATCH_DECISIONS = new Set(['accept', 'review'])
+const ALLOWED_MATCH_DECISIONS = new Set(['accept'])
 const PROFILE_MATCH_REQUIRED_ORIGINS = new Set(['live_crawl', 'geo_crawl', 'discovered'])
 const TERMINAL_TASK_STATUSES = new Set(['submitted', 'completed', 'cancelled'])
 const TRUST_BLOCK_FLAGS = new Set([
@@ -291,12 +291,12 @@ export async function assessHamiltonFundingSource(db, { profileId, opportunity =
       message: buildPolicyMessage(reasons),
     }
   }
-  if (!match && profileId && opportunityId && requiresProfileMatch(subject)) {
+  if (!match && profileId) {
     // No stored row ≠ no endorsement — the store is a rolling snapshot (see
     // computeLiveEngineDecision). Ask the engine LIVE before stopping.
     const live = await computeLiveEngineDecision(db, profileId, subject)
     const liveDecision = asLower(live?.decision)
-    if (liveDecision === 'accept' || liveDecision === 'review') {
+    if (liveDecision === 'accept') {
       return {
         ok: true,
         reasons: [],
@@ -357,15 +357,24 @@ export async function assessHamiltonFundingSource(db, { profileId, opportunity =
   // it does not re-implement eligibility, and it only ever refuses on an
   // EXPLICIT hard mismatch (`review`/`pass` both continue).
   const applicantVerdict = await assessApplicantTypeForPolicy(db, profileId, subject)
-  if (applicantVerdict?.decision === 'mismatch') {
-    const reasons = ['profile_match_rejected', `applicant_type:${applicantVerdict.reason}`]
+  const positiveApplicantProof =
+    applicantVerdict?.decision === 'pass'
+    && applicantVerdict?.reason === 'explicit_applicant_types_match'
+  if (!positiveApplicantProof) {
+    const hardMismatch = applicantVerdict?.decision === 'mismatch'
+    const reasons = [
+      hardMismatch ? 'profile_match_rejected' : 'profile_match_not_accepted',
+      `applicant_type:${applicantVerdict?.reason || 'not_positively_verified'}`,
+    ]
     return {
       ok: false,
-      code: 'funding_source_profile_rejected',
+      code: hardMismatch
+        ? 'funding_source_profile_rejected'
+        : 'funding_source_profile_not_accepted',
       reasons,
       trust,
       match,
-      applicant_type: applicantVerdict,
+      applicant_type: applicantVerdict ?? { decision: 'review', reason: 'unavailable' },
       message: buildPolicyMessage(reasons),
     }
   }

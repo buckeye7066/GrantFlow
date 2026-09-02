@@ -60,7 +60,8 @@ function makeDb() {
       id TEXT PRIMARY KEY,
       user_id TEXT,
       created_by TEXT,
-      display_name TEXT
+      display_name TEXT,
+      primary_type TEXT
     );
     CREATE TABLE profile_sections (
       profile_id TEXT,
@@ -75,7 +76,8 @@ function makeDb() {
       opportunity_kind TEXT,
       application_url TEXT,
       source_url TEXT,
-      evidence_url TEXT
+      evidence_url TEXT,
+      entity_types_allowed TEXT
     );
     CREATE TABLE grants (
       id TEXT PRIMARY KEY,
@@ -104,12 +106,12 @@ function makeDb() {
 }
 
 async function seedFixture(db) {
-  await db.prepare('INSERT INTO profiles (id, user_id, display_name) VALUES (?, ?, ?)')
-    .run(PROFILE, 'user-1', 'Robert Michael White')
+  await db.prepare('INSERT INTO profiles (id, user_id, display_name, primary_type) VALUES (?, ?, ?, ?)')
+    .run(PROFILE, 'user-1', 'Robert Michael White', 'college_student')
   await db.prepare('INSERT INTO profile_sections (profile_id, section_key, data) VALUES (?, ?, ?)')
     .run(PROFILE, 'basic_information', JSON.stringify({ first_name: 'Robert', last_name: 'White', email: 'r@example.org' }))
-  await db.prepare('INSERT INTO funding_opportunities (id, title, description, application_url) VALUES (?, ?, ?, ?)')
-    .run('opp-restricted', 'UNCF Scholarship', 'Apply through the portal.', 'https://portal.uncf-fixture.org/apply')
+  await db.prepare('INSERT INTO funding_opportunities (id, title, description, application_url, entity_types_allowed) VALUES (?, ?, ?, ?, ?)')
+    .run('opp-restricted', 'UNCF Scholarship', 'Apply through the portal.', 'https://portal.uncf-fixture.org/apply', JSON.stringify(['student', 'individual']))
   await db.prepare('INSERT INTO grants (id, profile_id, funding_opportunity_id, title, application_url) VALUES (?, ?, ?, ?, ?)')
     .run('g-restricted', PROFILE, 'opp-restricted', 'UNCF Scholarship', 'https://portal.uncf-fixture.org/apply')
 }
@@ -160,12 +162,24 @@ describe('Hamilton task-creation eligibility gate', () => {
       profileId: PROFILE,
       source: { grant_id: 'g-restricted' },
     })
-    expect(r.skipped).not.toBe(true)
-    expect(r.task?.id).toBeTruthy()
-    expect(await taskCount(db)).toBe(1)
+    expect(r.skipped).toBe(true)
+    expect(r.reason).toBe('funding_source_profile_not_accepted')
+    expect(r.task).toBeNull()
+    expect(await taskCount(db)).toBe(0)
   })
 
   it('still ADMITS a source with NO stored verdict at all', async () => {
+    const r = await automateSingleSource(db, {
+      profileId: PROFILE,
+      source: { grant_id: 'g-restricted' },
+    })
+    expect(r.skipped).toBe(true)
+    expect(r.task).toBeNull()
+    expect(await taskCount(db)).toBe(0)
+  })
+
+  it('ADMITS a stored ACCEPT only when applicant type is positively supported', async () => {
+    await storeDecision(db, 'accept')
     const r = await automateSingleSource(db, {
       profileId: PROFILE,
       source: { grant_id: 'g-restricted' },
@@ -174,7 +188,6 @@ describe('Hamilton task-creation eligibility gate', () => {
     expect(r.task?.id).toBeTruthy()
     expect(await taskCount(db)).toBe(1)
   })
-
   it('REFUSES ids that resolve to nothing instead of minting an "Untitled application"', async () => {
     let err = null
     try {

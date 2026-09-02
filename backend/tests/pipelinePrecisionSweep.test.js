@@ -36,8 +36,8 @@ const PROFILE_ID = 'precision-undergrad'
 const ROWS = [
   // Meets a declared need, student-eligible, real URL → KEEP.
   { id: 'pell', t: 'Federal Pell Grant', s: 'Federal Student Aid', ent: ['student', 'family'], cats: ['education'], url: 'https://studentaid.gov/pell', keep: true },
-  // A row that states NO need vocabulary is silent, not contrary → KEEP (counted needNeutralRow).
-  { id: 'silent', t: 'Murfreesboro Community Scholarship', s: 'Rutherford County Foundation', ent: ['student'], cats: [], url: 'https://example-rcf.org/apply', keep: true, silent: true },
+  // A row that states NO need vocabulary cannot prove it covers a declared need.
+  { id: 'silent', t: 'Murfreesboro Community Scholarship', s: 'Rutherford County Foundation', ent: ['student'], cats: [], url: 'https://example-rcf.org/apply', remove: 'covers_need', silent: true },
   // QUALIFIES — institutional NOFO an individual undergraduate cannot apply to.
   { id: 'nsf', t: 'Developmental Sciences', s: 'U.S. National Science Foundation', ent: ['nonprofit', 'school', 'government', 'business'], cats: ['education'], url: 'https://nsf.gov/dev-sci', remove: 'qualifies' },
   // QUALIFIES but PROTECTED (user already submitted) → re-labeled, never deleted.
@@ -120,7 +120,7 @@ describe('enforcePipelinePrecision — the boot net for the three conjuncts', ()
     expect(result.scanned).toBe(ROWS.length)
     expect(result.kept + result.removed + result.relabeled + result.failed).toBe(result.scanned)
     expect(result.failed).toBe(0)
-    expect(result.byGate).toEqual({ relatable: 1, qualifies: 2, covers_need: 1, real: 1 })
+    expect(result.byGate).toEqual({ relatable: 1, qualifies: 2, covers_need: 2, real: 1 })
     expect(Object.values(result.byReason).reduce((a, b) => a + b, 0)).toBe(result.removed + result.relabeled)
     expect(result.needNeutralRow).toBe(1)
     expect(result.needNeutralProfile).toBe(0)
@@ -135,8 +135,8 @@ describe('enforcePipelinePrecision — the boot net for the three conjuncts', ()
     for (const r of ROWS.filter((x) => x.keep)) {
       expect(remaining, `"${r.t}" must survive`).toContain(`g-${r.id}`)
     }
-    expect(result.removed).toBe(4)
-    expect(result.kept).toBe(2)
+    expect(result.removed).toBe(5)
+    expect(result.kept).toBe(1)
   })
 
   it('RE-LABELS a protected (submitted) failure and never deletes it', () => {
@@ -151,7 +151,7 @@ describe('enforcePipelinePrecision — the boot net for the three conjuncts', ()
 
   it('TOMBSTONES every removal so the sticky-delete net keeps it gone', () => {
     const tombstones = sqlite.prepare('SELECT title, reason FROM pipeline_dismissals WHERE profile_id = ?').all(PROFILE_ID)
-    expect(tombstones.length).toBe(4)
+    expect(tombstones.length).toBe(5)
     expect(tombstones.every((t) => String(t.reason).startsWith('pipeline_precision:'))).toBe(true)
     const titles = tombstones.map((t) => t.title)
     expect(titles).toContain('Developmental Sciences')
@@ -162,21 +162,21 @@ describe('enforcePipelinePrecision — the boot net for the three conjuncts', ()
     const again = await enforcePipelinePrecision(db)
     expect(again.ok).toBe(true)
     expect(again.removed).toBe(0)
-    expect(again.scanned).toBe(3) // pell + silent + the re-labeled HUD row
+    expect(again.scanned).toBe(2) // pell + the re-labeled HUD history row
     expect(again.relabeled).toBe(1) // the protected row still fails; the tag is appended once
     const hud = sqlite.prepare('SELECT ineligibility_reasons FROM grants WHERE id = ?').get('g-hud')
     expect(JSON.parse(hud.ineligibility_reasons).length).toBe(1)
   })
 })
 
-describe('enforcePipelinePrecision — silence is neutral and REPORTED', () => {
-  it('a profile that declares NO needs never loses a row to the need gate, and is counted', async () => {
+describe('enforcePipelinePrecision — silence fails closed for automated pipeline rows', () => {
+  it('a profile that declares NO needs cannot positively prove need coverage', async () => {
     const { sqlite, db } = seed(ROWS.filter((r) => r.id === 'legal' || r.id === 'pell'), { declareNeeds: false })
     const res = await enforcePipelinePrecision(db)
     expect(res.ok).toBe(true)
-    expect(res.byGate.covers_need).toBe(0)
+    expect(res.byGate.covers_need).toBe(2)
     expect(res.needNeutralProfile).toBe(2)
-    expect(grantIds(sqlite)).toEqual(['g-legal', 'g-pell'])
+    expect(grantIds(sqlite)).toEqual([])
   })
 
   it('skips LOUDLY (not green) when the catalog lacks the gate-evidence columns', async () => {
@@ -225,12 +225,12 @@ describe('pipelinePrecision — the shared declared-need predicate', () => {
     expect(bad.opportunity_needs).toEqual(['legal'])
   })
 
-  it('is neutral — and SAYS so — when either side is silent', () => {
+  it('fails closed — and SAYS why — when either side is silent', () => {
     const noProfile = evaluateDeclaredNeedCoverage({ categories: ['legal'] }, [])
-    expect(noProfile.pass).toBe(true)
+    expect(noProfile.pass).toBe(false)
     expect(noProfile.detail).toBe(NEED_COVERAGE_DETAIL.PROFILE_DECLARES_NO_NEEDS)
     const noRow = evaluateDeclaredNeedCoverage({ categories: [] }, ['education'])
-    expect(noRow.pass).toBe(true)
+    expect(noRow.pass).toBe(false)
     expect(noRow.detail).toBe(NEED_COVERAGE_DETAIL.OPPORTUNITY_STATES_NO_NEEDS)
   })
 })

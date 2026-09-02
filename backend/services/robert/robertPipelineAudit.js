@@ -297,15 +297,15 @@ export async function buildPipelineRowSql(db) {
   // RELATABLE gate would wrongly remove them — and their qualification was
   // already decided on the funder-specific four gates at admission. So the
   // four-gate AUDIT and the pipeline-precision boot net never see them here.
-  const funderLeadExclusion = grantCols.has('pipeline_category')
-    ? `\n    AND (g.pipeline_category IS NULL OR LOWER(g.pipeline_category) <> 'funder_lead')`
-    : ''
+  // Legacy funder-lead rows are part of the live profile pipeline and must
+  // pass the same four positive gates. New funder research remains catalog-only,
+  // but old rows cannot be exempted from reconciliation indefinitely.
   return `
   SELECT
     ${selects.join(',\n    ')}
   FROM grants g
   LEFT JOIN funding_opportunities fo ON fo.id = g.funding_opportunity_id
-  WHERE g.profile_id = ?${funderLeadExclusion}
+  WHERE g.profile_id = ?
 `
 }
 
@@ -413,11 +413,18 @@ export function gateQualifies(row, facts) {
     profile: facts.profile,
     sections: facts.sections,
   })
-  if (applicantEval.decision === 'mismatch') {
+  const positiveApplicantProof =
+    applicantEval.decision === 'pass' && applicantEval.reason === 'explicit_applicant_types_match'
+  if (!positiveApplicantProof) {
     return {
       pass: false,
       reason: REJECTION_REASONS.PROFILE_MISMATCH,
-      evidence: { gate: 'applicant_type', detail: applicantEval.reason, bucket: applicantEval.matched_bucket ?? null },
+      evidence: {
+        gate: 'applicant_type',
+        detail: applicantEval.reason || 'applicant_type_not_positively_verified',
+        decision: applicantEval.decision || 'unknown',
+        bucket: applicantEval.matched_bucket ?? null,
+      },
     }
   }
 
