@@ -32,7 +32,7 @@ const audit = await import('../services/robert/robertPipelineAudit.js')
 const {
   auditProfilePipeline, gateRelatable, gateQualifies, gateCoversNeed, gateReal,
   programIdentityKey, sameProgram, rankDuplicate, buildAmyNotation, isAmyAutonomousLever,
-  loadGapNotesForAmy, GATES,
+  loadGapNotesForAmy, loadPipelineRows, GATES,
 } = audit
 
 const PROFILE_ID = 'owner-report-2026-08-21-undergrad'
@@ -393,6 +393,40 @@ describe('dedup collapses PROGRAM IDENTITY, not exact title strings', () => {
     expect(res.deduped_away).toBe(1)
     expect(res.removals.find((r) => r.outcome === 'deduped').reason).toBe('duplicate')
     expect(res.accounting.balanced).toBe(true)
+  })
+
+  it('collapses exact normalized titles even when canonical keys disagree, without title-tombstoning the winner', async () => {
+    const { sqlite, db } = seed([
+      { t: 'Affordable Housing Services', s: 'Agency One', ent: ['student'], cats: ['housing'], url: 'https://one.example/apply' },
+      { t: '  AFFORDABLE   HOUSING SERVICES  ', s: 'Agency Two', ent: ['student'], cats: ['housing'], url: 'https://two.example/apply' },
+    ])
+    sqlite.prepare('UPDATE funding_opportunities SET canonical_opportunity_key = ? WHERE id = ?').run('lane-one', 'fo-0')
+    sqlite.prepare('UPDATE funding_opportunities SET canonical_opportunity_key = ? WHERE id = ?').run('lane-two', 'fo-1')
+
+    const res = await auditProfilePipeline(db, PROFILE_ID, { checkUrl: aliveCheckUrl })
+    expect(res.kept).toBe(1)
+    expect(res.deduped_away).toBe(1)
+    const tombstone = sqlite.prepare('SELECT * FROM pipeline_dismissals').get()
+    expect(tombstone.opportunity_id).toBeTruthy()
+    expect(tombstone.title).toBeNull()
+    expect(tombstone.fingerprint).toBeNull()
+  })
+})
+
+describe('funder-lead audit admission', () => {
+  it('audits miscategorized Grants.gov NOFOs but excludes genuine pointer-kind funder prospects', async () => {
+    const { sqlite, db } = seed([
+      { t: 'Institutional Research NOFO', s: 'Federal Agency', ent: ['nonprofit'], cats: ['research'], kind: 'grant', source: 'grants_gov', deadline: '2026-12-31' },
+    ])
+    sqlite.exec('ALTER TABLE grants ADD COLUMN pipeline_category TEXT')
+    sqlite.prepare("UPDATE grants SET pipeline_category = 'funder_lead'").run()
+
+    const nofoRows = await loadPipelineRows(db, PROFILE_ID)
+    expect(nofoRows).toHaveLength(1)
+
+    sqlite.prepare("UPDATE funding_opportunities SET opportunity_kind = 'directory', source = 'foundation_directory', deadline = NULL").run()
+    const genuineLeadRows = await loadPipelineRows(db, PROFILE_ID)
+    expect(genuineLeadRows).toHaveLength(0)
   })
 })
 

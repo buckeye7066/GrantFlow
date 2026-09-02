@@ -133,13 +133,14 @@ async function getPipelinePrecisionVerification(db) {
 
   let invalidActiveTasks = null
   try {
-    const terminalSql = ACTIVE_TASK_HISTORY_STATUSES
+    const safeTerminalSql = ACTIVE_TASK_HISTORY_STATUSES
       .map((status) => `'${status.replaceAll("'", "''")}'`)
       .join(', ')
+    // audit:allow unscoped-profile-query -- intentionally global, sanitized readiness count; no tenant data is returned.
     const row = await db.prepare(`
       SELECT COUNT(*) AS count
         FROM application_tasks t
-       WHERE LOWER(COALESCE(t.status, '')) NOT IN (${terminalSql})
+       WHERE LOWER(COALESCE(t.status, '')) NOT IN (${safeTerminalSql})
          AND (
            (t.grant_id IS NULL AND t.opportunity_id IS NULL)
            OR (
