@@ -59,11 +59,13 @@ const LINK_ONLY_OPP = {
   id: 'opp-tsaa',
   title: 'Tennessee Student Assistance Award',
   description: 'State grant for Tennessee students. Awards are determined based on your FAFSA; no separate application is required.',
+  application_url: 'https://www.tn.gov/collegepays/financial-aid/tsaa.html',
 }
 const IMPORT_OPP = {
   id: 'opp-mtsu-aid',
   title: 'MTSU Institutional Aid',
   description: 'Import your FAFSA information in the university portal to be considered for need-based awards.',
+  application_url: 'https://www.mtsu.edu/financial-aid/',
 }
 const MENTION_ONLY_OPP = {
   id: 'opp-mention',
@@ -79,7 +81,8 @@ function makeDb() {
       id TEXT PRIMARY KEY,
       user_id TEXT,
       created_by TEXT,
-      display_name TEXT
+      display_name TEXT,
+      primary_type TEXT
     );
     CREATE TABLE profile_sections (
       profile_id TEXT,
@@ -91,8 +94,15 @@ function makeDb() {
       profile_id TEXT,
       title TEXT,
       description TEXT,
+      opportunity_kind TEXT,
+      entity_types_allowed TEXT,
       application_url TEXT,
-      source_url TEXT
+      source_url TEXT,
+      source TEXT,
+      record_origin TEXT,
+      source_trust_tier TEXT,
+      reality_status TEXT,
+      is_active INTEGER
     );
     CREATE TABLE grants (
       id TEXT PRIMARY KEY,
@@ -101,6 +111,10 @@ function makeDb() {
       description TEXT,
       application_url TEXT,
       url TEXT
+    );
+    CREATE TABLE profile_opportunity_matches (
+      profile_id TEXT, opportunity_id TEXT, match_score REAL, match_decision TEXT,
+      match_explanation TEXT, matcher_version TEXT, updated_at DATETIME, computed_at DATETIME
     );
   `)
   const db = wrapSqlite(sqlite)
@@ -116,8 +130,18 @@ async function setSection(db, profileId, sectionKey, data) {
 }
 
 async function insertOpp(db, opp) {
-  await db.prepare('INSERT OR REPLACE INTO funding_opportunities (id, title, description, application_url) VALUES (?, ?, ?, ?)')
-    .run(opp.id, opp.title, opp.description, opp.application_url || null)
+  await db.prepare(`INSERT OR REPLACE INTO funding_opportunities
+    (id, title, description, opportunity_kind, entity_types_allowed, application_url,
+     source_url, source, record_origin, source_trust_tier, reality_status, is_active)
+    VALUES (?, ?, ?, 'direct_grant', ?, ?, ?, 'curated_verified', 'curated_verified', 'official', 'real', 1)`)
+    .run(
+      opp.id,
+      opp.title,
+      opp.description,
+      JSON.stringify(['student', 'individual']),
+      opp.application_url || null,
+      opp.application_url || null,
+    )
 }
 
 // ── 1. Recognition ──────────────────────────────────────────────────────────
@@ -232,10 +256,18 @@ describe('FAFSA-link fulfillment loop (Demo Student + Robert — profile-generic
   let db
   beforeEach(async () => {
     db = makeDb()
-    await db.prepare("INSERT INTO profiles (id, user_id, display_name) VALUES (?, 'u-ana', 'Demo Student Steele')").run(demo_stem_student)
-    await db.prepare("INSERT INTO profiles (id, user_id, display_name) VALUES (?, 'u-rob', 'Robert Michael White')").run(ROBERT)
+    await db.prepare("INSERT INTO profiles (id, user_id, display_name, primary_type) VALUES (?, 'u-ana', 'Demo Student Steele', 'college_student')").run(demo_stem_student)
+    await db.prepare("INSERT INTO profiles (id, user_id, display_name, primary_type) VALUES (?, 'u-rob', 'Robert Michael White', 'college_student')").run(ROBERT)
     await insertOpp(db, LINK_ONLY_OPP)
     await insertOpp(db, IMPORT_OPP)
+    for (const profileId of [demo_stem_student, ROBERT]) {
+      for (const opportunityId of [LINK_ONLY_OPP.id, IMPORT_OPP.id]) {
+        await db.prepare(`INSERT INTO profile_opportunity_matches
+          (profile_id, opportunity_id, match_score, match_decision, matcher_version, updated_at, computed_at)
+          VALUES (?, ?, 90, 'accept', 'crawler-os', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`)
+          .run(profileId, opportunityId)
+      }
+    }
   })
 
   it('parks a FAFSA-linked task on ONE honest ask, resolves it profile-wide when the FAFSA is filed, and completes without inventing a linkage', async () => {

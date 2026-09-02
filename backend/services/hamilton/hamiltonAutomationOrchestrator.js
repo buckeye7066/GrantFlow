@@ -695,7 +695,7 @@ export async function automateSingleSource(db, {
     grantId,
     opportunityId,
   })
-  if (requestedGrantId && (!grant?.profile_id || String(grant.profile_id) !== String(resolvedProfileId))) {
+  if (requestedGrantId && grant && (!grant.profile_id || String(grant.profile_id) !== String(resolvedProfileId))) {
     const err = new Error('selected grant does not belong to the requested profile')
     err.status = 403
     err.code = 'source_profile_mismatch'

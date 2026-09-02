@@ -47,12 +47,14 @@ function makeDb() {
   const sqlite = new Database(':memory:')
   sqlite.exec(`
     CREATE TABLE profiles (
-      id TEXT PRIMARY KEY, user_id TEXT, created_by TEXT, display_name TEXT
+      id TEXT PRIMARY KEY, user_id TEXT, created_by TEXT, display_name TEXT, primary_type TEXT
     );
     CREATE TABLE profile_sections (profile_id TEXT, section_key TEXT, data TEXT);
     CREATE TABLE funding_opportunities (
       id TEXT PRIMARY KEY, profile_id TEXT, title TEXT, description TEXT,
-      opportunity_kind TEXT, application_url TEXT, source_url TEXT, evidence_url TEXT
+      opportunity_kind TEXT, application_url TEXT, source_url TEXT, evidence_url TEXT,
+      entity_types_allowed TEXT, source TEXT, record_origin TEXT,
+      source_trust_tier TEXT, reality_status TEXT, is_active INTEGER
     );
     CREATE TABLE grants (
       id TEXT PRIMARY KEY, profile_id TEXT, funding_opportunity_id TEXT, title TEXT,
@@ -71,14 +73,28 @@ function makeDb() {
 }
 
 async function seedFixture(db) {
-  await db.prepare('INSERT INTO profiles (id, user_id, display_name) VALUES (?, ?, ?)')
-    .run(PROFILE, OWNER_USER_ID, 'Someone Else Entirely')
+  await db.prepare('INSERT INTO profiles (id, user_id, display_name, primary_type) VALUES (?, ?, ?, ?)')
+    .run(PROFILE, OWNER_USER_ID, 'Someone Else Entirely', 'college_student')
   await db.prepare('INSERT INTO profile_sections (profile_id, section_key, data) VALUES (?, ?, ?)')
-    .run(PROFILE, 'basic_information', JSON.stringify({ first_name: 'Someone', last_name: 'Else', email: 'owner@example.org' }))
-  await db.prepare('INSERT INTO funding_opportunities (id, title, description, application_url) VALUES (?, ?, ?, ?)')
-    .run('opp-1', 'Test Scholarship', 'Apply through the portal.', 'https://portal.fixture.org/apply')
+    .run(PROFILE, 'basic_information', JSON.stringify({ first_name: 'Someone', last_name: 'Else', email: 'owner@example.org', profile_category: 'college_student' }))
+  await db.prepare(`INSERT INTO funding_opportunities
+    (id, title, description, opportunity_kind, application_url, source_url,
+     entity_types_allowed, source, record_origin, source_trust_tier, reality_status, is_active)
+    VALUES (?, ?, ?, 'direct_grant', ?, ?, ?, 'curated_verified', 'curated_verified', 'official', 'real', 1)`)
+    .run(
+      'opp-1',
+      'Test Scholarship',
+      'Apply through the portal.',
+      'https://www.mtsu.edu/scholarships/apply',
+      'https://www.mtsu.edu/scholarships/apply',
+      JSON.stringify(['student', 'individual']),
+    )
   await db.prepare('INSERT INTO grants (id, profile_id, funding_opportunity_id, title, application_url) VALUES (?, ?, ?, ?, ?)')
-    .run('g-1', PROFILE, 'opp-1', 'Test Scholarship', 'https://portal.fixture.org/apply')
+    .run('g-1', PROFILE, 'opp-1', 'Test Scholarship', 'https://www.mtsu.edu/scholarships/apply')
+  await db.prepare(`INSERT INTO profile_opportunity_matches
+    (profile_id, opportunity_id, match_score, match_decision, matcher_version, updated_at, computed_at)
+    VALUES (?, ?, 90, 'accept', 'crawler-os', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`)
+    .run(PROFILE, 'opp-1')
   await db.prepare('INSERT INTO users (id, is_admin) VALUES (?, ?)').run(ADMIN_USER_ID, 1)
   await db.prepare('INSERT INTO users (id, is_admin) VALUES (?, ?)').run(STRANGER_USER_ID, 0)
 }

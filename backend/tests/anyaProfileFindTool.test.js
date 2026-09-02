@@ -11,6 +11,7 @@
 import { describe, expect, it } from 'vitest'
 import { invokeTool, listToolMetadata } from '../services/anyaToolRegistry.js'
 import { CHAT_TOOL_WHITELIST } from '../services/anyaOrchestrator.js'
+import { ADMIN_EMAIL } from '../config/constants.js'
 
 // DB stub: captures the profile-search SQL + params and returns `rows`.
 // Unknown statements (usage logging etc.) get inert defaults.
@@ -103,9 +104,16 @@ describe('chat wiring', () => {
   it('profile.find and chat.setAppearance are chat-whitelisted AND registered', () => {
     expect(CHAT_TOOL_WHITELIST).toContain('profile.find')
     expect(CHAT_TOOL_WHITELIST).toContain('chat.setAppearance')
-    const registered = listToolMetadata({ isAdmin: false, userId: 'u1' }).map((t) => t.name)
+    const publicTools = listToolMetadata({ isAdmin: false, userId: 'u1' })
+    const ownerTools = listToolMetadata({ isAdmin: true, userId: 'owner', email: ADMIN_EMAIL })
+    const ownerNames = ownerTools.map((tool) => tool.name)
+    const publicNames = publicTools.map((tool) => tool.name)
     for (const name of CHAT_TOOL_WHITELIST) {
-      expect(registered, `chat-whitelisted tool "${name}" must be registered and visible to non-admins`).toContain(name)
+      expect(ownerNames, `chat-whitelisted tool "${name}" must be registered`).toContain(name)
+      const metadata = ownerTools.find((tool) => tool.name === name)
+      if (!metadata?.requiresAdmin && !metadata?.requiresOwner) {
+        expect(publicNames, `public chat tool "${name}" must be visible to non-admins`).toContain(name)
+      }
     }
   })
 })

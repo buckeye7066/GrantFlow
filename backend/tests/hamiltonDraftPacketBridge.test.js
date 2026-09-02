@@ -71,7 +71,8 @@ function makeDb() {
       id TEXT PRIMARY KEY,
       user_id TEXT,
       created_by TEXT,
-      display_name TEXT
+      display_name TEXT,
+      primary_type TEXT
     );
     CREATE TABLE profile_sections (
       profile_id TEXT,
@@ -83,8 +84,15 @@ function makeDb() {
       profile_id TEXT,
       title TEXT,
       description TEXT,
+      opportunity_kind TEXT,
+      entity_types_allowed TEXT,
       application_url TEXT,
-      source_url TEXT
+      source_url TEXT,
+      source TEXT,
+      record_origin TEXT,
+      source_trust_tier TEXT,
+      reality_status TEXT,
+      is_active INTEGER
     );
     CREATE TABLE grants (
       id TEXT PRIMARY KEY,
@@ -94,6 +102,10 @@ function makeDb() {
       application_url TEXT,
       status TEXT,
       updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE TABLE profile_opportunity_matches (
+      profile_id TEXT, opportunity_id TEXT, match_score REAL, match_decision TEXT,
+      match_explanation TEXT, matcher_version TEXT, updated_at DATETIME, computed_at DATETIME
     );
     CREATE TABLE applications (
       id TEXT PRIMARY KEY,
@@ -118,11 +130,12 @@ function makeDb() {
 }
 
 async function seedProfile(db, profileId = PROFILE) {
-  await db.prepare('INSERT INTO profiles (id, user_id, display_name) VALUES (?, ?, ?)')
-    .run(profileId, 'user-1', 'Demo College Student Persona')
+  await db.prepare('INSERT INTO profiles (id, user_id, display_name, primary_type) VALUES (?, ?, ?, ?)')
+    .run(profileId, 'user-1', 'Demo College Student Persona', 'college_student')
   await db.prepare('INSERT INTO profile_sections (profile_id, section_key, data) VALUES (?, ?, ?)')
     .run(profileId, 'basic_information', JSON.stringify({
       first_name: 'Robert', last_name: 'White', email: 'r@example.com',
+      profile_category: 'college_student',
     }))
 }
 
@@ -280,8 +293,22 @@ const OPPORTUNITY = {
 }
 
 async function seedOpportunity(db, opp = OPPORTUNITY) {
-  await db.prepare('INSERT INTO funding_opportunities (id, title, description, application_url) VALUES (?, ?, ?, ?)')
-    .run(opp.id, opp.title, opp.description, opp.application_url)
+  await db.prepare(`INSERT INTO funding_opportunities
+    (id, title, description, opportunity_kind, entity_types_allowed, application_url,
+     source_url, source, record_origin, source_trust_tier, reality_status, is_active)
+    VALUES (?, ?, ?, 'direct_grant', ?, ?, ?, 'curated_verified', 'curated_verified', 'official', 'real', 1)`)
+    .run(
+      opp.id,
+      opp.title,
+      opp.description,
+      JSON.stringify(['student', 'individual']),
+      opp.application_url,
+      opp.application_url,
+    )
+  await db.prepare(`INSERT INTO profile_opportunity_matches
+    (profile_id, opportunity_id, match_score, match_decision, matcher_version, updated_at, computed_at)
+    VALUES (?, ?, 90, 'accept', 'crawler-os', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`)
+    .run(PROFILE, opp.id)
 }
 
 async function authorizeFormCompletion(db) {
