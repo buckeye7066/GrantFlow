@@ -599,19 +599,14 @@ export async function cleanupDisallowedHamiltonTraces(
   const where = sourceWhereClause({ profileId, opportunityId, grantId })
   if (!where) return empty
 
-  let tasks = []
-  try {
-    tasks = await db.prepare(`
-      SELECT *
-      FROM application_tasks
-      WHERE ${where.sql}
-    `).all(...where.params) || []
-  } catch (error) {
-    // This lookup is the evidence-protection boundary. Treating an unreadable
-    // task table as "no protected submissions" could authorize destructive
-    // source cleanup during a transient database failure.
-    throw error
-  }
+  // This lookup is the evidence-protection boundary. Let failures propagate:
+  // treating an unreadable task table as "no protected submissions" could
+  // authorize destructive source cleanup during a transient database failure.
+  const tasks = await db.prepare(`
+    SELECT *
+    FROM application_tasks
+    WHERE ${where.sql}
+  `).all(...where.params) || []
 
   const protectedEvidenceTask = tasks.find((task) =>
     EVIDENCE_PROTECTED_TASK_STATUSES.has(asLower(task.status)),
