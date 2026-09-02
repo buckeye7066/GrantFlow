@@ -50,7 +50,10 @@ const log = createLogger('service:hamiltonStopRecheck')
 // unresolved school_name stop is a stop whose writer no longer exists. The
 // recheck clears them so those tasks resume instead of sitting blocked forever.
 const RECHECKABLE_KEYS = ['crawler_profile_rules', 'application_url', 'school_name']
-const SKIP_STATUSES = ['submitted', 'draft_completed', 'completed_draft', 'failed', 'cancelled', 'completed']
+const SKIP_STATUSES = [
+  'submitted', 'draft_completed', 'completed_draft', 'completed', 'complete', 'done',
+  'failed', 'rejected', 'cancelled', 'canceled', 'archived', 'closed',
+]
 
 function usableUrl(...candidates) {
   for (const raw of candidates) {
