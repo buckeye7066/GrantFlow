@@ -447,7 +447,8 @@ export async function reconcileDismissedMatches(db, { limit = 100000 } = {}) {
       WHERE
         (d.opportunity_id IS NOT NULL AND d.opportunity_id = pom.opportunity_id)
         OR (d.title IS NOT NULL AND fo.title IS NOT NULL
-           AND lower(d.title) = lower(fo.title))
+           AND lower(d.title) = lower(fo.title)
+           AND lower(COALESCE(d.reason, '')) NOT LIKE '%duplicate%')
       LIMIT ${Number.isFinite(Number(limit)) ? Math.max(1, Number(limit)) : 100000}
     )
   `
