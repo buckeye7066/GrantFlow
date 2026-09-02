@@ -821,3 +821,30 @@ describe('discovery surfaces vs awards (owner report 2026-08-21)', () => {
     expect(aggregatorBrandSurface({ title: 'Some Scholarship', sponsor: 'Middle Tennessee State University' })).toBeNull()
   })
 })
+
+
+describe('2026-08-31 production precision residuals', () => {
+  it('uses persisted non-national state as restrictive geography evidence', () => {
+    expect(isRelevantGeo({ title: 'Whatcom Kids First', state: 'WA', is_national: false }, { states: ['TN'] }))
+      .toMatchObject({ relevant: false, reason: 'persisted_state_out_of_state:WA' })
+    expect(isRelevantGeo({ title: 'National Program', state: 'WA', is_national: true }, { states: ['TN'] }).relevant)
+      .toBe(true)
+  })
+
+  it.each([
+    ['https://usgrants.org/vermont', 'resource'],
+    ['https://bergenresourcenet.org/search', 'resource'],
+    ['https://elpasogivingday.org/organizations/example', 'not_a_grant'],
+  ])('classifies non-leaf host %s as %s', (application_url, bucket) => {
+    expect(classifyFundingResult({ title: 'Example Program', application_url }).bucket).toBe(bucket)
+  })
+
+  it.each([
+    'SAMHSA National Helpline',
+    'Ohio 2-1-1',
+    'State Health Insurance Assistance Program',
+    'GoodRx Discount Card',
+  ])('classifies non-funding service title %s', (title) => {
+    expect(classifyFundingResult({ title, application_url: 'https://example.org' }).bucket).toBe('not_a_grant')
+  })
+})
