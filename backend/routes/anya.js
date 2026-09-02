@@ -123,15 +123,24 @@ router.get('/health', async (req, res) => {
   const now = new Date()
   const dayAgo = new Date(now.getTime() - 24 * 60 * 60 * 1000).toISOString()
 
-  const [brain_memories, tool_usage_24h, sessions_24h, tool_registry] = await Promise.all([
+  const [brain_memories, tool_usage_24h, sessions_24h] = await Promise.all([
     safeCount('SELECT COUNT(*) AS count FROM anya_brain_memory'),
     safeCount('SELECT COUNT(*) AS count FROM anya_tool_usage WHERE ts >= ?', [dayAgo]),
     safeCount("SELECT COUNT(*) AS count FROM anya_sessions WHERE created_at >= ?", [dayAgo]),
-    safeCount('SELECT COUNT(*) AS count FROM anya_tool_registry_snapshot'),
   ])
 
+  // Registry metadata is process-owned, not database-owned. The old health
+  // probe queried a never-populated snapshot table and falsely reported zero
+  // even while the in-memory registry served tools to authenticated sessions.
+  let tool_registry = 0
+  try {
+    tool_registry = listTools({ userId: 'anya-health-probe', isAdmin: true }).length
+  } catch {
+    tool_registry = 0
+  }
+
   res.json({
-    ok: true,
+    ok: tool_registry > 0,
     service: 'anya',
     version: process.env.RAILWAY_DEPLOYMENT_ID || process.env.npm_package_version || 'dev',
     checked_at: now.toISOString(),
