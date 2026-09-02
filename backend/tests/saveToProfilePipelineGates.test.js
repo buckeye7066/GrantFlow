@@ -107,6 +107,7 @@ const profileContext = {
     mission: 'Community programs',
     organization_type: 'nonprofit',
     state: 'TN',
+    needs: JSON.stringify(['community']),
   },
   sections: null,
 }
@@ -139,6 +140,17 @@ function countGrants(db) {
   return Number(db.prepare('SELECT COUNT(*) AS n FROM grants').get().n)
 }
 
+function admissionReady(opportunity) {
+  return {
+    ...opportunity,
+    application_url: opportunity.application_url ?? opportunity.url,
+    opportunity_kind: opportunity.opportunity_kind ?? 'grant',
+    amount_max: opportunity.amount_max ?? 10000,
+    need_types_supported: opportunity.need_types_supported ??
+      JSON.stringify(['community', 'professional_development', 'business']),
+  }
+}
+
 describe('saveToProfilePipeline — legacy caller error contract', () => {
   it('returns and logs the original six-argument shape for admission-time exceptions', async () => {
     const db = makeDb()
@@ -159,7 +171,7 @@ describe('saveToProfilePipeline — legacy caller error contract', () => {
       application_url: 'https://example.gov/apply',
     }
 
-    const result = await saveToProfilePipeline(failingDb, opportunity, 'p1', profileContext, 90, 55)
+    const result = await saveToProfilePipeline(failingDb, admissionReady(opportunity), 'p1', profileContext, 90, 55)
 
     expect(result).toEqual({ saved: false, reason: 'injected admission failure' })
     expect(errorSpy).toHaveBeenCalledWith('[opportunityMatcher] Error saving to pipeline:', failure)
@@ -167,7 +179,7 @@ describe('saveToProfilePipeline — legacy caller error contract', () => {
     const record = vi.fn()
     const sweepResult = await saveToProfilePipeline(
       failingDb,
-      opportunity,
+      admissionReady(opportunity),
       'p1',
       profileContext,
       90,
@@ -207,14 +219,14 @@ describe('saveToProfilePipeline — DUPLICATE gate', () => {
 
     // First save — supply an explicit, above-floor score so the THRESHOLD gate
     // passes deterministically and we land in the pipeline.
-    const first = await saveToProfilePipeline(db, baseOpp, 'p1', profileContext, 90, 55)
+    const first = await saveToProfilePipeline(db, admissionReady(baseOpp), 'p1', profileContext, 90, 55)
     expect(first.saved).toBe(true)
     expect(countGrants(db)).toBe(1)
 
     // Re-crawl: SAME program, but a brand-new internal funding_opportunities id
     // (the exact case the old funding_opportunity_id-only check let slip).
     const recrawled = { ...baseOpp, id: 'opp-recrawled-DIFFERENT' }
-    const second = await saveToProfilePipeline(db, recrawled, 'p1', profileContext, 90, 55)
+    const second = await saveToProfilePipeline(db, admissionReady(recrawled), 'p1', profileContext, 90, 55)
 
     expect(second.saved).toBe(false)
     expect(second.gate).toBe('DUPLICATE')
@@ -230,7 +242,7 @@ describe('saveToProfilePipeline — DUPLICATE gate', () => {
       url: 'https://grants.example.gov/v1',
       source: 'grants_gov',
     }
-    const first = await saveToProfilePipeline(db, opp, 'p1', profileContext, 90, 55)
+    const first = await saveToProfilePipeline(db, admissionReady(opp), 'p1', profileContext, 90, 55)
     expect(first.saved).toBe(true)
     expect(countGrants(db)).toBe(1)
 
@@ -243,7 +255,7 @@ describe('saveToProfilePipeline — DUPLICATE gate', () => {
       url: 'https://grants.example.gov/v2-moved',
       source: 'grants_gov',
     }
-    const second = await saveToProfilePipeline(db, drifted, 'p1', profileContext, 90, 55)
+    const second = await saveToProfilePipeline(db, admissionReady(drifted), 'p1', profileContext, 90, 55)
     expect(second.saved).toBe(false)
     expect(second.gate).toBe('DUPLICATE')
     expect(countGrants(db)).toBe(1)
@@ -259,7 +271,7 @@ describe('saveToProfilePipeline — DUPLICATE gate', () => {
       source: 'web_search',
       record_origin: 'web_search',
     }
-    const first = await saveToProfilePipeline(db, umbrella, 'p1', emsProfileContext, 90, 55)
+    const first = await saveToProfilePipeline(db, admissionReady(umbrella), 'p1', emsProfileContext, 90, 55)
     expect(first.saved).toBe(true)
     expect(countGrants(db)).toBe(1)
 
@@ -272,7 +284,7 @@ describe('saveToProfilePipeline — DUPLICATE gate', () => {
       source: 'web_search',
       record_origin: 'web_search',
     }
-    const second = await saveToProfilePipeline(db, variant, 'p1', emsProfileContext, 90, 55)
+    const second = await saveToProfilePipeline(db, admissionReady(variant), 'p1', emsProfileContext, 90, 55)
 
     expect(second.saved).toBe(false)
     expect(second.gate).toBe('DUPLICATE')
@@ -288,7 +300,7 @@ describe('saveToProfilePipeline — DUPLICATE gate', () => {
       url: 'https://www.rd.usda.gov/programs-services/business-programs/value-added-producer-grants',
       source: 'grants_gov',
     }
-    const first = await saveToProfilePipeline(db, valueAdded, 'p1', farmBusinessProfileContext, 90, 55)
+    const first = await saveToProfilePipeline(db, admissionReady(valueAdded), 'p1', farmBusinessProfileContext, 90, 55)
     expect(first.saved).toBe(true)
     expect(countGrants(db)).toBe(1)
 
@@ -300,7 +312,7 @@ describe('saveToProfilePipeline — DUPLICATE gate', () => {
       url: 'https://www.rd.usda.gov/programs-services/energy-programs/rural-energy-america-program-renewable-energy-systems-energy-efficiency-improvement-guaranteed-loans',
       source: 'grants_gov',
     }
-    const second = await saveToProfilePipeline(db, reap, 'p1', farmBusinessProfileContext, 90, 55)
+    const second = await saveToProfilePipeline(db, admissionReady(reap), 'p1', farmBusinessProfileContext, 90, 55)
     expect(second.saved).toBe(true)
     expect(countGrants(db)).toBe(2)
   })
@@ -327,7 +339,7 @@ describe('saveToProfilePipeline — FUNDING_RESULT gate (Gate 1.75, the 2026-08-
     expect(res.saved).toBe(false)
     expect(res.gate).toBe('FUNDING_RESULT')
     expect(res.decision).toBe('REJECT')
-    expect(res.reason).toMatch(/not a fundable opportunity/i)
+    expect(res.reason).toMatch(/not a (?:positively )?fundable opportunity/i)
     expect(res.reason).toMatch(/regulatory_notice_title/)
     expect(countGrants(db)).toBe(0)
   })
@@ -347,7 +359,7 @@ describe('saveToProfilePipeline — FUNDING_RESULT gate (Gate 1.75, the 2026-08-
     expect(countGrants(db)).toBe(0)
   })
 
-  it('a RESOURCE-bucket pointer row is NOT refused by the funding-result gate (locator rule: only not_a_grant is)', async () => {
+  it('refuses a RESOURCE-bucket pointer row at the canonical writer', async () => {
     const directory = {
       id: 'opp-dir',
       title: 'findhelp — Local assistance programs',
@@ -357,9 +369,8 @@ describe('saveToProfilePipeline — FUNDING_RESULT gate (Gate 1.75, the 2026-08-
       source: 'web_search',
     }
     const res = await saveToProfilePipeline(db, directory, 'p1', profileContext, 90, 55)
-    // Whatever the later gates decide, Gate 1.75 must not be the refusal —
-    // `resource` stays admissible per the locator rule.
-    expect(res.gate).not.toBe('FUNDING_RESULT')
+    expect(res.saved).toBe(false)
+    expect(res.gate).toBe('FUNDING_RESULT')
   })
 
   it('still never writes a NULL match_score on a successful save', async () => {
@@ -370,7 +381,7 @@ describe('saveToProfilePipeline — FUNDING_RESULT gate (Gate 1.75, the 2026-08-
       url: 'https://grants.example.gov/good',
       source: 'grants_gov',
     }
-    const res = await saveToProfilePipeline(db, goodOpp, 'p1', profileContext, 90, 55)
+    const res = await saveToProfilePipeline(db, admissionReady(goodOpp), 'p1', profileContext, 90, 55)
     expect(res.saved).toBe(true)
     expect(countGrants(db)).toBe(1)
     const row = db.prepare('SELECT match_score FROM grants').get()
@@ -399,7 +410,7 @@ describe('saveToProfilePipeline — RELEVANCE FLOOR', () => {
 
     // Caller tries to lower the bar to 0 (the crawler-relaxed-threshold bug).
     // Explicit score is below the canonical floor.
-    const res = await saveToProfilePipeline(db, lowScoreOpp, 'p1', profileContext, belowFloor, 0)
+    const res = await saveToProfilePipeline(db, admissionReady(lowScoreOpp), 'p1', profileContext, belowFloor, 0)
 
     expect(res.saved).toBe(false)
     expect(res.gate).toBe('THRESHOLD')
@@ -417,6 +428,7 @@ describe('saveToProfilePipeline — RELEVANCE FLOOR', () => {
         focus_areas: ['cancer', 'research'],
         organization_type: 'nonprofit',
         state: 'TN',
+        needs: JSON.stringify(['community']),
       },
       sections: null,
     }
@@ -430,7 +442,7 @@ describe('saveToProfilePipeline — RELEVANCE FLOOR', () => {
       source: 'grants_gov',
       test_decision: 'REJECT',
     }
-    const res = await saveToProfilePipeline(db, rejectOpp, 'p1', ineligibleProfile, 99, 0)
+    const res = await saveToProfilePipeline(db, admissionReady(rejectOpp), 'p1', ineligibleProfile, 99, 0)
     expect(res.saved).toBe(false)
     expect(res.gate).toBe('DECISION_ENGINE')
     expect(res.decision).toBe('REJECT')
@@ -446,7 +458,7 @@ describe('saveToProfilePipeline — RELEVANCE FLOOR', () => {
       source: 'grants_gov',
       test_score: RELEVANCE_FLOOR,
     }
-    const res = await saveToProfilePipeline(db, goodOpp, 'p1', profileContext, RELEVANCE_FLOOR, 0)
+    const res = await saveToProfilePipeline(db, admissionReady(goodOpp), 'p1', profileContext, RELEVANCE_FLOOR, 0)
     expect(res.saved).toBe(true)
     expect(countGrants(db)).toBe(1)
   })

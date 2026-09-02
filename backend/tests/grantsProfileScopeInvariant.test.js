@@ -15,7 +15,7 @@ function makeDb() {
     CREATE TABLE profiles (
       id TEXT PRIMARY KEY, user_id TEXT, organization_id TEXT, display_name TEXT,
       primary_type TEXT, applicant_type TEXT, primary_profile_type TEXT,
-      tags TEXT, interests TEXT, state TEXT, city TEXT, zip TEXT,
+      tags TEXT, interests TEXT, needs TEXT, state TEXT, city TEXT, zip TEXT,
       created_at TEXT DEFAULT CURRENT_TIMESTAMP, updated_at TEXT
     );
     CREATE TABLE organizations (
@@ -71,6 +71,8 @@ function makeDb() {
       source_trust_tier TEXT,
       opportunity_kind TEXT,
       opportunity_type TEXT,
+      need_types_supported TEXT,
+      amount_max REAL,
       deadline TEXT,
       deadline_type TEXT,
       is_active INTEGER DEFAULT 1
@@ -83,10 +85,10 @@ function makeDb() {
       ('org-1', 'Organization One'),
       ('org-2', 'Organization Two');
     INSERT INTO profiles
-      (id, user_id, organization_id, display_name, primary_type, applicant_type, tags, interests)
+      (id, user_id, organization_id, display_name, primary_type, applicant_type, tags, interests, needs)
     VALUES
-      ('profile-1', 'user-1', 'org-1', 'Profile One', 'individual', 'individual', '[]', '[]'),
-      ('profile-2', 'user-2', 'org-2', 'Profile Two', 'individual', 'individual', '[]', '[]');
+      ('profile-1', 'user-1', 'org-1', 'Profile One', 'individual', 'individual', '[]', '[]', '["education"]'),
+      ('profile-2', 'user-2', 'org-2', 'Profile Two', 'individual', 'individual', '[]', '[]', '["education"]');
     INSERT INTO profile_sections (profile_id, section_key, data) VALUES
       ('profile-1', 'basic_information', '{"state":"TN","city":"Murfreesboro"}'),
       ('profile-1', 'education', '{"intended_major":"Paramedic"}');
@@ -279,9 +281,11 @@ describe('from-opportunity delegates hard eligibility to the canonical saver', (
   ])('rejects %s through DECISION_ENGINE, not a route-local second trial', async (_label, title, description) => {
     db.prepare(
       `INSERT INTO funding_opportunities
-         (id, title, sponsor, description, application_url, source, record_origin, source_trust_tier)
+         (id, title, sponsor, description, application_url, source, record_origin, source_trust_tier,
+          opportunity_kind, need_types_supported, amount_max)
        VALUES (?, ?, 'Official Funder', ?, 'https://www.nsf.gov/funding/opportunities',
-               'curated_verified', 'curated_verified', 'OFFICIAL_API')`,
+               'curated_verified', 'curated_verified', 'OFFICIAL_API',
+               'grant', '["education"]', 10000)`,
     ).run(`opportunity-${title.length}`, title, description)
 
     const response = await request(appWith(db))
