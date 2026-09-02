@@ -1,52 +1,73 @@
 /**
- * Automation must never declare a funder decision.
- *
- * `validateAdvance` only blocked BACKWARD moves, so a model that read an
- * application page optimistically could advance a grant all the way to
- * 'awarded' with no external evidence. That writes the one number the product
- * is judged on — did this profile actually receive money — from an inference,
- * which would make the outcome report worse than useless.
- *
- * Awards and declines now enter only from captured portal evidence or from the
- * profile owner recording them (POST /grant-applications/:id/outcome).
+ * Pipeline automation may organize preparation, but an AI inference may never
+ * become proof that an application was submitted or that a funder decided it.
  */
 
 import { describe, expect, it } from 'vitest'
 
-const { validateAdvance, isExternalOutcomeStatus } = await import('../services/pipelineAutomation.js')
+const {
+  PIPELINE_AUTOMATION_STATUSES,
+  isExternalOutcomeStatus,
+  isPipelineAutomationProcessable,
+  validateAdvance,
+} = await import('../services/pipelineAutomation.js')
+const {
+  PIPELINE_ALLOWED_STATUSES,
+  buildPipelineAutomationPrompt,
+} = await import('../prompts/pipelineAutomation.js')
 
-describe('validateAdvance outcome guard', () => {
-  it('refuses to let automation advance a grant to awarded', () => {
-    expect(validateAdvance('submitted', 'awarded')).toBe('submitted')
+describe('pipeline automation lifecycle guard', () => {
+  it('uses the shared canonical pre-submission lifecycle', () => {
+    expect(PIPELINE_AUTOMATION_STATUSES).toEqual([
+      'discovered',
+      'saved',
+      'interested',
+      'gathering_documents',
+      'drafting',
+      'ready_to_submit',
+    ])
+    expect(PIPELINE_ALLOWED_STATUSES).toEqual(PIPELINE_AUTOMATION_STATUSES)
   })
 
-  it('refuses to let automation advance a grant to declined', () => {
+  it('canonicalizes legacy preparation stages while allowing real forward progress', () => {
+    expect(validateAdvance('drafting', 'portal')).toBe('gathering_documents')
+    expect(validateAdvance('gathering_documents', 'ready_to_submit')).toBe('ready_to_submit')
+  })
+
+  it('refuses to infer submission or any post-submission outcome', () => {
+    expect(validateAdvance('ready_to_submit', 'submitted')).toBe('ready_to_submit')
+    expect(validateAdvance('drafting', 'pending_review')).toBe('drafting')
+    expect(validateAdvance('submitted', 'awarded')).toBe('submitted')
     expect(validateAdvance('submitted', 'declined')).toBe('submitted')
   })
 
-  it('still allows ordinary forward progress through the pipeline', () => {
-    // NOTE: this module's STATUS_ORDER is the legacy vocabulary and does not
-    // contain the canonical RC-13 stages (ready_to_submit, gathering_documents),
-    // so those are rejected as unknown here. Asserted with statuses the
-    // automation actually recognizes.
-    expect(validateAdvance('drafting', 'portal')).toBe('portal')
-    expect(validateAdvance('portal', 'submitted')).toBe('submitted')
-  })
-
-  it('still refuses backward moves', () => {
+  it('leaves already-recorded external evidence untouched', () => {
     expect(validateAdvance('submitted', 'drafting')).toBe('submitted')
-  })
-
-  it('leaves an already-recorded outcome untouched rather than churning it', () => {
-    // The grant is already awarded (a human or portal evidence put it there);
-    // re-suggesting the same status must be a no-op, not a rewrite.
     expect(validateAdvance('awarded', 'awarded')).toBe('awarded')
   })
 
-  it('identifies which statuses require external evidence', () => {
-    expect(isExternalOutcomeStatus('awarded')).toBe(true)
-    expect(isExternalOutcomeStatus('declined')).toBe(true)
-    expect(isExternalOutcomeStatus('submitted')).toBe(false)
-    expect(isExternalOutcomeStatus('drafting')).toBe(false)
+  it('identifies every stage that requires external evidence', () => {
+    for (const status of ['submitted', 'pending_review', 'follow_up', 'awarded', 'declined']) {
+      expect(isExternalOutcomeStatus(status)).toBe(true)
+      expect(isPipelineAutomationProcessable(status)).toBe(false)
+    }
+    expect(isExternalOutcomeStatus('ready_to_submit')).toBe(false)
+    expect(isPipelineAutomationProcessable('portal')).toBe(true)
+  })
+
+  it('the model prompt never authorizes an evidence-free submission', () => {
+    const rendered = buildPipelineAutomationPrompt({
+      grant: { id: 'g-1', status: 'drafting' },
+      organization: null,
+      milestones: [],
+      documents: [],
+      drafts: [],
+      expenses: [],
+      profileSummary: null,
+    })
+    expect(rendered).toContain('This automation NEVER submits an application')
+    expect(rendered).toContain('at most "ready_to_submit"')
+    expect(rendered).not.toMatch(/"submitted"\s+—\s+The application can be sent/i)
+    expect(rendered).not.toContain('portal, submitted, or pending_review')
   })
 })

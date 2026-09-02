@@ -1,7 +1,14 @@
-import { buildPipelineAutomationPrompt, PIPELINE_ALLOWED_STATUSES } from '../prompts/pipelineAutomation.js'
+import { buildPipelineAutomationPrompt } from '../prompts/pipelineAutomation.js'
 import { extractCompletionText } from '../utils/openai.js'
 import { summarizeOpenAIError } from '../utils/openaiClient.js'
 import { isAutomationEnabled } from '../../shared/automationPreferences.js'
+import {
+  PIPELINE_STAGE,
+  PIPELINE_STAGE_ALL,
+  PIPELINE_STAGES,
+  canonicalStage,
+  stageOrder,
+} from '../../shared/pipelineStages.js'
 
 // Per-profile automation toggle: is pipeline auto-processing allowed for this
 // profile? Reads the automation_preferences profile section directly so the
@@ -22,80 +29,44 @@ async function pipelineProcessingAllowedForProfile(db, profileId) {
   }
 }
 
-// STATUS_ORDER must match the frontend KanbanBoard STATUSES exactly
-const STATUS_ORDER = [
-    'discovery',
-    'discovered',
-    'interested',
-    'auto_applied',
-    'drafting',
-    'application_prep',
-    'revision',
-    'portal',
-    'submitted',
-    'pending_review',
-    'follow_up',
-    'awarded',
-    'report',
-    'declined_no_review',
-    'declined',
-    'closed',
-  ]
+// Pipeline automation prepares work; it never records an external action or
+// outcome. All lifecycle vocabulary comes from the shared canonical registry.
+const SUBMITTED_STAGE_ORDER = stageOrder(PIPELINE_STAGE.SUBMITTED)
+export const PIPELINE_AUTOMATION_STATUSES = Object.freeze(
+  PIPELINE_STAGES.filter((stage) => stageOrder(stage) < SUBMITTED_STAGE_ORDER),
+)
 
-// Map legacy backend statuses to current UI statuses
-const LEGACY_STATUS_MAP = {
-    'app_prep': 'application_prep',
-    'under_review': 'pending_review',
-    'rejected': 'declined',
-    'archived': 'closed',
-}
-
-function mapLegacyStatus(status) {
-    if (!status || typeof status !== 'string') return status
-    return LEGACY_STATUS_MAP[status.trim().toLowerCase()] || status.trim().toLowerCase()
-}
-
-function normalizeStatus(status) {
-    if (!status || typeof status !== 'string') return null
-    const mapped = mapLegacyStatus(status)
-    return PIPELINE_ALLOWED_STATUSES.includes(mapped) ? mapped : null
-}
-
-function compareStatuses(current, next) {
-    const currentIndex = STATUS_ORDER.indexOf(mapLegacyStatus(current))
-    const nextIndex = STATUS_ORDER.indexOf(mapLegacyStatus(next))
-    if (currentIndex === -1 || nextIndex === -1) return 0
-    return nextIndex - currentIndex
-}
-
-// Allow the AI to advance grants to the appropriate stage without artificial caps.
-// The AI prompt already instructs it to choose the correct submission stage
-// (portal, submitted, or pending_review) based on funding source requirements.
-// We only prevent backward movement unless the AI explicitly recommends it.
-// A funder's decision is an EXTERNAL fact. It can only enter the system from
-// captured evidence (a portal read) or from the profile owner recording it —
-// never from a model inferring it off application text. Letting automation write
-// these would poison the one number that answers "did this profile actually get
-// money", which is the product's whole bar.
-const EXTERNAL_OUTCOME_STATUSES = new Set(['awarded', 'declined'])
+const EXTERNAL_EVIDENCE_STATUSES = new Set([
+  PIPELINE_STAGE.SUBMITTED,
+  PIPELINE_STAGE.FOLLOW_UP,
+  PIPELINE_STAGE.AWARDED,
+  PIPELINE_STAGE.DECLINED,
+])
 
 export function isExternalOutcomeStatus(status) {
-    return EXTERNAL_OUTCOME_STATUSES.has(mapLegacyStatus(status))
+  const canonical = canonicalStage(status)
+  return canonical ? EXTERNAL_EVIDENCE_STATUSES.has(canonical) : false
+}
+
+export function isPipelineAutomationProcessable(status) {
+  const canonical = canonicalStage(status)
+  return canonical !== null && stageOrder(canonical) < SUBMITTED_STAGE_ORDER
 }
 
 export function validateAdvance(current, suggested) {
-    const currentMapped = mapLegacyStatus(current)
-    const suggestedMapped = mapLegacyStatus(suggested)
-    // Ensure the suggested status is a known canonical status before accepting it
-    if (!PIPELINE_ALLOWED_STATUSES.includes(suggestedMapped)) return currentMapped
-    // Never let automation declare an award or a rejection; hand it to a human.
-    if (EXTERNAL_OUTCOME_STATUSES.has(suggestedMapped) && suggestedMapped !== currentMapped) {
-      return currentMapped
-    }
-    const delta = compareStatuses(currentMapped, suggestedMapped)
-    // If AI suggests moving backward, keep current
-    if (delta < 0) return currentMapped
-    return suggestedMapped
+  const currentCanonical = canonicalStage(current)
+  const suggestedCanonical = canonicalStage(suggested)
+  const fallback = currentCanonical || current
+
+  if (!currentCanonical || !suggestedCanonical) return fallback
+  // A submitted or post-submission row is evidence/history, not automation
+  // input. An explicit single-grant call must be harmless too.
+  if (!isPipelineAutomationProcessable(currentCanonical)) return currentCanonical
+  // The model may organize preparation through ready_to_submit, but only a
+  // human or Hamilton's evidence-gated execution path can cross submission.
+  if (!PIPELINE_AUTOMATION_STATUSES.includes(suggestedCanonical)) return currentCanonical
+  if (stageOrder(suggestedCanonical) < stageOrder(currentCanonical)) return currentCanonical
+  return suggestedCanonical
 }
 
 async function createAnthropicClient() {
@@ -311,15 +282,11 @@ async function recordAutomationEvent(db, payload) {
     }
 }
 
-// All statuses that are eligible for pipeline automation processing
-const PROCESSABLE_STATUSES = [
-    'discovery', 'discovered', 'interested', 'auto_applied',
-    'drafting', 'application_prep', 'revision',
-    // Late-stage statuses that may still need AI-assisted advancement
-    'portal', 'submitted',
-    // Legacy statuses that may still exist in DB
-    'app_prep',
-  ]
+// Query every canonical/legacy pre-submission spelling, and nothing at or
+// beyond submitted. The per-grant validator repeats the same rule.
+const PROCESSABLE_STATUSES = Object.freeze(
+  PIPELINE_STAGE_ALL.filter((status) => isPipelineAutomationProcessable(status)),
+)
 
 export async function processPipelineAutomationJob({ db, job, profileContext, getOpenAI }) {
     const parameters = job.parameters ?? {}
@@ -353,6 +320,15 @@ export async function processPipelineAutomationJob({ db, job, profileContext, ge
 
       if (grantId) {
             const context = await fetchGrantContext(db, grantId)
+            if (!isPipelineAutomationProcessable(context.grant?.status)) {
+              return {
+                evaluated: 0,
+                advanced: 0,
+                handoffs: 0,
+                skipped: true,
+                skipped_reason: 'pipeline_stage_protected',
+              }
+            }
             grants.push(context)
       } else if (profileId) {
             const limitRaw = parameters.limit
@@ -569,13 +545,14 @@ export async function processPipelineAutomationJob({ db, job, profileContext, ge
                     continue
             }
 
-      const currentStatus = mapLegacyStatus(grant.status)
-              const suggestedStatus = normalizeStatus(parsed.suggested_status) ?? currentStatus
+      const currentStatus = canonicalStage(grant.status) || grant.status
+              const suggestedStatus = canonicalStage(parsed.suggested_status) || currentStatus
               const validatedStatus = validateAdvance(currentStatus, suggestedStatus)
 
-      // If the model wanted to declare an outcome, validateAdvance refused it.
-      // Surface that as work for the owner instead of dropping it silently.
-      const withheldOutcome = isExternalOutcomeStatus(suggestedStatus)
+      // If the model tried to infer a submission or external outcome,
+      // validateAdvance refused it. Surface that as work for the owner instead
+      // of silently treating the inference as a real event.
+      const withheldOutcome = isExternalOutcomeStatus(parsed.suggested_status)
         && suggestedStatus !== validatedStatus
 
       const handoffRequired = Boolean(parsed.handoff_required) || withheldOutcome

@@ -35,8 +35,11 @@ import { Sparkles, Trash2, Loader2, Filter, ExternalLink } from "lucide-react";
 import HamiltonAutopilotAuthorization from "@/components/hamilton/HamiltonAutopilotAuthorization";
 import HamiltonHardStopChecklist from "@/components/hamilton/HamiltonHardStopChecklist";
 import { isGrantExpired } from "@/components/shared/grantUtils";
-import { isRenderableUrl } from "@/lib/matchDisplayThresholds";
 import PortalLoginButton from "@/components/portal/PortalLoginButton";
+import {
+  hamiltonProcessingBlockReason,
+  isHamiltonProcessableStage,
+} from "../../shared/hamiltonProcessingPolicy.js";
 
 /**
  * HamiltonProcessing
@@ -75,9 +78,10 @@ const ACTIONS = Object.freeze({ LEAVE: "leave", PROCESS: "process", DELETE: "del
  * authorized or submitted until the user clicks "Process … with Hamilton" and
  * clears the authorize/preflight gate, so this default never auto-acts.
  */
-function defaultActionFor(grant) {
-  const url = grantUrl(grant);
-  const ready = !isGrantExpired(grant) && isRenderableUrl(url);
+function defaultActionFor(grant, autoSelectableGrantIds) {
+  const ready = isHamiltonProcessableStage(grant?.status)
+    && !isGrantExpired(grant)
+    && autoSelectableGrantIds.has(String(grant?.id));
   return ready ? ACTIONS.PROCESS : ACTIONS.LEAVE;
 }
 
@@ -156,6 +160,24 @@ export default function HamiltonProcessing() {
       client.entities.Grant.list("-created_date", 2000, { profile_id: profileId }),
   });
 
+  // The backend owns applyability classification. Reuse the exact server set
+  // that "Select all" and full automation use instead of guessing from a
+  // generic source URL (an info page is a URL, but it is not an application).
+  const readySourcesQuery = useQuery({
+    queryKey: ["hamilton", "ready-sources", profileId],
+    enabled: Boolean(profileId),
+    queryFn: () =>
+      client.get(`/api/hamilton/automation/ready-sources?profile_id=${encodeURIComponent(profileId)}`),
+  });
+  const autoSelectableGrantIds = useMemo(
+    () => new Set(
+      (Array.isArray(readySourcesQuery.data?.sources) ? readySourcesQuery.data.sources : [])
+        .filter((source) => source?.is_applyable === true)
+        .map((source) => String(source.grant_id)),
+    ),
+    [readySourcesQuery.data],
+  );
+
   // Only ever show sources that truly belong to the selected profile — never
   // fall back to organization_id (mirrors the Pipeline page's guard against
   // cross-profile bleed).
@@ -167,21 +189,31 @@ export default function HamiltonProcessing() {
   // Initialise the action map whenever the source list changes, preserving any
   // choices the user already made for rows that still exist.
   useEffect(() => {
+    // Wait for the server-owned applyability set before assigning defaults.
+    // Otherwise the first grants response would freeze every row at Leave and
+    // the later readiness response could never initialize the real candidates.
+    if (!readySourcesQuery.isSuccess) return;
     setActions((prev) => {
       const next = {};
       for (const g of sources) {
-        next[g.id] = prev[g.id] ?? defaultActionFor(g);
+        const previous = prev[g.id];
+        next[g.id] = previous === ACTIONS.PROCESS && !isHamiltonProcessableStage(g.status)
+          ? ACTIONS.LEAVE
+          : previous ?? defaultActionFor(g, autoSelectableGrantIds);
       }
       return next;
     });
-  }, [sources]);
+  }, [sources, autoSelectableGrantIds, readySourcesQuery.isSuccess]);
 
   const counts = useMemo(() => {
     let process = 0;
     let del = 0;
     let leave = 0;
     for (const g of sources) {
-      const a = actions[g.id] ?? ACTIONS.LEAVE;
+      const requested = actions[g.id] ?? ACTIONS.LEAVE;
+      const a = requested === ACTIONS.PROCESS && !isHamiltonProcessableStage(g.status)
+        ? ACTIONS.LEAVE
+        : requested;
       if (a === ACTIONS.PROCESS) process += 1;
       else if (a === ACTIONS.DELETE) del += 1;
       else leave += 1;
@@ -192,7 +224,7 @@ export default function HamiltonProcessing() {
   const selectedSources = useMemo(
     () =>
       sources
-        .filter((g) => actions[g.id] === ACTIONS.PROCESS)
+        .filter((g) => actions[g.id] === ACTIONS.PROCESS && isHamiltonProcessableStage(g.status))
         .map((g) => ({
           grant_id: g.id,
           opportunity_id: g.funding_opportunity_id || g.opportunity_id || null,
@@ -202,12 +234,22 @@ export default function HamiltonProcessing() {
     [sources, actions],
   );
 
-  const setAction = (id, action) => setActions((prev) => ({ ...prev, [id]: action }));
+  const setAction = (grant, action) => {
+    if (action === ACTIONS.PROCESS && !isHamiltonProcessableStage(grant?.status)) return;
+    setActions((prev) => ({ ...prev, [grant.id]: action }));
+  };
 
   const setAll = (action) => {
     setActions(() => {
       const next = {};
-      for (const g of sources) next[g.id] = action;
+      for (const g of sources) {
+        const canBulkProcess = isHamiltonProcessableStage(g.status)
+          && !isGrantExpired(g)
+          && autoSelectableGrantIds.has(String(g.id));
+        next[g.id] = action === ACTIONS.PROCESS && !canBulkProcess
+          ? ACTIONS.LEAVE
+          : action;
+      }
       return next;
     });
   };
@@ -260,7 +302,8 @@ export default function HamiltonProcessing() {
     setAuthOpen(true);
   }
 
-  const isLoading = grantsQuery.isLoading && Boolean(profileId);
+  const isLoading = Boolean(profileId)
+    && (grantsQuery.isLoading || readySourcesQuery.isLoading);
 
   return (
     <div className="p-6 md:p-8 space-y-6">
@@ -326,7 +369,7 @@ export default function HamiltonProcessing() {
               <div className="flex items-center gap-2 text-sm">
                 <span className="text-slate-500">Set all:</span>
                 <Button size="sm" variant="outline" onClick={() => setAll(ACTIONS.PROCESS)}>
-                  Process
+                  Process eligible
                 </Button>
                 <Button size="sm" variant="outline" onClick={() => setAll(ACTIONS.LEAVE)}>
                   Leave
@@ -357,7 +400,11 @@ export default function HamiltonProcessing() {
                 </TableHeader>
                 <TableBody>
                   {sources.map((g) => {
-                    const action = actions[g.id] ?? ACTIONS.LEAVE;
+                    const requestedAction = actions[g.id] ?? ACTIONS.LEAVE;
+                    const processingBlockReason = hamiltonProcessingBlockReason(g.status);
+                    const action = requestedAction === ACTIONS.PROCESS && processingBlockReason
+                      ? ACTIONS.LEAVE
+                      : requestedAction;
                     const url = grantUrl(g);
                     return (
                       <TableRow
@@ -397,6 +444,11 @@ export default function HamiltonProcessing() {
                           <span className="text-xs capitalize text-slate-700">
                             {String(g.status || "—").replace(/_/g, " ")}
                           </span>
+                          {processingBlockReason ? (
+                            <div className="mt-1 max-w-[220px] text-[11px] leading-snug text-amber-700">
+                              {processingBlockReason}
+                            </div>
+                          ) : null}
                         </TableCell>
                         <TableCell className="text-sm text-slate-700">{formatDeadline(g)}</TableCell>
                         <TableCell>
@@ -405,7 +457,12 @@ export default function HamiltonProcessing() {
                           </Badge>
                         </TableCell>
                         <TableCell className="text-right">
-                          <SegmentedAction value={action} onChange={(a) => setAction(g.id, a)} />
+                          <SegmentedAction
+                            value={action}
+                            onChange={(a) => setAction(g, a)}
+                            processDisabled={Boolean(processingBlockReason)}
+                            processDisabledReason={processingBlockReason}
+                          />
                         </TableCell>
                       </TableRow>
                     );
@@ -503,7 +560,7 @@ export default function HamiltonProcessing() {
  * single row. Uses aria-pressed buttons rather than a radio group so the whole
  * control fits on one line and reads clearly at table density.
  */
-function SegmentedAction({ value, onChange }) {
+function SegmentedAction({ value, onChange, processDisabled = false, processDisabledReason = null }) {
   const base = "px-3 py-1.5 text-xs font-medium transition-colors focus:outline-none focus:ring-2 focus:ring-offset-1";
   const opts = [
     { key: ACTIONS.PROCESS, label: "Process", on: "bg-indigo-600 text-white", off: "text-slate-600 hover:bg-indigo-50", ring: "focus:ring-indigo-400" },
@@ -514,13 +571,19 @@ function SegmentedAction({ value, onChange }) {
     <div className="inline-flex rounded-md border border-slate-200 overflow-hidden divide-x divide-slate-200">
       {opts.map((o) => {
         const active = value === o.key;
+        const disabled = o.key === ACTIONS.PROCESS && processDisabled;
         return (
           <button
             key={o.key}
             type="button"
             aria-pressed={active}
+            aria-disabled={disabled}
+            disabled={disabled}
+            title={disabled ? processDisabledReason || "This source cannot be reprocessed." : undefined}
             onClick={() => onChange(o.key)}
-            className={`${base} ${o.ring} ${active ? o.on : `bg-white ${o.off}`}`}
+            className={`${base} ${o.ring} ${active ? o.on : `bg-white ${o.off}`} ${
+              disabled ? "cursor-not-allowed opacity-40 hover:bg-white" : ""
+            }`}
           >
             {o.label}
           </button>

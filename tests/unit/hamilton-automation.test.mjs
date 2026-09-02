@@ -492,6 +492,48 @@ describe('hamiltonAutomationOrchestrator — multi-source dispatch', () => {
     assert.equal(tasks.length, 1, 'reselecting from different stages should reuse the same task')
   })
 
+  it('refuses an authoritative submitted grant before creating a duplicate task', async () => {
+    resetCaches()
+    const db = makeMemoryDb()
+    db.raw.prepare(`INSERT INTO funding_opportunities (id, title, mailing_address, application_mode, funder_name)
+                    VALUES ('opp-protected', 'Already sent award', '1 Main', 'mail', 'F')`).run()
+    db.raw.prepare(`INSERT INTO grants (id, profile_id, status, opportunity_id, title, updated_at)
+                    VALUES ('grant-protected', 'p-A', 'submitted', 'opp-protected', 'Already sent award', CURRENT_TIMESTAMP)`).run()
+
+    const result = await automateSingleSource(db, {
+      profileId: 'p-A',
+      userId: 'u-A',
+      source: {
+        grant_id: 'grant-protected',
+        opportunity_id: 'opp-protected',
+        current_stage: 'ready_to_submit',
+      },
+    })
+
+    assert.equal(result.skipped, true)
+    assert.equal(result.reason, 'pipeline_stage_protected')
+    assert.equal(result.pipeline_stage, 'submitted')
+    assert.equal(result.task, null)
+    assert.equal((await listApplicationTasks(db, { profileId: 'p-A' })).length, 0)
+  })
+
+  it('rejects a grant that belongs to another profile', async () => {
+    resetCaches()
+    const db = makeMemoryDb()
+    db.raw.prepare(`INSERT INTO grants (id, profile_id, status, title, updated_at)
+                    VALUES ('grant-other-profile', 'p-B', 'saved', 'Private source', CURRENT_TIMESTAMP)`).run()
+
+    await assert.rejects(
+      automateSingleSource(db, {
+        profileId: 'p-A',
+        userId: 'u-A',
+        source: { grant_id: 'grant-other-profile', current_stage: 'saved' },
+      }),
+      (error) => error?.code === 'source_profile_mismatch' && error?.status === 403,
+    )
+    assert.equal((await listApplicationTasks(db, { profileId: 'p-A' })).length, 0)
+  })
+
   it('keeps tasks scoped to the profile (no cross-profile leak)', async () => {
     resetCaches()
     const db = makeMemoryDb()

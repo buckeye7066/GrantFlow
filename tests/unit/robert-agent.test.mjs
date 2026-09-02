@@ -1,7 +1,9 @@
 import { describe, it, beforeEach } from 'node:test'
 import assert from 'node:assert/strict'
+import Database from 'better-sqlite3'
 import { makeMemoryDb } from './robert-test-helpers.mjs'
-import { runRobert, getRobertStatus } from '../../backend/services/robert/robertAgent.js'
+import { wrapSqlite } from '../helpers/sqliteTestDb.mjs'
+import { runRobert, getRobertStatus, resolveProfileIds } from '../../backend/services/robert/robertAgent.js'
 import { latestRun } from '../../backend/services/robert/robertRunStore.js'
 
 let db
@@ -82,6 +84,39 @@ describe('robertAgent — defaults are safe', () => {
       },
     })
     assert.equal(result.counters.profiles_considered, 5)
+  })
+
+  it('rotates bounded live discovery toward never and least-recently crawled profiles', async () => {
+    const sqlite = new Database(':memory:')
+    sqlite.exec(`
+      CREATE TABLE profiles (
+        id TEXT PRIMARY KEY,
+        status TEXT,
+        updated_at TEXT
+      );
+      CREATE TABLE crawler_runs (
+        run_id TEXT PRIMARY KEY,
+        profile_id TEXT,
+        started_at TEXT
+      );
+      INSERT INTO profiles (id, status, updated_at) VALUES
+        ('p-never', 'active', '2026-09-01T00:00:00.000Z'),
+        ('p-old', 'active', '2026-08-01T00:00:00.000Z'),
+        ('p-recent', 'active', '2026-07-01T00:00:00.000Z'),
+        ('p-deleted', 'deleted', '2026-09-02T00:00:00.000Z');
+      INSERT INTO crawler_runs (run_id, profile_id, started_at) VALUES
+        ('run-old', 'p-old', '2026-07-01T00:00:00.000Z'),
+        ('run-recent', 'p-recent', '2026-09-01T00:00:00.000Z');
+    `)
+
+    const selected = await resolveProfileIds({
+      db: wrapSqlite(sqlite),
+      cap: 2,
+      deps: {},
+    })
+
+    assert.deepEqual(selected, ['p-never', 'p-old'])
+    sqlite.close()
   })
 
   it('does NOT ingest opportunities when autoIngestVerified is false', async () => {

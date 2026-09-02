@@ -125,7 +125,7 @@ router.get('/health', async (req, res) => {
 
   const [brain_memories, tool_usage_24h, sessions_24h] = await Promise.all([
     safeCount('SELECT COUNT(*) AS count FROM anya_brain_memory'),
-    safeCount('SELECT COUNT(*) AS count FROM anya_tool_usage WHERE ts >= ?', [dayAgo]),
+    safeCount('SELECT COUNT(*) AS count FROM anya_tool_usage WHERE created_at >= ?', [dayAgo]),
     safeCount("SELECT COUNT(*) AS count FROM anya_sessions WHERE created_at >= ?", [dayAgo]),
   ])
 
@@ -296,6 +296,15 @@ router.get('/sessions/:sessionId/messages', async (req, res) => {
   }
 })
 
+async function recoverAnyaRunCompletion(db, runId, payload) {
+  for (const delayMs of [1_000, 3_000, 7_000, 15_000]) {
+    await new Promise((resolve) => setTimeout(resolve, delayMs))
+    if (await completeAnyaRun(db, runId, payload)) return true
+  }
+  routeLogger.error('[anya] reply stored but run completion could not be recovered', { runId })
+  return false
+}
+
 // Generate Anya's reply, persist it as an assistant message, and close out the
 // run. Shared by the synchronous and background message paths so both behave
 // identically (same timeout, same degraded fallback, same run bookkeeping).
@@ -341,14 +350,25 @@ async function generateAndStoreReply(db, ctx, sessionId, runId, { content, curre
       : {}),
   })
 
-  await completeAnyaRun(db, runId, {
+  const completion = {
     status: 'completed',
     // assistant_message_id lets the client's background poller pull the exact
     // reply when the run finishes (panel may be closed by then).
     response: { assistantText, degraded, assistant_message_id: assistantMessage.id },
-  })
+  }
+  const runFinalized = await completeAnyaRun(db, runId, completion)
+  if (!runFinalized) {
+    // The assistant message is already durable. Keep repairing the delivery
+    // marker out of band so background polling can surface that exact answer.
+    void recoverAnyaRunCompletion(db, runId, completion).catch((recoveryError) => {
+      routeLogger.error('[anya] run completion recovery crashed', {
+        runId,
+        error: recoveryError?.message || String(recoveryError),
+      })
+    })
+  }
 
-  return { assistantMessage, degraded }
+  return { assistantMessage, degraded, runFinalized }
 }
 
 router.post('/sessions/:sessionId/messages', async (req, res) => {
@@ -559,6 +579,9 @@ router.patch('/sessions/:sessionId/tasks/:taskId', (req, res) => {
 // Mark a task as executed and log the action
 router.post('/sessions/:sessionId/tasks/:taskId/execute', async (req, res) => {
   try {
+    // Match every sibling session route: prove the caller owns this session
+    // before mutating one of its tasks.
+    await getSession(req.db, req.ctx, req.params.sessionId)
     const { markTaskExecuted } = await import('../services/anyaTaskExecutionHelper.js')
     
     const result = await markTaskExecuted({

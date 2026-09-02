@@ -706,15 +706,39 @@ async function loadProfileContextDefault(db, profileId) {
   return await _cachedLoadProfileContext(db, profileId)
 }
 
-async function resolveProfileIds({ db, profileIds, cap, deps }) {
-  if (Array.isArray(profileIds) && profileIds.length > 0) return profileIds.slice(0, cap)
-  if (typeof deps.listActiveProfileIds === 'function') return (await deps.listActiveProfileIds(db)).slice(0, cap)
-  // Default: live SQL.
+export async function resolveProfileIds({ db, profileIds, cap, deps = {} }) {
+  const limit = Number(cap) || 50
+  if (Array.isArray(profileIds) && profileIds.length > 0) return profileIds.slice(0, limit)
+  if (typeof deps.listActiveProfileIds === 'function') return (await deps.listActiveProfileIds(db)).slice(0, limit)
+  // Default: live SQL. A fixed "updated_at DESC LIMIT N" permanently starves
+  // profiles beyond the cap. Prefer never-crawled profiles, then the least
+  // recently crawled, so bounded scheduled runs rotate through the full fleet.
   if (!db?.prepare) return []
   try {
-    const rows = await db.prepare(
-      `SELECT id FROM profiles WHERE COALESCE(status,'active') = 'active' ORDER BY updated_at DESC LIMIT ?`,
-    ).all(Number(cap) || 50)
+    let rows
+    try {
+      rows = await db.prepare(
+        `SELECT p.id
+           FROM profiles p
+           LEFT JOIN (
+             SELECT profile_id, MAX(started_at) AS last_crawled_at
+               FROM crawler_runs
+              GROUP BY profile_id
+           ) recent ON recent.profile_id = p.id
+          WHERE COALESCE(p.status,'active') = 'active'
+          ORDER BY CASE WHEN recent.last_crawled_at IS NULL THEN 0 ELSE 1 END ASC,
+                   recent.last_crawled_at ASC,
+                   p.updated_at DESC
+          LIMIT ?`,
+      ).all(limit)
+    } catch (rotationErr) {
+      // Degraded/legacy schemas may not have crawler_runs yet. Keep discovery
+      // available, but report that fair rotation could not be applied.
+      log.warn(`resolveProfileIds rotation unavailable; using profile recency: ${String(rotationErr?.message || rotationErr)}`)
+      rows = await db.prepare(
+        `SELECT id FROM profiles WHERE COALESCE(status,'active') = 'active' ORDER BY updated_at DESC LIMIT ?`,
+      ).all(limit)
+    }
     return rows.map((r) => r.id)
   } catch (err) {
     log.warn(`resolveProfileIds failed (returning none): ${String(err?.message || err)}`)

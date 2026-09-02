@@ -152,6 +152,55 @@ test('Hamilton adapter exposes open_blockers + queue_depth (best-effort)', async
   assert.equal(typeof status.open_blockers, 'number')
 })
 
+test('Hamilton preserves pause as a resumable adapter state', async () => {
+  resetRegistry()
+  const task = {
+    id: 'task-1',
+    profile_id: 'profile-1',
+    opportunity_id: 'opp-1',
+    grant_id: 'grant-1',
+    status: 'queued',
+  }
+  const db = {
+    prepare(sql) {
+      return {
+        async get() {
+          if (/COUNT\(\*\).*application_tasks/i.test(sql)) return { c: 1 }
+          return null
+        },
+        async all() {
+          if (/FROM application_tasks/i.test(sql)) return [task]
+          return []
+        },
+      }
+    },
+  }
+  const heartbeats = []
+  const adapter = getAdapter('hamilton')
+  const result = await adapter.start({
+    db,
+    controlRunId: 'run-1',
+    stepId: 'step-1',
+    options: { allow_hamilton_autopilot: true },
+    signal: makeSignal({
+      runId: 'run-1',
+      stepId: 'step-1',
+      agentName: 'hamilton',
+      shouldStop: () => false,
+      shouldPause: () => true,
+      heartbeat: async (progress) => heartbeats.push(progress),
+      recordEvent: async () => {},
+    }),
+  })
+
+  assert.equal(result.ok, true)
+  assert.equal(result.status, 'paused')
+  assert.equal(result.summary.paused, true)
+  assert.equal(result.summary.attempted, 0)
+  assert.equal(result.summary.queue_selected, 1)
+  assert.equal(heartbeats.at(-1)?.remaining, undefined)
+})
+
 test('Yana adapter is the LEAD-DISCOVERY agent, separate from Hamilton', async () => {
   resetRegistry()
   const yana = getAdapter('yana')

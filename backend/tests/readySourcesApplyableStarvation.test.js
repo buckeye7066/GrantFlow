@@ -22,7 +22,7 @@ import { beforeEach, afterEach, describe, expect, it } from 'vitest'
 process.env.RUNTIME_SECRETS_KEY = process.env.RUNTIME_SECRETS_KEY || 'd'.repeat(64)
 
 const { SqliteDb } = await import('../db/index.js')
-const { listReadySources } = await import('../routes/hamiltonAutomation.js')
+const { listReadySources, selectAutoSubmitSources } = await import('../routes/hamiltonAutomation.js')
 
 const PROFILE = 'profile-starve'
 
@@ -117,6 +117,21 @@ describe('listReadySources does not let the LIMIT starve applyable sources', () 
     expect(ready.slice(0, 5).every((r) => r.is_applyable === true)).toBe(true)
   })
 
+  it('auto-selects only sources with a direct application surface', async () => {
+    db = await makeDb({ noise: 120, applyableCount: 5 })
+    const selected = await selectAutoSubmitSources(db, PROFILE)
+
+    expect(selected).toHaveLength(5)
+    expect(selected.every((row) => row.is_applyable === true)).toBe(true)
+  })
+
+  it('does not fall back to guaranteed hard stops when nothing is applyable', async () => {
+    db = await makeDb({ noise: 12, applyableCount: 0 })
+    const selected = await selectAutoSubmitSources(db, PROFILE)
+
+    expect(selected).toEqual([])
+  })
+
   it('is an ORDER BY and not a WHERE — unapplyable rows are still returned', async () => {
     db = await makeDb({ noise: 120, applyableCount: 5 })
     const ready = await listReadySources(db, PROFILE)
@@ -133,6 +148,28 @@ describe('listReadySources does not let the LIMIT starve applyable sources', () 
     const ready = await listReadySources(db, PROFILE)
     expect(ready.length).toBe(5)
     expect(ready.slice(0, 2).every((r) => r.is_applyable === true)).toBe(true)
+  })
+
+  it('excludes submitted, follow-up, outcome, legacy and evidence-hold rows', async () => {
+    db = await makeDb({ noise: 0, applyableCount: 0 })
+    const statuses = [
+      ['grant-saved', 'saved'],
+      ['grant-submitted', 'submitted'],
+      ['grant-follow-up', 'follow_up'],
+      ['grant-review', 'under_review'],
+      ['grant-awarded', 'awarded'],
+      ['grant-evidence', 'submission_verification_required'],
+      ['grant-complete', 'completed'],
+    ]
+    for (const [id, status] of statuses) {
+      await db.prepare(
+        `INSERT INTO grants (id, profile_id, title, status, application_url, pipeline_category, updated_at)
+         VALUES (?, ?, ?, ?, ?, NULL, '2026-08-30T00:00:00Z')`,
+      ).run(id, PROFILE, id, status, `https://apply.example.org/${id}`)
+    }
+
+    const ready = await listReadySources(db, PROFILE)
+    expect(ready.map((row) => row.grant_id)).toEqual(['grant-saved'])
   })
 
   it('treats an UNKNOWN opportunity kind as neutral, not as a pointer', async () => {

@@ -45,7 +45,10 @@ let schemaCache = new WeakMap()
 export async function ensureSchema(db) {
   if (!db || typeof db.prepare !== 'function') return
   if (schemaCache.has(db)) return
-  schemaCache.set(db, true)
+  // Cache only after every required CREATE succeeds. A transient DDL failure
+  // must remain retryable; marking the handle ready before the work ran made a
+  // partially-created schema sticky for the lifetime of the process.
+  let schemaComplete = true
   const isPostgres = db?.dialect === 'postgres'
   const tsType = isPostgres ? 'TIMESTAMPTZ' : 'DATETIME'
   const idDefault = isPostgres ? 'gen_random_uuid()::text' : "lower(hex(randomblob(16)))"
@@ -135,7 +138,9 @@ export async function ensureSchema(db) {
         await db.prepare(sql).run()
       }
     } catch {
-      // table may already exist via migrations; ignore.
+      // Keep the bootstrap best-effort for ad-hoc test handles, but do not
+      // cache an incomplete attempt. The next real store operation retries.
+      schemaComplete = false
     }
   }
 
@@ -170,6 +175,7 @@ export async function ensureSchema(db) {
       if (!/already exists|does not exist/i.test(String(err?.message || err))) throw err
     }
   }
+  if (schemaComplete) schemaCache.set(db, true)
 }
 
 export function _resetSchemaCache() {
@@ -1046,14 +1052,18 @@ export async function listStopRequests(db, runId, { unfulfilledOnly = false } = 
  * react to. Resume cancels any outstanding pause; cancel/emergency_stop
  * trumps pause/graceful_stop.
  */
-export async function latestUnfulfilledStop(db, runId, { agentName = null } = {}) {
+export async function latestUnfulfilledStop(db, runId, { agentName = null, runWideOnly = false } = {}) {
   const reqs = await listStopRequests(db, runId, { unfulfilledOnly: true })
   if (!reqs.length) return null
 
-  // Filter by agent (null = run-wide)
-  const relevant = agentName
-    ? reqs.filter((r) => !r.agent_name || r.agent_name === String(agentName).toLowerCase())
-    : reqs
+  // An executor's between-step poll must ignore an agent-scoped stop so one
+  // agent can halt without terminating the entire full cycle. During a step,
+  // agentName includes both run-wide and that agent's requests.
+  const relevant = runWideOnly
+    ? reqs.filter((r) => !r.agent_name)
+    : agentName
+      ? reqs.filter((r) => !r.agent_name || r.agent_name === String(agentName).toLowerCase())
+      : reqs
 
   if (!relevant.length) return null
 
