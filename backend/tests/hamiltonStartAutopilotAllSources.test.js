@@ -45,8 +45,23 @@ function appWith(grantRows) {
     req.ctx = { isAdmin: true }
     req.db = {
       prepare: (sql) => ({
-        all: async () => (/FROM grants/i.test(sql) ? grantRows : []),
-        get: async () => ({ id: 'profile-1', user_id: 'user-1' }),
+        all: async (...params) => {
+          if (!/FROM grants/i.test(sql)) return []
+          const rows = grantRows.map((row) => ({ ...row, profile_id: row.profile_id || 'profile-1' }))
+          if (/funding_opportunity_id\s*=\s*\?/i.test(sql)) {
+            const opportunityId = String(params[1] || '')
+            return rows.filter((row) => String(row.funding_opportunity_id || '') === opportunityId)
+          }
+          return rows
+        },
+        get: async (...params) => {
+          if (/FROM grants/i.test(sql)) {
+            const id = String(params[0] || '')
+            const row = grantRows.find((candidate) => String(candidate.id) === id)
+            return row ? { ...row, profile_id: row.profile_id || 'profile-1' } : null
+          }
+          return { id: 'profile-1', user_id: 'user-1' }
+        },
         run: async () => ({ changes: 1 }),
       }),
     }
@@ -57,8 +72,22 @@ function appWith(grantRows) {
 }
 
 const READY = [
-  { id: 'g1', funding_opportunity_id: 'o1', title: 'Grant One', status: 'interested' },
-  { id: 'g2', funding_opportunity_id: null, title: 'Grant Two', status: 'drafting' },
+  {
+    id: 'g1',
+    funding_opportunity_id: 'o1',
+    title: 'Grant One',
+    status: 'interested',
+    g_application_url: 'https://apply.example.org/grant-one',
+    opportunity_kind: 'direct_grant',
+  },
+  {
+    id: 'g2',
+    funding_opportunity_id: null,
+    title: 'Grant Two',
+    status: 'drafting',
+    g_application_url: 'https://apply.example.org/grant-two',
+    opportunity_kind: 'direct_grant',
+  },
 ]
 
 describe('start-autopilot: all_ready_sources', () => {
@@ -93,7 +122,7 @@ describe('start-autopilot: all_ready_sources', () => {
   })
 
   it('honours an EXPLICIT selection verbatim', async () => {
-    const picked = [{ grant_id: 'g9', opportunity_id: 'o9', title: 'Only This', current_stage: 'drafting' }]
+    const picked = [{ grant_id: 'g1', opportunity_id: 'o1', title: 'Only This', current_stage: 'drafting' }]
     const res = await request(appWith(READY))
       .post('/api/hamilton/automation/start-autopilot')
       .send({ profile_id: 'profile-1', selected_sources: picked, all_ready_sources: true })
@@ -117,14 +146,15 @@ const MIXED = [
 ]
 
 describe('applyability prioritisation', () => {
-  it('ready-sources ranks APPLYABLE first and carries the tier', async () => {
+  it('ready-sources exposes only direct application surfaces to Select all', async () => {
     const res = await request(appWith(MIXED)).get('/api/hamilton/automation/ready-sources?profile_id=profile-1')
     expect(res.status).toBe(200)
-    const tiers = res.body.sources.map((s) => s.applyability_tier)
-    // online_form leads, then account_portal, then info_only.
-    expect(tiers[0]).toBe('online_form')
-    expect(res.body.sources[0].is_applyable).toBe(true)
-    expect(tiers).toEqual(['online_form', 'account_portal', 'info_only'])
+    expect(res.body.sources).toHaveLength(1)
+    expect(res.body.sources[0]).toMatchObject({
+      grant_id: 'gForm',
+      applyability_tier: 'online_form',
+      is_applyable: true,
+    })
   })
 
   it('auto-submit expands to the APPLYABLE source only when some exist', async () => {
@@ -135,5 +165,39 @@ describe('applyability prioritisation', () => {
     // Only the online_form scholarship — never the SSA login or the grants.gov
     // info page — is handed to auto-submit.
     expect(res.body.queued_count).toBe(1)
+  })
+
+  it('returns a stated no-ready reason instead of enqueueing only hard stops', async () => {
+    const noSurface = MIXED.filter((row) => row.id !== 'gForm')
+    const res = await request(appWith(noSurface))
+      .post('/api/hamilton/automation/start-autopilot')
+      .send({ profile_id: 'profile-1', all_ready_sources: true, options: { allow_auto_submit: true } })
+
+    expect(res.status).toBe(409)
+    expect(res.body.error).toBe('no_ready_sources')
+  })
+
+  it('rejects a spoofed opportunity-only selection when the server grant is submitted', async () => {
+    const submitted = [{
+      id: 'gSubmitted',
+      profile_id: 'profile-1',
+      funding_opportunity_id: 'oSubmitted',
+      title: 'Already sent',
+      status: 'submitted',
+      g_application_url: 'https://apply.example.org/already-sent',
+      opportunity_kind: 'direct_grant',
+    }]
+    const res = await request(appWith(submitted))
+      .post('/api/hamilton/automation/start-autopilot')
+      .send({
+        profile_id: 'profile-1',
+        selected_sources: [{
+          opportunity_id: 'oSubmitted',
+          current_stage: 'saved',
+        }],
+      })
+
+    expect(res.status).toBe(409)
+    expect(res.body.error).toBe('pipeline_stage_protected')
   })
 })
