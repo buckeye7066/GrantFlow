@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os'
 import {
   checkPrerequisites,
   inferExecutableRequirements,
+  recoverDockerDesktop,
   resolveLaunchEnv,
   satisfiesNodeEngine,
 } from '../src/prereq.mjs'
@@ -56,6 +57,28 @@ test('an opted-in Docker prerequisite recovers once, then verifies the daemon', 
   assert.equal(recoveries, 1)
   assert.equal(probes, 2, 'a successful recovery is never trusted without a fresh daemon probe')
   assert.deepEqual(result.unmet, [])
+})
+
+test('Docker Desktop recovery inherits only the global safe environment', () => {
+  let options
+  const result = recoverDockerDesktop({
+    platform: 'win32',
+    env: {
+      PATH: 'C:\\tools',
+      SystemRoot: 'C:\\Windows',
+      EVA_RUNNER_SECRET: 'do-not-inherit',
+      DATABASE_URL: 'postgresql://secret',
+    },
+    run: (_command, _args, receivedOptions) => {
+      options = receivedOptions
+      return { status: 0, stdout: 'Docker Desktop ready' }
+    },
+  })
+  assert.equal(result.ok, true)
+  assert.equal(options.env.PATH, 'C:\\tools')
+  assert.equal(options.env.SystemRoot, 'C:\\Windows')
+  assert.equal(options.env.EVA_RUNNER_SECRET, undefined)
+  assert.equal(options.env.DATABASE_URL, undefined)
 })
 
 test('Node engine ranges are enforced against the exact workspace contract', async () => {

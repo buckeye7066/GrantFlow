@@ -152,8 +152,13 @@ export function probeDocker({ run = spawnSync } = {}) {
 }
 
 /** Start Docker Desktop through the bounded, idempotent repo-owned helper. */
-export function recoverDockerDesktop({ run = spawnSync, timeoutSeconds = 900 } = {}) {
-  if (process.platform !== 'win32') return { ok: false, detail: 'Docker Desktop recovery is Windows-only' }
+export function recoverDockerDesktop({
+  run = spawnSync,
+  timeoutSeconds = 900,
+  env = process.env,
+  platform = process.platform,
+} = {}) {
+  if (platform !== 'win32') return { ok: false, detail: 'Docker Desktop recovery is Windows-only' }
   const script = fileURLToPath(new URL('../../ensure-docker-for-eva.ps1', import.meta.url))
   try {
     const res = run('powershell', [
@@ -163,6 +168,7 @@ export function recoverDockerDesktop({ run = spawnSync, timeoutSeconds = 900 } =
       '-TimeoutSeconds', String(timeoutSeconds),
     ], {
       encoding: 'utf8',
+      env: baseLaunchEnv(env),
       timeout: (timeoutSeconds + 30) * 1000,
       windowsHide: true,
     })

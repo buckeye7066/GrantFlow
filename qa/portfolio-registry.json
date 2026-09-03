@@ -198,7 +198,7 @@
     {
       "app_id": "kidney-antigen-discovery",
       "display_name": "Kidney Antigen Discovery",
-      "repo": "local-git-no-remote",
+      "repo": "buckeye7066/kidney-antigen-discovery",
       "local_path": "~/kidney-antigen-discovery",
       "runtime_type": "web",
       "runtime_status": "available",

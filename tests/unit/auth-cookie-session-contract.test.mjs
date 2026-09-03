@@ -37,6 +37,14 @@ test('legacy localStorage sessions deliberately force one re-auth without adopti
   assert.match(store, /reading or adopting them/)
 })
 
+test('a missing cookie session clears scheduled client authentication state', () => {
+  const store = readFileSync(path.join(repoRoot, 'src/stores/authStore.js'), 'utf8')
+  assert.match(
+    store,
+    /const response = await client\.refreshTokens\(\)[\s\S]*?if \(!response\) \{[\s\S]*?get\(\)\.clearState\(\)[\s\S]*?return null/,
+  )
+})
+
 test('backend refresh contract is HttpOnly, host-only, path-scoped, and cookie-only', () => {
   const source = readFileSync(path.join(repoRoot, 'backend/routes/auth.js'), 'utf8')
   assert.match(source, /httpOnly:\s*true/)

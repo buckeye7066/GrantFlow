@@ -922,6 +922,10 @@ export const useAuthStore = create((set, get) => ({
       // and a 401-triggered refresh from both hitting /api/auth/refresh at the same
       // time (which would invalidate the rotate-on-use refresh token).
       const response = await client.refreshTokens()
+      if (!response) {
+        get().clearState()
+        return null
+      }
       if (response?.accessToken) {
         client.setToken(response.accessToken)
         set({ accessToken: response.accessToken })

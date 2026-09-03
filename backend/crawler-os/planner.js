@@ -162,6 +162,9 @@ export const LANE_TIER = Object.freeze({
 });
 
 function servesDeclaredCriticalNeed(source, thesis) {
+  // Promote only needs explicitly supplied by the profile. Hand-built theses
+  // and type-defaulted needs preserve the historical priority ordering.
+  if (thesis?.needs_defaulted !== false) return false;
   const priorityNeeds = Array.isArray(source?.priority_need_categories)
     ? source.priority_need_categories
     : [];
