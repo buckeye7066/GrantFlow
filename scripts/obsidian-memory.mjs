@@ -7,7 +7,8 @@
  */
 import { existsSync } from "node:fs";
 import { spawn } from "node:child_process";
-import path from "node:path";\nimport { pathToFileURL } from "node:url";
+import path from "node:path";
+import { pathToFileURL } from "node:url";
 
 const APP = "GrantFlow";
 const VAULT = process.env.AIBUS_VAULT?.trim() || String.raw`G:\\Obsidian Vault`;
