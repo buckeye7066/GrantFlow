@@ -109,6 +109,7 @@ export async function invokeTextWithFallback({
   anthropicModel = null,
   freeRoutes = null,
   freeClientFactory = null,
+  timeoutMs = null,
 } = {}) {
   const safePrompt = typeof prompt === 'string' ? prompt : JSON.stringify(prompt ?? '')
   const messages = system
@@ -128,12 +129,13 @@ export async function invokeTextWithFallback({
 
   // Shared gateway-safe deadline across BOTH providers — a sequential
   // OpenAI->Anthropic fallback must never sum past the proxy's ~30s cut.
-  const deadlineAt = Date.now() + LLM_TIMEOUT_MS
+  const requestBudgetMs = Math.max(1, Number(timeoutMs ?? LLM_TIMEOUT_MS) || LLM_TIMEOUT_MS)
+  const deadlineAt = Date.now() + requestBudgetMs
   const remainingMs = () => deadlineAt - Date.now()
   const paidAttemptMs = () => Math.max(0, remainingMs() - freeReserveMs)
 
   // 1) OpenAI (optional)
-  if (openai && paidAttemptMs() > 500) {
+  if (openai && paidAttemptMs() > 25) {
     try {
       const completion = await withLLMTimeout(
         openai.chat.completions.create({
@@ -153,7 +155,7 @@ export async function invokeTextWithFallback({
   }
 
   // 2) Anthropic (only if budget remains)
-  const anthropic = paidAttemptMs() > 500 ? await getAnthropicClient() : null
+  const anthropic = paidAttemptMs() > 25 ? await getAnthropicClient() : null
   if (anthropic) {
     try {
       const response = await withLLMTimeout(
@@ -223,6 +225,7 @@ export async function invokeJsonWithFallback({
   anthropicModel = null,
   freeRoutes = null,
   freeClientFactory = null,
+  timeoutMs = null,
 } = {}) {
   const safePrompt = typeof prompt === 'string' ? prompt : JSON.stringify(prompt ?? '')
   let openaiError = null
@@ -234,12 +237,13 @@ export async function invokeJsonWithFallback({
     : 0
 
   // Shared gateway-safe deadline across BOTH providers (see invokeTextWithFallback).
-  const deadlineAt = Date.now() + LLM_TIMEOUT_MS
+  const requestBudgetMs = Math.max(1, Number(timeoutMs ?? LLM_TIMEOUT_MS) || LLM_TIMEOUT_MS)
+  const deadlineAt = Date.now() + requestBudgetMs
   const remainingMs = () => deadlineAt - Date.now()
   const paidAttemptMs = () => Math.max(0, remainingMs() - freeReserveMs)
 
   // 1) OpenAI (optional)
-  if (openai && paidAttemptMs() > 500) {
+  if (openai && paidAttemptMs() > 25) {
     try {
       const completion = await withLLMTimeout(
         openai.chat.completions.create({
@@ -267,7 +271,7 @@ export async function invokeJsonWithFallback({
   }
 
   // 2) Anthropic (only if budget remains)
-  const anthropic = paidAttemptMs() > 500 ? await getAnthropicClient() : null
+  const anthropic = paidAttemptMs() > 25 ? await getAnthropicClient() : null
   if (anthropic) {
     try {
       const systemText = [
