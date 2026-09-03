@@ -27,7 +27,6 @@ import { LINK_VERIFICATION_SKIP_DOMAINS, isPlaceholderUrl, assertSsrfSafeUrl } f
 import { safeFetch, discardResponseBody, SsrfBlockedError } from './http/safeFetch.js'
 import {
   isPointerOpportunityRow,
-  linkLifecycleOpportunitySql,
   pointerOpportunityRowSql,
 } from '../config/linkLifecycleKinds.js'
 
@@ -426,7 +425,6 @@ export async function quarantineUnverifiedDirectOpportunities(db) {
   const trueVal = isPostgres ? true : 1
   const falseVal = isPostgres ? false : 0
   const changes = (result) => Number(result?.changes ?? result?.rowCount ?? 0)
-  const directPredicate = linkLifecycleOpportunitySql()
   // Mission health defines a visible direct row as every non-pointer catalog
   // row, including legacy/unknown kind spellings. Quarantine must use the same
   // denominator or malformed-but-visible rows can keep /readyz red forever.
