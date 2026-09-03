@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { CAPABILITY_KEYS } from '../../../shared/tierCatalog.js'
-import { ensureBillingAccount, mapAccountRow } from '../billingAccounts.js'
+import { computeEffectiveBilling, ensureBillingAccount, mapAccountRow } from '../billingAccounts.js'
+import { tierById } from '../../../shared/tierCatalog.js'
 import { isFreeWeekActive } from '../../../shared/freeWeek.js'
 import { decideBillingEntitlement } from './entitlementDecision.js'
 
@@ -129,12 +130,23 @@ async function loadEntitlementAuthority(db, profileId, now) {
     readPaymentAccessStatus(db, profileId),
     listActiveBillingAddons(db, profileId, { now }),
   ])
+  const account = mapAccountRow(accountRow)
+  const effectiveBilling = await computeEffectiveBilling(db, profileId, account)
+  const effectiveTier = tierById(effectiveBilling?.tier_id)
+  const freeUntilMs = Date.parse(account?.free_until || '')
+  const freePeriodActive = Number.isFinite(freeUntilMs) && freeUntilMs > now.getTime()
+  const promotionActive = isFreeWeekActive(process.env) || freePeriodActive
+  const requiresPayment = Number(effectiveBilling?.net_monthly_cents || 0) > 0 && !promotionActive
+
   return {
     profile,
-    account: mapAccountRow(accountRow),
+    account,
+    effectiveBilling,
+    effectiveTier,
     paymentAccessStatus,
     activeAddons,
-    promotionActive: isFreeWeekActive(process.env),
+    promotionActive,
+    requiresPayment,
   }
 }
 
@@ -142,10 +154,17 @@ function decisionFromAuthority(profileId, key, authority) {
   if (!authority.profile) {
     return { profile_id: String(profileId), capability: key, allowed: false, source: null, reason: 'profile_not_found' }
   }
+  // Access and invoicing must consult the SAME effective tier. Previously the
+  // invoice used the profile-type/budget tier while this gate used the manually
+  // assigned billing_accounts tier, so a profile could be charged for one plan
+  // and receive another plan's capabilities.
+  const paymentAccessStatus = authority.requiresPayment && !authority.paymentAccessStatus
+    ? 'not_active'
+    : authority.paymentAccessStatus
   const decision = decideBillingEntitlement({
     profileStatus: authority.profile.status,
-    paymentAccessStatus: authority.paymentAccessStatus,
-    tierAllows: authority.account?.tier?.[key] === true,
+    paymentAccessStatus,
+    tierAllows: authority.effectiveTier?.capabilities?.[key] === true,
     activeAddons: authority.activeAddons,
     promotionActive: authority.promotionActive,
     capabilityKey: key,
@@ -153,9 +172,11 @@ function decisionFromAuthority(profileId, key, authority) {
   return {
     profile_id: String(profileId),
     capability: key,
-    tier_id: authority.account?.tier?.id || authority.account?.tier_id || null,
+    tier_id: authority.effectiveTier?.id || authority.effectiveBilling?.tier_id || null,
+    assigned_tier_id: authority.account?.tier?.id || authority.account?.tier_id || null,
+    billing_basis: authority.effectiveBilling?.basis || null,
     profile_status: authority.profile.status || null,
-    payment_access_status: authority.paymentAccessStatus,
+    payment_access_status: paymentAccessStatus,
     active_addons: authority.activeAddons
       .filter((row) => row.capability_key === key)
       .map(publicBillingAddon),
