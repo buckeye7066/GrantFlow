@@ -155,8 +155,11 @@ describe('free AI provider routing', () => {
       fallback_reason: 'paid_provider_not_configured',
     })
     expect(result.freeRouteErrors).toEqual([
-      expect.objectContaining({ route_id: 'first', message: 'local model unavailable' }),
+      expect.objectContaining({ message: 'free route unavailable', status: null, credit_exhausted: false }),
     ])
+    expect(JSON.stringify(result.freeRouteErrors)).not.toContain('first')
+    expect(JSON.stringify(result.freeRouteErrors)).not.toContain('first.internal')
+    expect(JSON.stringify(result.freeRouteErrors)).not.toContain('local model unavailable')
   })
 
   it('fails honestly when every paid and free route fails', async () => {
@@ -175,8 +178,11 @@ describe('free AI provider routing', () => {
     expect(result.provider).toBe('fallback')
     expect(result.text).toBeNull()
     expect(result.freeRouteErrors).toEqual([
-      expect.objectContaining({ route_id: 'offline', message: 'connection refused' }),
+      expect.objectContaining({ message: 'free route unavailable', status: null, credit_exhausted: false }),
     ])
+    expect(JSON.stringify(result.freeRouteErrors)).not.toContain('offline')
+    expect(JSON.stringify(result.freeRouteErrors)).not.toContain('offline.internal')
+    expect(JSON.stringify(result.freeRouteErrors)).not.toContain('connection refused')
   })
 
   it('does not call a free route when the paid provider succeeds', async () => {
