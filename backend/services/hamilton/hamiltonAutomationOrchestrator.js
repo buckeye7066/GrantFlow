@@ -64,6 +64,7 @@ import {
   isHamiltonProtectedPipelineStage,
 } from '../../../shared/hamiltonProcessingPolicy.js'
 import { deriveNamePartsIntoBasicInfo } from '../../../shared/nameParsing.js'
+import { loadProfileContext } from '../profileHelpers.js'
 import { runAutopilot, sanitizeListingSnapshotForPersistence } from './hamiltonAutopilotEngine.js'
 import { decomposeListing } from './listingDecomposition.js'
 import { makeListingApplyItem } from './listingApplyRunner.js'
@@ -309,27 +310,53 @@ export function deriveProfilePortalHosts({ profile, opportunity, grant, portalLi
 
 async function loadProfileBundle(db, profileId) {
   if (!db || !profileId) return null
-  const row = await db.prepare('SELECT * FROM profiles WHERE id = ? LIMIT 1').get(String(profileId))
-  if (!row) return null
-  let sectionRows = []
+
+  // Hamilton must consume the same canonical, whole-profile snapshot used by
+  // matching and discovery. This includes every section, linked organization,
+  // derived signals/facets, normalized eligibility facts, and document text.
+  // The old local loader read only profiles + profile_sections, silently
+  // dropping organization facts, extracted documents, and normalized signals.
   try {
-    sectionRows = await db
-      .prepare('SELECT section_key, data FROM profile_sections WHERE profile_id = ?')
-      .all(String(profileId))
-  } catch { /* table may not exist in tests */ }
-  const sections = {}
-  for (const r of sectionRows || []) {
-    try { sections[r.section_key] = typeof r.data === 'string' ? JSON.parse(r.data) : r.data } catch { /* ignore */ }
+    const context = await loadProfileContext(db, String(profileId))
+    const sections = { ...(context.sections || {}) }
+    const derived = deriveNamePartsIntoBasicInfo(
+      sections.basic_information || {},
+      context.profile?.display_name,
+    )
+    if (derived.changed) sections.basic_information = derived.data
+    return {
+      ...context.profile,
+      ...sections,
+      sections,
+      organization: context.organization || null,
+      signals: context.signals || {},
+      facets: context.facets || {},
+      profileNorm: context.profileNorm || null,
+      documents: context.documents || [],
+    }
+  } catch (error) {
+    // Keep focused unit fixtures that intentionally omit the canonical context
+    // tables usable, but never turn an absent profile into an empty bundle.
+    const row = await db.prepare('SELECT * FROM profiles WHERE id = ? LIMIT 1').get(String(profileId))
+    if (!row) return null
+    let sectionRows = []
+    try {
+      sectionRows = await db
+        .prepare('SELECT section_key, data FROM profile_sections WHERE profile_id = ?')
+        .all(String(profileId))
+    } catch { /* legacy/minimal test fixture */ }
+    const sections = {}
+    for (const sectionRow of sectionRows || []) {
+      try {
+        sections[sectionRow.section_key] = typeof sectionRow.data === 'string'
+          ? JSON.parse(sectionRow.data)
+          : sectionRow.data
+      } catch { /* ignore malformed legacy section */ }
+    }
+    const derived = deriveNamePartsIntoBasicInfo(sections.basic_information || {}, row.display_name)
+    if (derived.changed) sections.basic_information = derived.data
+    return { ...row, ...sections, sections, organization: null, signals: {}, facets: {}, profileNorm: null, documents: [] }
   }
-  // "Parse, baby, parse." Derive first/last name from full_name (or the
-  // profile's display_name) so the autopilot fill — and the preflight that
-  // runs on THIS bundle — never lacks a first/last name that is plainly
-  // present as a single full name. Mirrors hamiltonApplicationAgent.loadProfile
-  // and routes/hamiltonAutomation.loadProfile so every Hamilton entry point
-  // hydrates the profile identically.
-  const derived = deriveNamePartsIntoBasicInfo(sections.basic_information || {}, row.display_name)
-  if (derived.changed) sections.basic_information = derived.data
-  return { ...row, ...sections, sections }
 }
 
 async function loadOpportunity(db, id) {
