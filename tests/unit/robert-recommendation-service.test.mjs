@@ -17,6 +17,25 @@ import {
 let db
 beforeEach(() => { db = makeMemoryDb() })
 
+const FOUR_TRUTH_PROOF = {
+  direct_funding: true,
+  all_passed: true,
+  real: {
+    passed: true,
+    reality_status: 'VERIFIED',
+    evidence_url: 'https://example.org/grant',
+    content_hash_present: true,
+    evidence_captured_at: '2026-09-03T00:00:00.000Z',
+  },
+  relatable: { passed: true, canonical_decision: 'ACCEPT' },
+  meets_profile_need: {
+    passed: true,
+    profile_needs_defaulted: false,
+    matched_needs: ['equipment'],
+  },
+  profile_qualifies: { passed: true, eligibility: 'eligible' },
+}
+
 const ACCEPT_SAMPLE = {
   db: null,
   profileId: 'p1',
@@ -24,6 +43,7 @@ const ACCEPT_SAMPLE = {
   matchDecision: 'ACCEPT',
   matchScore: 20,
   matchReasons: ['state matched', 'applicant_type matched'],
+  fourTruthProof: FOUR_TRUTH_PROOF,
   whyFound: 'Discovered from grants.gov',
   opportunityTitle: 'Firefighter Equipment Grant',
   profileDisplayName: 'Cleveland VFD',
@@ -54,26 +74,22 @@ describe('robertRecommendationService — creates only useful, deduped recommend
     assert.equal(r.reason, 'decision_reject')
   })
 
-  it('trusts a canonical REVIEW even when its match score is low', async () => {
+  it('does not turn a REVIEW decision into a direct recommendation', async () => {
     const r = await createRecommendationIfHelpful({
-      ...ACCEPT_SAMPLE, db, matchDecision: 'REVIEW', matchScore: 0,
+      ...ACCEPT_SAMPLE, db, matchDecision: 'REVIEW', matchScore: 100,
     })
-    assert.equal(r.created, true)
-    const rec = await getRecommendation(db, r.recommendation_id)
-    assert.equal(rec.match_decision, 'REVIEW')
-    assert.equal(rec.toast_priority, 'normal')
+    assert.equal(r.created, false)
+    assert.equal(r.reason, 'decision_review')
   })
 
-  it('keeps the explicit REVIEW feature control without a score re-trial', async () => {
+  it('rejects ACCEPT without positive four-truth proof', async () => {
     const r = await createRecommendationIfHelpful({
       ...ACCEPT_SAMPLE,
       db,
-      matchDecision: 'REVIEW',
-      matchScore: 100,
-      config: { ...ACCEPT_SAMPLE.config, allowReviewMatchToasts: false },
+      fourTruthProof: null,
     })
     assert.equal(r.created, false)
-    assert.equal(r.reason, 'review_toasts_disabled')
+    assert.equal(r.reason, 'missing_four_truth_proof')
   })
 
   it('translates an unstamped legacy toast threshold for priority only', async () => {
@@ -143,7 +159,7 @@ describe('robertRecommendationService — creates only useful, deduped recommend
       await createRecommendationIfHelpful({ ...ACCEPT_SAMPLE, db, opportunityId: `o-pre-${i}` })
     }
     const overCap = await createRecommendationIfHelpful({
-      ...ACCEPT_SAMPLE, db, opportunityId: 'o-overcap', matchDecision: 'REVIEW', matchScore: 6,
+      ...ACCEPT_SAMPLE, db, opportunityId: 'o-overcap', matchScore: 6,
     })
     assert.equal(overCap.created, true)
     const rec = await getRecommendation(db, overCap.recommendation_id)
