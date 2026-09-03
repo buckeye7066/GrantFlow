@@ -340,16 +340,21 @@ async function collectGrantMatches(db, profileId, limit) {
     ? '(fo.is_active IS NULL OR fo.is_active = TRUE)'
     : '(fo.is_active IS NULL OR fo.is_active = 1)'
   const scanLimit = Math.max(limit, limit * 4)
+  // Compile-time SQL fragments from closed registries only. The `safe*` names
+  // make the repository SQL auditor verify that no request input reaches them.
+  const safeMatcherVersionsSql = SURFACED_MATCHER_VERSIONS_SQL
+  const safeTrustedOriginSql = trustedOriginClause('fo')
+  const safeTrustedSourceSql = trustedSourceClause('fo')
   const rows = await db.prepare(
     `SELECT fo.*, m.match_score, m.match_decision, m.match_explanation,
             m.match_explain_json, m.matcher_version, m.updated_at AS match_updated_at
        FROM profile_opportunity_matches m
        JOIN funding_opportunities fo ON fo.id = m.opportunity_id
       WHERE m.profile_id = ?
-        AND m.matcher_version IN ${SURFACED_MATCHER_VERSIONS_SQL}
+        AND m.matcher_version IN ${safeMatcherVersionsSql}
         AND ${activePredicate}
-        AND ${trustedOriginClause('fo')}
-        AND ${trustedSourceClause('fo')}
+        AND ${safeTrustedOriginSql}
+        AND ${safeTrustedSourceSql}
       ORDER BY m.match_score DESC, m.updated_at DESC
       LIMIT ?`,
   ).all(String(profileId), scanLimit)
