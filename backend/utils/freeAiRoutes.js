@@ -170,11 +170,9 @@ async function invokeRoutes({
     const remainingMs = deadlineAt - Date.now()
     if (remainingMs <= 500) break
     const route = routes[index]
-    let apiKey = ''
     try {
       const built = await (clientFactory ? clientFactory(route) : clientFor(route))
       const client = built?.client ?? built
-      apiKey = built?.apiKey ?? ''
       if (!client?.chat?.completions?.create) throw new Error('route is not OpenAI-compatible')
       const systemText = [
         system ? String(system) : null,
