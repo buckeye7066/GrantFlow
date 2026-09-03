@@ -19,24 +19,12 @@
  */
 
 import { safeParseJSON } from '../../utils/safeJson.js'
+import { invokeJsonWithFallback as invokeProviderJsonWithFallback } from '../../utils/aiProviders.js'
 import { createLogger } from '../../utils/logger.js'
 
 const log = createLogger('service:laptop-analyzer')
 
 let cachedAnthropic = null
-async function getAnthropicClient() {
-  if (cachedAnthropic) return cachedAnthropic
-  const key = String(process.env.ANTHROPIC_API_KEY || '').trim()
-  if (!key) return null
-  const Anthropic = (await import('@anthropic-ai/sdk')).default
-  cachedAnthropic = new Anthropic({
-    apiKey: key,
-    timeout: Number(process.env.LAPTOP_CONNECTOR_TIMEOUT_MS || 30_000),
-    maxRetries: Number(process.env.LAPTOP_CONNECTOR_MAX_RETRIES || 1),
-  })
-  return cachedAnthropic
-}
-
 const MODEL = process.env.LAPTOP_CONNECTOR_MODEL || process.env.ANTHROPIC_MODEL || 'claude-haiku-4-5'
 
 // Defense-in-depth: scrub the most damaging PII from snippets we store.
@@ -153,11 +141,6 @@ export async function analyzeText({ text, fileName, profilesDigest } = {}) {
     return { leads: [], funding: [], profile_fields: [], warnings: ['text too short to analyze'] }
   }
 
-  const anthropic = await getAnthropicClient()
-  if (!anthropic) {
-    return { leads: [], funding: [], profile_fields: [], warnings: ['ANTHROPIC_API_KEY not configured'] }
-  }
-
   const digest = profilesDigest?.profiles || []
   const userContent = [
     `FILE NAME: ${fileName || '(unknown)'}`,
@@ -169,28 +152,20 @@ export async function analyzeText({ text, fileName, profilesDigest } = {}) {
     clean.slice(0, Number(process.env.LAPTOP_CONNECTOR_MAX_TEXT || 40_000)),
   ].join('\n')
 
-  let raw = ''
-  try {
-    const response = await anthropic.messages.create({
-      model: MODEL,
-      max_tokens: 2000,
-      temperature: 0,
-      system: SYSTEM_PROMPT,
-      messages: [{ role: 'user', content: userContent }],
-    })
-    raw = extractAnthropicText(response)
-  } catch (err) {
-    log.warn('[laptop-analyzer] model call failed', { fileName, err: err?.message })
-    return { leads: [], funding: [], profile_fields: [], warnings: [`model error: ${err?.message}`] }
+  const providerResult = await invokeProviderJsonWithFallback({
+    openai: null,
+    anthropicModel: MODEL,
+    system: SYSTEM_PROMPT,
+    prompt: userContent,
+    temperature: 0,
+    maxTokens: 2000,
+  })
+  if (!providerResult.ok || !providerResult.json) {
+    const message = providerResult.error?.message || 'every configured AI provider failed'
+    log.warn('[laptop-analyzer] model call failed', { fileName, message })
+    return { leads: [], funding: [], profile_fields: [], warnings: [`model error: ${message}`] }
   }
-
-  // The model may wrap JSON in fences despite instructions — strip them.
-  const jsonText = raw.replace(/^```(?:json)?/i, '').replace(/```$/i, '').trim()
-  const parsed = safeParseJSON(jsonText, null)
-  if (!parsed || typeof parsed !== 'object') {
-    warnings.push('model returned unparseable output')
-    return { leads: [], funding: [], profile_fields: [], warnings }
-  }
+  const parsed = providerResult.json
 
   const valIdSet = new Set(digest.map((d) => d.profile_id))
   const leads = Array.isArray(parsed.leads) ? parsed.leads.filter((l) => l?.organization_name) : []
