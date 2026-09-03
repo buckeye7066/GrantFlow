@@ -447,6 +447,10 @@ export const SOURCES = Object.freeze([
     directory: false, loan_allowed: false, cost_share_allowed: false,
     applicant_types: ['individual', 'family', 'veteran', 'disabled'],
     need_categories: ['disability', 'medical'],
+    // A profile that explicitly declares disability must reach this federal
+    // benefit before a bounded crawl can spend its budget on lower-signal
+    // lanes. Selection and matching rules remain unchanged.
+    priority_need_categories: ['disability'],
     geography: { national: true, states: [] },
     default_kinds: [OPPORTUNITY_KIND.BENEFIT],
     crawler_method: 'html', requires_env: [], refresh_frequency_days: 30, priority_score: 74,

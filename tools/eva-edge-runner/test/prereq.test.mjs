@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os'
 import {
   checkPrerequisites,
   inferExecutableRequirements,
+  recoverDockerDesktop,
   resolveLaunchEnv,
   satisfiesNodeEngine,
 } from '../src/prereq.mjs'
@@ -35,6 +36,49 @@ test('a missing inferred executable is blocked before launch and names its remed
   assert.equal(result.unmet.length, 1)
   assert.equal(result.unmet[0].id, 'executable-pnpm')
   assert.match(result.unmet[0].remedy, /install pnpm/i)
+})
+
+test('an opted-in Docker prerequisite recovers once, then verifies the daemon', async () => {
+  let probes = 0
+  let recoveries = 0
+  const result = await checkPrerequisites({
+    manifest: {
+      app_id: 'compose-app',
+      start_command: 'docker compose up --build',
+      prerequisites: [{ id: 'docker', type: 'docker', auto_recover: 'docker-desktop' }],
+    },
+    probes: {
+      docker: async () => ({ ok: ++probes >= 2, detail: probes >= 2 ? 'docker 28' : 'daemon unavailable' }),
+      dockerRecovery: async () => { recoveries += 1; return { ok: true, detail: 'started' } },
+      executable: async () => ({ ok: true, detail: 'ok' }),
+      nodeVersion: '24.19.0',
+    },
+  })
+  assert.equal(recoveries, 1)
+  assert.equal(probes, 2, 'a successful recovery is never trusted without a fresh daemon probe')
+  assert.deepEqual(result.unmet, [])
+})
+
+test('Docker Desktop recovery inherits only the global safe environment', () => {
+  let options
+  const result = recoverDockerDesktop({
+    platform: 'win32',
+    env: {
+      PATH: 'C:\\tools',
+      SystemRoot: 'C:\\Windows',
+      EVA_RUNNER_SECRET: 'do-not-inherit',
+      DATABASE_URL: 'postgresql://secret',
+    },
+    run: (_command, _args, receivedOptions) => {
+      options = receivedOptions
+      return { status: 0, stdout: 'Docker Desktop ready' }
+    },
+  })
+  assert.equal(result.ok, true)
+  assert.equal(options.env.PATH, 'C:\\tools')
+  assert.equal(options.env.SystemRoot, 'C:\\Windows')
+  assert.equal(options.env.EVA_RUNNER_SECRET, undefined)
+  assert.equal(options.env.DATABASE_URL, undefined)
 })
 
 test('Node engine ranges are enforced against the exact workspace contract', async () => {

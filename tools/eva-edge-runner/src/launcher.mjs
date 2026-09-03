@@ -130,7 +130,19 @@ export function mayKillProcess(name, killable) {
 export function detectAnnouncedPorts(text) {
   const s = String(text || '')
   const out = new Set()
-  for (const m of s.matchAll(/(?:\d{1,3}(?:\.\d{1,3}){3}|\[[0-9a-f:]+\]|[A-Za-z0-9._-]+)?:(\d{4,5})\b/g)) out.add(Number(m[1]))
+  // Stack frames also contain `file.js:14849:15`; an unrestricted host:port
+  // pattern therefore reported source line numbers as manifest drift. URLs
+  // are unambiguous announcements, while bare host:port pairs count only on a
+  // line whose wording says the process started listening.
+  for (const m of s.matchAll(/\b(?:https?|wss?):\/\/(?:\[[0-9a-f:]+\]|[A-Za-z0-9._-]+):(\d{4,5})\b/gi)) {
+    out.add(Number(m[1]))
+  }
+  for (const line of s.split(/\r?\n|\s+\|\s+/)) {
+    if (!/\b(?:listen(?:ing)?|running|ready|started|bound)\b/i.test(line)) continue
+    for (const m of line.matchAll(/(?:\d{1,3}(?:\.\d{1,3}){3}|\[[0-9a-f:]+\]|localhost|[A-Za-z][A-Za-z0-9._-]*):(\d{4,5})\b/g)) {
+      out.add(Number(m[1]))
+    }
+  }
   for (const m of s.matchAll(/\bport\s*[=:]?\s*(\d{4,5})\b/gi)) out.add(Number(m[1]))
   return [...out].filter((p) => p >= 1024 && p <= 65535).sort((a, b) => a - b)
 }
@@ -185,7 +197,8 @@ export async function launchWebApp({ app, manifest, log = () => {}, launchEnv = 
     }
   }
 
-  const env = launchEnv || { ...process.env, ...(manifest.launch_env || manifest.env || {}) }
+  const rawEnv = launchEnv || { ...process.env, ...(manifest.launch_env || manifest.env || {}) }
+  const env = resolveDisposableLaunchEnv(rawEnv, cwd, manifest.disposable_data_root)
   let fixtureEnvFiles = []
 
   // Pre-launch hygiene: a prior app (or a dev server the owner left running)
@@ -515,6 +528,33 @@ function resolveDisposableRoot(cwd, root) {
   const prefix = base.endsWith(sep) ? base : `${base}${sep}`
   if (full === base || !full.startsWith(prefix)) return null
   return full
+}
+
+/**
+ * Resolve manifest env paths inside `disposable_data_root` before launch.
+ *
+ * App manifests are portable and therefore store these paths relative to the
+ * repository. Some applications correctly require an absolute data directory;
+ * the launcher owns the conversion because it alone knows the isolated checkout
+ * path. Only values at or below the declared disposable root are rewritten.
+ */
+export function resolveDisposableLaunchEnv(env, cwd, root) {
+  const result = { ...(env || {}) }
+  const fullRoot = resolveDisposableRoot(cwd, root)
+  if (!fullRoot) return result
+
+  const normalizedRoot = String(root).replace(/\\/g, '/').replace(/^\.\//, '').replace(/\/+$/, '')
+  const rootPrefix = fullRoot.endsWith(sep) ? fullRoot : `${fullRoot}${sep}`
+  for (const [name, value] of Object.entries(result)) {
+    if (typeof value !== 'string' || !value.trim()) continue
+    const raw = value.trim()
+    if (isAbsolute(raw) || /^[A-Za-z]:[\\/]/.test(raw) || /^[\\/]{2}/.test(raw)) continue
+    const normalized = raw.replace(/\\/g, '/').replace(/^\.\//, '')
+    if (normalized !== normalizedRoot && !normalized.startsWith(`${normalizedRoot}/`)) continue
+    const full = resolve(cwd, raw)
+    if (full === fullRoot || full.startsWith(rootPrefix)) result[name] = full
+  }
+  return result
 }
 
 export function resetDisposableRoot(cwd, root, { remove = rmSync, mkdir = mkdirSync } = {}) {

@@ -133,7 +133,7 @@ describe('the no-per-award-figure kind registry', () => {
 
   it('renders a dialect-agnostic, lower-cased SQL predicate', () => {
     const sql = noPerAwardFigureKindSql('fo.opportunity_kind')
-    expect(sql).toContain("LOWER(COALESCE(fo.opportunity_kind, ''))")
+    expect(sql).toContain("LOWER(COALESCE(CAST(fo.opportunity_kind AS TEXT), ''))")
     expect(sql).toContain("'referral'")
     expect(sql).toContain("'school_portal'")
   })

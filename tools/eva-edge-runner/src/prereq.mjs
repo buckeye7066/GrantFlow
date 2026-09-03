@@ -26,6 +26,7 @@ import { readFileSync } from 'node:fs'
 import { randomBytes } from 'node:crypto'
 import { spawnSync } from 'node:child_process'
 import { join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import net from 'node:net'
 
 // Child apps receive only the operating-system variables needed to locate
@@ -145,6 +146,34 @@ export function probeDocker({ run = spawnSync } = {}) {
     if (res && res.status === 0 && String(res.stdout || '').trim()) return { ok: true, detail: `docker ${String(res.stdout).trim()}` }
     const detail = firstLine(res?.stderr || res?.stdout || '') || 'docker info failed'
     return { ok: false, detail }
+  } catch (err) {
+    return { ok: false, detail: String(err?.message || err) }
+  }
+}
+
+/** Start Docker Desktop through the bounded, idempotent repo-owned helper. */
+export function recoverDockerDesktop({
+  run = spawnSync,
+  timeoutSeconds = 900,
+  env = process.env,
+  platform = process.platform,
+} = {}) {
+  if (platform !== 'win32') return { ok: false, detail: 'Docker Desktop recovery is Windows-only' }
+  const script = fileURLToPath(new URL('../../ensure-docker-for-eva.ps1', import.meta.url))
+  try {
+    const res = run('powershell', [
+      '-NoProfile',
+      '-ExecutionPolicy', 'Bypass',
+      '-File', script,
+      '-TimeoutSeconds', String(timeoutSeconds),
+    ], {
+      encoding: 'utf8',
+      env: baseLaunchEnv(env),
+      timeout: (timeoutSeconds + 30) * 1000,
+      windowsHide: true,
+    })
+    const detail = firstLine(res?.stdout || res?.stderr || '') || `Docker Desktop recovery exited ${res?.status ?? 'without a status'}`
+    return { ok: res?.status === 0, detail }
   } catch (err) {
     return { ok: false, detail: String(err?.message || err) }
   }
@@ -322,6 +351,7 @@ function firstLine(s) {
 export async function checkPrerequisites({ manifest, resolvedEnv = process.env, probes = {} } = {}) {
   const declared = Array.isArray(manifest?.prerequisites) ? manifest.prerequisites : []
   const docker = probes.docker || probeDocker
+  const dockerRecovery = probes.dockerRecovery || recoverDockerDesktop
   const tcp = probes.tcp || probeTcp
   const executable = probes.executable || ((spec) => probeExecutable({ ...spec, env: resolvedEnv }))
   const unmet = []
@@ -339,7 +369,14 @@ export async function checkPrerequisites({ manifest, resolvedEnv = process.env, 
         ? { ok: false, detail: `unset: ${missing.join(', ')}` }
         : { ok: true, detail: null }
     } else if (p?.type === 'docker') {
-      result = docker()
+      result = await docker()
+      if (!result.ok && p.auto_recover === 'docker-desktop') {
+        const recovery = await dockerRecovery()
+        if (recovery.ok) result = await docker()
+        if (!result.ok && recovery.detail) {
+          result = { ...result, detail: `${result.detail || 'docker unavailable'}; recovery: ${recovery.detail}` }
+        }
+      }
     } else if (p?.type === 'tcp') {
       result = await tcp({ host: p.host || '127.0.0.1', port: Number(p.port) })
     } else if (p?.type === 'executable') {

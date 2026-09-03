@@ -126,7 +126,7 @@
     {
       "app_id": "forgepress",
       "display_name": "ForgePress",
-      "repo": "local-git",
+      "repo": "buckeye7066/ForgePress",
       "local_path": "~/ForgePress",
       "runtime_type": "electron",
       "runtime_status": "available",
@@ -198,7 +198,7 @@
     {
       "app_id": "kidney-antigen-discovery",
       "display_name": "Kidney Antigen Discovery",
-      "repo": "local-git-no-remote",
+      "repo": "buckeye7066/kidney-antigen-discovery",
       "local_path": "~/kidney-antigen-discovery",
       "runtime_type": "web",
       "runtime_status": "available",

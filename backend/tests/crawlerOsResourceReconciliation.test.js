@@ -279,7 +279,7 @@ describe('Crawler OS resource-preserving reconciliation', () => {
       const resourceFallbackIndex = preparedSql.findIndex((sql) => (
         sql.includes('m.match_confidence') &&
         !sql.includes('m.source_query') &&
-        sql.includes("LOWER(COALESCE(o.opportunity_kind, '')) IN")
+        sql.includes("LOWER(COALESCE(CAST(o.opportunity_kind AS TEXT), '')) IN")
       ))
       const firstKindFreeIndex = preparedSql.findIndex((sql) => (
         sql.includes("LOWER(COALESCE(m.match_decision, '')) = 'accept'") &&

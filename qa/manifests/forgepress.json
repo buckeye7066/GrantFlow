@@ -1,10 +1,10 @@
 {
   "app_id": "forgepress",
   "display_name": "ForgePress",
-  "repo": "local-git",
+  "repo": "buckeye7066/ForgePress",
   "local_path": "~/ForgePress",
   "runtime_type": "electron",
-  "start_command": "electron . --user-data-dir=.eva-tmp/forgepress/profile (launch the packaged app tree with a disposable userData dir)",
+  "start_command": "npm start -- --user-data-dir=.eva-tmp/forgepress/profile",
   "stop_command": "close window",
   "readiness_probe": { "type": "window", "timeout_ms": 30000 },
   "base_url": null,

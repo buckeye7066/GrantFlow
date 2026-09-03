@@ -227,6 +227,16 @@ class APIClient {
       throw authError
     }
 
+    // If refresh completed without issuing a new access token, treat this as an
+    // anonymous session (first visit with no refresh cookie) and DO NOT retry.
+    // Retrying would 401 again and incorrectly fire the "session expired" handler.
+    if (!this.getToken()) {
+      log.debug('refreshTokens completed with no access token; assuming anonymous session and skipping retry')
+      const authError = this.createAuthError('Not signed in')
+      authError.isAuthError = true
+      throw authError
+    }
+
     log.debug('retrying original request after refresh')
     return this.fetch(originalRequest.endpoint, originalRequest.options);
   }
@@ -282,6 +292,10 @@ class APIClient {
       error.retryable = Boolean(errorData.retryable)
       throw error
     }
+
+    // No refresh cookie means the browser is simply anonymous. The backend
+    // deliberately returns 204 so clean first visits do not emit a false 401.
+    if (response.status === 204) return null
 
     const data = await response.json()
     if (data?.accessToken) this.setToken(data.accessToken)
@@ -767,7 +781,8 @@ class APIClient {
     me: async () => {
       if (!this.getToken()) {
         try {
-          await this.refreshTokens()
+          const refreshed = await this.refreshTokens()
+          if (!refreshed?.accessToken && !this.getToken()) return null
         } catch {
           return null
         }

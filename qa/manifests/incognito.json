@@ -7,7 +7,7 @@
   "start_command": "npm run dev",
   "stop_command": "taskkill-by-port",
   "readiness_probe": { "type": "http", "path": "/", "port": 5173, "timeout_ms": 60000, "warm_paths": ["/@vite/client"], "$warm_comment": "Measured 2026-08-15 (run evarun_77b7a395…): app-startup and create-vault PASSED while the FIRST journey navigation hit a 30s goto timeout — Vite answered the listen probe, then cold-transformed the module graph under the journey (the exact FSN class). /@vite/client must serve a stable non-empty body before readiness so journeys never race the transform pipeline." },
-  "base_url": "http://localhost:5173",
+  "base_url": "http://127.0.0.1:5173",
   "test_target": "disposable-local-instance",
   "required_env": [],
   "seed_command": "none (local-first, fully offline; no backend, no DB, no keys needed)",

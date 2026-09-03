@@ -42,3 +42,34 @@ test('selected sources carry a "selected" reason marker', () => {
   assert.ok(sel, 'at least one selected source');
   assert.ok(sel.reasons.includes('selected'));
 });
+
+test('an explicitly disabled profile runs SSA disability before bounded lower-signal lanes', () => {
+  const p = plan({
+    profile_id: 'disabled-profile',
+    applicant_types: ['individual'],
+    needs: ['disability', 'medical'],
+    needs_defaulted: false,
+    location: { state: 'TN' },
+    loan_allowed: false,
+    cost_share_allowed: false,
+  });
+  const ssa = p.source_decisions.find((d) => d.source_id === 'ssa_disability');
+  assert.equal(ssa?.selected, true);
+  assert.ok(ssa.reasons.includes('serves_declared_critical_need'));
+  assert.equal(p.selected_source_ids[0], 'ssa_disability');
+});
+
+test('critical-need promotion requires explicit need provenance', () => {
+  const p = plan({
+    profile_id: 'unprovenanced-profile',
+    applicant_types: ['individual'],
+    needs: ['disability', 'medical'],
+    location: { state: 'TN' },
+    loan_allowed: false,
+    cost_share_allowed: false,
+  });
+  const ssa = p.source_decisions.find((d) => d.source_id === 'ssa_disability');
+  assert.equal(ssa?.selected, true);
+  assert.equal(ssa?.lane_tier, 2);
+  assert.equal(ssa.reasons.includes('serves_declared_critical_need'), false);
+});
