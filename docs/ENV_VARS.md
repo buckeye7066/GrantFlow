@@ -8,9 +8,9 @@ requirements remain in `docs/ENVIRONMENT.md`.
 
 ## Summary
 
-- Total vars: **958**
-- Vars referenced in code: **958**
-- Vars listed in env templates: **955**
+- Total vars: **965**
+- Vars referenced in code: **965**
+- Vars listed in env templates: **962**
 
 ## Inventory
 
@@ -36,6 +36,7 @@ requirements remain in `docs/ENVIRONMENT.md`.
 | `ADVERSARIAL_VERIFIER_MAX_TOKENS` | Yes | Yes | Backend/Node |
 | `ADVERSARIAL_VERIFIER_MODEL` | Yes | Yes | Backend/Node |
 | `AGENT_CONTROL_ADMIN_EMAIL` | Yes | Yes | Backend/Node |
+| `AIBUS_VAULT` | Yes | Yes | Backend/Node |
 | `ALERT_FAILURE_THRESHOLD` | Yes | Yes | Backend/Node |
 | `ALERT_QUEUE_BACKLOG_THRESHOLD` | Yes | Yes | Backend/Node |
 | `ALLOW_AUTO_ROUTE_GENERATION` | Yes | Yes | Backend/Node |
@@ -622,6 +623,11 @@ requirements remain in `docs/ENVIRONMENT.md`.
 | `NOFO_PARSE_CHUNK_OVERLAP` | Yes | Yes | Backend/Node |
 | `NOFO_PARSE_MAX_TEXT_CHARS` | Yes | Yes | Backend/Node |
 | `NON_GRANT_PIPELINE_LIMIT` | Yes | Yes | Backend/Node |
+| `OBSIDIAN_MEMORY_AGENT` | Yes | Yes | Backend/Node |
+| `OBSIDIAN_MEMORY_AIBUS_PATH` | Yes | Yes | Backend/Node |
+| `OBSIDIAN_MEMORY_BRIDGE_TOKEN` | Yes | Yes | Backend/Node |
+| `OBSIDIAN_MEMORY_BRIDGE_URL` | Yes | Yes | Backend/Node |
+| `OBSIDIAN_MEMORY_PYTHON` | Yes | Yes | Backend/Node |
 | `OCR_PDF_DPI` | Yes | Yes | Backend/Node |
 | `OCR_PDF_MAX_PAGES` | Yes | Yes | Backend/Node |
 | `OCR_PROVIDER` | Yes | Yes | Backend/Node |
@@ -710,6 +716,7 @@ requirements remain in `docs/ENVIRONMENT.md`.
 | `PROPOSAL_CRITIC` | Yes | Yes | Backend/Node |
 | `PUBLIC_APP_URL` | Yes | Yes | Backend/Node |
 | `PUBLIC_URL` | Yes | Yes | Backend/Node |
+| `PYTHON` | Yes | Yes | Backend/Node |
 | `QUEUE_DRAIN_INTERVAL_MS` | Yes | Yes | Backend/Node |
 | `QUEUE_POLL_ENABLED` | Yes | Yes | Backend/Node |
 | `QUEUE_POLL_INTERVAL_MS` | Yes | Yes | Backend/Node |
@@ -1190,6 +1197,14 @@ requirements remain in `docs/ENVIRONMENT.md`.
   - `backend/services/agentControl/agentControlOrchestrator.js:L173` (process.env)
   - `backend/services/anyaAutonomousFunctionTesting.js:L238` (process.env)
   - `backend/tests/samCanonicalAdminEmail.test.js:L31–L77` (process.env)
+
+### `AIBUS_VAULT`
+
+- **Templates**:
+  - `.env.example:61` = ``
+  - `backend/.env.example:32` = ``
+- **Code references**:
+  - `scripts/obsidian-memory.mjs:L14` (process.env)
 
 ### `ALERT_FAILURE_THRESHOLD`
 
@@ -6390,6 +6405,46 @@ requirements remain in `docs/ENVIRONMENT.md`.
 - **Code references**:
   - `backend/tests/enforceInvariants.test.js:L2935–L3055` (process.env)
 
+### `OBSIDIAN_MEMORY_AGENT`
+
+- **Templates**:
+  - `.env.example:692` = ``
+  - `backend/.env.example:663` = ``
+- **Code references**:
+  - `scripts/obsidian-memory.mjs:L86–L87` (process.env)
+
+### `OBSIDIAN_MEMORY_AIBUS_PATH`
+
+- **Templates**:
+  - `.env.example:693` = ``
+  - `backend/.env.example:664` = ``
+- **Code references**:
+  - `scripts/obsidian-memory.mjs:L15` (process.env)
+
+### `OBSIDIAN_MEMORY_BRIDGE_TOKEN`
+
+- **Templates**:
+  - `.env.example:694` = `<REPLACE_ME>`
+  - `backend/.env.example:665` = `<REPLACE_ME>`
+- **Code references**:
+  - `scripts/obsidian-memory.mjs:L25` (process.env)
+
+### `OBSIDIAN_MEMORY_BRIDGE_URL`
+
+- **Templates**:
+  - `.env.example:695` = `http://127.0.0.1:8080`
+  - `backend/.env.example:666` = `http://127.0.0.1:8080`
+- **Code references**:
+  - `scripts/obsidian-memory.mjs:L24` (process.env)
+
+### `OBSIDIAN_MEMORY_PYTHON`
+
+- **Templates**:
+  - `.env.example:696` = ``
+  - `backend/.env.example:667` = ``
+- **Code references**:
+  - `scripts/obsidian-memory.mjs:L16` (process.env)
+
 ### `OCR_PDF_DPI`
 
 - **Templates**:
@@ -7119,6 +7174,14 @@ requirements remain in `docs/ENVIRONMENT.md`.
   - `backend/routes/auth.js:L201` (process.env)
   - `backend/routes/stripe.js:L24` (process.env)
   - `backend/services/diagnosticsService.js:L415` (process.env)
+
+### `PYTHON`
+
+- **Templates**:
+  - `.env.example:786` = ``
+  - `backend/.env.example:757` = ``
+- **Code references**:
+  - `scripts/obsidian-memory.mjs:L16` (process.env)
 
 ### `QUEUE_DRAIN_INTERVAL_MS`
 
