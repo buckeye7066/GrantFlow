@@ -347,7 +347,7 @@ export async function generateMedicalNecessityDocument(db, profileId, options = 
     error: providerResult.error?.message || 'Every configured AI provider failed',
     profile: summarizeProfile(medProfile),
   }
-
+}
 
 function summarizeProfile(medProfile) {
   return {
