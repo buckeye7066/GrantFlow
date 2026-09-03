@@ -134,7 +134,6 @@ export async function normalizePersistedMatchDecisionIntegrity(db, options = {})
          FROM profile_opportunity_matches m
          JOIN funding_opportunities fo ON fo.id = m.opportunity_id
         WHERE m.matcher_version IN ${SURFACED_MATCHER_VERSIONS_SQL}
-          AND m.match_explain_json IS NOT NULL
           ${aliasedScope.sql}`,
     ).all(...aliasedScope.params)
 
