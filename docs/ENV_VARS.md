@@ -8,9 +8,9 @@ requirements remain in `docs/ENVIRONMENT.md`.
 
 ## Summary
 
-- Total vars: **962**
-- Vars referenced in code: **962**
-- Vars listed in env templates: **959**
+- Total vars: **960**
+- Vars referenced in code: **960**
+- Vars listed in env templates: **957**
 
 ## Inventory
 
@@ -488,9 +488,7 @@ requirements remain in `docs/ENVIRONMENT.md`.
 | `HAMILTON_SIGNUP_VERIFY_POLL_MS` | Yes | Yes | Backend/Node |
 | `HAMILTON_SIGNUP_VERIFY_WAIT_MS` | Yes | Yes | Backend/Node |
 | `HAMILTON_STOP_RECHECK_LIMIT` | Yes | Yes | Backend/Node |
-| `HAMILTON_SUGGEST_MAX_RETRIES` | Yes | Yes | Backend/Node |
 | `HAMILTON_SUGGEST_MODEL` | Yes | Yes | Backend/Node |
-| `HAMILTON_SUGGEST_TIMEOUT_MS` | Yes | Yes | Backend/Node |
 | `HAMILTON_SYNC_ON_CAPTURE` | Yes | Yes | Backend/Node |
 | `HAMILTON_TAILORED_APPROVAL_GATE` | Yes | Yes | Backend/Node |
 | `HAMILTON_VAULT_UNLOCK_TTL_MS` | Yes | Yes | Backend/Node |
@@ -5206,14 +5204,6 @@ requirements remain in `docs/ENVIRONMENT.md`.
 - **Code references**:
   - `backend/startup/enforceInvariants.js:L1911` (process.env)
 
-### `HAMILTON_SUGGEST_MAX_RETRIES`
-
-- **Templates**:
-  - `.env.example:505` = ``
-  - `backend/.env.example:476` = ``
-- **Code references**:
-  - `backend/services/hamilton/hamiltonPortalLoginSuggester.js:L125` (process.env)
-
 ### `HAMILTON_SUGGEST_MODEL`
 
 - **Templates**:
@@ -5221,14 +5211,6 @@ requirements remain in `docs/ENVIRONMENT.md`.
   - `backend/.env.example:477` = ``
 - **Code references**:
   - `backend/services/hamilton/hamiltonPortalLoginSuggester.js:L130` (process.env)
-
-### `HAMILTON_SUGGEST_TIMEOUT_MS`
-
-- **Templates**:
-  - `.env.example:507` = ``
-  - `backend/.env.example:478` = ``
-- **Code references**:
-  - `backend/services/hamilton/hamiltonPortalLoginSuggester.js:L124` (process.env)
 
 ### `HAMILTON_SYNC_ON_CAPTURE`
 
