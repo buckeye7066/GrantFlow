@@ -6641,6 +6641,7 @@ export async function enforcePersistedMatchDecisionIntegrity(db) {
       repaired: Number(result?.repaired || 0),
       removedRejects: Number(result?.removed_rejects || 0),
       removedCanonicalRejects: Number(result?.removed_canonical_rejects || 0),
+      removedUnprovenDirectAccepts: Number(result?.removed_unproven_direct_accepts || 0),
       removedBelowReviewResources: Number(result?.removed_below_review_resources || 0),
       normalizedResources: Number(result?.normalized_resources || 0),
       ...(result?.reason ? { skipped: result.reason } : {}),
