@@ -2,6 +2,7 @@ import { randomUUID } from 'crypto'
 import { listToolMetadata, invokeTool as invokeRegisteredTool } from './anyaToolRegistry.js'
 import { createCircuitBreaker } from '../utils/circuitBreaker.js'
 import { createOpenAIClient, summarizeOpenAIError } from '../utils/openaiClient.js'
+import { invokeTextWithFallback as invokeProviderTextWithFallback } from '../utils/aiProviders.js'
 import { getProfileContext, runProfileContext } from '../db/scopedQuery.js'
 import path from 'path'
 import { promises as fs } from 'fs'
@@ -1463,6 +1464,31 @@ export async function generateAssistantResponse(db, user, sessionId, { content, 
     }))
   }
 
+  // Free/local routes are conversational fallbacks. They receive the same
+  // grounded profile/application context, but no mutation tools; this prevents
+  // a provider without reliable tool-call support from claiming that it wrote
+  // to a profile when no registry action actually ran.
+  const invokeGroundedProviderFallback = async () => {
+    const result = await invokeProviderTextWithFallback({
+      openai: null,
+      system:
+        `${systemPrompt}\n\n`
+        + 'You are running without GrantFlow mutation tools. Never claim that you saved, submitted, deleted, or changed anything. '
+        + 'Explain the next action or ask the user to retry the action when tool-capable service is restored.',
+      prompt: JSON.stringify(modelConversationMessages),
+      temperature: 0.3,
+      maxTokens: 1000,
+    })
+    if (result.ok && result.text) {
+      log.info('[Anya] fallback provider response received', {
+        provider: result.provider,
+        fallbackReason: result.fallback_reason ?? null,
+      })
+      return result.text
+    }
+    return null
+  }
+
   // 1) Try OpenAI first (if configured)
   if (openai) {
     try {
@@ -1666,37 +1692,17 @@ export async function generateAssistantResponse(db, user, sessionId, { content, 
         breaker: openAIBreaker.snapshot(),
       })
 
-      const tryAnthropicFallback = async () => {
-        try {
-          const anthropic = await getAnthropicClient()
-          if (!anthropic) return null
-          const response = await anthropic.messages.create({
-            model: process.env.ANTHROPIC_MODEL || 'claude-haiku-4-5',
-            max_tokens: 1000,
-            temperature: 0.3,
-            system: systemPrompt,
-            messages: modelConversationMessages.map((m) => ({
-              role: m.role === 'assistant' ? 'assistant' : 'user',
-              content: m.content,
-            })),
-          })
-          const reply = extractAnthropicText(response)
-          return reply || null
-        } catch (anthErr) {
-          console.error('[Anya] Anthropic fallback failed:', anthErr?.message || anthErr)
-          return null
-        }
-      }
+      const tryProviderFallback = invokeGroundedProviderFallback
 
       if (error?.code === 'CIRCUIT_OPEN') {
-        const anthropicReply = await tryAnthropicFallback()
-        if (anthropicReply) return anthropicReply
+        const providerReply = await tryProviderFallback()
+        if (providerReply) return providerReply
         return "The AI service is temporarily overloaded. Give me 30 seconds and try again."
       }
 
       if (summary.isAuth) {
         // OpenAI key invalid: fall back to Anthropic if configured.
-        const reply = await tryAnthropicFallback()
+        const reply = await tryProviderFallback()
         if (reply) return reply
 
         // Deterministic, non-LLM fallback (still safe and actionable).
@@ -1705,33 +1711,16 @@ export async function generateAssistantResponse(db, user, sessionId, { content, 
 
       if (summary.isRateLimit) {
         // Rate limit: also try Anthropic as a fallback provider.
-        const reply = await tryAnthropicFallback()
+        const reply = await tryProviderFallback()
         if (reply) return reply
         return "The AI service is rate-limiting us right now. Please try again shortly."
       }
     }
   }
 
-  // 2) Try Anthropic (if configured)
-  try {
-    const anthropic = await getAnthropicClient()
-    if (anthropic) {
-      const response = await anthropic.messages.create({
-        model: process.env.ANTHROPIC_MODEL || 'claude-haiku-4-5',
-        max_tokens: 1000,
-        temperature: 0.3,
-        system: systemPrompt,
-        messages: modelConversationMessages.map((m) => ({
-          role: m.role === 'assistant' ? 'assistant' : 'user',
-          content: m.content,
-        })),
-      })
-      const reply = extractAnthropicText(response)
-      if (reply) return reply
-    }
-  } catch (error) {
-    console.error('[Anya] Anthropic API Error:', error?.message || error)
-  }
+  // 2) Paid Anthropic, then configured free/local routes.
+  const providerReply = await invokeGroundedProviderFallback()
+  if (providerReply) return providerReply
 
   // 3) Deterministic safe fallback (no LLM)
   if (lowerContent.includes('grant') || lowerContent.includes('funding')) {
