@@ -75,7 +75,9 @@ import { runMissionAudit } from './missionAuditService.js'
 import { AUDIT_CATEGORIES, SEVERITY, logAuditEvent } from './auditService.js'
 import { trustedOriginClause, trustedSourceClause } from '../utils/recordOrigins.js'
 import { normalizeState, statesMatch } from '../utils/stateNormalization.js'
-import { scoreOpportunity, computeMatchDecision } from './matchEngine.js'
+import { computeMatchDecision } from './matchEngine.js'
+import { qualifiesForDisplay, SURFACED_MATCHER_VERSIONS_SQL } from '../config/matchSurfacing.js'
+import { fundingTruthProofFrom } from '../config/fundingTruthPolicy.js'
 import { loadProfileContext } from './profileHelpers.js'
 import {
   loadAnyaProfileSnapshot,
@@ -431,90 +433,31 @@ async function performCodeSearch({ query, scopePath, maxResults = 20 }) {
   }
 }
 
-function collectGrantMatches(db, profileId, limit) {
-  const activePredicate = db?.dialect === 'postgres' ? 'is_active = TRUE' : 'is_active = 1'
-  const primary = db
-    .prepare(
-      `
-        SELECT id, title, sponsor, deadline, amount_min, amount_max, amount_description,
-               application_url, state, opportunity_type, requires_match, match_percentage,
-               eligibility_bullets, categories, source, source_url, updated_at, match_reasons,
-               description, regions, keywords, link_status
-        FROM funding_opportunities
-        WHERE ${activePredicate} AND profile_id = ?
-          AND ${trustedOriginClause()}
-          AND ${trustedSourceClause()}
-        ORDER BY updated_at DESC
-        LIMIT ?
-      `,
-    )
-    .all(profileId, limit)
+async function collectGrantMatches(db, profileId, limit) {
+  const activePredicate = db?.dialect === 'postgres'
+    ? '(fo.is_active IS NULL OR fo.is_active = TRUE)'
+    : '(fo.is_active IS NULL OR fo.is_active = 1)'
+  const scanLimit = Math.max(limit, limit * 4)
+  const rows = await db.prepare(
+    `SELECT fo.*, m.match_score, m.match_decision, m.match_explanation,
+            m.match_explain_json, m.matcher_version, m.updated_at AS match_updated_at
+       FROM profile_opportunity_matches m
+       JOIN funding_opportunities fo ON fo.id = m.opportunity_id
+      WHERE m.profile_id = ?
+        AND m.matcher_version IN ${SURFACED_MATCHER_VERSIONS_SQL}
+        AND ${activePredicate}
+        AND ${trustedOriginClause('fo')}
+        AND ${trustedSourceClause('fo')}
+      ORDER BY m.match_score DESC, m.updated_at DESC
+      LIMIT ?`,
+  ).all(String(profileId), scanLimit)
 
-  if (primary.length >= limit) {
-    return primary
-  }
-
-  const seen = new Set(primary.map((opp) => opp.id))
-  const remaining = limit - primary.length
-
-  // v4 FIX: Fallback query now filters by profile state or national opportunities.
-  // Previously this query had NO profile_id filter, causing "profile bleed" where
-  // unrelated global opportunities would be shown to users.
-  let profileState = null
-  try {
-    const profileRow = db.prepare('SELECT state FROM profiles WHERE id = ?').get(profileId)
-    profileState = normalizeState(profileRow?.state)
-  } catch { /* profiles table may not have state column */ }
-
-  let fallback
-  if (profileState) {
-    fallback = db
-      .prepare(
-        `
-          SELECT id, title, sponsor, deadline, amount_min, amount_max, amount_description,
-                 application_url, state, opportunity_type, requires_match, match_percentage,
-                 eligibility_bullets, categories, source, source_url, updated_at, match_reasons,
-                 description, regions, keywords, link_status
-          FROM funding_opportunities
-          WHERE ${activePredicate}
-            AND (state = ? OR state = 'nationwide' OR is_national = ${db?.dialect === 'postgres' ? 'TRUE' : '1'})
-            AND ${trustedOriginClause()}
-            AND ${trustedSourceClause()}
-          ORDER BY updated_at DESC
-          LIMIT ?
-        `,
-      )
-      .all(profileState, (remaining * 3) || remaining)
-  } else {
-    // No state known — only return national opportunities as fallback
-    fallback = db
-      .prepare(
-        `
-          SELECT id, title, sponsor, deadline, amount_min, amount_max, amount_description,
-                 application_url, state, opportunity_type, requires_match, match_percentage,
-                 eligibility_bullets, categories, source, source_url, updated_at, match_reasons,
-                 description, regions, keywords, link_status
-          FROM funding_opportunities
-          WHERE ${activePredicate}
-            AND (state = 'nationwide' OR is_national = ${db?.dialect === 'postgres' ? 'TRUE' : '1'})
-            AND ${trustedOriginClause()}
-            AND ${trustedSourceClause()}
-          ORDER BY updated_at DESC
-          LIMIT ?
-        `,
-      )
-      .all((remaining * 3) || remaining)
-  }
-
-  const merged = [...primary]
-  fallback.forEach((opp) => {
-    if (merged.length >= limit) return
-    if (seen.has(opp.id)) return
-    seen.add(opp.id)
-    merged.push(opp)
-  })
-
-  return merged
+  // This is a read of the canonical rolling match snapshot, not a second
+  // catalog scorer. Direct funding needs ACCEPT + all four truth proofs;
+  // pointer resources remain explicitly labelled as research paths.
+  return (rows || [])
+    .filter((row) => qualifiesForDisplay(row))
+    .slice(0, limit)
 }
 
 function formatGrantSummaries(opportunities, profile = null) {
@@ -524,23 +467,15 @@ function formatGrantSummaries(opportunities, profile = null) {
     const amountRange = formatAmountRange(opp.amount_min, opp.amount_max, opp.amount_description)
     const daysRemaining = daysUntil(opp.deadline)
     
-    // Get or generate match reasons
-    let matchReasons = cleanList(safeParseJSON(opp.match_reasons, []), 10)
-    if (matchReasons.length === 0 && profile) {
-      matchReasons = generateMatchReasons(opp, profile)
-    }
-    
-    // Calculate match score
-    let matchScore = null
-    if (profile) {
-      matchScore = scoreOpportunity(profile, opp).score
-    }
-    
-    // Generate fit explanation
-    let fitExplanation = null
-    if (profile) {
-      fitExplanation = generateFitExplanation(opp, profile, matchReasons)
-    }
+    const matchExplain = safeParseJSON(opp.match_explain_json, {}) || {}
+    const matchReasons = cleanList(
+      matchExplain.matched_profile_facts || safeParseJSON(opp.match_reasons, []),
+      10,
+    )
+    const matchScore = Number.isFinite(Number(opp.match_score))
+      ? Number(opp.match_score)
+      : null
+    const fitExplanation = opp.match_explanation || null
 
     return {
       id: opp.id,
@@ -604,33 +539,21 @@ async function summarizeGrants(db, params, context) {
   }
 
   const limit = Math.max(1, Math.min(Number(params?.limit) || DEFAULT_GRANT_LIMIT, 10))
-  const opportunities = collectGrantMatches(db, profileId, limit)
+  const opportunities = await collectGrantMatches(db, profileId, limit)
   const formatted = formatGrantSummaries(opportunities, enrichedProfile)
 
-  // Re-run the canonical decision engine for each opportunity so the returned
-  // explanation lines up with what matching/discovery would show. We attach
-  // the matched_profile_facts payload so the UI/Anya can display "what facts
-  // from your profile caused this" without re-deriving anything.
+  // Report the exact stored decision/proof that made each row visible. Anya
+  // must not recalculate a different score while explaining the user's list.
   for (let i = 0; i < formatted.length; i++) {
-    try {
-      const opp = opportunities[i]
-      if (!opp) continue
-      const decision = computeMatchDecision(
-        context_profile.profile,
-        opp,
-        { profileSections: context_profile.sections, signals: context_profile.signals },
-      )
-      formatted[i].canonical_match = {
-        score: decision.score,
-        decision: decision.decision,
-        confidence: decision.confidence,
-        matched_profile_facts: decision.matched_profile_facts ?? [],
-        ineligibility_reasons: decision.ineligibilityReasons ?? [],
-        matcher_version: decision.matcherVersion,
-      }
-    } catch (decisionErr) {
-      // Never fail the whole summary on a single bad row.
-      formatted[i].canonical_match = { error: decisionErr?.message ?? String(decisionErr) }
+    const opp = opportunities[i]
+    const explain = safeParseJSON(opp?.match_explain_json, {}) || {}
+    formatted[i].canonical_match = {
+      score: Number.isFinite(Number(opp?.match_score)) ? Number(opp.match_score) : null,
+      decision: String(opp?.match_decision || '').toUpperCase() || null,
+      matched_profile_facts: explain.matched_profile_facts || [],
+      ineligibility_reasons: explain.ineligibility_reasons || [],
+      matcher_version: opp?.matcher_version || null,
+      four_truth_proof: fundingTruthProofFrom(opp),
     }
   }
 
