@@ -4,8 +4,11 @@
 // non-profile bulk crawl endpoints return an explicit retired/OS response.
 import {
   opportunityLifecycleVisibilitySql,
+  qualifiesForDisplay,
   SURFACED_MATCHER_VERSIONS_SQL,
 } from '../config/matchSurfacing.js'
+import { allSources, getSource } from '../crawler-os/sourceRegistry.js'
+import { resolveCrawlerActivation } from '../config/crawlerActivationPolicy.js'
 
 const SUPERSEDED = Object.freeze({
   retired: true,
@@ -20,15 +23,31 @@ const SUPERSEDED = Object.freeze({
 // Retired discovery-strategy / item / domain-engine / state-waiver helpers used
 // by older route contracts. They intentionally do not crawl. Profile-facing
 // routes below call Crawler OS instead.
-export function getStrategy() { return null }
-export function listStrategies() { return [] }
-export async function searchWebForItem() { return [] }
-export const KNOWN_ITEM_SOURCES = Object.freeze([])
-export function parseItemRequest() { return {} }
-export async function runAllDomainEngines() { return { ...SUPERSEDED, engines: [] } }
-export async function crawlStateWaiverBenefits() { return [] }
-export function evaluateStateWaiverEligibility() { return { eligible: false, superseded: true } }
-export async function stampLastDiscoveryAt() { /* OS persistence stamps last_discovery_at */ }
+export function getStrategy(sourceId) { return getSource(String(sourceId || '').trim()) }
+export function listStrategies() { return allSources() }
+export const KNOWN_ITEM_SOURCES = Object.freeze(['profile_catalog', 'live_web'])
+export function parseItemRequest(value) {
+  const raw = typeof value === 'object' && value ? value.item_request ?? value.items : value
+  const items = (Array.isArray(raw) ? raw : String(raw || '').split(/[\n,;]+/))
+    .map((item) => String(item || '').trim())
+    .filter(Boolean)
+  return { items }
+}
+export async function searchWebForItem(db, profileId, item, options = {}) {
+  const { searchItemNeed } = await import('./itemNeedSearch.js')
+  return searchItemNeed(db, { profileId, item, ...options })
+}
+export async function runAllDomainEngines(db, profileId, options = {}) {
+  return runCrawler(db, profileId, { ...options, crawlerType: 'crawler-os' })
+}
+export async function crawlStateWaiverBenefits(db, profileId, options = {}) {
+  return runCrawler(db, profileId, { ...options, crawlerType: 'state_waiver_benefits' })
+}
+export function evaluateStateWaiverEligibility(profile) {
+  const state = String(profile?.state || profile?.location?.state || '').trim()
+  return { eligible: Boolean(state), reason: state ? 'profile_state_present' : 'profile_state_required' }
+}
+export async function stampLastDiscoveryAt() { /* Crawler OS persistence owns this timestamp. */ }
 
 function safeJsonParse(value, fallback) {
   if (Array.isArray(value)) return value
@@ -71,6 +90,10 @@ export async function loadCrawlerOsProfileResults(db, profileId, limit = 200) {
       applicationUrl: row.application_url || row.apply_url || null,
       sourceUrl: row.source_url || null,
       matchScore: Number(row.match_score ?? 0),
+      match_score: Number(row.match_score ?? 0),
+      match_decision: row.match_decision,
+      opportunity_kind: row.opportunity_kind,
+      four_truth_proof: explain?.four_truth_proof ?? null,
       matchReasons: safeJsonParse(row.match_reasons, explain?.matched_needs || []),
       matchedCategories: categories,
       categories,
@@ -85,7 +108,7 @@ export async function loadCrawlerOsProfileResults(db, profileId, limit = 200) {
       is_active: row.is_active ?? null,
       match_explain: { ...explain, why: row.match_explanation || explain?.why, matcher_version: row.matcher_version },
     }
-  })
+  }).filter((row) => qualifiesForDisplay(row, 0))
 }
 
 // The legacy "trigger auto-discovery" entrypoint now drives the Crawler OS, so
@@ -153,6 +176,10 @@ export async function runCrawler(db, profileId, options = {}) {
   const { runProfileDiscoveryLive } = await import('./crawlerOsService.js')
   const floor = Number.isFinite(Number(options?.minScore)) ? Number(options.minScore) : undefined
   const maxResults = Number(options?.maxResults) || 200
+  const activation = resolveCrawlerActivation(options?.crawlerType || 'crawler-os')
+  if (!activation.valid || activation.mode !== 'profile_planned') {
+    return { ...SUPERSEDED, success: false, error: 'profile_planned_crawler_required', results: [] }
+  }
   const { run, persisted } = await runProfileDiscoveryLive({ db, profileId: String(profileId), floor })
   const results = await loadCrawlerOsProfileResults(db, profileId, maxResults)
   return {
@@ -160,6 +187,7 @@ export async function runCrawler(db, profileId, options = {}) {
     superseded: false,
     engine: 'crawler-os',
     crawler_type: options?.crawlerType || 'crawler-os',
+    activation_authority: activation.activation_authority,
     inserted: persisted?.opportunities ?? run?.stored ?? results.length,
     evaluated: persisted?.matches ?? results.length,
     total: results.length,
@@ -170,22 +198,102 @@ export async function runCrawler(db, profileId, options = {}) {
     hamiltonCleaned: persisted?.hamiltonCleaned ?? 0,
   }
 }
-export const SCHEMA = Object.freeze({})
-export async function crawlItemFunding() { return { ...SUPERSEDED, items: [] } }
-export const DOMAIN_CRAWLER_REGISTRY = Object.freeze({})
+export const SCHEMA = Object.freeze({
+  activation_authority: 'crawler-os/planner',
+  source_authority: 'crawler-os/sourceRegistry',
+  result_authority: 'config/fundingTruthPolicy',
+})
 
-// countyFundingCrawler surface (admin county-crawl endpoints) — no-ops post-cutover.
-export async function crawlAllCounties() { return { ...SUPERSEDED, counties: 0 } }
-export async function crawlStateCounties() { return { ...SUPERSEDED, counties: 0 } }
-export async function getCrawlerStatus() { return { ...SUPERSEDED, running: false } }
-export function isCountyCrawlerEnabled() { return false }
+export async function crawlItemFunding(profileInput, options = {}) {
+  const db = options.db || profileInput?.db
+  const profileId = profileInput?.id || profileInput?.profile_id || options.profileId || options.profile_id
+  const { items } = parseItemRequest(options.item_request ?? options.items)
+  if (!db || !profileId || items.length === 0) return []
+  const { searchItemNeeds } = await import('./itemNeedSearch.js')
+  const report = await searchItemNeeds(db, {
+    profileId: String(profileId),
+    items,
+    profileContext: options.profileContext || null,
+  })
+  return (report?.items || []).flatMap((item) => item?.results || [])
+}
 
-export async function processComprehensiveCrawlerJob() { return { ...SUPERSEDED } }
-export async function crawlGrantsGov() { return { ...SUPERSEDED } }
-export async function crawlRealOpportunities() { return { ...SUPERSEDED } }
-export async function crawlAllStates() { return { ...SUPERSEDED } }
-export async function seedAllRealFunding() { return { ...SUPERSEDED } }
-export function getOpportunityCountsByState() { return {} }
+export const DOMAIN_CRAWLER_REGISTRY = Object.freeze(
+  Object.fromEntries(allSources().map((source) => [source.source_id, source])),
+)
+
+async function runProfileScopedOs(context = {}, { onlySourceIds = null, crawlerType = 'crawler-os' } = {}) {
+  const db = context.db
+  const profileId = context.profileId || context.profile_id ||
+    context.job?.profile_id || context.job?.parameters?.profile_id ||
+    context.profileContext?.profile_id || context.profileContext?.profile?.id
+  if (!db || !profileId) {
+    return {
+      ...SUPERSEDED,
+      success: false,
+      retired: false,
+      superseded: false,
+      error: 'profile_id_required',
+      message: 'Crawler OS requires a profile so source activation and all four funding truths can be evaluated.',
+    }
+  }
+  const { runProfileDiscoveryLive } = await import('./crawlerOsService.js')
+  const { run, persisted } = await runProfileDiscoveryLive({
+    db,
+    profileId: String(profileId),
+    onlySourceIds,
+    crawlerType,
+  })
+  return {
+    success: true,
+    retired: false,
+    superseded: false,
+    engine: 'crawler-os',
+    activation_authority: 'crawler-os/planner',
+    profile_id: String(profileId),
+    inserted: Number(persisted?.opportunities ?? run?.stored ?? 0),
+    updated: 0,
+    evaluated: Number(persisted?.matches ?? 0),
+    errors: 0,
+    rejected: Number(run?.rejected ?? 0),
+    sources: run?.sources ?? [],
+    recommendations: run?.recommendations ?? [],
+  }
+}
+
+export async function crawlAllCounties(db, options = {}) {
+  return runProfileScopedOs({ db, ...options }, { crawlerType: 'local_funding' })
+}
+export async function crawlStateCounties(db, state, options = {}) {
+  return runProfileScopedOs({ db, ...options, state }, { crawlerType: 'local_funding' })
+}
+export async function getCrawlerStatus() {
+  return { engine: 'crawler-os', running: false, activation_authority: 'crawler-os/planner' }
+}
+export function isCountyCrawlerEnabled() { return true }
+
+export async function processComprehensiveCrawlerJob(context = {}) {
+  return runProfileScopedOs(context, { crawlerType: 'comprehensive' })
+}
+export async function crawlGrantsGov(db, options = {}) {
+  return runProfileScopedOs({ db, ...options }, { onlySourceIds: ['grants_gov'], crawlerType: 'government_funding' })
+}
+export async function crawlRealOpportunities(db, options = {}) {
+  return runProfileScopedOs({ db, ...options }, { crawlerType: 'comprehensive' })
+}
+export async function crawlAllStates(db, options = {}) {
+  return runProfileScopedOs({ db, ...options }, { crawlerType: 'local_funding' })
+}
+export async function seedAllRealFunding(db, options = {}) {
+  return runProfileScopedOs({ db, ...options }, { crawlerType: 'comprehensive' })
+}
+export async function getOpportunityCountsByState(db) {
+  if (!db?.prepare) return {}
+  const rows = await db.prepare(
+    "SELECT COALESCE(NULLIF(TRIM(state), ''), 'national') AS state, COUNT(*) AS count FROM funding_opportunities WHERE COALESCE(is_active, 1) = 1 GROUP BY COALESCE(NULLIF(TRIM(state), ''), 'national')",
+  ).all()
+  return Object.fromEntries((rows || []).map((row) => [row.state, Number(row.count || 0)]))
+}
 
 export default {
   processComprehensiveCrawlerJob,
