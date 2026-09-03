@@ -8,6 +8,7 @@ import { dirname, join, resolve } from 'path';
 import { fileURLToPath } from 'url';
 import pdfParse from 'pdf-parse';
 import { createOpenAIClient, summarizeOpenAIError } from '../utils/openaiClient.js';
+import { invokeJsonWithFallback as invokeProviderJsonWithFallback } from '../utils/aiProviders.js';
 import { encryptRuntimeSecret } from '../utils/runtimeSecrets.js';
 import { seedRealOpportunities } from '../utils/seedRealOpportunities.js';
 import { seedAssistanceDirectories } from '../utils/seedAssistanceDirectories.js';
@@ -825,62 +826,22 @@ function tryExtractFirstJson(text) {
 }
 
 async function invokeJsonWithFallback({ system, prompt, maxTokens = 1500, temperature = 0.1 } = {}) {
-  const openai = getOpenAIOptional()
-  if (openai) {
-    try {
-      const completion = await openai.chat.completions.create({
-        model: AI_MODEL,
-        messages: [
-          system ? { role: 'system', content: system } : null,
-          { role: 'user', content: prompt },
-        ].filter(Boolean),
-        response_format: { type: 'json_object' },
-        temperature,
-        max_tokens: maxTokens,
-      })
+  const result = await invokeProviderJsonWithFallback({
+    openai: getOpenAIOptional(),
+    openaiModel: AI_MODEL,
+    system,
+    prompt,
+    maxTokens,
+    temperature,
+  })
 
-      const raw = completion.choices?.[0]?.message?.content
-      if (raw) {
-        try {
-          return { json: JSON.parse(raw), provider: 'openai', raw }
-        } catch {
-          const extracted = tryExtractFirstJson(raw)
-          if (extracted) return { json: extracted, provider: 'openai', raw }
-        }
-      }
-    } catch (error) {
-      const summary = summarizeOpenAIError(error)
-      console.warn('[admin/ai] OpenAI failed, will try Anthropic:', summary?.message || error?.message || error)
-    }
+  return {
+    json: result.ok ? result.json : null,
+    provider: result.provider,
+    raw: result.raw ?? null,
+    fallback_reason: result.fallback_reason ?? null,
+    free_route_errors: result.freeRouteErrors ?? [],
   }
-
-  const anthropic = await createAnthropicClient()
-  if (anthropic) {
-    try {
-      const response = await anthropic.messages.create({
-        model: process.env.ANTHROPIC_MODEL || 'claude-haiku-4-5',
-        max_tokens: maxTokens,
-        temperature,
-        system: system || undefined,
-        messages: [
-          {
-            role: 'user',
-            content:
-              `${prompt}\n\n` +
-              `Return ONLY a valid JSON object. Do not include markdown fences or commentary.`,
-          },
-        ],
-      })
-
-      const raw = extractAnthropicText(response)
-      const extracted = tryExtractFirstJson(raw)
-      if (extracted) return { json: extracted, provider: 'anthropic', raw }
-    } catch (error) {
-      console.warn('[admin/ai] Anthropic failed:', error?.message || error)
-    }
-  }
-
-  return { json: null, provider: 'fallback', raw: null }
 }
 
 // GET /api/admin/openai/verify
@@ -1067,6 +1028,16 @@ router.post('/env/apply', async (req, res) => {
   const ALLOWLIST = new Set([
     'OPENAI_API_KEY',
     'ANTHROPIC_API_KEY',
+    'FREE_AI_ROUTES',
+    'FREE_AI_BASE_URL',
+    'FREE_AI_MODEL',
+    'FREE_AI_API_KEY',
+    'FREE_AI_TIMEOUT_MS',
+    'FREE_AI_MAX_RETRIES',
+    'FREE_AI_RESERVE_MS',
+    'OLLAMA_BASE_URL',
+    'OLLAMA_MODEL',
+    'OLLAMA_API_KEY',
     'RESEND_API_KEY',
     'FROM_EMAIL',
     'AUTH_NOTIFY_ON_LOGIN',
@@ -1083,6 +1054,8 @@ router.post('/env/apply', async (req, res) => {
   const SECRET_KEYS = new Set([
     'OPENAI_API_KEY',
     'ANTHROPIC_API_KEY',
+    'FREE_AI_API_KEY',
+    'OLLAMA_API_KEY',
     'RESEND_API_KEY',
     'ANYA_ADMIN_TOKEN',
     // Funding provider keys should be treated as secrets too.
