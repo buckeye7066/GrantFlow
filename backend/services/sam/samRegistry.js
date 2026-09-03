@@ -340,10 +340,10 @@ export const DIAGNOSTIC_CHECKS = Object.freeze([
     category: SAM_CATEGORIES.BROKEN_IMPORTS,
     kind: CHECK_KIND.TOOL,
     tool: 'admin.code.crawl',
-    parameters: { dryRun: true, maxFiles: 200 },
+    parameters: { dryRun: true, includeTests: true },
     severityOnFailure: SEVERITY.MEDIUM,
     heavy: true, // walks the source tree
-    description: 'Delegates to Anya admin.code.crawl to find broken imports, missing handlers, structural drift across the codebase.',
+    description: 'Delegates to Anya admin.code.crawl across every JS/TS source and test file, reporting exact file/byte coverage plus any unreadable paths so a partial sweep cannot claim completion.',
   },
   {
     id: 'code.lint',
