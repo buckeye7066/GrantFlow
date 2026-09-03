@@ -1,4 +1,5 @@
 import Database from 'better-sqlite3'
+import { verifiedFourTruthExplain } from './helpers/fourTruthFixture.js'
 import { describe, expect, it } from 'vitest'
 import fs from 'node:fs'
 import path from 'node:path'
@@ -151,6 +152,8 @@ function createCanonicalDb({ withDismissals = true, withMatchConfidence = true }
       VALUES ('d-1', 'p-1', 'opp-dismissed', 'Dismissed Grant');
     ` : ''}
   `)
+  db.prepare("UPDATE profile_opportunity_matches SET match_explain_json = ? WHERE opportunity_id IN ('opp-1', 'opp-dismissed')")
+    .run(verifiedFourTruthExplain({ scoring_policy_version: 'need-first-v2' }))
   return db
 }
 
