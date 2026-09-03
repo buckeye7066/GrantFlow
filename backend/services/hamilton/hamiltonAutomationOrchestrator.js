@@ -272,11 +272,12 @@ export function reviewedPortalSubmissionExecutionAvailable(
   url,
   { fullAutomation = false, extraAllowedHosts = [] } = {},
 ) {
-  // Full automation is the profile user's explicit authorization to drive a
-  // public portal. Operational beta flags may narrow assist-only runs, but they
-  // may not silently override that consent. The SSRF/public-HTTPS floor remains.
-  if (fullAutomation === true) return isHamiltonBrowserTargetAllowed(url)
-  return browserAutomationPermittedForUrl(url, { extraAllowedHosts })
+  // Full automation bypasses only the host allowlist. The emergency browser
+  // kill switch and the SSRF/public-HTTPS floor still apply.
+  return browserAutomationPermittedForUrl(url, {
+    extraAllowedHosts,
+    ignoreHostAllowlist: fullAutomation === true,
+  })
 }
 
 /**
