@@ -32,7 +32,7 @@ import {
 import { isProposalCriticEnabled, runProposalCritic } from '../services/proposalCritic.js';
 import { DEFAULT_MIN_SCORE, RELAX_THRESHOLDS, FALLBACK_TOP_N } from '../config/matchThresholds.js';
 import { filterOutPipelineMembers, dedupeOpportunityList } from '../services/pipelineExclusion.js';
-import { createOpenAIClient, summarizeOpenAIError } from '../utils/openaiClient.js';
+import { createOpenAIClient } from '../utils/openaiClient.js';
 import {
   invokeJsonWithFallback as invokeProviderJsonWithFallback,
   invokeTextWithFallback as invokeProviderTextWithFallback,
@@ -143,14 +143,6 @@ async function createAnthropicClient() {
   }
 }
 
-function extractAnthropicText(response) {
-  const parts = Array.isArray(response?.content) ? response.content : []
-  return parts
-    .map((part) => (typeof part?.text === 'string' ? part.text : typeof part === 'string' ? part : ''))
-    .filter(Boolean)
-    .join('\n')
-    .trim()
-}
 
 function fallbackProposalTemplate({ grant, section }) {
   const applicant = grant?.name || 'Applicant'
