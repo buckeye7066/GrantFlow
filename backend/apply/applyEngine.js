@@ -1493,6 +1493,10 @@ export async function generateApplicationSections(db, grant, opportunity, profil
         prompt,
         temperature: 0.7,
         maxTokens: 1200,
+        timeoutMs: Math.max(
+          1,
+          Math.min(AUTO_POPULATE_PER_SECTION_TIMEOUT_MS, startedAt + wallBudgetMs - Date.now()),
+        ),
       })
       if (!providerResult.ok || !providerResult.text) {
         throw providerResult.error || new Error('Every configured AI provider failed')
