@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import Database from 'better-sqlite3'
+import { VERIFIED_FOUR_TRUTH_PROOF } from './helpers/fourTruthFixture.js'
 
 import { createGrantsGovAdapter } from '../crawler-os/adapters/grantsGovAdapter.js'
 import { normalize } from '../crawler-os/normalizer.js'
@@ -96,7 +97,7 @@ function makePublicNumberCrawl() {
     match_score: 91,
     match_confidence: 0.9,
     decision: 'accept',
-    match_explain: { why: 'Aligned resilience need.' },
+    match_explain: { why: 'Aligned resilience need.', four_truth_proof: VERIFIED_FOUR_TRUTH_PROOF },
   })
   return { store, opportunity }
 }
