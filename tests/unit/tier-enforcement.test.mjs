@@ -119,14 +119,15 @@ test('tier enforcement is backend-authoritative (pipeline automation, item fundi
 
     const { ensureBillingSchema } = await import('../../backend/services/billingAccounts.js')
     await ensureBillingSchema(db)
-    // The integration fixture owns its schema explicitly. Production receives
-    // these tables through migrations 080 and 1002; keeping the fixture local
-    // makes entitlement behavior independent of migration-runner timing.
+    // The integration fixture owns both independent entitlement authorities.
+    // Production receives them through numbered migrations. Keeping the fixture
+    // local makes this behavior test independent of migration-runner timing
+    // without weakening fail-closed reads when either authority is unavailable.
     db.exec(`
       CREATE TABLE IF NOT EXISTS profile_pricing (
         id TEXT PRIMARY KEY,
         profile_id TEXT NOT NULL UNIQUE,
-        access_status TEXT NOT NULL DEFAULT 'pending_admin_review'
+        access_status TEXT
       );
 
       CREATE TABLE IF NOT EXISTS billing_addon_entitlements (

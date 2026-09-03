@@ -27,6 +27,16 @@ import assert from 'node:assert/strict'
 import { buildThesis } from '../../backend/crawler-os/profileIntelligence.js'
 import { plan } from '../../backend/crawler-os/planner.js'
 import { allSources } from '../../backend/crawler-os/sourceRegistry.js'
+import {
+  buildFourTruthProof,
+  isRecommendable,
+  isResearchLead,
+} from '../../backend/crawler-os/matchEngine.js'
+import {
+  buildCrawlerProfileRoute,
+  listProfileTypes,
+} from '../../backend/services/profileTypeRegistry.js'
+import { profileContextToThesisInput } from '../../backend/services/crawlerOsPersistenceCore.js'
 
 const DIRECTORY_IDS = new Set(allSources().filter((s) => s.directory).map((s) => s.source_id))
 
@@ -118,4 +128,196 @@ test('students reach federal student aid + benefit directories', () => {
     assert.ok(selected.includes('studentaid_gov'), `"${t}" missing studentaid_gov`)
     assert.ok(selected.includes('benefits_gov'), `"${t}" missing benefits_gov`)
   }
+})
+
+test('every canonical profile type has one explicit runtime applicant route', () => {
+  for (const profileType of listProfileTypes()) {
+    const route = buildCrawlerProfileRoute(profileType.id)
+    assert.equal(route.canonical_profile_type, profileType.id)
+    assert.equal(route.resolved, true)
+    assert.ok(
+      route.applicant_types.length > 0,
+      `profile type "${profileType.id}" has no Crawler OS applicant route`,
+    )
+  }
+})
+
+test('the live profile-context bridge carries the canonical route into source decisions', () => {
+  const input = profileContextToThesisInput({
+    profile: { id: 'church-1', primary_type: 'church', display_name: 'Community Church' },
+    sections: { organization_details: { mission: 'Food pantry and housing ministry' } },
+    signals: {
+      applicantTypes: new Set(['church']),
+      needs: new Set(['food', 'housing']),
+      needsDefaulted: false,
+      location: { state: 'OH', city: 'Lorain' },
+      states: ['OH'],
+    },
+    profileNorm: { needCategories: ['food', 'housing'] },
+  })
+  const thesis = buildThesis(input)
+  const routePlan = plan(thesis)
+  const grantsGov = routePlan.source_decisions.find((decision) => decision.source_id === 'grants_gov')
+
+  assert.equal(input.profile_route.canonical_profile_type, 'church')
+  assert.ok(input.applicant_types.includes('church'))
+  assert.ok(input.applicant_types.includes('nonprofit'))
+  assert.equal(grantsGov?.selected, true)
+  assert.ok(grantsGov?.reasons.includes('profile_type_route:church'))
+  assert.ok(grantsGov?.reasons.includes('profile_needs_source:profile_declared_or_faceted'))
+})
+
+test('the live bridge reads profileNorm, every section, documents, organization, and all states', () => {
+  const input = profileContextToThesisInput({
+    profile: { id: 'profile-all-facts', primary_type: 'disabled_adult', display_name: 'Applicant' },
+    sections: {
+      medical: { dme_needed: ['power wheelchair'] },
+      transportation: { requested_vehicle: 'wheelchair-accessible van' },
+    },
+    signals: {
+      applicantTypes: new Set(['individual', 'disabled']),
+      needs: new Set(),
+      needsDefaulted: false,
+      location: { state: 'OH', county: 'Lorain', city: 'Elyria', zip: '44035' },
+      states: ['OH', 'WV'],
+    },
+    profileNorm: { needCategories: new Set(['medical', 'transportation', 'equipment']) },
+    organization: { name: 'Care Network', organization_type: 'nonprofit', mission: 'Mobility access' },
+    documents: [{ title: 'DME prescription', extracted_text: 'Power wheelchair is medically necessary.' }],
+  })
+
+  assert.deepEqual(
+    new Set(input.need_categories),
+    new Set(['medical', 'transportation', 'equipment']),
+  )
+  assert.deepEqual(input.location.states, ['OH', 'WV'])
+  assert.deepEqual(input.sections.map((section) => section.title).sort(), ['medical', 'transportation'])
+  assert.equal(input.documents[0].name, 'DME prescription')
+  assert.equal(input.organizations[0].mission, 'Mobility access')
+  assert.equal(input.profile_route.profile_norm_considered, true)
+  assert.equal(input.profile_route.document_count, 1)
+})
+
+test('type defaults are labeled as defaults and never masquerade as declared needs', () => {
+  const input = profileContextToThesisInput({
+    profile: { id: 'sparse-student', primary_type: 'college_student' },
+    sections: {},
+    signals: {
+      applicantTypes: new Set(['student']),
+      // These values imitate fallback residue carried in both signal bags.
+      // They are deliberately absent from every college/student/individual
+      // type default so this assertion tests provenance, not overlap with a
+      // legitimate parent-type default such as housing or utilities.
+      needs: new Set(['emergency_relocation', 'vehicle_repair']),
+      needCategories: new Set(['emergency_relocation', 'vehicle_repair']),
+      needsDefaulted: true,
+      location: { state: 'TN' },
+    },
+  })
+  const thesis = buildThesis(input)
+
+  assert.equal(input.profile_route.needs_source, 'profile_type_default')
+  assert.equal(thesis.needs_defaulted, true)
+  assert.ok(input.need_categories.includes('scholarship'))
+  assert.equal(input.need_categories.includes('emergency_relocation'), false)
+  assert.equal(input.need_categories.includes('vehicle_repair'), false)
+})
+
+test('section-derived needs are not mislabeled as route defaults', () => {
+  const input = profileContextToThesisInput({
+    profile: { id: 'described-org', primary_type: 'nonprofit', display_name: 'Community Services' },
+    sections: {
+      programs_services: { focus_areas: ['food_security'], interests: ['food bank', 'hunger relief'] },
+      narrative: { primary_goal: 'Operate a food pantry for the county.' },
+    },
+  })
+  const thesis = buildThesis(input)
+
+  // Before buildThesis scans all section/document prose, the bridge has only
+  // the type fallback available. The thesis must replace that provisional
+  // provenance once the profile itself establishes a real need.
+  assert.equal(input.profile_route.needs_source, 'profile_type_default')
+  assert.equal(thesis.needs_defaulted, false)
+  assert.equal(thesis.profile_route.needs_source, 'whole_profile_inference')
+  assert.ok(thesis.needs.includes('food'))
+})
+
+test('direct funding requires positive proof for all four truths', () => {
+  const opportunity = {
+    id: 'opp-transport',
+    kind: 'DIRECT_GRANT',
+    reality_status: 'VERIFIED',
+    apply_url: 'https://agency.gov/apply',
+    evidence: {
+      url: 'https://agency.gov/program',
+      content_hash: 'sha256:verified-page',
+      fetched_at: '2026-09-02T19:00:00.000Z',
+    },
+  }
+  const canonical = {
+    decision: 'ACCEPT',
+    score: 91,
+    eligible: 'yes',
+    matchedNeeds: ['transportation'],
+    missingEligibilityFields: [],
+  }
+  const proof = buildFourTruthProof(opportunity, { needs_defaulted: false }, canonical, {
+    realityPassed: true,
+  })
+
+  assert.equal(proof.real.passed, true)
+  assert.equal(proof.relatable.passed, true)
+  assert.equal(proof.meets_profile_need.passed, true)
+  assert.equal(proof.profile_qualifies.passed, true)
+  assert.equal(proof.all_passed, true)
+})
+
+test('unknown qualification or type-defaulted needs cannot authorize direct funding', () => {
+  const opportunity = {
+    kind: 'DIRECT_GRANT',
+    reality_status: 'VERIFIED',
+    evidence: {
+      url: 'https://agency.gov/program',
+      content_hash: 'sha256:verified-page',
+      fetched_at: '2026-09-02T19:00:00.000Z',
+    },
+  }
+  const canonical = {
+    decision: 'ACCEPT',
+    score: 90,
+    eligible: 'maybe',
+    matchedNeeds: ['housing'],
+    missingEligibilityFields: ['household_income'],
+  }
+  const proof = buildFourTruthProof(opportunity, { needs_defaulted: true }, canonical, {
+    realityPassed: true,
+  })
+
+  assert.equal(proof.meets_profile_need.passed, false)
+  assert.equal(proof.profile_qualifies.passed, false)
+  assert.equal(proof.all_passed, false)
+})
+
+test('a safe but uncaptured link cannot satisfy the real truth', () => {
+  const proof = buildFourTruthProof({
+    kind: 'DIRECT_GRANT',
+    reality_status: 'LINK_UNVERIFIED',
+    apply_url: 'https://agency.gov/apply',
+    evidence: { url: 'https://agency.gov/program' },
+  }, { needs_defaulted: false }, {
+    decision: 'ACCEPT',
+    score: 90,
+    eligible: 'yes',
+    matchedNeeds: ['transportation'],
+  }, { realityPassed: true })
+
+  assert.equal(proof.real.passed, false)
+  assert.equal(proof.all_passed, false)
+})
+
+test('directories are research leads, never direct funding recommendations', () => {
+  const directory = { kind: 'DIRECTORY' }
+  assert.equal(isRecommendable(directory, 'review'), false)
+  assert.equal(isResearchLead(directory, 'review'), true)
+  assert.equal(isResearchLead({ kind: 'DIRECT_GRANT' }, 'review'), false)
 })

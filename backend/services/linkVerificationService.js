@@ -424,8 +424,28 @@ export async function quarantineUnverifiedDirectOpportunities(db) {
   const falseVal = isPostgres ? false : 0
   const changes = (result) => Number(result?.changes ?? result?.rowCount ?? 0)
   const directPredicate = linkLifecycleOpportunitySql()
+  const freshnessCutoff = new Date(
+    Date.now() - REVERIFY_AFTER_DAYS * 24 * 60 * 60 * 1000,
+  ).toISOString()
+  const staleMarker = `stale_reverification_required:${freshnessCutoff}`
 
   try {
+    // A formerly successful probe is not current proof forever. Move only
+    // VISIBLE stale direct rows into the same retryable state as an unchecked
+    // row. Preserve last_verified_at as historical evidence; the verifier will
+    // replace it and restore visibility only after a current successful probe.
+    // Already-hidden rows are left untouched so an independent quarantine can
+    // never be erased by this freshness repair.
+    const staleSuccessful = await db
+      .prepare(
+        "UPDATE funding_opportunities SET is_hidden = ?, link_status = 'unverified', verification_error = ? WHERE " +
+        directPredicate +
+        " AND COALESCE(is_hidden, ?) = ? AND LOWER(TRIM(COALESCE(link_status, ''))) IN ('ok', 'redirect', 'verified')" +
+        ' AND last_verified_at IS NOT NULL AND last_verified_at < ?' +
+        ` AND ${mutableLinkLifecycleSql()}`,
+      )
+      .run(trueVal, staleMarker, falseVal, falseVal, freshnessCutoff)
+
     const quarantined = await db
       .prepare(
         'UPDATE funding_opportunities SET is_hidden = ? WHERE ' + directPredicate +
@@ -449,7 +469,7 @@ export async function quarantineUnverifiedDirectOpportunities(db) {
 
     return {
       ok: true,
-      quarantined: changes(quarantined),
+      quarantined: changes(staleSuccessful) + changes(quarantined),
       deactivated: changes(deactivated),
       // SQL-only startup state cannot prove that a hidden row was hidden by a
       // retryable link failure rather than an independent quarantine. Only a
@@ -473,6 +493,17 @@ export async function runLinkVerification(
   db,
   { limit = 100, verifiedBy = 'recurring-verifier', fetchImpl } = {},
 ) {
+  // Normalize visibility before selecting work so a visible stale success is
+  // selected back as retryable/unverified and can be restored by this same run.
+  // Selecting first left the in-memory row at status=ok, which made the restore
+  // guard preserve its new quarantine even after the fresh probe succeeded.
+  const quarantine = await quarantineUnverifiedDirectOpportunities(db)
+  if (!quarantine?.ok) {
+    console.warn('[link-verify] quarantine pass failed:', quarantine?.reason || 'unknown')
+  }
+
+  // Compute this after quarantine. Its cutoff is therefore at least as recent
+  // as the quarantine cutoff, so every row that was just demoted is selected.
   const cutoff = new Date(Date.now() - REVERIFY_AFTER_DAYS * 24 * 60 * 60 * 1000).toISOString()
 
   const rows = await db
@@ -557,13 +588,10 @@ export async function runLinkVerification(
     return Number(result?.changes ?? result?.rowCount ?? 0)
   }
 
-  const quarantine = await quarantineUnverifiedDirectOpportunities(db)
   if (quarantine?.ok) {
     stats.quarantined += Number(quarantine.quarantined || 0)
     stats.deactivated += Number(quarantine.deactivated || 0)
     stats.restored += Number(quarantine.restored || 0)
-  } else {
-    console.warn('[link-verify] quarantine pass failed:', quarantine?.reason || 'unknown')
   }
 
   for (let i = 0; i < rows.length; i += BATCH_SIZE) {

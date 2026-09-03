@@ -14,7 +14,7 @@ import { OPPORTUNITY_KIND } from '../contract.js';
 import { createCountyCityDirectoryAdapter } from '../adapters/countyCityDirectoryAdapter.js';
 import { enforceReality } from '../realityGate.js';
 import { normalize } from '../normalizer.js';
-import { computeMatchDecision, isRecommendable } from '../matchEngine.js';
+import { computeMatchDecision, isRecommendable, isResearchLead } from '../matchEngine.js';
 import { MATCH_DECISION } from '../contract.js';
 
 const COUNTY_CITY = ['usa_gov_local_governments', 'hud_resource_locator', 'findhelp_local_programs'];
@@ -69,10 +69,10 @@ test('disease rows carry the condition keywords the gap detector matches on', ()
 });
 
 // ── The 2026-07-12 regression: a DIRECTORY locator (apply_url null BY DESIGN)
-//    must be able to reach an ACCEPT match decision. The #886 no-apply-url
-//    demotion held EVERY locator at REVIEW, so the county lane's candidates
-//    never entered recommendations and Amy reported hyperlocal_recall_miss on
-//    all 50 synthetic profiles every day. ──
+//    must remain visible for research without pretending to be direct funding.
+//    Locators stay at REVIEW and travel through research_leads, so the county
+//    lane remains reachable without weakening the four-truth recommendation
+//    contract or recreating Amy's false-positive findings. ──
 const RICH_THESIS = {
   profile_id: 'p-recall-test',
   applicant_types: ['individual', 'family'],
@@ -96,15 +96,18 @@ function decisionForCountySource(sourceId, thesis) {
 }
 
 // The #886 guard, restated against the rule that now carries it. A locator's
-// reachability is owned by isRecommendable(), NOT by it claiming ACCEPT: a
-// pointer is admitted to the recommendation list at REVIEW. Asserting ACCEPT
-// here is what previously forced locators to over-claim to stay visible
-// (Amy false_positive x56) — the guard is that the locator stays RECOMMENDABLE.
-test('a county DIRECTORY locator with no apply_url stays recommendation-eligible', () => {
+// reachability is owned by the research-lead channel, NOT by claiming ACCEPT or
+// appearing in direct funding recommendations. Asserting recommendation
+// eligibility here previously forced locators to over-claim to stay visible
+// (Amy false_positive x56). The guard is that the locator stays discoverable as
+// an explicitly labeled research lead.
+test('a county DIRECTORY locator with no apply_url stays research-lead eligible', () => {
   const { opp, decision } = decisionForCountySource('hud_resource_locator', RICH_THESIS);
   assert.equal(opp.apply_url, null, 'locator honesty: apply_url stays null');
-  assert.ok(isRecommendable(opp, decision.decision),
-    'locator must remain recommendation-eligible (hyperlocal fleet reachability)');
+  assert.equal(isRecommendable(opp, decision.decision), false,
+    'a locator must never enter direct funding recommendations');
+  assert.ok(isResearchLead(opp, decision.decision),
+    'locator must remain research-lead eligible (hyperlocal fleet reachability)');
   assert.ok(
     !decision.match_explain.warnings.some((w) => /no direct application URL/i.test(w)),
     'a locator is never demoted for its by-design missing apply URL',
