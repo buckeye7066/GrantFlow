@@ -39,6 +39,7 @@ import {
 } from './anyaBrainService.js'
 import { getSystemDiagnostics, analyzeSystemHealth } from './diagnosticsService.js'
 import { ADMIN_EMAIL } from '../config/constants.js'
+import { invokeTextWithFallback as invokeProviderTextWithFallback } from '../utils/aiProviders.js'
 import { resolveInternalSelfBaseUrl } from '../utils/internalSelfBaseUrl.js'
 
 /**
@@ -837,12 +838,6 @@ registerTool({
 
     const getOpenAI = context?.getOpenAI
     const openai = typeof getOpenAI === 'function' ? getOpenAI() : null
-    if (!openai) {
-      const error = new Error('OpenAI client not configured for code.suggestPatch')
-      error.status = 503
-      throw error
-    }
-
     const system = [
       'You are a code advisor.',
       'Return ONLY a unified diff patch (no markdown, no explanations).',
@@ -857,17 +852,20 @@ registerTool({
       truncated,
     ].join('\n')
 
-    const response = await openai.chat.completions.create({
-      model: process.env.ANYA_OPENAI_MODEL || 'gpt-4o-mini',
+    const providerResult = await invokeProviderTextWithFallback({
+      openai,
+      openaiModel: process.env.ANYA_OPENAI_MODEL || 'gpt-4o-mini',
+      system,
+      prompt: userPrompt,
       temperature: 0.2,
-      max_tokens: 1200,
-      messages: [
-        { role: 'system', content: system },
-        { role: 'user', content: userPrompt },
-      ],
+      maxTokens: 1200,
     })
-
-    const patch = response?.choices?.[0]?.message?.content ?? ''
+    if (!providerResult.ok || !providerResult.text) {
+      const error = providerResult.error || new Error('Every configured AI provider failed for code.suggestPatch')
+      error.status = 503
+      throw error
+    }
+    const patch = providerResult.text
     return {
       file: filePath,
       patch: String(patch || '').trim(),
@@ -3734,26 +3732,23 @@ async function generateGrantWritingDocument(context, { systemDirective, opportun
 
   const getOpenAI = context?.getOpenAI
   const openai = typeof getOpenAI === 'function' ? getOpenAI() : null
-  if (!openai) {
-    return {
-      content: null,
-      generated: 'unavailable',
-      note: 'The AI writing service is not configured, so a finished draft could not be generated here. The opportunity and profile facts are included so the draft can be written manually.',
-    }
-  }
-
   try {
-    const response = await openai.chat.completions.create({
-      model: process.env.ANYA_OPENAI_MODEL || process.env.OPENAI_MODEL || 'gpt-4o-mini',
+    const providerResult = await invokeProviderTextWithFallback({
+      openai,
+      openaiModel: process.env.ANYA_OPENAI_MODEL || process.env.OPENAI_MODEL || 'gpt-4o-mini',
+      system: systemDirective,
+      prompt: userPrompt,
       temperature: 0.6,
-      max_tokens: 3000,
-      messages: [
-        { role: 'system', content: systemDirective },
-        { role: 'user', content: userPrompt },
-      ],
+      maxTokens: 3000,
     })
-    const content = response?.choices?.[0]?.message?.content?.trim() || ''
-    return { content: content || null, generated: content ? 'ai' : 'empty', usage: response?.usage || null }
+    const content = providerResult.ok ? providerResult.text?.trim() || '' : ''
+    if (!content) throw providerResult.error || new Error('Every configured AI provider failed')
+    return {
+      content,
+      generated: 'ai',
+      provider: providerResult.provider,
+      usage: providerResult.usage || null,
+    }
   } catch (err) {
     console.error('[grants.write] AI generation failed:', err.message)
     return { content: null, generated: 'error', error: err.message }
