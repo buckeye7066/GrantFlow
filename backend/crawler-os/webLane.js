@@ -26,7 +26,7 @@
 import { enforceReality } from './realityGate.js';
 import { normalize } from './normalizer.js';
 import { computeMatchDecision } from './matchEngine.js';
-import { isVerifiedDirectFundingRecommendation } from '../config/fundingTruthPolicy.js';
+import { isVerifiedDirectFundingRecommendation } from './fundingTruthPolicy.js';
 import { upsertSource, upsertOpportunity, upsertMatch, recordRejection } from './storage.js';
 import { OPPORTUNITY_KIND, TRUST_TIER, MATCH_DECISION, canonicalOpportunityKey } from './contract.js';
 import { buildWebQueries } from './webQueries.js';
