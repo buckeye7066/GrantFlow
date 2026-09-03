@@ -287,14 +287,80 @@ describe('startup SQL-only link quarantine', () => {
 
       const stats = await quarantineUnverifiedDirectOpportunities(db)
 
-      expect(stats).toMatchObject({ ok: true, quarantined: 8, deactivated: 8, restored: 0 })
+      expect(stats).toMatchObject({ ok: true, quarantined: 9, deactivated: 9, restored: 0 })
       expect(fetchSpy).not.toHaveBeenCalled()
       for (const [id] of lifecycleRows) {
         expect(readRow(db, id)).toMatchObject({ is_hidden: 1, is_active: 0 })
       }
-      for (const id of ['pointer-kind', 'pointer-result', 'pointer-type', 'pointer-action', 'unknown-kind']) {
+      for (const id of ['pointer-kind', 'pointer-result', 'pointer-type', 'pointer-action']) {
         expect(readRow(db, id)).toMatchObject({ is_hidden: 0, is_active: 1 })
       }
+      // Mission health counts every non-pointer visible row as direct, even when
+      // its kind spelling is unknown. Quarantine must use the same denominator.
+      expect(readRow(db, 'unknown-kind')).toMatchObject({ is_hidden: 1, is_active: 0 })
+    } finally {
+      fetchSpy.mockRestore()
+      db.close()
+    }
+  })
+
+  it('refreshes successful proof before the 30-day mission cutoff', async () => {
+    const db = makeDb()
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue({
+      status: 200,
+      url: 'https://8.8.8.8/due-soon',
+    })
+
+    try {
+      insertOpportunity(db, { id: 'due-soon', url: 'https://8.8.8.8/due-soon', status: 'ok' })
+      const nearlyStaleAt = new Date(Date.now() - 29 * 24 * 60 * 60 * 1000).toISOString()
+      db.prepare('UPDATE funding_opportunities SET last_verified_at = ? WHERE id = ?')
+        .run(nearlyStaleAt, 'due-soon')
+
+      const stats = await runLinkVerification(db, {
+        fetchImpl: globalThis.fetch,
+        limit: 10,
+        verifiedBy: 'test-refresh-runway',
+      })
+
+      expect(stats).toMatchObject({ checked: 1, ok: 1 })
+      expect(readRow(db, 'due-soon')).toMatchObject({
+        link_status: 'ok',
+        is_hidden: 0,
+        is_active: 1,
+      })
+      expect(Date.parse(readRow(db, 'due-soon').last_verified_at)).toBeGreaterThan(Date.parse(nearlyStaleAt))
+    } finally {
+      fetchSpy.mockRestore()
+      db.close()
+    }
+  })
+
+  it('post-probe quarantine hides a direct row downgraded to suspicious', async () => {
+    const db = makeDb()
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue({
+      status: 200,
+      url: 'https://1.1.1.1/',
+    })
+
+    try {
+      insertOpportunity(db, { id: 'suspicious-recheck', url: 'https://8.8.8.8/program', status: 'ok' })
+      const nearlyStaleAt = new Date(Date.now() - 29 * 24 * 60 * 60 * 1000).toISOString()
+      db.prepare('UPDATE funding_opportunities SET last_verified_at = ? WHERE id = ?')
+        .run(nearlyStaleAt, 'suspicious-recheck')
+
+      const stats = await runLinkVerification(db, {
+        fetchImpl: globalThis.fetch,
+        limit: 10,
+        verifiedBy: 'test-suspicious-closeout',
+      })
+
+      expect(stats.checked).toBe(1)
+      expect(readRow(db, 'suspicious-recheck')).toMatchObject({
+        link_status: 'suspicious',
+        is_hidden: 1,
+        is_active: 1,
+      })
     } finally {
       fetchSpy.mockRestore()
       db.close()
