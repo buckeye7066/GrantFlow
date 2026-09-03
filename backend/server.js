@@ -3948,18 +3948,21 @@ if (process.env.NODE_ENV !== 'test') {
   // Run link verification in background (non-blocking).
   //
   // Mission rule: a "verified" opportunity must have actually been verified.
-  // The recurring verifier owns ongoing freshness, including expiring stale
-  // direct opportunities that have not been confirmed reachable in 90 days.
+  // The recurring verifier owns ongoing freshness. The mission gate requires
+  // current proof inside 30 days, so the default throughput must cover the
+  // complete production catalog with retry headroom before that boundary.
+  // Slower/smaller environment overrides are clamped to the safe envelope.
   //
   // Tunable via env:
-  //   LINK_VERIFICATION_INTERVAL_MS (default 6h)
-  //   LINK_VERIFICATION_BATCH      (default 200)
+  //   LINK_VERIFICATION_INTERVAL_MS (default/max 3h; minimum 30m)
+  //   LINK_VERIFICATION_BATCH      (default/minimum 300)
   async function scheduleLinkVerification(dbInstance) {
+    const configuredIntervalMs = Number(process.env.LINK_VERIFICATION_INTERVAL_MS) || 3 * 60 * 60 * 1000
     const intervalMs = Math.max(
       30 * 60 * 1000,
-      Number(process.env.LINK_VERIFICATION_INTERVAL_MS) || 6 * 60 * 60 * 1000,
+      Math.min(configuredIntervalMs, 3 * 60 * 60 * 1000),
     )
-    const limit = Math.max(10, Number(process.env.LINK_VERIFICATION_BATCH) || 200)
+    const limit = Math.max(300, Number(process.env.LINK_VERIFICATION_BATCH) || 300)
     const runOnce = async () => {
       try {
         // The boot invariant sweep is post-listen and may still be mutating
