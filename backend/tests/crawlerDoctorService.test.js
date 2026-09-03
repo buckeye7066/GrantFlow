@@ -9,6 +9,7 @@
  */
 import { describe, it, expect } from 'vitest'
 import Database from 'better-sqlite3'
+import { verifiedFourTruthExplain } from './helpers/fourTruthFixture.js'
 import { buildCrawlerDoctorReport } from '../services/crawlerDoctorService.js'
 import { DEFAULT_MIN_SCORE } from '../config/matchThresholds.js'
 
@@ -82,7 +83,7 @@ function seed(db) {
       (id, profile_id, opportunity_id, match_score, match_decision, match_explain_json, matcher_version, source_query, discovered_via)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`)
     .run('p1:opp-good', 'p1', 'opp-good', 82, 'accept',
-      JSON.stringify({ why: 'strong county + student fit', matched_location: 'Bradley County, TN', matched_needs: ['scholarship'], score_breakdown: { geo_component: 90 } }),
+      verifiedFourTruthExplain({ why: 'strong county + student fit', matched_location: 'Bradley County, TN', matched_needs: ['scholarship'], score_breakdown: { geo_component: 90 } }),
       'crawler-os', 'Bradley County, TN education foundation scholarships', 'web_search')
   db.prepare(`INSERT INTO profile_opportunity_matches
       (id, profile_id, opportunity_id, match_score, match_decision, match_explain_json, matcher_version)
