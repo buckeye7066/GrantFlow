@@ -15,6 +15,7 @@
  */
 
 import { createOpenAIClient } from '../utils/openaiClient.js'
+import { invokeJsonWithFallback as invokeProviderJsonWithFallback } from '../utils/aiProviders.js'
 import { expandNeed } from './shared/needTaxonomy.js'
 
 const MAX_INPUT = 2000
@@ -798,19 +799,15 @@ export function interpretFundingIntentRules(text) {
  * @param {import('openai').default|null} openai
  */
 async function interpretWithOpenAI(text, openai) {
-  if (!openai) return null
   const raw = String(text || '').trim().slice(0, MAX_INPUT)
   if (!raw) return null
 
-  const completion = await openai.chat.completions.create({
-    model: process.env.SMART_MATCHER_INTENT_MODEL || 'gpt-4o-mini',
+  const providerResult = await invokeProviderJsonWithFallback({
+    openai,
+    openaiModel: process.env.SMART_MATCHER_INTENT_MODEL || 'gpt-4o-mini',
     temperature: 0.2,
-    max_tokens: 400,
-    response_format: { type: 'json_object' },
-    messages: [
-      {
-        role: 'system',
-        content: `You help users find grant and assistance programs. Given a plain-language request, output JSON only:
+    maxTokens: 400,
+    system: `You help users find grant and assistance programs. Given a plain-language request, output JSON only:
 {"summary":"one short sentence for the user","search_terms":["term1","term2",...]}
 Rules:
 - search_terms: 4-12 short lowercase phrases (2-4 words each) useful for SQL LIKE against titles/descriptions (funding, nonprofits, government programs, charities).
@@ -818,26 +815,17 @@ Rules:
 - For professional development / continuing education / licensure / nursing PROBE / CME / remediation requests, also include: "professional development", "continuing education", "license reinstatement", "wioa training", "workforce training board", "individual training account".
 - For student / college / university / off-campus / on-campus / dorm / room-and-board / cost-of-attendance / FAFSA / Pell / financial-aid / tuition / scholarship requests, also include: "cost of attendance", "room and board", "student housing", "off-campus housing", "college housing", "fafsa", "pell grant", "fseog", "student emergency aid", "completion grant", "scholarship", "tuition assistance", "state student aid".
 - No duplicates. No PII. English only.`,
-      },
-      { role: 'user', content: raw },
-    ],
+    prompt: raw,
   })
-
-  const msg = completion?.choices?.[0]?.message?.content
-  if (!msg) return null
-  let parsed
-  try {
-    parsed = JSON.parse(msg)
-  } catch {
-    return null
-  }
+  if (!providerResult.ok || !providerResult.json) return null
+  const parsed = providerResult.json
   const terms = uniqueTerms(Array.isArray(parsed.search_terms) ? parsed.search_terms : [])
   const summary = typeof parsed.summary === 'string' ? parsed.summary.trim() : ''
   if (!terms.length) return null
   return {
     summary: summary || `Looking for: ${terms.slice(0, 5).join(', ')}.`,
     search_terms: terms,
-    method: 'openai',
+    method: providerResult.provider,
   }
 }
 
@@ -869,7 +857,7 @@ export async function interpretFundingIntent(text, opts = {}) {
       return {
         summary: ai.summary || rules.summary,
         search_terms: merged.length ? merged : ai.search_terms,
-        method: 'openai+rules',
+        method: `${ai.method}+rules`,
         primary_category: cat.primary_category,
         excluded_categories: cat.excluded_categories,
         branded_program: rules.branded_program,
@@ -877,7 +865,7 @@ export async function interpretFundingIntent(text, opts = {}) {
       }
     }
   } catch (e) {
-    console.warn('[smartMatcherIntent] OpenAI interpret failed, using rules only:', e?.message || e)
+    console.warn('[smartMatcherIntent] AI intent refinement failed, using rules only:', e?.message || e)
   }
 
   return rules
