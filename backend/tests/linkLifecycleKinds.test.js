@@ -40,7 +40,7 @@ describe('link lifecycle kind registry', () => {
     }
   })
 
-  it('executes the same six-kind denominator in SQL and excludes structural pointers', () => {
+  it('keeps the finite kind registry for classification but uses every non-pointer row for link proof', () => {
     const db = new Database(':memory:')
     db.exec(`
       CREATE TABLE rows (
@@ -99,6 +99,7 @@ describe('link lifecycle kind registry', () => {
       'legacy-null',
       'program',
       'scholarship',
+      'unknown',
     ])
 
     expect(db.prepare(`
