@@ -16,6 +16,7 @@
 
 import { describe, it, expect, beforeEach } from 'vitest'
 import Database from 'better-sqlite3'
+import { VERIFIED_FOUR_TRUTH_PROOF } from './helpers/fourTruthFixture.js'
 import crypto from 'crypto'
 
 import {
@@ -186,7 +187,7 @@ function fakeMatcher(profile, opportunity) {
       missingEligibilityFields: [],
     }
   }
-  return { score: 88, decision: 'ACCEPT', reasons: ['strong fit on needs'], eligible: true, missingEligibilityFields: [] }
+  return { score: 88, decision: 'ACCEPT', reasons: ['strong fit on needs'], eligible: true, missingEligibilityFields: [], match_explain: { four_truth_proof: VERIFIED_FOUR_TRUTH_PROOF } }
 }
 
 function makeCtx(db) {
