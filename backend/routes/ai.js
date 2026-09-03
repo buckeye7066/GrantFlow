@@ -734,7 +734,7 @@ Return ONLY valid JSON in this format:
     const narrativeResult = await invokeProviderJsonWithFallback({
       openai,
       openaiModel: DEFAULT_OPENAI_MODEL,
-      system: 'Return only source-grounded, non-authoritative observations as valid JSON.',
+      system: 'Return only source-grounded, non-authoritative observations as valid JSON. Do not score, rank, decide fit, state qualification, or decide eligibility. GrantFlow\'s deterministic canonical decision engine owns those judgments.',
       prompt,
       temperature: 0.3,
       maxTokens: 2000,
