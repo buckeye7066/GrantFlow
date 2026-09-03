@@ -22,6 +22,7 @@ import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import path from 'node:path'
 import Database from 'better-sqlite3'
+import { withVerifiedFourTruth, verifiedFourTruthExplain } from './helpers/fourTruthFixture.js'
 
 import {
   DEFAULT_PROFILE_RESULT_TARGET,
@@ -56,7 +57,7 @@ const HERE = path.dirname(fileURLToPath(import.meta.url))
 const read = (rel) => readFileSync(path.join(HERE, '..', rel), 'utf8')
 
 /** A row the engine ACCEPTed — surfaces regardless of the display floor. */
-const award = (over = {}) => ({ match_score: 40, match_decision: 'ACCEPT', title: 'Emergency Housing Grant', opportunity_kind: 'direct_grant', ...over })
+const award = (over = {}) => withVerifiedFourTruth({ match_score: 40, match_decision: 'ACCEPT', title: 'Emergency Housing Grant', opportunity_kind: 'direct_grant', ...over })
 const locator = (over = {}) => ({ match_score: 40, match_decision: 'REVIEW', title: 'Local assistance programs near you', opportunity_kind: 'directory', is_directory: true, ...over })
 
 // ───────────────────────────── 1. THE COUNT ─────────────────────────────────
