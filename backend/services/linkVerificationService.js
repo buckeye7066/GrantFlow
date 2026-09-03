@@ -27,6 +27,7 @@ import { LINK_VERIFICATION_SKIP_DOMAINS, isPlaceholderUrl, assertSsrfSafeUrl } f
 import { safeFetch, discardResponseBody, SsrfBlockedError } from './http/safeFetch.js'
 import {
   isPointerOpportunityRow,
+  linkLifecycleOpportunitySql,
   pointerOpportunityRowSql,
 } from '../config/linkLifecycleKinds.js'
 
