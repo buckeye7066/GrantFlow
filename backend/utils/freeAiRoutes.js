@@ -6,6 +6,10 @@ import { createLogger } from './logger.js'
 
 const log = createLogger('utils:freeAiRoutes')
 const MAX_ROUTES = 6
+const FREE_ROUTE_ENV_KEYS = Object.freeze({
+  genericApiKey: 'FREE_AI_API_KEY',
+  ollamaApiKey: 'OLLAMA_API_KEY',
+})
 
 function parseJsonLoose(text) {
   const raw = String(text || '').trim()
@@ -58,7 +62,7 @@ export function getConfiguredFreeAiRoutes(env = process.env) {
       id: 'free-compatible',
       base_url: env.FREE_AI_BASE_URL,
       model: env.FREE_AI_MODEL,
-      api_key_env: 'FREE_AI_API_KEY',
+      api_key_env: FREE_ROUTE_ENV_KEYS.genericApiKey,
     })
   }
   if (String(env?.OLLAMA_BASE_URL || '').trim()) {
@@ -66,7 +70,7 @@ export function getConfiguredFreeAiRoutes(env = process.env) {
       id: 'ollama',
       base_url: env.OLLAMA_BASE_URL,
       model: env.OLLAMA_MODEL || env.FREE_AI_MODEL || 'llama3.2',
-      api_key_env: 'OLLAMA_API_KEY',
+      api_key_env: FREE_ROUTE_ENV_KEYS.ollamaApiKey,
     })
   }
 
