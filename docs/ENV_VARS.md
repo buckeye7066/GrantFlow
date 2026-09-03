@@ -8,9 +8,9 @@ requirements remain in `docs/ENVIRONMENT.md`.
 
 ## Summary
 
-- Total vars: **964**
-- Vars referenced in code: **964**
-- Vars listed in env templates: **961**
+- Total vars: **962**
+- Vars referenced in code: **962**
+- Vars listed in env templates: **959**
 
 ## Inventory
 
@@ -90,8 +90,6 @@ requirements remain in `docs/ENVIRONMENT.md`.
 | `ANYA_ADMIN_GEO_OVERPASS_RADIUS_KM` | Yes | Yes | Backend/Node |
 | `ANYA_ADMIN_GEO_STATE_PACING_MS` | Yes | Yes | Backend/Node |
 | `ANYA_ADMIN_TOKEN` | Yes | Yes | Backend/Node |
-| `ANYA_ANTHROPIC_COOLDOWN_MS` | Yes | Yes | Backend/Node |
-| `ANYA_ANTHROPIC_FAILURE_THRESHOLD` | Yes | Yes | Backend/Node |
 | `ANYA_ANTHROPIC_MAX_RETRIES` | Yes | Yes | Backend/Node |
 | `ANYA_ANTHROPIC_TIMEOUT_MS` | Yes | Yes | Backend/Node |
 | `ANYA_API_KEY` | Yes | Yes | Backend/Node |
