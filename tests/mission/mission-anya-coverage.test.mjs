@@ -192,6 +192,7 @@ test('phase-h: all mission-required Anya tools are registered', () => {
     'grants.explainMatch',
     'grants.summarizeMatches',
     'profile.getCompletionStatus',
+    'profile.searchItemFunding',
     'profile.updateSection',
     'anya.nextBestAction',
     'application.createFromOpportunity',
