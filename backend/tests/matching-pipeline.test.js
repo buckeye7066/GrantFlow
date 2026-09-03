@@ -2,6 +2,7 @@ import request from "supertest"
 import { describe, it, expect, beforeAll, beforeEach } from "vitest"
 import { getAppAndDb, resetDb, TEST_ADMIN_AUTH_HEADER } from "./testServer.js"
 import { stampMatchConfidenceProvenance } from "../services/matching/matchConfidenceProvenance.js"
+import { VERIFIED_FOUR_TRUTH_PROOF } from "./helpers/fourTruthFixture.js"
 
 /**
  * Integration tests for the matching pipeline — the core flow that
