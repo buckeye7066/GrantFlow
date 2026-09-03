@@ -132,15 +132,25 @@ function clientFor(route, env = currentFreeAiEnv()) {
   }
 }
 
-function safeError(error, route, apiKey) {
-  let message = String(error?.message ?? error ?? 'free route failed')
-  if (apiKey) message = message.split(String(apiKey)).join('***REDACTED***')
-  message = message.replace(/Bearer\s+[A-Za-z0-9._~+/-]+/gi, 'Bearer ***REDACTED***')
+function safeError(error) {
+  const status = Number(error?.status ?? error?.response?.status ?? 0) || null
+  const creditExhausted = isProviderCreditExhaustion(error)
+  const raw = String(error?.message ?? error ?? '')
+  const timedOut = error?.name === 'AbortError' || error?.code === 'ERR_CANCELED' || /timeout|timed out|aborted/i.test(raw)
+  const responseRejected = /empty response|invalid json|not OpenAI-compatible/i.test(raw)
+  const message = creditExhausted
+    ? 'free route quota or rate limit reached'
+    : timedOut
+      ? 'free route timed out'
+      : responseRejected
+        ? 'free route response rejected'
+        : status && status >= 400 && status < 500
+          ? 'free route rejected the request'
+          : 'free route unavailable'
   return {
-    route_id: route.id,
-    status: Number(error?.status ?? error?.response?.status ?? 0) || null,
-    message: message.slice(0, 500),
-    credit_exhausted: isProviderCreditExhaustion(error),
+    status,
+    message,
+    credit_exhausted: creditExhausted,
   }
 }
 
@@ -204,7 +214,7 @@ async function invokeRoutes({
       if (!json || typeof json !== 'object') throw new Error('route returned invalid JSON')
       return { ...common, json }
     } catch (error) {
-      errors.push(safeError(error, route, apiKey))
+      errors.push(safeError(error))
       log.warn(`Free AI route ${route.id} failed; trying the next configured route`)
     }
   }
