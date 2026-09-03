@@ -81,8 +81,9 @@ function composeReport(outDir) {
     database_role: db?.role ?? null,
     safety: {
       // Every claim below is backed by a check recorded in guard.json.
-      auto_submit_disabled: guard?.posture?.allow_auto_submit === false,
-      auto_submit_verified_against_running_process: guard?.posture?.boot_id_matches_live === true,
+      profile_submission_authority: guard?.posture?.submission_authority === 'profile_authorization' &&
+        guard?.posture?.profile_authorization_required === true,
+      posture_verified_against_running_process: guard?.posture?.boot_id_matches_live === true,
       db_write_refused: Boolean(
         guard?.checks?.find((c) => c.name === 'write attempt is REFUSED by production')?.pass,
       ),
@@ -148,9 +149,9 @@ function composeReport(outDir) {
   L.push('');
   L.push('| Control | Result |');
   L.push('| --- | --- |');
-  L.push(`| HAMILTON_ALLOW_AUTOSUBMIT disabled | ${summary.safety.auto_submit_disabled ? 'verified' : 'NOT VERIFIED'} |`);
+  L.push(`| Hamilton requires profile-scoped submission authorization | ${summary.safety.profile_submission_authority ? 'verified' : 'NOT VERIFIED'} |`);
   L.push(
-    `| ...in the process actually serving traffic | ${summary.safety.auto_submit_verified_against_running_process ? 'verified (boot id matched)' : 'NOT VERIFIED'} |`,
+    `| Posture came from the process serving traffic | ${summary.safety.posture_verified_against_running_process ? 'verified (boot id matched)' : 'NOT VERIFIED'} |`,
   );
   L.push(`| Production DB write refused | ${summary.safety.db_write_refused ? 'verified' : 'NOT VERIFIED'} |`);
   L.push(`| Production DB INSERT refused | ${summary.safety.db_insert_refused ? 'verified' : 'NOT VERIFIED'} |`);
