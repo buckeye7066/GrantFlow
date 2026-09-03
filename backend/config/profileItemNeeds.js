@@ -319,7 +319,7 @@ export const ITEM_NEED_RULES = Object.freeze([
     source: 'derived',
     vocabulary: 'MOBILITY_NEED_ITEMS',
     read: (s) => list(obj(s.medical_history).mobility_needs),
-    emit: (values) => mapThroughVocabulary(values, MOBILITY_NEED_ITEMS, { reportUnmapped: false }),
+    emit: (values) => mapThroughVocabulary(values, MOBILITY_NEED_ITEMS, { reportUnmapped: false, multiple: true }),
   }),
   Object.freeze({
     id: 'medical_history.dme_needed',
@@ -431,17 +431,19 @@ export const ITEM_NEED_RULES = Object.freeze([
  * nothing is returned as `unmapped` (when the rule asks for it) carrying the
  * one-line fix, so the gap CONVERGES instead of recurring nightly.
  */
-function mapThroughVocabulary(values, vocabulary, { reportUnmapped = true } = {}) {
+function mapThroughVocabulary(values, vocabulary, { reportUnmapped = true, multiple = false } = {}) {
   const needs = []
   const unmapped = []
   for (const raw of values) {
     const declared = String(raw ?? '').trim()
     if (!declared) continue
-    let hit = null
+    const hits = []
     for (const [term, entry] of Object.entries(vocabulary)) {
-      if (statesTerm(term, declared)) { hit = entry; break }
+      if (!statesTerm(term, declared)) continue
+      hits.push(entry)
+      if (!multiple) break
     }
-    if (hit) needs.push({ ...hit })
+    if (hits.length > 0) needs.push(...hits.map((entry) => ({ ...entry })))
     else if (reportUnmapped) unmapped.push(declared)
   }
   return { needs, unmapped }
