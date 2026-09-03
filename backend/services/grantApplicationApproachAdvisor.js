@@ -1,6 +1,6 @@
 import { buildGrantApplicationApproachPrompt } from '../prompts/grantApplicationApproach.js'
-import { createOpenAIClient, summarizeOpenAIError } from '../utils/openaiClient.js'
-import { extractCompletionText } from '../utils/openai.js'
+import { createOpenAIClient } from '../utils/openaiClient.js'
+import { invokeJsonWithFallback as invokeProviderJsonWithFallback } from '../utils/aiProviders.js'
 import { createLogger } from '../utils/logger.js'
 import { buildLanguageDirectiveForProfileAsync } from './languagePreference.js'
 const log = createLogger('grantApplicationApproachAdvisor')
@@ -213,7 +213,6 @@ export async function analyzeAndPersistGrantApplicationApproach({ db, grantId, p
   let final = { ...heuristic }
   try {
     const { openai } = createOpenAIClient({ allowMissing: true })
-    if (openai) {
       const prompt = buildGrantApplicationApproachPrompt({
         grant: {
           id: grant.id,
@@ -238,18 +237,19 @@ export async function analyzeAndPersistGrantApplicationApproach({ db, grantId, p
 
       // The application_steps reach the user, so honour their chosen language.
       const languageDirective = await buildLanguageDirectiveForProfileAsync(db, grant.profile_id)
-      const completion = await openai.chat.completions.create({
-        model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
+      const providerResult = await invokeProviderJsonWithFallback({
+        openai,
+        openaiModel: process.env.OPENAI_MODEL || 'gpt-4o-mini',
+        system: `Output JSON only.${languageDirective}`,
+        prompt,
         temperature: 0.2,
-        response_format: { type: 'json_object' },
-        messages: [
-          { role: 'system', content: `Output JSON only.${languageDirective}` },
-          { role: 'user', content: prompt },
-        ],
+        maxTokens: 1200,
       })
+      const parsed = providerResult.ok ? providerResult.json : null
+      if (!parsed || typeof parsed !== 'object') {
+        throw providerResult.error || new Error('Every configured AI provider failed')
+      }
 
-      const text = extractCompletionText(completion) || '{}'
-      const parsed = JSON.parse(text)
 
       const steps = Array.isArray(parsed?.steps) ? parsed.steps.filter(Boolean).slice(0, 10) : []
       const mergedSteps =
@@ -268,13 +268,11 @@ export async function analyzeAndPersistGrantApplicationApproach({ db, grantId, p
         contact_phone: parsed?.contact_phone || heuristic.contact_phone,
         application_steps: mergedSteps,
       }
-    }
   } catch (error) {
-    const summary = summarizeOpenAIError(error)
     console.warn('[grant-application-approach] AI enrichment failed; using heuristics', {
       grantId,
-      message: summary.message,
-      status: summary.status,
+      message: error?.message || String(error),
+      status: error?.status ?? null,
     })
   }
 
