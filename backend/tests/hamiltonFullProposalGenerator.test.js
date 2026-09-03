@@ -114,6 +114,30 @@ describe('resolveProfileKind + rubric', () => {
     // A field that is absent must not appear at all.
     expect(ev.organization_name).toBeUndefined()
   })
+
+  it('uses canonical section aliases, derived signals, and uploaded profile evidence', () => {
+    const ev = buildEvidencePack({
+      display_name: 'Jordan Rivera',
+      contact_information: { city: 'Cleveland', state: 'OH', zip: '44101' },
+      financial_information: { assistance_needs: ['medical equipment'], annual_income: 21000 },
+      education: { intended_major: 'Nursing', gpa: 3.8 },
+      health_medical: { disability_status: true, mobility_needs: ['wheelchair'] },
+      family_life: { household_size: 3 },
+      narrative: { statement_of_need: 'Accessible equipment is required for daily living.' },
+      signals: { needs: ['durable medical equipment'], location: { state: 'OH' } },
+      profileNorm: { applicantTypes: ['individual'], eligibility: { income: 21000 } },
+      documents: [{ name: 'medical-letter.pdf', extracted_text: 'Clinician recommends a wheelchair.' }],
+    }, 'individual')
+
+    expect(ev.location).toContain('Cleveland')
+    expect(ev.assistance_needs).toContain('medical equipment')
+    expect(ev.education).toContain('Nursing')
+    expect(ev.health_context).toContain('wheelchair')
+    expect(ev.family_and_demographics).toContain('household_size')
+    expect(ev.derived_profile_signals).toContain('durable medical equipment')
+    expect(ev.normalized_eligibility_facts).toContain('21000')
+    expect(ev.uploaded_document_evidence).toContain('medical-letter.pdf')
+  })
 })
 
 describe('generateMbaProposal — section rubric per profile type', () => {
