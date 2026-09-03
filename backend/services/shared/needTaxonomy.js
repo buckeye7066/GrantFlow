@@ -191,6 +191,14 @@ const TAXONOMY = {
       'personal care', 'HCBS waiver', 'supported employment'],
     programCategories: ['disability', 'healthcare', 'employment'],
   },
+  dme: {
+    canonicalNeed: 'durable_medical_equipment',
+    synonyms: ['durable medical equipment', 'DME assistance', 'medical equipment grant',
+      'adaptive medical equipment', 'mobility equipment', 'wheelchair funding',
+      'hospital bed assistance', 'oxygen equipment assistance', 'shower chair',
+      'assistive device funding', 'Medicaid DME', 'Medicare DME'],
+    programCategories: ['disability', 'healthcare', 'medical_equipment'],
+  },
   business: {
     canonicalNeed: 'business',
     synonyms: ['small business grant', 'microenterprise', 'SBA', 'startup funding',
