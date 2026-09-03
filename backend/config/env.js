@@ -121,6 +121,16 @@ const EnvSchema = z
     // Integrations
     OPENAI_API_KEY: z.string().optional(),
     ANTHROPIC_API_KEY: z.string().optional(),
+    FREE_AI_ROUTES: z.string().optional(),
+    FREE_AI_BASE_URL: z.string().optional(),
+    FREE_AI_MODEL: z.string().optional(),
+    FREE_AI_API_KEY: z.string().optional(),
+    FREE_AI_TIMEOUT_MS: z.coerce.number().int().positive().optional(),
+    FREE_AI_MAX_RETRIES: z.coerce.number().int().min(0).max(5).optional(),
+    FREE_AI_RESERVE_MS: z.coerce.number().int().positive().optional(),
+    OLLAMA_BASE_URL: z.string().optional(),
+    OLLAMA_MODEL: z.string().optional(),
+    OLLAMA_API_KEY: z.string().optional(),
 
     RESEND_API_KEY: z.string().optional(),
     FROM_EMAIL: z.string().optional(),
