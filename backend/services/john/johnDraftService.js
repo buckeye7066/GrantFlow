@@ -101,7 +101,12 @@ export async function draftEmailForLead({
       composed: null,
       safety: makeSafetyReport({
         status: SAFETY_STATUS.BLOCKED,
-        reasons: ['insufficient_personalization_evidence'],
+        reasons: [
+          'insufficient_personalization_evidence',
+          ...((Array.isArray(lead?.public_evidence) && lead.public_evidence.length > 0)
+            ? []
+            : [BLOCK_REASONS.MISSING_PUBLIC_EVIDENCE]),
+        ],
         details: {
           missing: sufficiency.missing,
           note: sufficiency.note,
