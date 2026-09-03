@@ -362,7 +362,7 @@ function makeFloorDb() {
     CREATE TABLE profile_sections (profile_id TEXT, section_key TEXT, data TEXT, updated_at TEXT);
     CREATE TABLE profile_opportunity_matches (
       profile_id TEXT, opportunity_id TEXT, match_score INTEGER,
-      match_decision TEXT, matcher_version TEXT
+      match_decision TEXT, matcher_version TEXT, match_explain_json TEXT
     );
     CREATE TABLE funding_opportunities (
       id TEXT PRIMARY KEY, title TEXT, sponsor TEXT, description TEXT,
@@ -380,8 +380,15 @@ function seed(db, profileId, { awards = 0, locators = 0 } = {}) {
     const oid = `${profileId}-o${n++}`
     db.prepare('INSERT INTO funding_opportunities (id, title, opportunity_kind, is_active) VALUES (?,?,?,1)')
       .run(oid, `${kind} ${n}`, kind)
-    db.prepare('INSERT INTO profile_opportunity_matches (profile_id, opportunity_id, match_score, match_decision, matcher_version) VALUES (?,?,?,?,?)')
-      .run(profileId, oid, 40, decision, 'crawler-os')
+    db.prepare('INSERT INTO profile_opportunity_matches (profile_id, opportunity_id, match_score, match_decision, matcher_version, match_explain_json) VALUES (?,?,?,?,?,?)')
+      .run(
+        profileId,
+        oid,
+        40,
+        decision,
+        'crawler-os',
+        decision === 'ACCEPT' ? verifiedFourTruthExplain() : null,
+      )
   }
   for (let i = 0; i < awards; i += 1) put('direct_grant', 'ACCEPT')
   for (let i = 0; i < locators; i += 1) put('directory', 'REVIEW')
