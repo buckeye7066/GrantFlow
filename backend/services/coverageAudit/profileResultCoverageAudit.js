@@ -359,7 +359,7 @@ export async function auditProfileResultCoverage(db, profileId, { floor = DEFAUL
   // amount-enrichment nets read them), but a minimal test/older schema may not,
   // so the URL-carrying SELECT falls back to the base SELECT — applyability then
   // classifies url-less rows as info_only, never a throw (MISSING = NEUTRAL).
-  const baseCols = `m.match_score, m.match_decision, o.title, o.sponsor, o.description, o.categories,
+  const baseCols = `m.match_score, m.match_decision, m.match_explain_json, o.title, o.sponsor, o.description, o.categories,
               o.opportunity_kind, o.deadline, o.deadline_at, o.deadline_type,
               (UPPER(COALESCE(o.opportunity_kind,'')) IN ('DIRECTORY','PAST_AWARD_INTEL')) AS is_directory`
   const buildSurfacedSql = (cols) =>
