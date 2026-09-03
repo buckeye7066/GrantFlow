@@ -8,6 +8,7 @@
  */
 import { describe, it, expect } from 'vitest'
 import Database from 'better-sqlite3'
+import { verifiedFourTruthExplain } from './helpers/fourTruthFixture.js'
 import { reScoreSurfacedIneligible, liveOppToOs } from '../services/coverageAudit/surfacedEligibility.js'
 import { DEFAULT_MIN_SCORE } from '../config/matchThresholds.js'
 
@@ -27,7 +28,8 @@ function makeDb() {
     );
     CREATE TABLE profile_opportunity_matches (
       id TEXT PRIMARY KEY, profile_id TEXT, opportunity_id TEXT,
-      match_score REAL, match_decision TEXT, match_explanation TEXT, matcher_version TEXT
+      match_score REAL, match_decision TEXT, match_explanation TEXT, matcher_version TEXT,
+      match_explain_json TEXT
     );
   `)
   raw.prepare("INSERT INTO profiles (id, display_name, status) VALUES ('p1','Test Profile','active')").run()
@@ -39,8 +41,8 @@ function addMatch(db, { title, kind = 'DIRECT_GRANT', score, decision, matcher =
   seq += 1
   const oid = `o${seq}`; const mid = `m${seq}`
   db.prepare('INSERT INTO funding_opportunities (id,title,opportunity_kind) VALUES (?,?,?)').run(oid, title, kind)
-  db.prepare('INSERT INTO profile_opportunity_matches (id,profile_id,opportunity_id,match_score,match_decision,matcher_version) VALUES (?,?,?,?,?,?)')
-    .run(mid, 'p1', oid, score, decision, matcher)
+  db.prepare('INSERT INTO profile_opportunity_matches (id,profile_id,opportunity_id,match_score,match_decision,matcher_version,match_explain_json) VALUES (?,?,?,?,?,?,?)')
+    .run(mid, 'p1', oid, score, decision, matcher, decision === 'accept' && kind !== 'DIRECTORY' ? verifiedFourTruthExplain() : null)
   return mid
 }
 
@@ -119,8 +121,8 @@ describe('reScoreSurfacedIneligible', () => {
     // A rejectable match on p2 that must NOT be touched when we scope to p1.
     const oid = 'op2'; const m2 = 'mp2'
     db.prepare('INSERT INTO funding_opportunities (id,title,opportunity_kind) VALUES (?,?,?)').run(oid, 'REJECTME Two', 'DIRECT_GRANT')
-    db.prepare('INSERT INTO profile_opportunity_matches (id,profile_id,opportunity_id,match_score,match_decision,matcher_version) VALUES (?,?,?,?,?,?)')
-      .run(m2, 'p2', oid, 88, 'accept', 'web-llm')
+    db.prepare('INSERT INTO profile_opportunity_matches (id,profile_id,opportunity_id,match_score,match_decision,matcher_version,match_explain_json) VALUES (?,?,?,?,?,?,?)')
+      .run(m2, 'p2', oid, 88, 'accept', 'web-llm', verifiedFourTruthExplain())
     const res = await reScoreSurfacedIneligible(db, { ...deps, scoreOpp, profileId: 'p1' })
     expect(res.demoted).toBe(1)
     expect(db.prepare('SELECT match_decision FROM profile_opportunity_matches WHERE id=?').get(m1).match_decision).toBe('reject')
