@@ -271,7 +271,7 @@ describe('canonical funding-source query projection', () => {
           SET match_explain_json = ?, match_confidence = ?
         WHERE profile_id = ? AND opportunity_id = ?`,
     ).run(
-      JSON.stringify({ scoring_policy_version: 'need_first_v2' }),
+      verifiedFourTruthExplain({ scoring_policy_version: 'need_first_v2' }),
       89,
       'p-1',
       'opp-1',
@@ -299,7 +299,7 @@ describe('canonical funding-source query projection', () => {
   it('preserves confidence only with exact persistence-time provenance', async () => {
     const db = createCanonicalDb()
     const explain = stampMatchConfidenceProvenance(
-      { scoring_policy_version: 'need_first_v2' },
+      JSON.parse(verifiedFourTruthExplain({ scoring_policy_version: 'need_first_v2' })),
       { match_score: 82, match_decision: 'accept', match_confidence: 89 },
     )
     db.prepare(
@@ -328,7 +328,7 @@ describe('canonical funding-source query projection', () => {
   it('clears confidence when a later writer changes a stamped score', async () => {
     const db = createCanonicalDb()
     const explain = stampMatchConfidenceProvenance(
-      { scoring_policy_version: 'need_first_v2' },
+      JSON.parse(verifiedFourTruthExplain({ scoring_policy_version: 'need_first_v2' })),
       { match_score: 82, match_decision: 'accept', match_confidence: 89 },
     )
     db.prepare(
