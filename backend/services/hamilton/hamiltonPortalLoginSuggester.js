@@ -33,6 +33,7 @@
 import { normalizeHost } from './hamiltonCredentialSessionService.js'
 import { getConnectorForHost, resolveConnector } from './portalSync/registry.js'
 import { createLogger } from '../../utils/logger.js'
+import { invokeJsonWithFallback as invokeProviderJsonWithFallback } from '../../utils/aiProviders.js'
 
 const log = createLogger('service:hamilton-portal-login-suggester')
 
@@ -113,20 +114,6 @@ async function resolveOpportunityLinks(db, opportunityId) {
   }
 }
 
-let cachedAnthropic = null
-async function getAnthropicClient() {
-  if (cachedAnthropic) return cachedAnthropic
-  const key = String(process.env.ANTHROPIC_API_KEY || '').trim()
-  if (!key) return null
-  const Anthropic = (await import('@anthropic-ai/sdk')).default
-  cachedAnthropic = new Anthropic({
-    apiKey: key,
-    timeout: Number(process.env.HAMILTON_SUGGEST_TIMEOUT_MS || 12_000),
-    maxRetries: Number(process.env.HAMILTON_SUGGEST_MAX_RETRIES || 0),
-  })
-  return cachedAnthropic
-}
-
 const SUGGEST_MODEL = process.env.HAMILTON_SUGGEST_MODEL || process.env.ANTHROPIC_MODEL || 'claude-haiku-4-5'
 
 /**
@@ -137,40 +124,30 @@ const SUGGEST_MODEL = process.env.HAMILTON_SUGGEST_MODEL || process.env.ANTHROPI
 async function aiResolveLoginUrl(portalName) {
   const name = firstNonEmpty(portalName)
   if (!name) return null
-  let anthropic
-  try { anthropic = await getAnthropicClient() } catch { anthropic = null }
-  if (!anthropic) return null
   try {
-    const response = await anthropic.messages.create({
-      model: SUGGEST_MODEL,
-      max_tokens: 200,
-      messages: [{
-        role: 'user',
-        content: (
-          'Return ONLY compact JSON {"host":"...","loginUrl":"..."} for the '
-          + 'official sign-in page of this application/grant/student portal. '
-          + 'Use the real public host and a plausible https login URL. If you are '
-          + 'not reasonably confident the portal exists, return {"host":"","loginUrl":""}.\n\n'
-          + `Portal: ${name}`
-        ),
-      }],
+    const providerResult = await invokeProviderJsonWithFallback({
+      openai: null,
+      anthropicModel: SUGGEST_MODEL,
+      prompt: (
+        'Return ONLY compact JSON {"host":"...","loginUrl":"..."} for the '
+        + 'official sign-in page of this application/grant/student portal. '
+        + 'Use the real public host and a plausible https login URL. If you are '
+        + 'not reasonably confident the portal exists, return {"host":"","loginUrl":""}.\n\n'
+        + `Portal: ${name}`
+      ),
+      temperature: 0.1,
+      maxTokens: 200,
     })
-    const text = (Array.isArray(response?.content) ? response.content : [])
-      .map((p) => (typeof p?.text === 'string' ? p.text : ''))
-      .join('')
-      .trim()
-    const match = text.match(/\{[\s\S]*\}/)
-    if (!match) return null
-    const parsed = JSON.parse(match[0])
+    const parsed = providerResult.ok ? providerResult.json : null
     const host = normalizeHost(parsed?.host || parsed?.loginUrl)
     if (!host) return null
     const loginUrl = firstNonEmpty(parsed?.loginUrl) || `https://${host}`
-    return { host, loginUrl }
+    return { host, loginUrl, provider: providerResult.provider }
   } catch (err) {
     log.warn('ai_resolve_login_url_failed', { err: err?.message })
     return null
   }
-}
+
 
 /**
  * Best-effort portal-login suggestion.
