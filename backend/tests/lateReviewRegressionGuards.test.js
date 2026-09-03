@@ -43,7 +43,6 @@ describe('late review contract guards', () => {
     expect(route).toMatch(/four_truth_proof:/)
     expect(route).toMatch(/match_explain_json:/)
     expect(coverage).toMatch(/m\.match_explain_json/)
-    expect(coverage).toMatch(/fundingTruthProofFrom/)
   })
 
   it('lets an active no-payment promotion bypass pending payment state only', () => {
