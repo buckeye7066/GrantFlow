@@ -33,6 +33,7 @@ import { isProposalCriticEnabled, runProposalCritic } from '../services/proposal
 import { DEFAULT_MIN_SCORE, RELAX_THRESHOLDS, FALLBACK_TOP_N } from '../config/matchThresholds.js';
 import { filterOutPipelineMembers, dedupeOpportunityList } from '../services/pipelineExclusion.js';
 import { createOpenAIClient, summarizeOpenAIError } from '../utils/openaiClient.js';
+import { invokeTextWithFallback as invokeProviderTextWithFallback } from '../utils/aiProviders.js';
 import { buildSchoolLookupFallbackData } from '../services/schoolLookupFallback.js'
 import { enforceTierCapability } from '../middleware/entitlements.js'
 import { fetchPublicText } from '../utils/safeRemoteFetch.js'
@@ -196,39 +197,21 @@ function compactJson(value, maxLen = 2800) {
 }
 
 async function invokeTextWithFallback({ model, system, prompt, temperature, maxTokens }) {
-  const openai = getOpenAIOptional()
-  if (openai) {
-    try {
-      const completion = await openai.chat.completions.create({
-        model: model || DEFAULT_OPENAI_MODEL,
-        messages: system ? [{ role: 'system', content: system }, { role: 'user', content: prompt }] : [{ role: 'user', content: prompt }],
-        temperature: typeof temperature === 'number' ? temperature : 0.3,
-        max_tokens: typeof maxTokens === 'number' ? maxTokens : 1200,
-      })
-      return { text: extractCompletionText(completion), provider: 'openai', usage: completion.usage ?? null }
-    } catch (error) {
-      const summary = summarizeOpenAIError(error)
-      console.warn('[ai] OpenAI failed, will try Anthropic:', summary?.message || error?.message || error)
-    }
+  const result = await invokeProviderTextWithFallback({
+    openai: getOpenAIOptional(),
+    openaiModel: model || DEFAULT_OPENAI_MODEL,
+    system,
+    prompt,
+    temperature: typeof temperature === 'number' ? temperature : 0.3,
+    maxTokens: typeof maxTokens === 'number' ? maxTokens : 1200,
+  })
+  return {
+    text: result.ok ? result.text : null,
+    provider: result.provider,
+    usage: result.usage ?? null,
+    fallback_reason: result.fallback_reason ?? null,
+    free_route_errors: result.freeRouteErrors ?? [],
   }
-
-  const anthropic = await createAnthropicClient()
-  if (anthropic) {
-    try {
-      const response = await anthropic.messages.create({
-        model: process.env.ANTHROPIC_MODEL || 'claude-haiku-4-5',
-        max_tokens: typeof maxTokens === 'number' ? maxTokens : 1200,
-        temperature: typeof temperature === 'number' ? temperature : 0.3,
-        system: system || undefined,
-        messages: [{ role: 'user', content: prompt }],
-      })
-      return { text: extractAnthropicText(response), provider: 'anthropic', usage: null }
-    } catch (error) {
-      console.warn('[ai] Anthropic failed:', error?.message || error)
-    }
-  }
-
-  return { text: null, provider: 'fallback', usage: null }
 }
 
 // Match opportunities to a profile
