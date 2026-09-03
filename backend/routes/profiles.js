@@ -1,6 +1,6 @@
 import express from 'express'
 import crypto from 'crypto'
-import { createOpenAIClient, summarizeOpenAIError } from '../utils/openaiClient.js'
+import { createOpenAIClient } from '../utils/openaiClient.js'
 import {
   invokeJsonWithFallback as invokeProviderJsonWithFallback,
   invokeTextWithFallback as invokeProviderTextWithFallback,
@@ -14,8 +14,6 @@ import { buildProfileSectionPrompt, supportedSectionKeys } from '../prompts/prof
 import { PROFILE_SCHEMA, getDefaultSectionData, getFlatFieldToSectionMap } from '../config/profileSchema.js'
 import { dispatchCrawlerJob } from '../services/crawlerDispatcher.js'
 import { ensureBillingAccount, mapAccountRow } from '../services/billingAccounts.js'
-import { extractCompletionText } from '../utils/openai.js'
-import { withLLMTimeout, isLLMTimeout, LLM_TIMEOUT_MS } from '../utils/llmTimeout.js'
 import { linkProfileToAdmin } from '../utils/adminProfileLinks.js'
 import { safeParseJSON } from '../utils/safeJson.js'
 import { validatePagination } from '../utils/validation.js'
