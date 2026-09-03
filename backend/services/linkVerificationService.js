@@ -36,6 +36,10 @@ const REQUEST_TIMEOUT_MS = 10_000
 const BATCH_SIZE = 10
 const BATCH_DELAY_MS = 2_000
 const REVERIFY_AFTER_DAYS = 30
+// Refresh before the hard mission cutoff. Selecting only after day 30 creates
+// an unavoidable readiness-red window between recurring verifier ticks.
+const REVERIFY_LEAD_DAYS = 2
+const REVERIFY_DUE_AFTER_DAYS = Math.max(1, REVERIFY_AFTER_DAYS - REVERIFY_LEAD_DAYS)
 // After this many days without a successful re-verification, a direct
 // opportunity is considered stale and hidden from user-facing results.
 const STALE_AFTER_DAYS = 90
@@ -424,6 +428,10 @@ export async function quarantineUnverifiedDirectOpportunities(db) {
   const falseVal = isPostgres ? false : 0
   const changes = (result) => Number(result?.changes ?? result?.rowCount ?? 0)
   const directPredicate = linkLifecycleOpportunitySql()
+  // Mission health defines a visible direct row as every non-pointer catalog
+  // row, including legacy/unknown kind spellings. Quarantine must use the same
+  // denominator or malformed-but-visible rows can keep /readyz red forever.
+  const visibleDirectPredicate = `NOT (${pointerOpportunityRowSql()})`
   const freshnessCutoff = new Date(
     Date.now() - REVERIFY_AFTER_DAYS * 24 * 60 * 60 * 1000,
   ).toISOString()
@@ -439,7 +447,7 @@ export async function quarantineUnverifiedDirectOpportunities(db) {
     const staleSuccessful = await db
       .prepare(
         "UPDATE funding_opportunities SET is_hidden = ?, link_status = 'unverified', verification_error = ? WHERE " +
-        directPredicate +
+        visibleDirectPredicate +
         " AND COALESCE(is_hidden, ?) = ? AND LOWER(TRIM(COALESCE(link_status, ''))) IN ('ok', 'redirect', 'verified')" +
         ' AND last_verified_at IS NOT NULL AND last_verified_at < ?' +
         ` AND ${mutableLinkLifecycleSql()}`,
@@ -448,7 +456,7 @@ export async function quarantineUnverifiedDirectOpportunities(db) {
 
     const quarantined = await db
       .prepare(
-        'UPDATE funding_opportunities SET is_hidden = ? WHERE ' + directPredicate +
+        'UPDATE funding_opportunities SET is_hidden = ? WHERE ' + visibleDirectPredicate +
         // proof-based startup quarantine: only a timestamped successful probe
         // may keep a lifecycle row visible. skipped, null, stale-claimed,
         // unknown, and future noncanonical statuses all fail closed.
@@ -461,7 +469,7 @@ export async function quarantineUnverifiedDirectOpportunities(db) {
     // kill switch so older readers that only filter is_active still fail closed.
     const deactivated = await db
       .prepare(
-        'UPDATE funding_opportunities SET is_active = ? WHERE ' + directPredicate +
+        'UPDATE funding_opportunities SET is_active = ? WHERE ' + visibleDirectPredicate +
         " AND COALESCE(is_active, ?) = ? AND link_status = 'broken'" +
         ` AND ${mutableLinkLifecycleSql()}`,
       )
@@ -502,9 +510,10 @@ export async function runLinkVerification(
     console.warn('[link-verify] quarantine pass failed:', quarantine?.reason || 'unknown')
   }
 
-  // Compute this after quarantine. Its cutoff is therefore at least as recent
-  // as the quarantine cutoff, so every row that was just demoted is selected.
-  const cutoff = new Date(Date.now() - REVERIFY_AFTER_DAYS * 24 * 60 * 60 * 1000).toISOString()
+  // Select successful rows before their proof expires. The quarantine cutoff
+  // remains the hard 30-day mission boundary; this earlier due cutoff provides
+  // enough runway for bounded batches, retries, and scheduler jitter.
+  const cutoff = new Date(Date.now() - REVERIFY_DUE_AFTER_DAYS * 24 * 60 * 60 * 1000).toISOString()
 
   const rows = await db
     .prepare(
@@ -518,6 +527,7 @@ export async function runLinkVerification(
               link_status = 'skipped'
               AND COALESCE(verification_error, '') LIKE 'retired_after_definitive_recheck:%'
             )
+            AND COALESCE(is_active, TRUE) = TRUE
             AND (link_status = 'broken' OR last_verified_at IS NULL OR last_verified_at < ?)
             AND ${mutableLinkLifecycleSql()}
           ORDER BY CASE WHEN link_status = 'broken' THEN 0 ELSE 1 END,
@@ -644,7 +654,6 @@ export async function runLinkVerification(
         if (
           didPersist &&
           result.status === 'broken' &&
-          isLinkLifecycleKind(row.opportunity_kind) &&
           !isPointerOpportunityRow(row)
         ) {
           try {
@@ -688,6 +697,18 @@ export async function runLinkVerification(
     console.warn('[link-verify] stale expiry pass failed:', err?.message)
   }
 
+  // Close the write-time race: a probe can downgrade a previously visible
+  // direct row to suspicious/skipped/unverified. Re-apply the exact mission
+  // visibility invariant after all verdicts are persisted so /readyz never
+  // observes a non-successful direct row left visible by this run.
+  const postProbeQuarantine = await quarantineUnverifiedDirectOpportunities(db)
+  if (postProbeQuarantine?.ok) {
+    stats.quarantined += Number(postProbeQuarantine.quarantined || 0)
+    stats.deactivated += Number(postProbeQuarantine.deactivated || 0)
+  } else {
+    console.warn('[link-verify] post-probe quarantine failed:', postProbeQuarantine?.reason || 'unknown')
+  }
+
   return stats
 }
 
@@ -707,4 +728,5 @@ export function getLinkHealthSummary(db) {
 }
 
 export const REVERIFY_AFTER_DAYS_CONST = REVERIFY_AFTER_DAYS
+export const REVERIFY_LEAD_DAYS_CONST = REVERIFY_LEAD_DAYS
 export const STALE_AFTER_DAYS_CONST = STALE_AFTER_DAYS
