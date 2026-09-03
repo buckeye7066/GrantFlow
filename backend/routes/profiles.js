@@ -3755,7 +3755,6 @@ async function handleProfileSectionAi(req, res) {
         raw_response: providerResult.raw ?? '',
         ai_provider: providerResult.provider,
         fallback_reason: providerResult.fallback_reason ?? null,
-        free_route_errors: providerResult.freeRouteErrors ?? [],
       })
     }
 
@@ -3895,7 +3894,6 @@ Return ONLY the field value content, no JSON wrapper or explanations.`
         usage: providerResult.usage ?? null,
         ai_provider: providerResult.provider,
         fallback_reason: providerResult.fallback_reason ?? null,
-        free_route_errors: providerResult.freeRouteErrors ?? [],
       })
     }
 

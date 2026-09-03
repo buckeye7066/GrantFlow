@@ -1039,7 +1039,6 @@ ${JSON.stringify(evidence, null, 2)}
           error: 'ai_failed',
           message: providerResult.error?.message || 'Every configured AI provider failed',
           draft: { program_description, eligibility_summary, selection_criteria },
-          free_route_errors: providerResult.freeRouteErrors ?? [],
         })
       }
       const parsed = providerResult.json

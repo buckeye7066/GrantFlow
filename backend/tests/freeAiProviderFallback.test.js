@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs'
+
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import {
@@ -192,4 +194,20 @@ describe('free AI provider routing', () => {
     expect(result).toMatchObject({ ok: true, provider: 'openai', text: 'paid response' })
     expect(freeClientFactory).not.toHaveBeenCalled()
   })
+
+  it('keeps free-route failure diagnostics out of user-facing API responses', () => {
+    const publicRouteModules = [
+      '../routes/ai.js',
+      '../routes/grants.js',
+      '../routes/legacyFunctions.js',
+      '../routes/profiles.js',
+    ]
+
+    for (const routeModule of publicRouteModules) {
+      const source = readFileSync(new URL(routeModule, import.meta.url), 'utf8')
+      expect(source).not.toContain('free_route_errors')
+      expect(source).not.toContain('freeRouteErrors')
+    }
+  })
+
 })

@@ -153,7 +153,6 @@ async function invokeOpenAiOptional(prompt) {
     text: result.ok ? result.text : null,
     provider: result.provider,
     fallback_reason: result.fallback_reason ?? null,
-    free_route_errors: result.freeRouteErrors ?? [],
   }
 }
 

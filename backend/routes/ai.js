@@ -205,7 +205,6 @@ async function invokeTextWithFallback({ model, system, prompt, temperature, maxT
     provider: result.provider,
     usage: result.usage ?? null,
     fallback_reason: result.fallback_reason ?? null,
-    free_route_errors: result.freeRouteErrors ?? [],
   }
 }
 
@@ -748,7 +747,6 @@ Return ONLY valid JSON in this format:
         count: Math.min(opportunities.length, limit),
         ai_enhanced: false,
         ai_provider: narrativeResult.provider,
-        free_route_errors: narrativeResult.freeRouteErrors ?? [],
       });
     }
 
