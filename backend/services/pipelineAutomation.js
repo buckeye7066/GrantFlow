@@ -1,6 +1,5 @@
 import { buildPipelineAutomationPrompt } from '../prompts/pipelineAutomation.js'
-import { extractCompletionText } from '../utils/openai.js'
-import { summarizeOpenAIError } from '../utils/openaiClient.js'
+import { invokeJsonWithFallback as invokeProviderJsonWithFallback } from '../utils/aiProviders.js'
 import { isAutomationEnabled } from '../../shared/automationPreferences.js'
 import {
   PIPELINE_STAGE,
@@ -67,30 +66,6 @@ export function validateAdvance(current, suggested) {
   if (!PIPELINE_AUTOMATION_STATUSES.includes(suggestedCanonical)) return currentCanonical
   if (stageOrder(suggestedCanonical) < stageOrder(currentCanonical)) return currentCanonical
   return suggestedCanonical
-}
-
-async function createAnthropicClient() {
-    const key = String(process.env.ANTHROPIC_API_KEY || '').trim()
-    if (!key) return null
-    const Anthropic = (await import('@anthropic-ai/sdk')).default
-    return new Anthropic({
-          apiKey: key,
-          timeout: Number(process.env.ANYA_ANTHROPIC_TIMEOUT_MS || 20_000),
-          maxRetries: Number(process.env.ANYA_ANTHROPIC_MAX_RETRIES || 1),
-    })
-}
-
-function extractAnthropicText(response) {
-    const parts = Array.isArray(response?.content) ? response.content : []
-        return parts
-      .map((part) => {
-              if (typeof part?.text === 'string') return part.text
-              if (typeof part === 'string') return part
-              return ''
-      })
-      .filter(Boolean)
-      .join('\n')
-      .trim()
 }
 
 async function fetchGrantContext(db, grantId) {
@@ -430,13 +405,11 @@ export async function processPipelineAutomationJob({ db, job, profileContext, ge
     try {
           openai = typeof getOpenAI === 'function' ? getOpenAI() : null
     } catch (clientError) {
-          console.warn('[pipeline_automation] getOpenAI() threw; falling back to Anthropic', {
+          console.warn('[pipeline_automation] getOpenAI() threw; using configured fallback providers', {
                 error: clientError?.message || String(clientError),
           })
           openai = null
     }
-    const anthropic = await createAnthropicClient()
-
   let advanced = 0
     let handoffs = 0
     const grantLogs = []
@@ -454,96 +427,33 @@ export async function processPipelineAutomationJob({ db, job, profileContext, ge
               profileSummary,
       })
 
-      let aiResponse = null
+      const providerResult = await invokeProviderJsonWithFallback({
+              openai,
+              openaiModel: process.env.OPENAI_MODEL || 'gpt-4o-mini',
+              system: 'You are Anya, the GrantFlow pipeline automation assistant. Output JSON only.',
+              prompt,
+              temperature: 0.2,
+              maxTokens: 1200,
+      })
 
-      try {
-              if (openai) {
-                        const completion = await openai.chat.completions.create({
-                                    model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
-                                    temperature: 0.2,
-                                    response_format: { type: 'json_object' },
-                                    messages: [
-                                      {
-                                                      role: 'system',
-                                                      content: 'You are Anya, the GrantFlow pipeline automation assistant.',
-                                      },
-                                      { role: 'user', content: prompt },
-                                                ],
-                        })
-
-                aiResponse = extractCompletionText(completion) || '{}'
-              } else {
-                        throw new Error('OpenAI client unavailable')
-              }
-      } catch (error) {
-              const summary = summarizeOpenAIError(error)
-              if (anthropic) {
-                        try {
-                                    const response = await anthropic.messages.create({
-                                                  model: process.env.ANTHROPIC_MODEL || 'claude-haiku-4-5',
-                                                  max_tokens: 1200,
-                                                  temperature: 0.2,
-                                                  system:
-                                                                  'You are Anya, the GrantFlow pipeline automation assistant. Output JSON only (json_object).',
-                                                  messages: [{ role: 'user', content: prompt }],
-                                    })
-
-                          aiResponse = extractAnthropicText(response) || '{}'
-                        } catch (anthropicError) {
-                                    await recordAutomationEvent(db, {
-                                                  jobId: job.id,
-                                                  grantId: grant.id,
-                                                  previousStatus: grant.status,
-                                                  suggestedStatus: null,
-                                                  appliedStatus: grant.status,
-                                                  confidence: null,
-                                                  handoffRequired: true,
-                                                  handoffReason: 'Both OpenAI and Anthropic failed — manual review required.',
-                                                  recommendedActions: ['review_ai_failure', 'manually_advance_status'],
-                                                  aiSummary: `Automation failed (both providers): ${
-                                                                  anthropicError instanceof Error ? anthropicError.message : String(anthropicError)
-                                                  }`,
-                                    })
-                                    handoffs += 1
-                                    continue
-                        }
-              } else {
-                        await recordAutomationEvent(db, {
-                                    jobId: job.id,
-                                    grantId: grant.id,
-                                    previousStatus: grant.status,
-                                    suggestedStatus: null,
-                                    appliedStatus: grant.status,
-                                    confidence: null,
-                                    handoffRequired: true,
-                                    handoffReason: 'No AI provider available — manual review required.',
-                                    recommendedActions: ['configure_ai_provider', 'manually_advance_status'],
-                                    aiSummary: `Automation failed (no provider): ${error instanceof Error ? error.message : String(error)}`,
-                        })
-                        handoffs += 1
-                        continue
-              }
+      if (!providerResult.ok || !providerResult.json || typeof providerResult.json !== 'object') {
+              await recordAutomationEvent(db, {
+                        jobId: job.id,
+                        grantId: grant.id,
+                        previousStatus: grant.status,
+                        suggestedStatus: null,
+                        appliedStatus: grant.status,
+                        confidence: null,
+                        handoffRequired: true,
+                        handoffReason: 'Every configured AI provider failed — manual review required.',
+                        recommendedActions: ['review_ai_failure', 'configure_ai_provider', 'manually_advance_status'],
+                        aiSummary: `Automation provider failure: ${providerResult.error?.message || 'No usable JSON response'}`,
+              })
+              handoffs += 1
+              continue
       }
 
-      let parsed = {}
-            try {
-                    parsed = JSON.parse(aiResponse)
-            } catch (parseError) {
-                    await recordAutomationEvent(db, {
-                              jobId: job.id,
-                              grantId: grant.id,
-                              previousStatus: grant.status,
-                              suggestedStatus: null,
-                              appliedStatus: grant.status,
-                              confidence: null,
-                              handoffRequired: true,
-                              handoffReason: 'AI response could not be parsed as JSON — manual review required.',
-                              recommendedActions: ['review_ai_response', 'manually_advance_status'],
-                              aiSummary: `Automation parse failure: ${parseError instanceof Error ? parseError.message : String(parseError)}`,
-                    })
-                    handoffs += 1
-                    continue
-            }
+      const parsed = providerResult.json
 
       const currentStatus = canonicalStage(grant.status) || grant.status
               const suggestedStatus = canonicalStage(parsed.suggested_status) || currentStatus
