@@ -196,7 +196,7 @@ export async function reScoreSurfacedIneligible(db, {
     let rows = []
     try {
       rows = await db.prepare(
-        `SELECT m.id AS match_id, m.match_score, m.match_decision, o.*,
+        `SELECT m.id AS match_id, m.match_score, m.match_decision, m.match_explain_json, o.*,
                 (UPPER(COALESCE(o.opportunity_kind,'')) IN ('DIRECTORY','PAST_AWARD_INTEL')) AS is_dir
            FROM profile_opportunity_matches m JOIN funding_opportunities o ON o.id = m.opportunity_id
           WHERE m.profile_id = ? AND m.matcher_version IN ${SURFACED_MATCHER_VERSIONS_SQL}
@@ -209,7 +209,7 @@ export async function reScoreSurfacedIneligible(db, {
       const isDir = r.is_dir === 1 || r.is_dir === true
       // Only rows that currently SURFACE (ACCEPT or >= floor); directories always survive.
       if (isDir) continue
-      if (!qualifiesForDisplay({ is_directory: false, match_decision: r.match_decision, match_score: r.match_score }, floor)) continue
+      if (!qualifiesForDisplay({ ...r, is_directory: false }, floor)) continue
       let d = null
       try { d = _score(liveOppToOs(r), thesis, { sections: ctx.sections }) } catch { d = null }
       if (!d) continue
