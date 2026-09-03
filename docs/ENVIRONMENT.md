@@ -139,7 +139,6 @@ truth: `shared/freeWeek.js` (enforced in `backend/utils/tierGating.js` and
   - **`HAMILTON_ENABLE_BROWSER_AUTOMATION`** - `"true"` to let Hamilton drive a real Playwright browser; otherwise she degrades to the lawful pdf/docx packet.
   - **`HAMILTON_TAILORED_APPROVAL_GATE`** - defaults ON. Set to `"0"` to disable the per-funder tailored-application auto-submit gate (operational escape hatch only). When ON, Hamilton may auto-submit a portal card ONLY when its tailored narrative is approved/edited, has no outstanding missing questions, and the profile's `hamilton_auto_submit` toggle is on.
   - **`HAMILTON_BROWSER_AUTOMATION_HOST_ALLOWLIST`** - Optional comma-separated host allowlist (e.g. `tn.gov,mtsu.edu`). Empty = no restriction.
-  - **`HAMILTON_ALLOW_AUTOSUBMIT`** - `"true"` to let Hamilton submit portal applications (per-source authorization still gates it).
   - **`HAMILTON_BROWSER_STORAGE_DIR`** - Optional on-disk dir for legacy storageState files (path-traversal guard root). Sessions are stored encrypted in Postgres regardless; Railway disk is ephemeral.
 
 - **Hamilton cloud interactive login (Option B — in-app portal session capture)**
