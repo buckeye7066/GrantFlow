@@ -289,8 +289,15 @@ export async function seedAllRealFunding(db, options = {}) {
 }
 export async function getOpportunityCountsByState(db) {
   if (!db?.prepare) return {}
+  const active = db.dialect === 'postgres'
+    ? 'COALESCE(is_active, TRUE) = TRUE'
+    : 'COALESCE(is_active, 1) = 1'
   const rows = await db.prepare(
-    "SELECT COALESCE(NULLIF(TRIM(state), ''), 'national') AS state, COUNT(*) AS count FROM funding_opportunities WHERE COALESCE(is_active, 1) = 1 GROUP BY COALESCE(NULLIF(TRIM(state), ''), 'national')",
+    `SELECT COALESCE(NULLIF(TRIM(state), ''), 'national') AS state,
+            COUNT(*) AS count
+       FROM funding_opportunities
+      WHERE ${active}
+      GROUP BY COALESCE(NULLIF(TRIM(state), ''), 'national')`,
   ).all()
   return Object.fromEntries((rows || []).map((row) => [row.state, Number(row.count || 0)]))
 }
