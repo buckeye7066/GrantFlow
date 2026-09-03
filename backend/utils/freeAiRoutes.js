@@ -11,6 +11,24 @@ const FREE_ROUTE_ENV_KEYS = Object.freeze({
   ollamaApiKey: 'OLLAMA_API_KEY',
 })
 
+// Keep every supported key explicit so the generated environment inventory and
+// example-file authority can discover the configuration surface. Resolve this
+// on each call so an admin runtime override is visible without a restart.
+function currentFreeAiEnv() {
+  return {
+    FREE_AI_ROUTES: process.env.FREE_AI_ROUTES,
+    FREE_AI_BASE_URL: process.env.FREE_AI_BASE_URL,
+    FREE_AI_MODEL: process.env.FREE_AI_MODEL,
+    FREE_AI_API_KEY: process.env.FREE_AI_API_KEY,
+    FREE_AI_TIMEOUT_MS: process.env.FREE_AI_TIMEOUT_MS,
+    FREE_AI_MAX_RETRIES: process.env.FREE_AI_MAX_RETRIES,
+    FREE_AI_RESERVE_MS: process.env.FREE_AI_RESERVE_MS,
+    OLLAMA_BASE_URL: process.env.OLLAMA_BASE_URL,
+    OLLAMA_MODEL: process.env.OLLAMA_MODEL,
+    OLLAMA_API_KEY: process.env.OLLAMA_API_KEY,
+  }
+}
+
 function parseJsonLoose(text) {
   const raw = String(text || '').trim()
   if (!raw) return null
@@ -45,7 +63,7 @@ function normalizeRoute(entry, index) {
  * Route JSON references secrets by env-var name; secret values are never
  * returned by this function or included in diagnostics.
  */
-export function getConfiguredFreeAiRoutes(env = process.env) {
+export function getConfiguredFreeAiRoutes(env = currentFreeAiEnv()) {
   const candidates = []
   const raw = String(env?.FREE_AI_ROUTES || '').trim()
   if (raw) {
@@ -87,7 +105,7 @@ export function getConfiguredFreeAiRoutes(env = process.env) {
     .slice(0, MAX_ROUTES)
 }
 
-export function resolveFreeAiRoutes(routes, env = process.env) {
+export function resolveFreeAiRoutes(routes, env = currentFreeAiEnv()) {
   if (routes === null || routes === undefined) return getConfiguredFreeAiRoutes(env)
   return Array.isArray(routes) ? routes.map(normalizeRoute).filter(Boolean).slice(0, MAX_ROUTES) : []
 }
@@ -101,7 +119,7 @@ export function isProviderCreditExhaustion(error) {
     /insufficient[_ -]?quota|credit(?:s)? (?:balance )?(?:exhausted|depleted|expired)|billing|payment required|spend limit|quota exceeded|rate limit/i.test(message)
 }
 
-function clientFor(route, env = process.env) {
+function clientFor(route, env = currentFreeAiEnv()) {
   const apiKey = route.apiKeyEnv ? String(env?.[route.apiKeyEnv] || '').trim() : ''
   return {
     client: new OpenAI({
