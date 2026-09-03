@@ -227,6 +227,16 @@ class APIClient {
       throw authError
     }
 
+    // If refresh completed without issuing a new access token, treat this as an
+    // anonymous session (first visit with no refresh cookie) and DO NOT retry.
+    // Retrying would 401 again and incorrectly fire the "session expired" handler.
+    if (!this.getToken()) {
+      log.debug('refreshTokens completed with no access token; assuming anonymous session and skipping retry')
+      const authError = this.createAuthError('Not signed in')
+      authError.isAuthError = true
+      throw authError
+    }
+
     log.debug('retrying original request after refresh')
     return this.fetch(originalRequest.endpoint, originalRequest.options);
   }
