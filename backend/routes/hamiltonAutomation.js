@@ -62,7 +62,6 @@ import {
   FULL_AUTOMATION_AUTHORIZATION_TYPES,
   FULL_AUTOMATION_OPTIONS,
 } from '../services/hamilton/hamiltonFullAutomationMode.js'
-import { isAutoSubmitGloballyEnabled } from '../services/hamiltonApplicationAgent.js'
 import { attachTaskPresentation } from '../services/hamilton/hamiltonTaskPresentation.js'
 import { assessHamiltonFundingSource } from '../services/hamilton/hamiltonFundingSourcePolicy.js'
 import { readHamiltonTaskTruthSnapshot } from '../services/hamilton/hamiltonTaskTruthSnapshot.js'
@@ -1126,21 +1125,19 @@ router.get('/full-automation', async (req, res) => {
   try {
     const authorization = await isFullAutomationEnabled(req.db, profileId)
     const preferences = await readAutomationPreferenceState(req.db, profileId)
-    const globalRail = isAutoSubmitGloballyEnabled()
     // Every reason Hamilton would stop short, named. An empty list is the only
     // honest way to say "nothing is blocking an unattended submit".
     const blockers = []
     if (!authorization.enabled) blockers.push({ kind: 'authorization', reason: authorization.reason, vetoes: authorization.vetoes })
     if (!preferences.hamilton_autopilot) blockers.push({ kind: 'profile_preference', reason: 'hamilton_autopilot_off' })
     if (!preferences.hamilton_auto_submit) blockers.push({ kind: 'profile_preference', reason: 'hamilton_auto_submit_off' })
-    if (!globalRail) blockers.push({ kind: 'deployment', reason: 'HAMILTON_ALLOW_AUTOSUBMIT_disabled' })
     return res.json({
       ok: true,
       profile_id: profileId,
       enabled: blockers.length === 0,
       authorization,
       preferences,
-      global_auto_submit_enabled: globalRail,
+      submission_authority: 'profile_authorization',
       blockers,
     })
   } catch (err) {
