@@ -58,11 +58,13 @@ function safeJsonParse(value, fallback) {
 
 export async function loadCrawlerOsProfileResults(db, profileId, limit = 200) {
   if (!db || !profileId) return []
+  const requestedLimit = Math.max(1, Math.min(Number(limit) || 200, 2000))
+  const batchSize = Math.max(200, Math.min(requestedLimit * 2, 1000))
   const lifecycleClause = opportunityLifecycleVisibilitySql({
     tableAlias: 'fo',
     dialect: db?.dialect,
   })
-  const rows = await db.prepare(`
+  const sql = `
     SELECT fo.id, fo.title, fo.sponsor, fo.description, fo.application_url, fo.apply_url,
            fo.source_url, fo.opportunity_kind, fo.deadline, fo.amount_min, fo.amount_max,
            fo.state, fo.categories, fo.funding_type, fo.is_hidden, fo.is_active,
@@ -75,40 +77,54 @@ export async function loadCrawlerOsProfileResults(db, profileId, limit = 200) {
        AND lower(COALESCE(m.match_decision, '')) IN ('accept', 'review')
        AND ${lifecycleClause}
      ORDER BY m.match_score DESC
-     LIMIT ?
-  `).all(String(profileId), Number(limit) || 200)
+     LIMIT ? OFFSET ?
+  `
 
-  return (rows || []).map((row) => {
-    const explain = safeJsonParse(row.match_explain_json, {})
-    const categories = safeJsonParse(row.categories, [])
-    return {
-      id: row.id,
-      name: row.title,
-      title: row.title,
-      description: row.description,
-      url: row.application_url || row.apply_url || row.source_url || null,
-      applicationUrl: row.application_url || row.apply_url || null,
-      sourceUrl: row.source_url || null,
-      matchScore: Number(row.match_score ?? 0),
-      match_score: Number(row.match_score ?? 0),
-      match_decision: row.match_decision,
-      opportunity_kind: row.opportunity_kind,
-      four_truth_proof: explain?.four_truth_proof ?? null,
-      matchReasons: safeJsonParse(row.match_reasons, explain?.matched_needs || []),
-      matchedCategories: categories,
-      categories,
-      type: String(row.opportunity_kind || '').toUpperCase() === 'DIRECTORY' ? 'portal' : 'program',
-      fundingType: row.funding_type || null,
-      maxAmount: row.amount_max || null,
-      minAmount: row.amount_min || null,
-      deadline: row.deadline || null,
-      stateRestriction: row.state || null,
-      recurring: !row.deadline,
-      is_hidden: row.is_hidden ?? null,
-      is_active: row.is_active ?? null,
-      match_explain: { ...explain, why: row.match_explanation || explain?.why, matcher_version: row.matcher_version },
+  const visible = []
+  let offset = 0
+  while (visible.length < requestedLimit) {
+    const rows = await db.prepare(sql).all(String(profileId), batchSize, offset)
+    if (!Array.isArray(rows) || rows.length === 0) break
+
+    for (const row of rows) {
+      const explain = safeJsonParse(row.match_explain_json, {})
+      const categories = safeJsonParse(row.categories, [])
+      const shaped = {
+        id: row.id,
+        name: row.title,
+        title: row.title,
+        description: row.description,
+        url: row.application_url || row.apply_url || row.source_url || null,
+        applicationUrl: row.application_url || row.apply_url || null,
+        sourceUrl: row.source_url || null,
+        matchScore: Number(row.match_score ?? 0),
+        match_score: Number(row.match_score ?? 0),
+        match_decision: row.match_decision,
+        opportunity_kind: row.opportunity_kind,
+        four_truth_proof: explain?.four_truth_proof ?? null,
+        matchReasons: safeJsonParse(row.match_reasons, explain?.matched_needs || []),
+        matchedCategories: categories,
+        categories,
+        type: String(row.opportunity_kind || '').toUpperCase() === 'DIRECTORY' ? 'portal' : 'program',
+        fundingType: row.funding_type || null,
+        maxAmount: row.amount_max || null,
+        minAmount: row.amount_min || null,
+        deadline: row.deadline || null,
+        stateRestriction: row.state || null,
+        recurring: !row.deadline,
+        is_hidden: row.is_hidden ?? null,
+        is_active: row.is_active ?? null,
+        match_explain: { ...explain, why: row.match_explanation || explain?.why, matcher_version: row.matcher_version },
+      }
+      if (qualifiesForDisplay(shaped, 0)) visible.push(shaped)
+      if (visible.length >= requestedLimit) break
     }
-  }).filter((row) => qualifiesForDisplay(row, 0))
+
+    offset += rows.length
+    if (rows.length < batchSize) break
+  }
+
+  return visible.slice(0, requestedLimit)
 }
 
 // The legacy "trigger auto-discovery" entrypoint now drives the Crawler OS, so
