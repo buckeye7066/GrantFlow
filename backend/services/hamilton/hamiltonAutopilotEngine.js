@@ -307,38 +307,81 @@ export function stateValueAlternates(value) {
 
 function readProfileValues(profile) {
   const apps = pick(profile, ['university_applications.applications']) || []
-  const firstApp = Array.isArray(apps) && apps.length > 0 ? apps[0] : {}
-  const storedAddress1 = pick(profile, ['basic_information.address1', 'basic_information.address'])
-  const storedCity = pick(profile, ['basic_information.city'])
-  const storedState = pick(profile, ['basic_information.state'])
-  const storedZip = pick(profile, ['basic_information.zip'])
+  const committed = Array.isArray(apps)
+    ? apps.find((app) => ['committed', 'enrolled', 'attending'].includes(String(app?.status || '').toLowerCase()))
+    : null
+  const firstApp = committed || (Array.isArray(apps) && apps.length > 0 ? apps[0] : {})
+  const storedAddress1 = pick(profile, [
+    'basic_information.address1', 'basic_information.address',
+    'contact_information.address1', 'contact_information.address',
+    'address1', 'address',
+  ])
+  const storedCity = pick(profile, ['basic_information.city', 'contact_information.city', 'city', 'signals.location.city'])
+  const storedState = pick(profile, ['basic_information.state', 'contact_information.state', 'state', 'signals.location.state'])
+  const storedZip = pick(profile, [
+    'basic_information.zip', 'basic_information.postal_code',
+    'contact_information.zip', 'postal_code', 'zip', 'signals.location.zip',
+  ])
   const parsedAddress = (!storedCity || !storedState || !storedZip) ? parseAddressBlob(storedAddress1) : null
   return {
-    first_name:  pick(profile, ['basic_information.first_name', 'first_name']),
-    last_name:   pick(profile, ['basic_information.last_name', 'last_name']),
-    full_name:   [pick(profile, ['basic_information.first_name','first_name']), pick(profile, ['basic_information.last_name','last_name'])].filter(Boolean).join(' ') || undefined,
-    email:       pick(profile, ['basic_information.email', 'email']),
-    phone:       pick(profile, ['basic_information.phone', 'phone']),
-    address1:    parsedAddress?.street || storedAddress1,
-    address2:    pick(profile, ['basic_information.address2']),
-    city:        storedCity || parsedAddress?.city,
-    state:       storedState || parsedAddress?.state,
-    zip:         storedZip || parsedAddress?.zip,
-    country:     pick(profile, ['basic_information.country']) || 'United States',
-    school:      firstApp.name      || pick(profile, ['student_info.school_name']),
-    major:       firstApp.major     || pick(profile, ['student_info.major']),
-    degree_level:firstApp.degree_level || pick(profile, ['student_info.degree_level']),
-    student_id:  firstApp.student_id || pick(profile, ['student_info.student_id']),
-    gpa:         pick(profile, ['student_info.gpa', 'gpa']),
-    act_score:   pick(profile, ['student_info.act_score', 'act_score']),
-    sat_score:   pick(profile, ['student_info.sat_score', 'sat_score']),
-    expected_graduation: firstApp.expected_graduation || pick(profile, ['student_info.expected_graduation']),
-    household_income: pick(profile, ['financial_information.household_income', 'household.income', 'household_income']),
-    household_size:   pick(profile, ['financial_information.household_size', 'household.size', 'household_size']),
-    fafsa_efc:        pick(profile, ['financial_information.fafsa_efc', 'financial_information.sai']),
-    essay:            pick(profile, ['essays.primary', 'essays.personal_statement', 'personal_statement'])
-                        ?? readOrgNarrative(profile),
-    goals:            pick(profile, ['essays.goals', 'goals', 'career_goals']),
+    first_name: pick(profile, [
+      'basic_information.first_name', 'personal_information.first_name', 'first_name',
+    ]),
+    last_name: pick(profile, [
+      'basic_information.last_name', 'personal_information.last_name', 'last_name',
+    ]),
+    full_name: [
+      pick(profile, ['basic_information.first_name', 'personal_information.first_name', 'first_name']),
+      pick(profile, ['basic_information.last_name', 'personal_information.last_name', 'last_name']),
+    ].filter(Boolean).join(' ') || pick(profile, ['basic_information.full_name', 'display_name']),
+    email: pick(profile, ['basic_information.email', 'contact_information.email', 'email']),
+    phone: pick(profile, ['basic_information.phone', 'contact_information.phone', 'phone']),
+    address1: parsedAddress?.street || storedAddress1,
+    address2: pick(profile, ['basic_information.address2', 'contact_information.address2', 'address2']),
+    city: storedCity || parsedAddress?.city,
+    state: storedState || parsedAddress?.state,
+    zip: storedZip || parsedAddress?.zip,
+    country: pick(profile, ['basic_information.country', 'contact_information.country', 'country']) || 'United States',
+    school: firstApp.name || pick(profile, [
+      'education.current_institution', 'education.school_name',
+      'education_information.current_institution', 'student_info.school_name',
+    ]),
+    major: firstApp.major || pick(profile, [
+      'education.intended_major', 'education.major',
+      'education_information.intended_major', 'student_info.major',
+    ]),
+    degree_level: firstApp.degree_level || pick(profile, [
+      'education.degree_level', 'education_information.degree_level', 'student_info.degree_level',
+    ]),
+    student_id: firstApp.student_id || pick(profile, ['education.student_id', 'student_info.student_id']),
+    gpa: pick(profile, ['education.gpa', 'education_information.gpa', 'student_info.gpa', 'gpa']),
+    act_score: pick(profile, ['education.act_score', 'education_information.act_score', 'student_info.act_score', 'act_score']),
+    sat_score: pick(profile, ['education.sat_score', 'education_information.sat_score', 'student_info.sat_score', 'sat_score']),
+    expected_graduation: firstApp.expected_graduation || pick(profile, [
+      'education.expected_graduation', 'education_information.expected_graduation',
+      'student_info.expected_graduation',
+    ]),
+    household_income: pick(profile, [
+      'financial_information.household_income', 'financial_information.annual_income',
+      'household.income', 'household_income',
+    ]),
+    household_size: pick(profile, [
+      'financial_information.household_size', 'family.household_size',
+      'family_life.household_size', 'household.size', 'household_size',
+    ]),
+    fafsa_efc: pick(profile, [
+      'financial_information.fafsa_efc', 'financial_information.sai',
+      'education.fafsa_efc', 'education.sai',
+    ]),
+    essay: pick(profile, [
+      'essays.primary', 'essays.personal_statement',
+      'narrative.personal_statement', 'narrative.statement_of_need',
+      'personal_statement',
+    ]) ?? readOrgNarrative(profile),
+    goals: pick(profile, [
+      'essays.goals', 'narrative.goals', 'education.career_goals',
+      'goals', 'career_goals',
+    ]),
   }
 }
 
