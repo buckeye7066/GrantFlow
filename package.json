@@ -36,7 +36,7 @@
   },
   "scripts": {
     "dev": "vite",
-    "prebuild": "node scripts/ensure-build-natives.mjs",
+    "prebuild": "npm run memory:startup && node scripts/ensure-build-natives.mjs",
     "build": "vite build",
     "build:mobile-bundle": "npm run build && node scripts/build-mobile-bundle.mjs",
     "build:deploy": "npm run release:gates && node scripts/build-mobile-bundle.mjs",
