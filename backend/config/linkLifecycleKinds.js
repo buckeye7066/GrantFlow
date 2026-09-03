@@ -1,10 +1,16 @@
 /**
  * Canonical opportunity-kind contract for link verification and repair.
  *
- * Crawler OS owns the five apply-capable kinds. `DIRECT` is retained only as
+ * Crawler OS owns the known apply-capable kinds. `DIRECT` is retained only as
  * the legacy spelling used by older catalog rows; NULL and blank values are
  * classified as that legacy kind explicitly so they remain visible in health
  * receipts instead of disappearing from the denominator.
+ *
+ * IMPORTANT: link-proof safety cannot use a finite allowlist as its denominator.
+ * A new/future/malformed kind that is not structurally a pointer is still a
+ * user-facing direct candidate and must fail closed, be reverified, and remain
+ * repairable. The finite kind registry below is classification metadata only;
+ * `linkLifecycleOpportunitySql()` deliberately means every non-pointer row.
  */
 
 import { APPLICABLE_KINDS } from '../crawler-os/contract.js'
@@ -74,12 +80,13 @@ export function isPointerOpportunityRow(row = {}) {
 }
 
 /**
- * Authoritative lifecycle denominator: one of the six lifecycle kinds and not
- * a structurally-declared pointer/resource row.
+ * Authoritative link-proof denominator: every row that is not structurally a
+ * pointer/resource row. This is intentionally future-proof. Unknown kinds must
+ * be quarantined and repaired, never omitted merely because an enum has not yet
+ * learned their spelling.
  */
 export function linkLifecycleOpportunitySql(alias = '') {
-  const prefix = alias ? `${alias}.` : ''
-  return `(${linkLifecycleKindSql(`${prefix}opportunity_kind`)}) AND NOT (${pointerOpportunityRowSql(alias)})`
+  return `NOT (${pointerOpportunityRowSql(alias)})`
 }
 
 export default {
