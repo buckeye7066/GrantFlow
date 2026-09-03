@@ -9,6 +9,7 @@
  */
 
 import { createOpenAIClient } from '../utils/openaiClient.js'
+import { invokeJsonWithFallback as invokeProviderJsonWithFallback } from '../utils/aiProviders.js'
 
 const ANALYSIS_PROMPT = `You are analyzing a knowledge base document to identify its purpose and extract key information.
 
@@ -64,7 +65,7 @@ export async function analyzeKnowledgeBaseDocument({ documentId, extractedText, 
     // broken DB handle.
     db.prepare('SELECT 1')
 
-    const { openai } = createOpenAIClient()
+    const { openai } = createOpenAIClient({ allowMissing: true })
     
     // Truncate very long documents to manage token usage
     // Note: Character-to-token ratio varies by content (typically 3-5 chars per token).
@@ -75,34 +76,27 @@ export async function analyzeKnowledgeBaseDocument({ documentId, extractedText, 
       ? extractedText.substring(0, maxLength) + '\n\n[Document truncated for analysis]'
       : extractedText
 
-    const completion = await openai.chat.completions.create({
-      model: 'gpt-4o-mini',
-      messages: [
-        { role: 'system', content: ANALYSIS_PROMPT },
-        { 
-          role: 'user', 
-          content: `Analyze this document:\n\n${textToAnalyze}` 
-        },
-      ],
-      response_format: { type: 'json_object' },
+    const providerResult = await invokeProviderJsonWithFallback({
+      openai,
+      openaiModel: process.env.OPENAI_MODEL || 'gpt-4o-mini',
+      system: ANALYSIS_PROMPT,
+      prompt: `Analyze this document:\n\n${textToAnalyze}`,
       temperature: 0.1,
-      max_tokens: 2000,
+      maxTokens: 2000,
     })
-
-    const analysisText = completion.choices[0]?.message?.content
-    if (!analysisText) {
-      throw new Error('No analysis returned from AI')
+    if (!providerResult.ok || !providerResult.json) {
+      throw providerResult.error || new Error('No analysis returned from any configured AI provider')
     }
-
-    const analysis = JSON.parse(analysisText)
+    const analysis = providerResult.json
 
     // Wrap analysis with provenance metadata so re-evaluation is possible (Goals 8, 9)
     const PROCESSOR_VERSION = '1.0.0'
-    const MODEL_USED = 'gpt-4o-mini'
+    const MODEL_USED = providerResult.model || providerResult.provider || process.env.OPENAI_MODEL || 'gpt-4o-mini'
     const enrichedMetadata = {
       ...analysis,
       _processor_version: PROCESSOR_VERSION,
       _model: MODEL_USED,
+      _ai_provider: providerResult.provider,
       _evaluated_at: new Date().toISOString(),
     }
 
