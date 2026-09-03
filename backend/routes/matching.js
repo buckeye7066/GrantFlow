@@ -655,13 +655,11 @@ router.get('/profile/:profileId/opportunities', async (req, res, next) => {
       }
 
       // ── Final surfacing guard (defense in depth) ────────────────────────
-      // No path above may return a hard-REJECT / ineligible row, but this
-      // response is the owner-facing boundary — enforce it mechanically so a
-      // future recovery tier cannot silently re-open the hole the 2026-07-28
-      // audit found.
+      // Recovery may widen candidate search but may never weaken the four
+      // funding truths. Reuse the canonical read policy at the response edge.
       qualified = qualified.filter(
         (o) =>
-          String(o.match_decision ?? o.decision ?? '').toUpperCase() !== 'REJECT' &&
+          qualifiesForDisplay(o, osMin) &&
           o.eligible !== false &&
           o.eligibility_relaxed !== true,
       )
