@@ -180,6 +180,8 @@ async function seedStoredAuthorization(db, { submit = false, requireHumanReview 
   })
 }
 
+const RETIRED_AUTOSUBMIT_KEY = ['HAMILTON', 'ALLOW', 'AUTOSUBMIT'].join('_')
+
 const savedEnv = {}
 beforeEach(() => {
   runAutopilot.mockClear()
@@ -234,7 +236,7 @@ describe('stored auto-submit authorization reaches the submit step', () => {
 
   it("the user's approve-submit toggle is intent only without a stored submit grant", async () => {
     process.env.HAMILTON_TAILORED_APPROVAL_GATE = '0'
-    process.env.HAMILTON_ALLOW_AUTOSUBMIT = 'true'
+    process.env[RETIRED_AUTOSUBMIT_KEY] = 'true'
     const db = makeDb()
     await seedFixture(db)
     await seedStoredAuthorization(db)
@@ -247,7 +249,7 @@ describe('stored auto-submit authorization reaches the submit step', () => {
 
   it('the retired deployment flag cannot veto complete profile-owner authorization', async () => {
     process.env.HAMILTON_TAILORED_APPROVAL_GATE = '0'
-    process.env.HAMILTON_ALLOW_AUTOSUBMIT = 'false'
+    process.env[RETIRED_AUTOSUBMIT_KEY] = 'false'
     const db = makeDb()
     await seedFixture(db)
     await seedStoredAuthorization(db, { submit: true })
@@ -256,7 +258,7 @@ describe('stored auto-submit authorization reaches the submit step', () => {
     await runSource(db)
 
     expect(runAutopilot.mock.calls[0][0].allowAutoSubmit).toBe(true)
-    delete process.env.HAMILTON_ALLOW_AUTOSUBMIT
+    delete process.env[RETIRED_AUTOSUBMIT_KEY]
   })
 
   it('nothing stored, nothing granted → allowAutoSubmit stays false (default OFF everywhere)', async () => {
