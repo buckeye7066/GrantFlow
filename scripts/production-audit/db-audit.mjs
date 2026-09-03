@@ -584,7 +584,7 @@ async function runGuard(client, { baseUrl, writePrivilegeCode }) {
     cipher.ok ? 'CIPHERTEXT READABLE — stop' : `SQLSTATE ${cipher.code}`,
   );
 
-  // ---- the auto-submit gate -------------------------------------------------
+  // ---- submission-authority gate -------------------------------------------
   const posture = await verifyAutomationPosture(client, { baseUrl, record });
 
   const failed = checks.filter((c) => !c.pass);
@@ -592,16 +592,15 @@ async function runGuard(client, { baseUrl, writePrivilegeCode }) {
 }
 
 /**
- * Prove HAMILTON_ALLOW_AUTOSUBMIT is disabled IN THE PROCESS SERVING TRAFFIC.
+ * Prove the RUNNING process uses profile-scoped submission authorization.
  *
  * Two facts are needed and neither is sufficient alone:
- *   1. system_kv.automation_posture says allow_auto_submit is false;
- *   2. the boot_id in that row equals the bootId reported by the LIVE
- *      /api/health/deployment.
+ *   1. system_kv.automation_posture names profile_authorization as the authority
+ *      and says profile authorization is required; and
+ *   2. the posture boot_id equals the bootId reported by the live deployment.
  *
- * Without (2) the row could have been written by a previous deploy that has
- * since been replaced by one with auto-submit armed — a stale record that reads
- * safe. "Cannot verify" is treated exactly like "armed": both abort.
+ * Without (2), the row could be stale. "Cannot verify" aborts the read-only
+ * audit before an authenticated browser opens.
  */
 async function verifyAutomationPosture(client, { baseUrl, record }) {
   const row = await probe(client, "SELECT value, updated_at FROM system_kv WHERE key = 'automation_posture'");
