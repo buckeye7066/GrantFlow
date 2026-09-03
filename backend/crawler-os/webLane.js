@@ -25,7 +25,8 @@
 
 import { enforceReality } from './realityGate.js';
 import { normalize } from './normalizer.js';
-import { computeMatchDecision, isRecommendable } from './matchEngine.js';
+import { computeMatchDecision } from './matchEngine.js';
+import { isVerifiedDirectFundingRecommendation } from '../config/fundingTruthPolicy.js';
 import { upsertSource, upsertOpportunity, upsertMatch, recordRejection } from './storage.js';
 import { OPPORTUNITY_KIND, TRUST_TIER, MATCH_DECISION, canonicalOpportunityKey } from './contract.js';
 import { buildWebQueries } from './webQueries.js';
@@ -606,11 +607,21 @@ export async function runWebDiscoveryLane(deps, opts = {}) {
           profileRow: mp._profileContext?.profile ?? null,
           profileSections: mp._profileContext?.sections ?? null,
           signals: mp._profileContext?.signals ?? null,
+          // A safe URL or score is not enough. The open-web lane must enforce
+          // the same four positive truths as the registry-adapter pipeline.
+          realityPassed: Boolean(
+            matchOpp.evidence?.url &&
+            matchOpp.evidence?.content_hash &&
+            matchOpp.evidence?.fetched_at
+          ),
+          enforceFourTruths: true,
         });
         // Provenance for the crawler doctor: the exact query that surfaced the
         // page this opportunity was extracted from.
         upsertMatch(store, { ...decision, source_query: page.query, discovered_via: 'web_search' });
-        if (isRecommendable(matchOpp, decision.decision) && mp.profile_id === thesis.profile_id) {
+        const truthProof = decision.match_explain?.four_truth_proof ?? null;
+        if (isVerifiedDirectFundingRecommendation(matchOpp, decision) &&
+            mp.profile_id === thesis.profile_id) {
           // topical_evidence: legacy weighted-evidence subscale for Amy's
           // weight-tuning validation (weights no longer move the final score).
           // kind + amounts travel with the recommendation so Amy's evaluator
@@ -635,6 +646,7 @@ export async function runWebDiscoveryLane(deps, opts = {}) {
             decision: decision.decision,
             match_decision: decision.decision,
             match_explanation: decision.match_explain?.why ?? null,
+            four_truth_proof: truthProof,
             source: 'web_search',
             topical_evidence: decision.match_explain?.score_breakdown?.topical_evidence ?? null,
           });
