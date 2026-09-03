@@ -111,10 +111,34 @@ describe('matchSurfacing — surfaced matcher versions', () => {
 
 describe('matchSurfacing — qualifiesForDisplay', () => {
   const MIN = STRONG_MATCH_SCORE
+  const positiveProof = {
+    direct_funding: true,
+    all_passed: true,
+    real: {
+      passed: true,
+      reality_status: 'VERIFIED',
+      evidence_url: 'https://funder.example/program',
+      evidence_captured_at: '2026-09-03T00:00:00.000Z',
+      content_hash_present: true,
+    },
+    relatable: { passed: true, canonical_decision: 'ACCEPT' },
+    meets_profile_need: {
+      passed: true,
+      matched_needs: ['housing'],
+      profile_needs_defaulted: false,
+    },
+    profile_qualifies: { passed: true, eligibility: 'yes' },
+  }
+  const direct = (overrides = {}) => ({
+    match_score: MIN,
+    match_decision: 'ACCEPT',
+    match_explain: { four_truth_proof: positiveProof },
+    ...overrides,
+  })
 
-  it('surfaces rows at or above the display floor', () => {
-    expect(qualifiesForDisplay({ match_score: MIN }, MIN)).toBe(true)
-    expect(qualifiesForDisplay({ match_score: MIN + 3 }, MIN)).toBe(true)
+  it('never treats a score by itself as four-truth funding proof', () => {
+    expect(qualifiesForDisplay({ match_score: MIN }, MIN)).toBe(false)
+    expect(qualifiesForDisplay({ match_score: MIN + 3, match_decision: 'REVIEW' }, MIN)).toBe(false)
   })
 
   it('hides plain rows below the floor', () => {
@@ -122,9 +146,17 @@ describe('matchSurfacing — qualifiesForDisplay', () => {
     expect(qualifiesForDisplay({ match_score: REVIEW_SCORE, match_decision: 'review' }, MIN)).toBe(false)
   })
 
-  it('ALWAYS surfaces the engine-certified ACCEPT decisions below the floor', () => {
-    expect(qualifiesForDisplay({ match_score: ACCEPT_SCORE, match_decision: 'accept' }, MIN)).toBe(true)
-    expect(qualifiesForDisplay({ match_score: REVIEW_SCORE, match_decision: 'ACCEPT' }, MIN)).toBe(true)
+  it('surfaces a direct ACCEPT only with independently valid four-truth proof', () => {
+    expect(qualifiesForDisplay(direct({ match_score: ACCEPT_SCORE }), MIN)).toBe(true)
+    expect(qualifiesForDisplay({ match_score: ACCEPT_SCORE, match_decision: 'ACCEPT' }, MIN)).toBe(false)
+    expect(qualifiesForDisplay(direct({
+      match_explain: {
+        four_truth_proof: {
+          ...positiveProof,
+          profile_qualifies: { passed: false, eligibility: 'no' },
+        },
+      },
+    }), MIN)).toBe(false)
   })
 
   it('surfaces directories past the display floor (mission rule), but not ones the engine scored irrelevant', () => {
@@ -152,6 +184,7 @@ describe('matchSurfacing — qualifiesForDisplay', () => {
       is_active: 1,
       match_score: MIN,
       match_decision: 'ACCEPT',
+      match_explain: { four_truth_proof: positiveProof },
     }, MIN)).toBe(false)
     expect(qualifiesForDisplay({
       is_hidden: 0,
