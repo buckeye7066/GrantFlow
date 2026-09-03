@@ -453,7 +453,6 @@ requirements remain in `docs/ENVIRONMENT.md`.
 | `GRANT_STRUCTURAL_RECLAIM_LIMIT` | Yes | Yes | Backend/Node |
 | `HAMILTON_ADMIN_EMAIL` | Yes | Yes | Backend/Node |
 | `HAMILTON_ADMIN_VAULT_PROFILE_ID` | Yes | Yes | Backend/Node |
-| `HAMILTON_ALLOW_AUTOSUBMIT` | Yes | Yes | Backend/Node |
 | `HAMILTON_AUTOPILOT_MAX_PAGES` | Yes | Yes | Backend/Node |
 | `HAMILTON_AUTOPILOT_NAV_TIMEOUT_MS` | Yes | Yes | Backend/Node |
 | `HAMILTON_AUTOPILOT_STEP_TIMEOUT_MS` | Yes | Yes | Backend/Node |
@@ -4928,16 +4927,6 @@ requirements remain in `docs/ENVIRONMENT.md`.
   - `backend/tests/hamiltonPortalAutopilotIdentity.test.js:L20` (process.env)
   - `backend/tests/hamiltonPortalSignupAdapter.test.js:L18` (process.env)
   - `backend/tests/portalAutopilotCobrowseAndMerge.test.js:L20` (process.env)
-
-### `HAMILTON_ALLOW_AUTOSUBMIT`
-
-- **Templates**:
-  - `.env.example:474` = ``
-  - `backend/.env.example:445` = ``
-- **Code references**:
-  - `backend/tests/automationPosture.test.js:L74–L87` (process.env)
-  - `backend/tests/hamiltonAutoSubmitAuthorizedLeg.test.js:L158–L218` (process.env)
-  - `backend/tests/hamiltonConfirmationProof.test.js:L117–L133` (process.env)
 
 ### `HAMILTON_AUTOPILOT_MAX_PAGES`
 
