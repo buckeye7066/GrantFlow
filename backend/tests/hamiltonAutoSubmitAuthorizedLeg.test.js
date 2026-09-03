@@ -12,10 +12,9 @@
  *      explicit approve-submit toggle, previously honored only by the legacy
  *      hamiltonApplicationAgent) flow into the autopilot engine's
  *      allowAutoSubmit on EVERY run, not only the batch that created the task.
- *   2. NO WIDENING — auto_submit_enabled still requires the global
- *      HAMILTON_ALLOW_AUTOSUBMIT flag (same rail as the legacy agent), the
- *      tailored-approval gate still forces filled-not-submitted when not
- *      approved, and everything defaults OFF.
+ *   2. NO WIDENING — auto_submit_enabled still requires the profile owner's
+ *      stored submit grant, live automation preferences, and the tailored-
+ *      approval gate; the retired deployment flag cannot veto owner consent.
  *   3. SUBMISSION EVIDENCE HONESTY — a run is only reported "submitted" with
  *      captured evidence; the task record distinguishes a portal-issued
  *      reference from a screenshot-only capture, and a submit click with NO
@@ -192,17 +191,13 @@ beforeEach(() => {
   })
   savedEnv.enabled = process.env.HAMILTON_ENABLE_BROWSER_AUTOMATION
   savedEnv.allow = process.env.HAMILTON_BROWSER_AUTOMATION_HOST_ALLOWLIST
-  savedEnv.autosubmit = process.env.HAMILTON_ALLOW_AUTOSUBMIT
   savedEnv.gate = process.env.HAMILTON_TAILORED_APPROVAL_GATE
   process.env.HAMILTON_ENABLE_BROWSER_AUTOMATION = 'true'
   process.env.HAMILTON_BROWSER_AUTOMATION_HOST_ALLOWLIST = ''
-  process.env.HAMILTON_ALLOW_AUTOSUBMIT = 'true'
   delete process.env.HAMILTON_TAILORED_APPROVAL_GATE
   return () => {
     process.env.HAMILTON_ENABLE_BROWSER_AUTOMATION = savedEnv.enabled
     process.env.HAMILTON_BROWSER_AUTOMATION_HOST_ALLOWLIST = savedEnv.allow
-    if (savedEnv.autosubmit === undefined) delete process.env.HAMILTON_ALLOW_AUTOSUBMIT
-    else process.env.HAMILTON_ALLOW_AUTOSUBMIT = savedEnv.autosubmit
     if (savedEnv.gate === undefined) delete process.env.HAMILTON_TAILORED_APPROVAL_GATE
     else process.env.HAMILTON_TAILORED_APPROVAL_GATE = savedEnv.gate
   }
@@ -250,9 +245,9 @@ describe('stored auto-submit authorization reaches the submit step', () => {
     expect(runAutopilot.mock.calls[0][0].allowAutoSubmit).toBe(false)
   })
 
-  it('auto_submit_enabled WITHOUT the global HAMILTON_ALLOW_AUTOSUBMIT flag stays draft-only (legacy-agent rail)', async () => {
+  it('the retired deployment flag cannot veto complete profile-owner authorization', async () => {
     process.env.HAMILTON_TAILORED_APPROVAL_GATE = '0'
-    delete process.env.HAMILTON_ALLOW_AUTOSUBMIT
+    process.env.HAMILTON_ALLOW_AUTOSUBMIT = 'false'
     const db = makeDb()
     await seedFixture(db)
     await seedStoredAuthorization(db, { submit: true })
@@ -260,7 +255,8 @@ describe('stored auto-submit authorization reaches the submit step', () => {
 
     await runSource(db)
 
-    expect(runAutopilot.mock.calls[0][0].allowAutoSubmit).toBe(false)
+    expect(runAutopilot.mock.calls[0][0].allowAutoSubmit).toBe(true)
+    delete process.env.HAMILTON_ALLOW_AUTOSUBMIT
   })
 
   it('nothing stored, nothing granted → allowAutoSubmit stays false (default OFF everywhere)', async () => {
