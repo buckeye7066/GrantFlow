@@ -25,6 +25,7 @@
 
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import Database from 'better-sqlite3'
+import { verifiedFourTruthExplain } from './helpers/fourTruthFixture.js'
 
 process.env.RUNTIME_SECRETS_KEY = process.env.RUNTIME_SECRETS_KEY || 'b'.repeat(64)
 
