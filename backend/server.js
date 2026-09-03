@@ -46,8 +46,11 @@ import realCrawlersRouter from './routes/realCrawlers.js';
 import matchingRouter from './routes/matching.js';
 import grantMonitoringRouter from './routes/grantMonitoring.js';
 import billingRouter from './routes/billing.js';
+import { enforceTierCapability } from './middleware/entitlements.js';
+import { TIER_CAPABILITIES } from './utils/tierGating.js';
 import { maintenanceGuard } from './services/maintenance/maintenanceMode.js';
 const maintenanceGuardMw = maintenanceGuard();
+const requirePipelineAutomation = enforceTierCapability(TIER_CAPABILITIES.PIPELINE_AUTOMATION);
 import authRouter from './routes/auth.js';
 import preferencesRouter from './routes/preferences.js';
 import incognitoRouter from './routes/incognito.js';
@@ -2509,24 +2512,24 @@ app.use('/api', lazyRouter('./routes/announcements.js'));
 // aggregate COA / FAFSA / aid / matched funding / Hamilton status). Same
 // /:profileId path convention as studentPortals.
 app.use('/api', lazyRouter('./routes/committedCollege.js'));
-app.use('/api/application-tasks', lazyRouter('./routes/applicationTasks.js'));
+app.use('/api/application-tasks', requirePipelineAutomation, lazyRouter('./routes/applicationTasks.js'));
 // Hamilton Automation Agent — Application Autopilot / Funding Completion.
 // Note: existing Yana = Client Discovery / Lead Funnel and is unchanged.
-app.use('/api/hamilton/automation', lazyRouter('./routes/hamiltonAutomation.js'));
+app.use('/api/hamilton/automation', requirePipelineAutomation, lazyRouter('./routes/hamiltonAutomation.js'));
 // Hamilton Portal Sync — two-way portal ↔ GrantFlow data sync. READ pulls real
 // data (test scores, financial-aid awards, application status) from a school /
 // funder portal into the profile + pipeline using the profile's saved session /
 // login; WRITE pushes GrantFlow funding sources/awards into the portal. Gated by
 // HAMILTON_ENABLE_BROWSER_AUTOMATION + host allowlist inside the service.
-app.use('/api/hamilton/portal-sync', lazyRouter('./routes/hamiltonPortalSync.js'));
+app.use('/api/hamilton/portal-sync', requirePipelineAutomation, lazyRouter('./routes/hamiltonPortalSync.js'));
 // Hamilton Tailored Application — the per-funder, MBA-level, fabrication-guarded
 // application narrative stored ON each portal card with an approval state.
 // Auto-submit runs ONLY when approved/edited + no missing questions + the
 // profile's auto-submit toggle is on (evaluateAutoSubmitGate is the choke point).
-app.use('/api/hamilton/tailored', lazyRouter('./routes/hamiltonTailoredApplication.js'));
+app.use('/api/hamilton/tailored', requirePipelineAutomation, lazyRouter('./routes/hamiltonTailoredApplication.js'));
 // Backwards-compatible alias so any in-flight client still works during
 // the rollout. Both paths resolve to the same router.
-app.use('/api/yana/automation', lazyRouter('./routes/hamiltonAutomation.js'));
+app.use('/api/yana/automation', requirePipelineAutomation, lazyRouter('./routes/hamiltonAutomation.js'));
 app.use('/api/saved-grants', savedGrantsRouter);
 // Canonical persisted 990 intelligence reads precede the legacy foundation
 // router; both share the same authenticated foundation namespace.

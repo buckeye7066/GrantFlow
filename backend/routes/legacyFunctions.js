@@ -101,6 +101,16 @@ function requireUser(req, res) {
   return requireAuthenticatedUser(req, res)
 }
 
+function requireAdminCrawlerUser(req, res) {
+  const user = requireUser(req, res)
+  if (!user) return null
+  if (req.ctx?.isAdmin !== true) {
+    res.status(403).json({ error: 'admin_required' })
+    return null
+  }
+  return user
+}
+
 async function ensureOrg(req, res, orgId) {
   return await ensureOrganizationAccess(req, res, String(orgId))
 }
@@ -148,11 +158,11 @@ async function invokeOpenAiOptional(prompt) {
 
 // POST /api/crawlGrantsGov (legacy function endpoint)
 router.post('/crawlGrantsGov', async (req, res) => {
-  const user = requireUser(req, res)
+  // This endpoint starts a global catalog crawl, not profile-scoped paid work.
+  // Only DB-backed admins may run it; a user id must never be misread as a
+  // profile id for billing.
+  const user = requireAdminCrawlerUser(req, res)
   if (!user) return
-  
-  const allowed = await requireTierCapability(req, res, user.userId, TIER_CAPABILITIES.CRAWLING)
-  if (!allowed) return
 
   const logId = createLogId()
   const startedAt = Date.now()
@@ -204,11 +214,11 @@ router.post('/crawlGrantsGov', async (req, res) => {
 
 // POST /api/crawlBenefitsGov (legacy function endpoint)
 router.post('/crawlBenefitsGov', async (req, res) => {
-  const user = requireUser(req, res)
+  // This endpoint starts a global catalog crawl, not profile-scoped paid work.
+  // Only DB-backed admins may run it; a user id must never be misread as a
+  // profile id for billing.
+  const user = requireAdminCrawlerUser(req, res)
   if (!user) return
-  
-  const allowed = await requireTierCapability(req, res, user.userId, TIER_CAPABILITIES.CRAWLING)
-  if (!allowed) return
 
   const payload = req.body ?? {}
   const organizationId = payload.organization_id ?? payload.organizationId ?? null
