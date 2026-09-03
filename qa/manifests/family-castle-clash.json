@@ -7,7 +7,7 @@
   "start_command": "npm run build && node tools/eva-reset-fixture.mjs && npm start",
   "stop_command": "taskkill-by-port",
   "readiness_probe": { "type": "http", "path": "/api/health", "port": 8080, "timeout_ms": 90000 },
-  "base_url": "http://localhost:8080",
+  "base_url": "http://127.0.0.1:8080",
   "test_target": "disposable-local-instance",
   "required_env": ["PORT"],
   "launch_env": { "PORT": "8080", "FCC_DATA_DIR": ".eva-tmp/family-castle-clash/data" },

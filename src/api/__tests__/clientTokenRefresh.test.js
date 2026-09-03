@@ -70,6 +70,16 @@ describe('APIClient HttpOnly-cookie refresh', () => {
     expect(storage.setItem).not.toHaveBeenCalled()
   })
 
+  it('treats a missing refresh cookie as an anonymous session without parsing a body', async () => {
+    const json = vi.fn()
+    global.fetch = vi.fn(async () => ({ ok: true, status: 204, json }))
+
+    await expect(client._refreshTokenNetwork()).resolves.toBeNull()
+
+    expect(json).not.toHaveBeenCalled()
+    expect(client.getToken()).toBeNull()
+  })
+
   it('retries one refresh-rotation conflict without clearing the current access token', async () => {
     client.setToken('AT_CURRENT')
     global.fetch = vi
@@ -159,5 +169,15 @@ describe('APIClient HttpOnly-cookie refresh', () => {
     expect(refreshSpy).toHaveBeenCalledTimes(1)
     expect(fetchSpy).toHaveBeenCalledWith('/api/auth/me')
     expect(result.user.id).toBe('user-1')
+  })
+
+  it('returns an anonymous identity without requesting /me when no refresh cookie exists', async () => {
+    const refreshSpy = vi.spyOn(client, 'refreshTokens').mockResolvedValue(null)
+    const fetchSpy = vi.spyOn(client, 'fetch')
+
+    await expect(client.auth.me()).resolves.toBeNull()
+
+    expect(refreshSpy).toHaveBeenCalledTimes(1)
+    expect(fetchSpy).not.toHaveBeenCalled()
   })
 })

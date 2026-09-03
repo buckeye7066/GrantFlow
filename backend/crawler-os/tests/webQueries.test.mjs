@@ -214,6 +214,38 @@ test('a non-research org gets NO SBIR queries', () => {
   assert.ok(!qs.some((q) => /sbir/i.test(q)), 'no SBIR queries for a food pantry');
 });
 
+test('persistent org archetype misses get class-specific hyperlocal CORE queries', () => {
+  const cases = [
+    {
+      label: 'business',
+      thesis: { applicant_types: ['business'], is_org: true, needs: ['capital'], location: { state: 'MT', county: 'Yellowstone' } },
+      expected: 'small business economic development grants Yellowstone County, MT',
+    },
+    {
+      label: 'nonprofit',
+      thesis: { applicant_types: ['nonprofit'], is_org: true, needs: ['capacity building'], location: { state: 'IN', county: 'Howard' } },
+      expected: 'nonprofit capacity building grants Howard County, IN',
+    },
+    {
+      label: 'school district',
+      thesis: { applicant_types: ['school', 'government'], is_org: true, needs: ['education'], location: { state: 'WV', county: 'Raleigh' } },
+      expected: 'school district STEM literacy grants Raleigh County, WV',
+    },
+    {
+      label: 'college / university',
+      thesis: { applicant_types: ['school'], is_org: true, needs: ['research'], location: { state: 'NM', county: 'McKinley' } },
+      expected: 'higher education research student access grants McKinley County, NM',
+    },
+  ];
+
+  for (const { label, thesis, expected } of cases) {
+    for (const seed of [0, 7]) {
+      const qs = buildWebQueries(thesis, { year: 2026, max: 14, seed });
+      assert.ok(qs.includes(expected), `${label} class-specific query survives seed ${seed}`);
+    }
+  }
+});
+
 test('SBIR topic prefers thesis.research_topic and never uses a bookkeeping tag', () => {
   const qs = buildWebQueries(
     { ...RESEARCH_ORG_THESIS, research_topic: 'genomics', interest_terms: ['designated', 'source-safe'] },

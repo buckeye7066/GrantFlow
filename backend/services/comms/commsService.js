@@ -29,6 +29,7 @@ import { sendSms, normalizePhone } from '../sms.js'
 import { getProfileLanguage } from './profileLanguage.js'
 import { t } from './commsMessages.js'
 import { createLogger } from '../../utils/logger.js'
+import { isValidEmail } from '../../utils/validation.js'
 
 const log = createLogger('comms')
 
@@ -202,6 +203,10 @@ export async function resolveProfileContacts(db, profileId) {
   const addEmail = (email, { is_proxy = false, source } = {}) => {
     const e = String(email || '').trim()
     if (!e || seenEmail.has(e.toLowerCase())) return
+    // Reject malformed addresses at the shared contact-resolution boundary.
+    // Otherwise one bad profile field makes an entire multi-recipient Outlook
+    // draft fail and Hamilton reports the same opaque draft error every week.
+    if (!isValidEmail(e)) return
     // The operator (admin) is never a recipient of profile-directed mail. Admin
     // owns/created most profiles, so users.primary_email resolves to the admin
     // address on nearly every profile — without this guard the weekly digest /

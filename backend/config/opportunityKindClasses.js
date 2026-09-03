@@ -76,12 +76,12 @@ const quoteList = (kinds) => kinds.map((k) => `'${k}'`).join(', ')
  * @param {string} column fully-qualified kind column, e.g. `fo.opportunity_kind`
  */
 export function noPerAwardFigureKindSql(column) {
-  return `LOWER(COALESCE(${column}, '')) IN (${quoteList(NO_PER_AWARD_FIGURE_KINDS)})`
+  return `LOWER(COALESCE(CAST(${column} AS TEXT), '')) IN (${quoteList(NO_PER_AWARD_FIGURE_KINDS)})`
 }
 
 /** SQL predicate for POINTER kinds only (no benefit programs). */
 export function pointerKindSql(column) {
-  return `LOWER(COALESCE(${column}, '')) IN (${quoteList(POINTER_KINDS)})`
+  return `LOWER(COALESCE(CAST(${column} AS TEXT), '')) IN (${quoteList(POINTER_KINDS)})`
 }
 
 /** JS-side twin of `noPerAwardFigureKindSql`, for rows already in memory. */

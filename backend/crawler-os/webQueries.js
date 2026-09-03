@@ -209,6 +209,24 @@ export function buildWebQueries(thesis = {}, opts = {}) {
       add(core, `Department of Labor apprenticeship grants ${year}`);
       add(core, `Employment and Training Administration funding opportunities ${year}`);
     }
+
+    // Persistent Amy hyperlocal misses need an entity-class query, not another
+    // generic "grants for organization" variant. Put these ahead of the shared
+    // core so they survive the live query cap. They only widen discovery; every
+    // result still passes the normal reality, eligibility, and match gates.
+    const local = county || geo || state;
+    if (local && hasType('business') && !hasType('farm')) {
+      add(core, `small business economic development grants ${local}`);
+    }
+    if (local && hasType('nonprofit') && !hasType('school')) {
+      add(core, `nonprofit capacity building grants ${local}`);
+    }
+    if (local && hasType('school') && hasType('government')) {
+      add(core, `school district STEM literacy grants ${local}`);
+    }
+    if (local && hasType('school') && !hasType('government') && needSignal(/research|higher education|student access|trio/)) {
+      add(core, `higher education research student access grants ${local}`);
+    }
   }
 
   // ── CORE (always emitted, highest signal) ──

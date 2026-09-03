@@ -37,6 +37,27 @@ test('a missing inferred executable is blocked before launch and names its remed
   assert.match(result.unmet[0].remedy, /install pnpm/i)
 })
 
+test('an opted-in Docker prerequisite recovers once, then verifies the daemon', async () => {
+  let probes = 0
+  let recoveries = 0
+  const result = await checkPrerequisites({
+    manifest: {
+      app_id: 'compose-app',
+      start_command: 'docker compose up --build',
+      prerequisites: [{ id: 'docker', type: 'docker', auto_recover: 'docker-desktop' }],
+    },
+    probes: {
+      docker: async () => ({ ok: ++probes >= 2, detail: probes >= 2 ? 'docker 28' : 'daemon unavailable' }),
+      dockerRecovery: async () => { recoveries += 1; return { ok: true, detail: 'started' } },
+      executable: async () => ({ ok: true, detail: 'ok' }),
+      nodeVersion: '24.19.0',
+    },
+  })
+  assert.equal(recoveries, 1)
+  assert.equal(probes, 2, 'a successful recovery is never trusted without a fresh daemon probe')
+  assert.deepEqual(result.unmet, [])
+})
+
 test('Node engine ranges are enforced against the exact workspace contract', async () => {
   const root = mkdtempSync(join(tmpdir(), 'eva-node-engine-'))
   try {

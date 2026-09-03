@@ -1,13 +1,13 @@
 {
   "app_id": "kidney-antigen-discovery",
   "display_name": "Kidney Antigen Discovery",
-  "repo": "local-git-no-remote",
+  "repo": "buckeye7066/kidney-antigen-discovery",
   "local_path": "~/kidney-antigen-discovery",
   "runtime_type": "web",
-  "start_command": "cd backend && uvicorn app.main:app --port 8000 & cd frontend && npm run dev",
+  "start_command": "cd backend && uvicorn app.main:app --host 127.0.0.1 --port 8000 & cd frontend && npm run dev -- --hostname 127.0.0.1 --port 3000",
   "stop_command": "taskkill-by-port",
   "readiness_probe": { "type": "http", "path": "/", "port": 3000, "timeout_ms": 60000 },
-  "base_url": "http://localhost:3000",
+  "base_url": "http://127.0.0.1:3000",
   "test_target": "disposable-local-instance",
   "required_env": ["KAD_DB_PATH", "KAD_UPLOAD_DIR", "KAD_OUTPUT_DIR", "KAD_UPLOAD_TTL_HOURS", "KAD_LOG_LEVEL"],
   "launch_env": {
@@ -15,7 +15,7 @@
     "KAD_UPLOAD_DIR": ".eva-tmp/kidney-antigen-discovery/uploads",
     "KAD_OUTPUT_DIR": ".eva-tmp/kidney-antigen-discovery/outputs",
     "KAD_UPLOAD_TTL_HOURS": "24",
-    "KAD_LOG_LEVEL": "info"
+    "KAD_LOG_LEVEL": "INFO"
   },
   "seed_command": "python -m app.tests.synthetic_data ../example_data/synthetic (regenerate the artificial demo dataset; cwd backend)",
   "reset_command": "rm -rf .eva-tmp/kidney-antigen-discovery/runs.db",

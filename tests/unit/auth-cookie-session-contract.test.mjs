@@ -46,6 +46,7 @@ test('backend refresh contract is HttpOnly, host-only, path-scoped, and cookie-o
   assert.doesNotMatch(source, /domain\s*:/i)
   assert.match(source, /refresh_token_body_not_allowed/)
   assert.match(source, /requireRefreshRequestIntegrity/)
+  assert.match(source, /if \(!refreshToken\)[\s\S]*?res\.status\(204\)\.send\(\)/)
   assert.doesNotMatch(source, /refreshToken:\s*session\.refreshToken/)
 })
 

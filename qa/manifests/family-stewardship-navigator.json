@@ -35,13 +35,14 @@
       "variables": ["NODE_ENV", "PORT", "LOCAL_ONLY", "DATABASE_URL", "JWT_SECRET", "CORS_ORIGIN", "PUBLIC_URL", "UPLOAD_DIR", "ENCRYPTION_KEY", "AI_PROVIDER"]
     }
   ],
-  "$prereq_comment": "Measured 2026-08-01: `docker compose up --build` fails immediately with 'failed to connect to the docker API at npipe:////./pipe/dockerDesktopLinuxEngine ... the daemon is running?'. UPDATED 2026-08-03: the earlier remedy ('set it to start at login') was ALREADY SATISFIED and is not sufficient -- Docker Desktop sits in the HKCU Run key and settings-store.json carries AutoStart=True, yet the daemon was still down at 04:00 because its own backend log shows the previous instance quit at 2026-08-02 16:40 EDT and no logon event happened before the slot. A login-scoped remedy cannot cover 'quit yesterday afternoon', so the remedy is now TIME-scoped: the scheduled task 'Docker Desktop for EVA' runs tools/ensure-docker-for-eva.ps1 at 03:40 (idempotent; never restarts a healthy daemon). SEPARATELY, EVA itself used to destroy this prerequisite: Docker publishes container ports through com.docker.backend, so this stack's own published 3001/5180 resolve to it and the launcher's pre-launch port clear taskkilled Docker Desktop's backend -- fixed by the PROTECTED_PORT_HOLDERS allowlist in tools/eva-edge-runner/src/launcher.mjs.",
+  "$prereq_comment": "Docker Desktop is a runtime prerequisite. The shared EVA runner invokes the repo-owned tools/ensure-docker-for-eva.ps1 helper once, waits for the daemon, and re-probes it before launch; it never treats helper exit alone as proof of recovery. Docker's protected port holders remain excluded from pre-launch cleanup.",
   "prerequisites": [
     {
       "id": "docker-daemon",
       "type": "docker",
+      "auto_recover": "docker-desktop",
       "name": "Docker daemon (the compose stack provides the app AND its Postgres)",
-      "remedy": "the scheduled task 'Docker Desktop for EVA' (03:40 daily) runs tools/ensure-docker-for-eva.ps1 to bring the daemon up before this run; if this is still blocking, check that task rather than re-enabling start-at-login, which is already on and cannot cover a daemon quit during the previous day"
+      "remedy": "EVA runs tools/ensure-docker-for-eva.ps1 once and re-probes before blocking; inspect Docker Desktop diagnostics if that bounded recovery fails"
     }
   ],
   "seed_command": "npm --prefix server run db:create-admin",

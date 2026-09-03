@@ -3978,7 +3978,10 @@ router.post('/refresh', requireRefreshRequestIntegrity, async (req, res) => {
   const refreshToken = getRefreshCookie(req)
   if (!refreshToken) {
     clearRefreshCookie(req, res)
-    return res.status(401).json({ error: 'refresh_cookie_required' })
+    // A browser with no refresh cookie is an ordinary anonymous session, not
+    // an authentication failure. Keep 401 responses for presented-but-invalid,
+    // expired, revoked, or reused credentials below.
+    return res.status(204).send()
   }
 
   await req.db.prepare(

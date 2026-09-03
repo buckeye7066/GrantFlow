@@ -30,6 +30,7 @@ import {
   writeFixtureEnvFiles,
   removeFixtureEnvFiles,
   resetDisposableRoot,
+  resolveDisposableLaunchEnv,
 } from '../src/launcher.mjs'
 import { mkdtempSync, writeFileSync, readFileSync, existsSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
@@ -144,6 +145,34 @@ test('a log timestamp is never read as a port', () => {
   assert.deepEqual(detectAnnouncedPorts(output), [], 'no 2-3 digit clock fragment becomes a port')
   assert.deepEqual(detectAnnouncedPorts('listening on port 8501'), [8501])
   assert.deepEqual(detectAnnouncedPorts('http://0.0.0.0:8501'), [8501])
+})
+
+test('stack-trace source locations are never reported as announced ports', () => {
+  const output = [
+    'SystemError [ERR_SYSTEM_ERROR]: uv_interface_addresses returned Unknown system error 1',
+    'at resolveServerUrls (file:///C:/repo/node_modules/vite/dist/node/chunks/dep.js:14849:15)',
+    'at startServer (file:///C:/repo/node_modules/vite/dist/node/chunks/dep.js:47144:11)',
+  ].join('\n')
+  assert.deepEqual(detectAnnouncedPorts(output), [])
+  assert.deepEqual(detectPortDrift({ output, declaredPorts: [3101, 5173] }), [])
+})
+
+test('disposable launch paths become absolute without rewriting unrelated env values', () => {
+  const root = mkdtempSync(join(tmpdir(), 'eva-launch-env-'))
+  try {
+    const env = resolveDisposableLaunchEnv({
+      FCC_DATA_DIR: '.eva-tmp/family-castle-clash/data',
+      SQLITE_DB_PATH: '.eva-tmp/grantflow/test.sqlite',
+      LABEL: 'prefix .eva-tmp/family-castle-clash/data',
+      OTHER_PATH: 'server/data',
+    }, root, '.eva-tmp/family-castle-clash')
+    assert.equal(env.FCC_DATA_DIR, join(root, '.eva-tmp', 'family-castle-clash', 'data'))
+    assert.equal(env.LABEL, 'prefix .eva-tmp/family-castle-clash/data')
+    assert.equal(env.OTHER_PATH, 'server/data')
+    assert.equal(env.SQLITE_DB_PATH, '.eva-tmp/grantflow/test.sqlite')
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
 })
 
 test('isolated disposable data is reset between runs and cannot escape the workspace', () => {

@@ -283,6 +283,10 @@ class APIClient {
       throw error
     }
 
+    // No refresh cookie means the browser is simply anonymous. The backend
+    // deliberately returns 204 so clean first visits do not emit a false 401.
+    if (response.status === 204) return null
+
     const data = await response.json()
     if (data?.accessToken) this.setToken(data.accessToken)
     return data
@@ -767,7 +771,8 @@ class APIClient {
     me: async () => {
       if (!this.getToken()) {
         try {
-          await this.refreshTokens()
+          const refreshed = await this.refreshTokens()
+          if (!refreshed?.accessToken && !this.getToken()) return null
         } catch {
           return null
         }

@@ -126,7 +126,7 @@
     {
       "app_id": "forgepress",
       "display_name": "ForgePress",
-      "repo": "local-git",
+      "repo": "buckeye7066/ForgePress",
       "local_path": "~/ForgePress",
       "runtime_type": "electron",
       "runtime_status": "available",

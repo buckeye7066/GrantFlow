@@ -155,10 +155,20 @@ function servesGeo(source, thesis) {
  * RECORDED in `source_decisions` so the crawl plan can explain itself.
  */
 export const LANE_TIER = Object.freeze({
+  DECLARED_CRITICAL_NEED: -1,
   DECLARED_TOPIC: 0,
   DECLARED_STAGE: 1,
   DEFAULT: 2,
 });
+
+function servesDeclaredCriticalNeed(source, thesis) {
+  const priorityNeeds = Array.isArray(source?.priority_need_categories)
+    ? source.priority_need_categories
+    : [];
+  if (priorityNeeds.length === 0) return false;
+  const declared = new Set(Array.isArray(thesis?.needs) ? thesis.needs : []);
+  return priorityNeeds.some((need) => declared.has(need));
+}
 
 /**
  * A source's CURATED vocabulary — `keywords[]` ONLY.
@@ -255,7 +265,10 @@ export function plan(thesis = {}) {
       // Affinity is computed ONLY for selected sources: it decides ORDER, never
       // membership, so an excluded source must not carry a rank that implies it
       // was considered for one.
-      if (servesDeclaredTopic(source, declaredTerms)) {
+      if (servesDeclaredCriticalNeed(source, thesis)) {
+        tier = LANE_TIER.DECLARED_CRITICAL_NEED;
+        reasons.push('serves_declared_critical_need');
+      } else if (servesDeclaredTopic(source, declaredTerms)) {
         tier = LANE_TIER.DECLARED_TOPIC;
         reasons.push('serves_declared_topic');
       } else if (servesDeclaredStage(source, stage)) {

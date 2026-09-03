@@ -8,7 +8,7 @@
   "stop_command": "taskkill-by-port",
   "$readiness_comment": "`port_env` was never a field the runner understood, so readiness silently degraded to GET http://localhost:5173/api/health — which only answers once Vite's /api proxy can reach the backend, making the real cause (which of the two dev servers died) unknowable. Probe the backend's own port (8080, backend/server.js `ENV?.PORT ?? process.env.PORT ?? 8080`) AND the frontend root, so a half-up dev:full is reported precisely.",
   "readiness_probe": { "type": "http", "path": "/api/health", "port": 8080, "timeout_ms": 120000, "warm_paths": ["/@vite/client"] },
-  "base_url": "http://localhost:5173",
+  "base_url": "http://127.0.0.1:5173",
   "test_target": "disposable-local-instance",
   "required_env": ["AUTH_JWT_SECRET", "CORS_ORIGIN", "SMOKE_MODE", "DISABLE_AI", "SQLITE_DB_PATH"],
   "launch_env": {
@@ -16,7 +16,7 @@
     "DB_PROVIDER": "sqlite",
     "PORT": "8080",
     "VITE_APP_BASE": "/",
-    "CORS_ORIGIN": "http://localhost:5173",
+    "CORS_ORIGIN": "http://127.0.0.1:5173",
     "SMOKE_MODE": "1",
     "DISABLE_AI": "1",
     "SQLITE_DB_PATH": ".eva-tmp/grantflow/grantflow.sqlite"

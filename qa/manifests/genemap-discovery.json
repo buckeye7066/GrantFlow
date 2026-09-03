@@ -8,7 +8,7 @@
   "start_command": "pnpm dev",
   "stop_command": "taskkill-by-port",
   "readiness_probe": { "type": "http", "path": "/readyz", "port": 3000, "timeout_ms": 60000, "warm_paths": ["/@vite/client"] },
-  "base_url": "http://localhost:5173",
+  "base_url": "http://127.0.0.1:5173",
   "test_target": "disposable-local-instance",
   "required_env": ["CORS_ORIGINS", "SKIP_LLM_KEY_CHECK", "ADMIN_EMAILS"],
   "launch_env": {
