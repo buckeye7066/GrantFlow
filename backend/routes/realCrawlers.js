@@ -36,6 +36,11 @@ import {
   applyProfessionalDevelopmentQueryPolicy,
 } from '../services/matching/professionalDevelopmentPolicy.js'
 import { allSources as allCrawlerOsSources } from '../crawler-os/sourceRegistry.js'
+import {
+  CRAWLER_REQUEST_TYPES,
+  ITEM_SEARCH_CRAWLER_TYPE,
+  resolveCrawlerActivation,
+} from '../config/crawlerActivationPolicy.js'
 import { implementedAdapterIds } from '../crawler-os/adapters/index.js'
 import { filterOutPipelineMembers, dedupeOpportunityList } from '../services/pipelineExclusion.js'
 
@@ -354,20 +359,7 @@ async function excludeExistingPipeline(db, profileId, opportunities) {
   return working;
 }
 
-const CRAWLER_TYPES = [
-  'crawler-os',
-  'comprehensive',
-  'curated_benefits',
-  'local_funding',
-  'government_funding',
-  'student_grants',
-  'health_resources',
-  'ecf_benefits',
-  'state_waiver_benefits',
-  'item_matching',
-  'special_needs',
-  'housing_funding',
-]
+const CRAWLER_TYPES = CRAWLER_REQUEST_TYPES
 
 /**
  * Map a new-system result to the response shape the frontend expects.
@@ -498,7 +490,8 @@ router.post('/run', ensureAuth, async (req, res) => {
   const { crawler_type, profile_id, min_match_score: bodyMinScore, item_request: itemRequest } = req.body
   const requestedMinScore = normalizeMinMatchScore(bodyMinScore)
   const min_match_score = requestedMinScore === null ? DEFAULT_MIN_SCORE : requestedMinScore
-  if (!crawler_type || !CRAWLER_TYPES.includes(crawler_type)) {
+  const activation = resolveCrawlerActivation(crawler_type)
+  if (!activation.valid) {
     return res.status(400).json({ error: 'Invalid crawler type', message: `Invalid crawler type: ${crawler_type}`, available_crawlers: CRAWLER_TYPES })
   }
   if (!profile_id) return res.status(400).json({ error: 'Profile ID required', message: 'Crawler runs require a profile_id.' })
@@ -517,7 +510,7 @@ router.post('/run', ensureAuth, async (req, res) => {
   // cannot be wired back. The item now routes to the live item lane
   // (`services/itemNeedSearch.js`), and a request with NO item is refused
   // rather than silently answered by something else.
-  if (crawler_type === 'item_matching') {
+  if (activation.mode === 'item_search') {
     const item = String(itemRequest ?? '').trim()
     if (item.length < 2) {
       return res.status(400).json({
@@ -540,6 +533,7 @@ router.post('/run', ensureAuth, async (req, res) => {
         crawler_type,
         profile_id,
         engine: 'item-need-search',
+        activation_authority: activation.activation_authority,
         item_request: item,
         count: report.total_found,
         awardable_count: report.total_awardable,
@@ -601,6 +595,8 @@ router.post('/run', ensureAuth, async (req, res) => {
     const results = selection.opportunities
     return res.json({
       success: true, crawler_type, profile_id, engine: 'crawler-os',
+      activation_authority: activation.activation_authority,
+      requested_crawler_label: activation.requested,
       score_scale_id: SCORE_SCALE_ID,
       min_match_score: selection.min_match_score,
       partial: timedOut, timed_out: timedOut,
