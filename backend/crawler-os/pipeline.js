@@ -23,7 +23,8 @@ import { getAdapter } from './adapters/index.js';
 import { parse } from './parsers.js';
 import { enforceReality } from './realityGate.js';
 import { normalize } from './normalizer.js';
-import { computeMatchDecision, isRecommendable, isResearchLead } from './matchEngine.js';
+import { computeMatchDecision, isResearchLead } from './matchEngine.js';
+import { isVerifiedDirectFundingRecommendation } from '../config/fundingTruthPolicy.js';
 import { buildEvolutionSignals } from './profileEvolution.js';
 import { CRAWLER_OUTCOME, MATCH_DECISION, OPPORTUNITY_KIND, REASON, canonicalOpportunityKey } from './contract.js';
 import {
@@ -145,7 +146,7 @@ export async function runDiscovery(deps, opts = {}) {
       }
       const recommendationKey = `${mp.profile_id}:${canonicalOpp.id}`;
       const truthProof = decision.match_explain?.four_truth_proof ?? null;
-      if (isRecommendable(canonicalOpp, decision.decision) && truthProof?.all_passed === true &&
+      if (isVerifiedDirectFundingRecommendation(canonicalOpp, decision) &&
           mp.profile_id === thesis.profile_id && !recommendationKeys.has(recommendationKey)) {
         recommendationKeys.add(recommendationKey);
         // topical_evidence: legacy weighted-evidence subscale, retained so Amy's
