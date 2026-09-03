@@ -31,6 +31,7 @@ import {
   STRONG_MATCH_SCORE,
   translateLegacyMinScore,
 } from '../../config/matchThresholds.js'
+import { hasPositiveFourTruthProof } from '../../config/fundingTruthPolicy.js'
 
 const DEFAULT_TOAST_TITLE = 'Robert found a possible funding source'
 
@@ -60,6 +61,8 @@ export async function createRecommendationIfHelpful({
   matchDecision,
   matchScore,
   matchReasons = [],
+  matchExplain = null,
+  fourTruthProof = null,
   missingProfileFields = [],
   whyFound = '',
   searchQueryUsed = '',
@@ -81,18 +84,22 @@ export async function createRecommendationIfHelpful({
   const score = Number(matchScore || 0)
   const decision = String(matchDecision || '').toUpperCase()
   const minTopScore = resolveToastPriorityThreshold(config)
-  const allowReview = config.allowReviewMatchToasts !== false
-
-  if (decision === MATCH_DECISION.REJECT) return { created: false, reason: 'decision_reject' }
-  if (decision === MATCH_DECISION.NEEDS_PROFILE_DATA) {
-    // we still record one recommendation but with priority=low and no
-    // delivery toast, so the admin can see what Robert needs.
-  }
-  if (decision === MATCH_DECISION.REVIEW && !allowReview) {
-    return { created: false, reason: 'review_toasts_disabled' }
-  }
   if (!Object.values(MATCH_DECISION).includes(decision)) {
     return { created: false, reason: 'invalid_match_decision' }
+  }
+  if (decision !== MATCH_DECISION.ACCEPT) {
+    return { created: false, reason: `decision_${decision.toLowerCase()}` }
+  }
+
+  // Robert's toast is a direct recommendation, not a research lead. It must
+  // carry the same positive proof as every other surfaced direct source:
+  // real, relatable, meets a declared profile need, and the profile qualifies.
+  // A caller cannot turn a score or a historical ACCEPT into a recommendation.
+  const proofCarrier = fourTruthProof
+    ? { four_truth_proof: fourTruthProof }
+    : (matchExplain || {})
+  if (!hasPositiveFourTruthProof(proofCarrier)) {
+    return { created: false, reason: 'missing_four_truth_proof' }
   }
 
   // Idempotency — refuse duplicates and skip declined unless superseding.
