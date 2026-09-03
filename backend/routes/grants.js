@@ -6,7 +6,8 @@ import { formatError } from '../middleware/errorHandler.js';
 import { mutationRateLimiter } from '../middleware/rateLimiting.js';
 import { withProfileScope } from '../middleware/profileContext.js'
 import { GRANT_STATUSES } from '../config/constants.js';
-import { createOpenAIClient, summarizeOpenAIError } from '../utils/openaiClient.js'
+import { createOpenAIClient } from '../utils/openaiClient.js'
+import { invokeJsonWithFallback as invokeProviderJsonWithFallback } from '../utils/aiProviders.js'
 import {
   ensureGrantAccess as ensureGrantAccessUtil,
   ensureOrganizationAccess,
@@ -1003,14 +1004,6 @@ router.post('/:id/ai/draft-details', mutationRateLimiter, async (req, res) => {
     const needsAi = !program_description || !eligibility_summary || !selection_criteria
     if (needsAi) {
       const { openai } = createOpenAIClient({ allowMissing: true })
-      if (!openai) {
-        return res.status(503).json({
-          error: 'ai_unavailable',
-          message: 'OpenAI is not configured on the server (OPENAI_API_KEY missing).',
-          draft: { program_description, eligibility_summary, selection_criteria },
-        })
-      }
-
       const evidence = {
         title: grant.title,
         funder: grant.funder ?? null,
@@ -1034,29 +1027,25 @@ EVIDENCE JSON:
 ${JSON.stringify(evidence, null, 2)}
 `
 
-      try {
-        const completion = await openai.chat.completions.create({
-          model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
-          messages: [{ role: 'user', content: prompt }],
-          temperature: 0.2,
-          max_tokens: 800,
-        })
-
-        const raw = String(completion?.choices?.[0]?.message?.content || '').trim()
-        const match = raw.match(/\{[\s\S]*\}/)
-        const parsed = match ? JSON.parse(match[0]) : JSON.parse(raw)
-
-        if (!program_description) program_description = String(parsed?.program_description || '').trim()
-        if (!eligibility_summary) eligibility_summary = String(parsed?.eligibility_summary || '').trim()
-        if (!selection_criteria) selection_criteria = String(parsed?.selection_criteria || '').trim()
-      } catch (error) {
-        const summary = summarizeOpenAIError(error)
+      const providerResult = await invokeProviderJsonWithFallback({
+        openai,
+        openaiModel: process.env.OPENAI_MODEL || 'gpt-4o-mini',
+        prompt,
+        temperature: 0.2,
+        maxTokens: 800,
+      })
+      if (!providerResult.ok || !providerResult.json) {
         return res.status(502).json({
           error: 'ai_failed',
-          message: summary?.message || 'AI drafting failed',
+          message: providerResult.error?.message || 'Every configured AI provider failed',
           draft: { program_description, eligibility_summary, selection_criteria },
+          free_route_errors: providerResult.freeRouteErrors ?? [],
         })
       }
+      const parsed = providerResult.json
+      if (!program_description) program_description = String(parsed?.program_description || '').trim()
+      if (!eligibility_summary) eligibility_summary = String(parsed?.eligibility_summary || '').trim()
+      if (!selection_criteria) selection_criteria = String(parsed?.selection_criteria || '').trim()
     }
 
     const now = new Date().toISOString()
