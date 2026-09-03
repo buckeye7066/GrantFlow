@@ -54,10 +54,6 @@
       "SURFACED_MATCHER_VERSIONS_SQL": 1,
       "activeClause": 1
     },
-    "backend/services/crawlerOsCompatibility.js": {
-      "SURFACED_MATCHER_VERSIONS_SQL": 1,
-      "lifecycleClause": 1
-    },
     "backend/services/hamilton/hamiltonFundingSourcePolicy.js": {
       "SURFACED_MATCHER_VERSIONS_SQL": 1,
       "where.sql": 2,
