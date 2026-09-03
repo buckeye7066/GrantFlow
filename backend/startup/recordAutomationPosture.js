@@ -3,21 +3,18 @@
  *
  * WHY: the production audit bridge runs in GitHub Actions, which deliberately
  * holds NO Railway credentials (a Railway token in CI would be a far larger
- * exposure than the audit is worth). So the auditor cannot ask Railway what
- * HAMILTON_ALLOW_AUTOSUBMIT is set to. It has exactly two channels into
+ * exposure than the audit is worth). It has exactly two channels into
  * production: the scoped read-only database role, and the public HTTP surface.
- * This writes the answer into the first one.
+ * This publishes the active submission authority through the first channel.
  *
- * WHAT IS AND IS NOT PUBLISHED: booleans only — whether each gate is armed.
- * No values, no secrets, no connection material. Knowing "auto-submit is off"
- * is precisely what an auditor must be able to prove before it is allowed to
- * touch an authenticated surface.
+ * WHAT IS AND IS NOT PUBLISHED: booleans and authority identifiers only — no
+ * profile consent, values, secrets, or connection material. The audit proves
+ * Hamilton requires profile-scoped authorization and that the posture came
+ * from the process currently serving traffic.
  *
- * THE STALENESS TRAP: a row saying `allow_auto_submit: false` is worthless on
- * its own — it may have been written by a deploy that has since been replaced
- * by one where the flag is armed. Environment changes only take effect on a
- * redeploy, so the honest question is not "is this row recent?" but "did the
- * process serving traffic right now write it?". BOOT_ID answers that: it is
+ * THE STALENESS TRAP: an authority row is worthless on its own — it may have
+ * been written by a deploy that has since been replaced. BOOT_ID answers the
+ * honest question, "did the process serving traffic right now write it?". It is
  * minted per process, stored here, and echoed by GET /api/health/deployment.
  * The auditor compares the two and refuses to proceed unless they match.
  */
