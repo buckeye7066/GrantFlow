@@ -78,6 +78,10 @@ import { computeMatchDecision } from './matchEngine.js'
 import { qualifiesForDisplay, SURFACED_MATCHER_VERSIONS_SQL } from '../config/matchSurfacing.js'
 import { fundingTruthProofFrom } from '../config/fundingTruthPolicy.js'
 import { loadProfileContext } from './profileHelpers.js'
+import { deriveProfileItemNeeds } from '../config/profileItemNeeds.js'
+import { searchItemNeeds } from './itemNeedSearch.js'
+import { resolveProfileEntitlement } from './billing/entitlementService.js'
+import { CAPABILITY_KEYS } from '../../shared/tierCatalog.js'
 import {
   loadAnyaProfileSnapshot,
   ANYA_PROFILE_TOOL_MAX_CHARS,
@@ -1444,6 +1448,94 @@ registerTool({
       message: unset
         ? `Done — ${target.name} is back to "planning" and all schools' funding cards are visible in the feed again.`
         : `Done — ${target.name} is marked as the school you are attending. Other still-active applications were moved to "deferred", and the funding feed is now scoped to ${target.name}.`,
+    }
+  },
+})
+
+registerTool({
+  name: 'profile.searchItemFunding',
+  description: 'Search for profile-specific funding and assistance for concrete items. If items are omitted, derive the list from all stored profile sections (including assistance and mobility needs). Exact free-text wording is always searched first. Results separate verified direct funding from research leads and enforce the profile tier/add-on entitlement.',
+  schema: {
+    type: 'object',
+    properties: {
+      profileId: { type: 'string', description: 'The profile whose facts, location, eligibility, and billing entitlement govern the search.' },
+      items: {
+        type: 'array',
+        description: 'Optional exact item phrases from the user, such as "15 passenger bus" or "durable medical equipment". Omit to derive needs from the profile.',
+        items: { type: 'string' },
+        maxItems: 5,
+      },
+      item: { type: 'string', description: 'Optional single exact free-text item phrase; combined with items when both are supplied.' },
+      variant: { type: 'string', enum: ['funding', 'gift'], description: 'Search funding by default, or in-kind gifts.' },
+      maxResults: { type: 'integer', minimum: 1, maximum: 20 },
+    },
+    required: ['profileId'],
+    additionalProperties: false,
+  },
+  handler: async (params, context) => {
+    if (!context?.db) throw new Error('Database connection unavailable')
+    const profileId = String(params?.profileId || '').trim()
+    if (!profileId) throw new Error('profileId is required')
+    if (!ensureProfileAccess(context?.ctx, profileId)) {
+      const error = new Error('Not authorized to search item funding for this profile')
+      error.status = 403
+      throw error
+    }
+
+    const entitlement = await resolveProfileEntitlement(context.db, {
+      profileId,
+      capabilityKey: CAPABILITY_KEYS.ITEM_FUNDING,
+      isAdmin: context?.ctx?.isAdmin === true,
+    })
+    if (!entitlement.allowed) {
+      const error = new Error('Item funding search is not included in this profile tier or active add-ons')
+      error.status = 402
+      error.code = 'entitlement_required'
+      error.entitlement = entitlement
+      throw error
+    }
+
+    const profileContext = await loadProfileContext(context.db, profileId)
+    const explicitItems = [
+      ...(Array.isArray(params?.items) ? params.items : []),
+      params?.item,
+    ]
+      .map((value) => String(value || '').trim())
+      .filter(Boolean)
+
+    const derivedItems = explicitItems.length === 0
+      ? deriveProfileItemNeeds(profileContext.profile, profileContext.sections)
+      : []
+    const requestedItems = explicitItems.length > 0 ? explicitItems : derivedItems
+    if (requestedItems.length === 0) {
+      return {
+        profile_id: profileId,
+        requested_count: 0,
+        searched_count: 0,
+        total_found: 0,
+        total_direct_funding: 0,
+        total_research_leads: 0,
+        items: [],
+        derived_from_profile: true,
+        message: 'No concrete item needs are stored yet. Add an item, assistance need, disability mobility need, or equipment need to the profile and search again.',
+      }
+    }
+
+    const results = await searchItemNeeds(context.db, {
+      profileId,
+      items: requestedItems,
+      profileContext,
+      variant: params?.variant === 'gift' ? 'gift' : 'funding',
+      maxResults: Math.max(1, Math.min(Number(params?.maxResults) || 12, 20)),
+    })
+    return {
+      ...results,
+      derived_from_profile: explicitItems.length === 0,
+      entitlement: {
+        capability: entitlement.capability,
+        tier_id: entitlement.tier_id || null,
+        source: entitlement.source,
+      },
     }
   },
 })
