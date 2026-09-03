@@ -8,9 +8,9 @@ requirements remain in `docs/ENVIRONMENT.md`.
 
 ## Summary
 
-- Total vars: **954**
-- Vars referenced in code: **954**
-- Vars listed in env templates: **951**
+- Total vars: **964**
+- Vars referenced in code: **964**
+- Vars listed in env templates: **961**
 
 ## Inventory
 
@@ -365,6 +365,13 @@ requirements remain in `docs/ENVIRONMENT.md`.
 | `FEATURE_DETAILED_MATCHING` | Yes | Yes | Backend/Node |
 | `FEATURE_GEO_CRAWL` | Yes | Yes | Backend/Node |
 | `FIRST_LOGIN_REPORT_EMAIL` | Yes | Yes | Backend/Node |
+| `FREE_AI_API_KEY` | Yes | Yes | Backend/Node |
+| `FREE_AI_BASE_URL` | Yes | Yes | Backend/Node |
+| `FREE_AI_MAX_RETRIES` | Yes | Yes | Backend/Node |
+| `FREE_AI_MODEL` | Yes | Yes | Backend/Node |
+| `FREE_AI_RESERVE_MS` | Yes | Yes | Backend/Node |
+| `FREE_AI_ROUTES` | Yes | Yes | Backend/Node |
+| `FREE_AI_TIMEOUT_MS` | Yes | Yes | Backend/Node |
 | `FROM_EMAIL` | Yes | Yes | Backend/Node |
 | `FRONTEND_BASE_URL` | Yes | Yes | Backend/Node |
 | `FRONTEND_COMPONENTS_PATH` | Yes | Yes | Backend/Node |
@@ -624,6 +631,9 @@ requirements remain in `docs/ENVIRONMENT.md`.
 | `OCR_PDF_DPI` | Yes | Yes | Backend/Node |
 | `OCR_PDF_MAX_PAGES` | Yes | Yes | Backend/Node |
 | `OCR_PROVIDER` | Yes | Yes | Backend/Node |
+| `OLLAMA_API_KEY` | Yes | Yes | Backend/Node |
+| `OLLAMA_BASE_URL` | Yes | Yes | Backend/Node |
+| `OLLAMA_MODEL` | Yes | Yes | Backend/Node |
 | `ONBOARDING_VERIFY_BASE` | Yes | Yes | Backend/Node |
 | `OPENAI_API_KEY` | Yes | Yes | Backend/Node |
 | `OPENAI_MAX_RETRIES` | Yes | Yes | Backend/Node |
