@@ -117,7 +117,7 @@ function seedOpportunity(db, overrides = {}) {
     seedCrawlerOsMatch(db, overrides.profileId || currentProfileId, id, {
       score: overrides.match_score ?? 72,
       confidence: overrides.match_confidence ?? null,
-      decision: overrides.match_decision || "review",
+      decision: overrides.match_decision || "accept",
       reasons: overrides.match_reasons || ["profile_need_match"],
       explanation: overrides.match_explanation || "Crawler OS matched this opportunity for the profile.",
     })
@@ -133,8 +133,8 @@ function seedCrawlerOsMatch(db, profileId, opportunityId, {
   explanation = "Crawler OS matched this opportunity for the profile.",
 } = {}) {
   if (!profileId || !opportunityId) return
-  const explainJson = confidence === null
-    ? null
+  let explainJson = confidence === null
+    ? {}
     : stampMatchConfidenceProvenance(
         { scoring_policy_version: 'need_first_v2' },
         {
@@ -143,6 +143,9 @@ function seedCrawlerOsMatch(db, profileId, opportunityId, {
           match_decision: decision,
         },
       )
+  if (String(decision).toLowerCase() === 'accept') {
+    explainJson.four_truth_proof = VERIFIED_FOUR_TRUTH_PROOF
+  }
   db.prepare(`
     INSERT OR REPLACE INTO profile_opportunity_matches
       (id, profile_id, opportunity_id, match_score, match_confidence, match_decision,
@@ -157,7 +160,7 @@ function seedCrawlerOsMatch(db, profileId, opportunityId, {
     decision,
     explanation,
     JSON.stringify(reasons),
-    explainJson ? JSON.stringify(explainJson) : null,
+    JSON.stringify(explainJson),
   )
 }
 
