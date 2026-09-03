@@ -86,8 +86,8 @@ unsafe work.
 **Action:** review and resolve blockers
 (`SELECT blocker_type, COUNT(*) FROM hamilton_blockers WHERE resolved_at IS NULL
 GROUP BY blocker_type`), clearing each via the admin Hard Stops UI. Browser
-automation also requires `HAMILTON_ENABLE_BROWSER_AUTOMATION` (+ host allowlist)
-and `HAMILTON_ALLOW_AUTOSUBMIT` per existing config.
+automation requires `HAMILTON_ENABLE_BROWSER_AUTOMATION`; external submission
+requires the profile owner's current stored full-automation authorization.
 
 ## Pre-flagged (operator, not code)
 - **`SAM_GOV_PUBLIC_API_KEY` missing** — operator must set the secret for SAM.gov
