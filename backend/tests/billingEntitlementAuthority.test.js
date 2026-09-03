@@ -85,6 +85,22 @@ describe('billing entitlement authority', () => {
     })
   })
 
+  it('lets an active free period override pending payment workflow states', () => {
+    const { paymentAccessStatus, input } = buildEntitlementDecisionInput(
+      authority({
+        paymentAccessStatus: 'pending_payment',
+        promotionActive: true,
+        requiresPayment: false,
+      }),
+      'enable_pipeline_automation',
+    )
+    expect(paymentAccessStatus).toBeNull()
+    expect(decideBillingEntitlement(input)).toMatchObject({
+      allowed: true,
+      source: 'promotion',
+    })
+  })
+
   it('allows a live free period without manufacturing paid status', () => {
     const { input } = buildEntitlementDecisionInput(
       authority({
