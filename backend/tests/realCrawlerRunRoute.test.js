@@ -1,6 +1,7 @@
 import express from 'express'
 import request from 'supertest'
 import Database from 'better-sqlite3'
+import { verifiedFourTruthExplain } from './helpers/fourTruthFixture.js'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   REVIEW_SCORE,
@@ -136,8 +137,9 @@ function seedLifecycleResults(db, profileId) {
       INSERT INTO profile_opportunity_matches (
         profile_id, opportunity_id, match_score, match_decision,
         match_explanation, match_reasons, match_explain_json, matcher_version
-      ) VALUES (?, ?, ?, ?, 'Persisted lifecycle fixture.', '[]', '{}', 'crawler-os')
-    `).run(profileId, row.id, row.score, row.decision)
+      ) VALUES (?, ?, ?, ?, 'Persisted lifecycle fixture.', '[]', ?, 'crawler-os')
+    `).run(profileId, row.id, row.score, row.decision,
+      row.decision === 'ACCEPT' ? verifiedFourTruthExplain() : '{}')
   }
 }
 
@@ -196,7 +198,7 @@ describe('POST /api/real-crawlers/run Crawler OS authority', () => {
         'ACCEPT',
         'Persisted canonical Crawler OS decision.',
         '["ohio residency"]',
-        '{"why":"Persisted canonical Crawler OS decision."}',
+        verifiedFourTruthExplain({ why: 'Persisted canonical Crawler OS decision.' }),
         'crawler-os',
       )
       db.prepare(`
