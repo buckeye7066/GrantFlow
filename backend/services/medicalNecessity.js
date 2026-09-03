@@ -313,39 +313,47 @@ export async function generateMedicalNecessityDocument(db, profileId, options = 
     specificEquipment, specificCondition, additionalContext,
   })
 
-  let openai = null
   try {
     const client = createOpenAIClient({ allowMissing: true })
-    openai = client?.openai || null
     const providerResult = await invokeProviderTextWithFallback({
-    openai,
-    openaiModel: process.env.OPENAI_MODEL || 'gpt-4o-mini',
-    system: getMedNecSystemPrompt(documentType),
-    prompt,
-    temperature: 0.6,
-    maxTokens: 3000,
-  })
+      openai: client?.openai || null,
+      openaiModel: process.env.OPENAI_MODEL || 'gpt-4o-mini',
+      system: getMedNecSystemPrompt(documentType),
+      prompt,
+      temperature: 0.6,
+      maxTokens: 3000,
+    })
 
-  if (providerResult.ok && providerResult.text) {
-    const content = providerResult.text.trim()
-    log.info(`[medicalNecessity] Generated ${documentType} for profile ${profileId} (${content.length} chars)`)
+    if (providerResult.ok && providerResult.text) {
+      const content = providerResult.text.trim()
+      log.info(`[medicalNecessity] Generated ${documentType} for profile ${profileId} (${content.length} chars)`)
+      return {
+        type: documentType,
+        content,
+        generated: 'ai',
+        provider: providerResult.provider,
+        profile: summarizeProfile(medProfile),
+        usage: providerResult.usage || null,
+      }
+    }
+
+    log.error('[medicalNecessity] AI generation failed; using grounded template', providerResult.error?.message)
     return {
       type: documentType,
-      content,
-      generated: 'ai',
-      provider: providerResult.provider,
+      content: buildTemplateDocument(documentType, medProfile, opportunity, grant, options),
+      generated: 'template_fallback',
+      error: providerResult.error?.message || 'Every configured AI provider failed',
       profile: summarizeProfile(medProfile),
-      usage: providerResult.usage || null,
     }
-  }
-
-  log.error('[medicalNecessity] AI generation failed; using grounded template', providerResult.error?.message)
-  return {
-    type: documentType,
-    content: buildTemplateDocument(documentType, medProfile, opportunity, grant, options),
-    generated: 'template_fallback',
-    error: providerResult.error?.message || 'Every configured AI provider failed',
-    profile: summarizeProfile(medProfile),
+  } catch (error) {
+    log.error('[medicalNecessity] AI provider setup failed; using grounded template', error?.message)
+    return {
+      type: documentType,
+      content: buildTemplateDocument(documentType, medProfile, opportunity, grant, options),
+      generated: 'template_fallback',
+      error: error?.message || 'AI provider setup failed',
+      profile: summarizeProfile(medProfile),
+    }
   }
 }
 
