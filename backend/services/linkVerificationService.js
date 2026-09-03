@@ -26,7 +26,6 @@ import { setTimeout as sleep } from 'node:timers/promises'
 import { LINK_VERIFICATION_SKIP_DOMAINS, isPlaceholderUrl, assertSsrfSafeUrl } from '../config/urlRules.js'
 import { safeFetch, discardResponseBody, SsrfBlockedError } from './http/safeFetch.js'
 import {
-  isLinkLifecycleKind,
   isPointerOpportunityRow,
   linkLifecycleOpportunitySql,
   pointerOpportunityRowSql,
