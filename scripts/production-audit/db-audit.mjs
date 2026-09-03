@@ -622,10 +622,13 @@ async function verifyAutomationPosture(client, { baseUrl, record }) {
     return { verified: false, reason: 'posture_unparseable' };
   }
 
+  const authorityIsProfileScoped =
+    posture.submission_authority === 'profile_authorization' &&
+    posture.profile_authorization_required === true;
   record(
-    'HAMILTON_ALLOW_AUTOSUBMIT is disabled',
-    posture.allow_auto_submit === false,
-    `allow_auto_submit=${posture.allow_auto_submit}`,
+    'Hamilton submission authority is profile-scoped',
+    authorityIsProfileScoped,
+    `submission_authority=${posture.submission_authority}; profile_authorization_required=${posture.profile_authorization_required}`,
   );
 
   let live = null;
@@ -650,8 +653,10 @@ async function verifyAutomationPosture(client, { baseUrl, record }) {
   );
 
   return {
-    verified: posture.allow_auto_submit === false && bootMatches,
-    allow_auto_submit: posture.allow_auto_submit,
+    verified: authorityIsProfileScoped && bootMatches,
+    submission_authority: posture.submission_authority,
+    profile_authorization_required: posture.profile_authorization_required,
+    external_submission_possible: posture.external_submission_possible,
     browser_automation: posture.browser_automation,
     run_on_schedule: posture.run_on_schedule,
     tailored_approval_gate: posture.tailored_approval_gate,
@@ -703,7 +708,7 @@ async function probeWritePrivilege(client) {
  * safety check drift, and the copy that drifts is always the one that stops
  * catching things — so the app lane does not re-derive this, it calls it.
  */
-export async function assertAutoSubmitDisabled({ baseUrl, logger = console } = {}) {
+export async function assertReadOnlyAuditPosture({ baseUrl, logger = console } = {}) {
   const client = await connect();
   try {
     await client.query('BEGIN TRANSACTION READ ONLY');
@@ -832,12 +837,12 @@ async function main() {
     }
     if (!guard.posture?.verified) {
       console.error(
-        '\nAUTO-SUBMIT POSTURE NOT VERIFIED — refusing to audit production.\n' +
-          `reason: ${guard.posture?.reason || 'allow_auto_submit is not provably false in the running process'}`,
+        '\nHAMILTON AUTHORITY POSTURE NOT VERIFIED — refusing to audit production.\n' +
+          `reason: ${guard.posture?.reason || 'profile-scoped submission authority or running boot could not be verified'}`,
       );
       process.exit(4);
     }
-    console.log('\nGuard passed: read-only proven, sensitive tables denied, auto-submit disabled.');
+    console.log('\nGuard passed: read-only proven, sensitive tables denied, profile-scoped submission authority verified.');
 
     if (args.guardOnly) {
       await client.query('COMMIT');
