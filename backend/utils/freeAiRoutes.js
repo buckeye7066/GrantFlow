@@ -135,7 +135,7 @@ function clientFor(route, env = currentFreeAiEnv()) {
 function safeError(error, route, apiKey) {
   let message = String(error?.message ?? error ?? 'free route failed')
   if (apiKey) message = message.split(String(apiKey)).join('***REDACTED***')
-  message = message.replace(/Bearer\s+[A-Za-z0-9._~+\/-]+/gi, 'Bearer ***REDACTED***')
+  message = message.replace(/Bearer\s+[A-Za-z0-9._~+/-]+/gi, 'Bearer ***REDACTED***')
   return {
     route_id: route.id,
     status: Number(error?.status ?? error?.response?.status ?? 0) || null,
