@@ -647,24 +647,6 @@ function getOpenAIOptional() {
   return createOpenAIClient({ allowMissing: true }).openai
 }
 
-async function createAnthropicClient() {
-  if (!process.env.ANTHROPIC_API_KEY) return null
-  const Anthropic = (await import('@anthropic-ai/sdk')).default
-  return new Anthropic({
-    apiKey: process.env.ANTHROPIC_API_KEY,
-    timeout: Number(process.env.ANYA_ANTHROPIC_TIMEOUT_MS || 15_000),
-    maxRetries: Number(process.env.ANYA_ANTHROPIC_MAX_RETRIES || 1),
-  })
-}
-
-function extractAnthropicText(response) {
-  const parts = Array.isArray(response?.content) ? response.content : []
-  return parts
-    .map((part) => (typeof part?.text === 'string' ? part.text : typeof part === 'string' ? part : ''))
-    .filter(Boolean)
-    .join('\n')
-    .trim()
-}
 
 // Normalize what an admin types into the "Ingest by URL" box into the https
 // URL the SSRF-safe fetcher requires. A bare domain ("example.org/grants") gets
@@ -811,17 +793,6 @@ async function downloadRemoteFileToUploads({ url, req }) {
     publicUrl: `/uploads/${filename}`,
     pageTitle,
     finalUrl: remote.finalUrl || url,
-  }
-}
-
-function tryExtractFirstJson(text) {
-  const raw = String(text || '')
-  const jsonMatch = raw.match(/\{[\s\S]*\}/)
-  if (!jsonMatch) return null
-  try {
-    return JSON.parse(jsonMatch[0])
-  } catch {
-    return null
   }
 }
 
