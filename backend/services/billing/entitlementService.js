@@ -150,6 +150,23 @@ async function loadEntitlementAuthority(db, profileId, now) {
   }
 }
 
+export function buildEntitlementDecisionInput(authority, key) {
+  const paymentAccessStatus = authority?.requiresPayment && !authority?.paymentAccessStatus
+    ? 'not_active'
+    : authority?.paymentAccessStatus
+  return {
+    paymentAccessStatus,
+    input: {
+      profileStatus: authority?.profile?.status,
+      paymentAccessStatus,
+      tierAllows: authority?.effectiveTier?.capabilities?.[key] === true,
+      activeAddons: authority?.activeAddons || [],
+      promotionActive: authority?.promotionActive === true,
+      capabilityKey: key,
+    },
+  }
+}
+
 function decisionFromAuthority(profileId, key, authority) {
   if (!authority.profile) {
     return { profile_id: String(profileId), capability: key, allowed: false, source: null, reason: 'profile_not_found' }
@@ -158,17 +175,8 @@ function decisionFromAuthority(profileId, key, authority) {
   // invoice used the profile-type/budget tier while this gate used the manually
   // assigned billing_accounts tier, so a profile could be charged for one plan
   // and receive another plan's capabilities.
-  const paymentAccessStatus = authority.requiresPayment && !authority.paymentAccessStatus
-    ? 'not_active'
-    : authority.paymentAccessStatus
-  const decision = decideBillingEntitlement({
-    profileStatus: authority.profile.status,
-    paymentAccessStatus,
-    tierAllows: authority.effectiveTier?.capabilities?.[key] === true,
-    activeAddons: authority.activeAddons,
-    promotionActive: authority.promotionActive,
-    capabilityKey: key,
-  })
+  const { paymentAccessStatus, input } = buildEntitlementDecisionInput(authority, key)
+  const decision = decideBillingEntitlement(input)
   return {
     profile_id: String(profileId),
     capability: key,
