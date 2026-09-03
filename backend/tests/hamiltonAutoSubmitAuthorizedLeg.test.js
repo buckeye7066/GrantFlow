@@ -254,7 +254,7 @@ describe('stored auto-submit authorization reaches the submit step', () => {
     const db = makeDb()
     await seedFixture(db)
     await seedStoredAuthorization(db, { submit: true })
-    await seedTaskWith(db, { autoSubmitEnabled: true })
+    await seedTaskWith(db, { allowAutoSubmit: true, autoSubmitEnabled: true })
 
     await runSource(db)
 
