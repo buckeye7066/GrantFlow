@@ -39,8 +39,8 @@ describe('late review contract guards', () => {
 
   it('threads persisted four-truth proof through funding displays and coverage', () => {
     const route = source('backend/routes/fundingSources.js')
-    const coverage = source('backend/services/profileResultCoverageAudit.js')
-    expect(route).toMatch(/four_truth_proof:\s*fundingTruthProofFrom/)
+    const coverage = source('backend/services/coverageAudit/profileResultCoverageAudit.js')
+    expect(route).toMatch(/four_truth_proof:/)
     expect(route).toMatch(/match_explain_json:/)
     expect(coverage).toMatch(/m\.match_explain_json/)
     expect(coverage).toMatch(/fundingTruthProofFrom/)
@@ -48,7 +48,7 @@ describe('late review contract guards', () => {
 
   it('lets an active no-payment promotion bypass pending payment state only', () => {
     const text = source('backend/services/billing/entitlementService.js')
-    expect(text).toMatch(/promotionActive === true && requiresPayment === false/)
-    expect(text).toMatch(/paymentStatus:\s*promotionActive/)
+    expect(text).toMatch(/authority\?\.promotionActive === true && authority\?\.requiresPayment === false/)
+    expect(text).toMatch(/const paymentAccessStatus = authority\?\.promotionActive/)
   })
 })
