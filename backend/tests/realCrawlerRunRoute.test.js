@@ -276,7 +276,7 @@ describe('POST /api/real-crawlers/run Crawler OS authority', () => {
         min_match_score: STRONG_MATCH_SCORE,
         count: 1,
         total_found: 1,
-        display_preference_excluded: 1,
+        display_preference_excluded: 0,
       })
       expect(res.body.results).toHaveLength(1)
       expect(res.body.results[0]).toMatchObject({
