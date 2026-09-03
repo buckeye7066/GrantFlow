@@ -34,6 +34,7 @@ import {
 } from './johnOutreachSafety.js'
 import { composeEmailFromLead } from './johnEmailWriter.js'
 import { interpretLead } from './johnLeadInterpreter.js'
+import { assessLeadSufficiency } from './johnEvidenceSufficiency.js'
 import {
   hasDraftForLead,
   insertAudit,
@@ -86,8 +87,29 @@ export async function draftEmailForLead({
   // 3. Rate limit pre-flight
   const rate = await checkRateGate(db, config)
 
-  // 4. Interpret + compose
+  // 4. Personalization is a hard production gate. A contact address and an
+  // organization name are not enough evidence to draft honestly. Thin packets
+  // return to Yana through the agent bridge; direct callers are blocked here so
+  // they cannot bypass that workflow and create the old generic template.
   const interpretation = interpretLead(lead)
+  const sufficiency = assessLeadSufficiency(lead, interpretation)
+  if (!sufficiency.sufficient) {
+    return finalizeBlocked({
+      db,
+      lead,
+      runId,
+      composed: null,
+      safety: makeSafetyReport({
+        status: SAFETY_STATUS.BLOCKED,
+        reasons: ['insufficient_personalization_evidence'],
+        details: {
+          missing: sufficiency.missing,
+          note: sufficiency.note,
+        },
+      }),
+      aliasReport,
+    })
+  }
   const composed = await composeEmailFromLead(lead, { config, interpretation, logger, operatorNote })
 
   // 5. Safety classification
