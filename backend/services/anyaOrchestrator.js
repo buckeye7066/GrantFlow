@@ -34,41 +34,7 @@ function getOpenAIClient() {
   return cachedOpenAI
 }
 
-let cachedAnthropic = null
-const anthropicBreaker = createCircuitBreaker({
-  name: 'anya-anthropic',
-  failureThreshold: Number(process.env.ANYA_ANTHROPIC_FAILURE_THRESHOLD || 3),
-  cooldownMs: Number(process.env.ANYA_ANTHROPIC_COOLDOWN_MS || 30_000),
-})
-
-async function getAnthropicClient() {
-  if (cachedAnthropic) return cachedAnthropic
-  const key = String(process.env.ANTHROPIC_API_KEY || '').trim()
-  if (!key) return null
-  const Anthropic = (await import('@anthropic-ai/sdk')).default
-  cachedAnthropic = new Anthropic({
-    apiKey: key,
-    timeout: Number(process.env.ANYA_ANTHROPIC_TIMEOUT_MS || 20_000),
-    maxRetries: Number(process.env.ANYA_ANTHROPIC_MAX_RETRIES || 1),
-  })
-  return cachedAnthropic
-}
-
-function extractAnthropicText(response) {
-  const parts = Array.isArray(response?.content) ? response.content : []
-  return parts
-    .map((part) => {
-      if (typeof part?.text === 'string') return part.text
-      if (typeof part === 'string') return part
-      return ''
-    })
-    .filter(Boolean)
-    .join('\n')
-    .trim()
-}
-
 const DEFAULT_ASSISTANT_MODEL = process.env.ANYA_OPENAI_MODEL || 'gpt-4o-mini'
-const DEFAULT_ANTHROPIC_MODEL = process.env.ANTHROPIC_MODEL || 'claude-haiku-4-5'
 
 // Whitelist of tools the chat path is allowed to call mid-conversation
 // via OpenAI tool calling. Keep this list tight — every tool exposed here
