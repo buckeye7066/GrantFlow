@@ -38,7 +38,6 @@ import {
 import { allSources as allCrawlerOsSources } from '../crawler-os/sourceRegistry.js'
 import {
   CRAWLER_REQUEST_TYPES,
-  ITEM_SEARCH_CRAWLER_TYPE,
   resolveCrawlerActivation,
 } from '../config/crawlerActivationPolicy.js'
 import { implementedAdapterIds } from '../crawler-os/adapters/index.js'
