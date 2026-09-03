@@ -169,7 +169,7 @@ describe('matching zero-result recovery respects the four-truth boundary', () =>
       expect(res.body.returned).toBe(0)
       expect(res.body.opportunities).toEqual([])
       expect(res.body.included).toBe(0)
-      expect(res.body.relaxation?.applied ?? false).toBe(false)
+      expect(res.body.relaxation?.eligibility_relaxed).not.toBe(true)
     } finally {
       db.close()
     }
