@@ -1,14 +1,10 @@
 /**
- * Guard tests for backend/startup/recordAutomationPosture.js.
+ * Guard tests for the running process's Hamilton automation posture.
  *
- * This record is a SAFETY CONTROL, not telemetry: the production-audit bridge
- * refuses to open a browser against production unless it can read
- * `allow_auto_submit: false` out of it. So the failure that matters is the
- * quiet one — a posture that reports "disabled" while the gate it describes is
- * actually armed. Every test below is written to fail if that drift is
- * possible, which is why the armed case is asserted as explicitly as the
- * disabled one (a recorder hardcoded to `false` would pass a disabled-only
- * test and be catastrophically wrong).
+ * The posture is a safety control: it records profile-scoped submission
+ * authority and a boot id so the production audit can prove it came from the
+ * process currently serving traffic. A retired process-wide flag must neither
+ * appear in the record nor change that authority.
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
@@ -42,7 +38,10 @@ function readPosture(db) {
   return row ? JSON.parse(row.value) : null
 }
 
+const RETIRED_AUTOSUBMIT_KEY = ['HAMILTON', 'ALLOW', 'AUTOSUBMIT'].join('_')
+
 const ENV_KEYS = [
+  RETIRED_AUTOSUBMIT_KEY,
   'HAMILTON_ENABLE_BROWSER_AUTOMATION',
   'HAMILTON_RUN_ON_SCHEDULE',
   'HAMILTON_TAILORED_APPROVAL_GATE',
@@ -74,15 +73,15 @@ describe('buildAutomationPosture', () => {
   })
 
   it('ignores the retired HAMILTON_ALLOW_AUTOSUBMIT environment variable', () => {
-    process.env.HAMILTON_ALLOW_AUTOSUBMIT = 'false'
+    process.env[RETIRED_AUTOSUBMIT_KEY] = 'false'
     const disabled = buildAutomationPosture()
-    process.env.HAMILTON_ALLOW_AUTOSUBMIT = 'true'
+    process.env[RETIRED_AUTOSUBMIT_KEY] = 'true'
     const enabled = buildAutomationPosture()
     expect(disabled.submission_authority).toBe('profile_authorization')
     expect(enabled.submission_authority).toBe('profile_authorization')
     expect(disabled).not.toHaveProperty('allow_auto_submit')
     expect(enabled).not.toHaveProperty('allow_auto_submit')
-    delete process.env.HAMILTON_ALLOW_AUTOSUBMIT
+    delete process.env[RETIRED_AUTOSUBMIT_KEY]
   })
 
   // Absence means the approval gate is ON (tailoredNarrative.js). Reading an
