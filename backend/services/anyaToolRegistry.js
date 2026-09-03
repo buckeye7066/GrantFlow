@@ -1508,10 +1508,12 @@ registerTool({
       .map((value) => String(value || '').trim())
       .filter(Boolean)
 
-    const derivedItems = explicitItems.length === 0
+    const derivedItemReport = explicitItems.length === 0
       ? deriveProfileItemNeeds(profileContext.profile, profileContext.sections)
-      : []
-    const requestedItems = explicitItems.length > 0 ? explicitItems : derivedItems
+      : null
+    const requestedItems = explicitItems.length > 0
+      ? explicitItems
+      : (Array.isArray(derivedItemReport?.needs) ? derivedItemReport.needs : [])
     if (requestedItems.length === 0) {
       return {
         profile_id: profileId,
