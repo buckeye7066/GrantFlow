@@ -2,6 +2,7 @@ import express from 'express'
 import request from 'supertest'
 import { describe, expect, it } from 'vitest'
 import Database from 'better-sqlite3'
+import { verifiedFourTruthExplain } from './helpers/fourTruthFixture.js'
 import matchingRouter from '../routes/matching.js'
 import { stampLastDiscoveryAt } from '../services/autoDiscoveryCrawlers.js'
 import { MIN_SCORE_SLIDER_MAX } from '../config/matchThresholds.js'
@@ -131,6 +132,8 @@ function createDb() {
       ('profile-discovered', 'real-grant-1', 78, 'review', 'Crawler OS matched ministry/community signals.', '["profile_need_match"]', 'crawler-os', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP),
       ('profile-discovered', 'real-grant-2', 74, 'review', 'Crawler OS matched housing ministry signals.', '["profile_need_match"]', 'crawler-os', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP);
   `)
+  db.prepare("UPDATE profile_opportunity_matches SET match_decision = 'accept', match_explain_json = ?")
+    .run(verifiedFourTruthExplain())
   return db
 }
 

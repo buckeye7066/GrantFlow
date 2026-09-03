@@ -206,6 +206,40 @@ describe('hamiltonAutopilotEngine — internal mappers', () => {
     assert.equal(v.essay, 'Essay text')
   })
 
+  it('readProfileValues maps canonical profile section aliases and committed school', () => {
+    const v = _internal.readProfileValues({
+      display_name: 'Jordan Rivera',
+      contact_information: {
+        email: 'jordan@example.org',
+        phone: '555-0100',
+        address: '10 Main St',
+        city: 'Cleveland',
+        state: 'OH',
+        zip: '44101',
+      },
+      financial_information: { annual_income: 24000 },
+      family_life: { household_size: 3 },
+      education: { gpa: '3.82', intended_major: 'Nursing', career_goals: 'Serve rural patients.' },
+      narrative: { personal_statement: 'I am pursuing nursing to expand rural care.' },
+      university_applications: {
+        applications: [
+          { name: 'Unselected College', status: 'interested' },
+          { name: 'Committed University', status: 'committed', major: 'Nursing' },
+        ],
+      },
+    })
+    assert.equal(v.full_name, 'Jordan Rivera')
+    assert.equal(v.email, 'jordan@example.org')
+    assert.equal(v.city, 'Cleveland')
+    assert.equal(v.school, 'Committed University')
+    assert.equal(v.major, 'Nursing')
+    assert.equal(v.gpa, '3.82')
+    assert.equal(v.household_income, 24000)
+    assert.equal(v.household_size, 3)
+    assert.match(v.essay, /rural care/)
+    assert.match(v.goals, /rural patients/)
+  })
+
   it('extractConfirmationReference accepts explicit codes and rejects prose', () => {
     assert.equal(_internal.extractConfirmationReference('Thanks! Confirmation #: MOCK-ABCDEF'), 'MOCK-ABCDEF')
     assert.equal(_internal.extractConfirmationReference('Reference code ABCDEF'), 'ABCDEF')

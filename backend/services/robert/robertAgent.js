@@ -136,6 +136,7 @@ async function runRobertDiscoveryViaCrawlerOs({
             opportunityId: rec.opportunity_id,
             matchDecision: rec.decision,
             matchScore: rec.match_score,
+            fourTruthProof: rec.four_truth_proof || null,
             opportunityTitle: rec.title || '',
             whyFound: 'Robert discovery (crawler-os)',
           }), { errors: summary.errors, stage: `persist_recommendation:${profileId}` })
@@ -591,6 +592,7 @@ export async function runRobert({
               matchDecision: decision.decision,
               matchScore: decision.score,
               matchReasons: decision.reasons || [],
+              matchExplain: decision.matchExplain || null,
               missingProfileFields: decision.missingProfileFields || [],
               whyFound: `Robert discovered this opportunity from ${opp.source || 'a verified source'}.`,
               searchQueryUsed: '',

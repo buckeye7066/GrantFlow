@@ -98,6 +98,7 @@ export function extractOrgSignals(lead) {
   // The single best free-text hook (mission first, then any other prose).
   const hookText =
     mission ||
+    websiteExcerpt ||
     freeText.find((t) => t.length > 25) ||
     freeText[0] ||
     null

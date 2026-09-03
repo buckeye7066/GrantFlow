@@ -8,6 +8,7 @@ import { dirname, join, resolve } from 'path';
 import { fileURLToPath } from 'url';
 import pdfParse from 'pdf-parse';
 import { createOpenAIClient, summarizeOpenAIError } from '../utils/openaiClient.js';
+import { invokeJsonWithFallback as invokeProviderJsonWithFallback } from '../utils/aiProviders.js';
 import { encryptRuntimeSecret } from '../utils/runtimeSecrets.js';
 import { seedRealOpportunities } from '../utils/seedRealOpportunities.js';
 import { seedAssistanceDirectories } from '../utils/seedAssistanceDirectories.js';
@@ -646,24 +647,6 @@ function getOpenAIOptional() {
   return createOpenAIClient({ allowMissing: true }).openai
 }
 
-async function createAnthropicClient() {
-  if (!process.env.ANTHROPIC_API_KEY) return null
-  const Anthropic = (await import('@anthropic-ai/sdk')).default
-  return new Anthropic({
-    apiKey: process.env.ANTHROPIC_API_KEY,
-    timeout: Number(process.env.ANYA_ANTHROPIC_TIMEOUT_MS || 15_000),
-    maxRetries: Number(process.env.ANYA_ANTHROPIC_MAX_RETRIES || 1),
-  })
-}
-
-function extractAnthropicText(response) {
-  const parts = Array.isArray(response?.content) ? response.content : []
-  return parts
-    .map((part) => (typeof part?.text === 'string' ? part.text : typeof part === 'string' ? part : ''))
-    .filter(Boolean)
-    .join('\n')
-    .trim()
-}
 
 // Normalize what an admin types into the "Ingest by URL" box into the https
 // URL the SSRF-safe fetcher requires. A bare domain ("example.org/grants") gets
@@ -813,74 +796,23 @@ async function downloadRemoteFileToUploads({ url, req }) {
   }
 }
 
-function tryExtractFirstJson(text) {
-  const raw = String(text || '')
-  const jsonMatch = raw.match(/\{[\s\S]*\}/)
-  if (!jsonMatch) return null
-  try {
-    return JSON.parse(jsonMatch[0])
-  } catch {
-    return null
-  }
-}
-
 async function invokeJsonWithFallback({ system, prompt, maxTokens = 1500, temperature = 0.1 } = {}) {
-  const openai = getOpenAIOptional()
-  if (openai) {
-    try {
-      const completion = await openai.chat.completions.create({
-        model: AI_MODEL,
-        messages: [
-          system ? { role: 'system', content: system } : null,
-          { role: 'user', content: prompt },
-        ].filter(Boolean),
-        response_format: { type: 'json_object' },
-        temperature,
-        max_tokens: maxTokens,
-      })
+  const result = await invokeProviderJsonWithFallback({
+    openai: getOpenAIOptional(),
+    openaiModel: AI_MODEL,
+    system,
+    prompt,
+    maxTokens,
+    temperature,
+  })
 
-      const raw = completion.choices?.[0]?.message?.content
-      if (raw) {
-        try {
-          return { json: JSON.parse(raw), provider: 'openai', raw }
-        } catch {
-          const extracted = tryExtractFirstJson(raw)
-          if (extracted) return { json: extracted, provider: 'openai', raw }
-        }
-      }
-    } catch (error) {
-      const summary = summarizeOpenAIError(error)
-      console.warn('[admin/ai] OpenAI failed, will try Anthropic:', summary?.message || error?.message || error)
-    }
+  return {
+    json: result.ok ? result.json : null,
+    provider: result.provider,
+    raw: result.raw ?? null,
+    fallback_reason: result.fallback_reason ?? null,
+    free_route_errors: result.freeRouteErrors ?? [],
   }
-
-  const anthropic = await createAnthropicClient()
-  if (anthropic) {
-    try {
-      const response = await anthropic.messages.create({
-        model: process.env.ANTHROPIC_MODEL || 'claude-haiku-4-5',
-        max_tokens: maxTokens,
-        temperature,
-        system: system || undefined,
-        messages: [
-          {
-            role: 'user',
-            content:
-              `${prompt}\n\n` +
-              `Return ONLY a valid JSON object. Do not include markdown fences or commentary.`,
-          },
-        ],
-      })
-
-      const raw = extractAnthropicText(response)
-      const extracted = tryExtractFirstJson(raw)
-      if (extracted) return { json: extracted, provider: 'anthropic', raw }
-    } catch (error) {
-      console.warn('[admin/ai] Anthropic failed:', error?.message || error)
-    }
-  }
-
-  return { json: null, provider: 'fallback', raw: null }
 }
 
 // GET /api/admin/openai/verify
@@ -1067,6 +999,16 @@ router.post('/env/apply', async (req, res) => {
   const ALLOWLIST = new Set([
     'OPENAI_API_KEY',
     'ANTHROPIC_API_KEY',
+    'FREE_AI_ROUTES',
+    'FREE_AI_BASE_URL',
+    'FREE_AI_MODEL',
+    'FREE_AI_API_KEY',
+    'FREE_AI_TIMEOUT_MS',
+    'FREE_AI_MAX_RETRIES',
+    'FREE_AI_RESERVE_MS',
+    'OLLAMA_BASE_URL',
+    'OLLAMA_MODEL',
+    'OLLAMA_API_KEY',
     'RESEND_API_KEY',
     'FROM_EMAIL',
     'AUTH_NOTIFY_ON_LOGIN',
@@ -1083,6 +1025,8 @@ router.post('/env/apply', async (req, res) => {
   const SECRET_KEYS = new Set([
     'OPENAI_API_KEY',
     'ANTHROPIC_API_KEY',
+    'FREE_AI_API_KEY',
+    'OLLAMA_API_KEY',
     'RESEND_API_KEY',
     'ANYA_ADMIN_TOKEN',
     // Funding provider keys should be treated as secrets too.
@@ -4282,7 +4226,7 @@ router.post('/crawlers/audit-live', async (req, res) => {
         try {
           if (crawlerType === 'item_matching') {
             const itemResult = await withTimeout(
-              crawlItemFunding({ id: profileId }, { item_request }),
+              crawlItemFunding({ id: profileId }, { db: req.db, item_request }),
               boundedTimeoutMs,
               `audit:item_matching`,
             );

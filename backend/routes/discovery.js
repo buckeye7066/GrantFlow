@@ -266,10 +266,12 @@ async function loadProfileOsResults(req, profileId, {
     }
   }
 
-  // Final surfacing guard (defense in depth): never return REJECT/ineligible rows.
+  // Final owner-facing boundary: recovery may widen search, never the four
+  // funding truths. Pointers remain research leads; direct rows must still
+  // satisfy the same persisted proof policy as the primary path.
   qualified = qualified.filter(
     (o) =>
-      String(o.match_decision ?? o.decision ?? '').toUpperCase() !== 'REJECT' &&
+      qualifiesForDisplay(o, minScore) &&
       o.eligible !== false &&
       o.eligibility_relaxed !== true,
   )

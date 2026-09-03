@@ -713,6 +713,7 @@ describe('the forensic-item audit: RANKING — item relevance dominates profile 
       real: {
         passed: true,
         reality_status: 'VERIFIED',
+        evidence_url: 'https://www.grants.gov/search-results-detail/item-fixture',
         content_hash_present: true,
         evidence_captured_at: '2026-09-02T19:00:00.000Z',
       },
@@ -772,6 +773,7 @@ describe('the forensic-item audit: RANKING — item relevance dominates profile 
       real: {
         passed: true,
         reality_status: 'VERIFIED',
+        evidence_url: 'https://www.grants.gov/search-results-detail/item-fixture',
         content_hash_present: true,
         evidence_captured_at: '2026-09-02T19:00:00.000Z',
       },

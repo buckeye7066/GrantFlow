@@ -2,6 +2,7 @@ import express from 'express'
 import request from 'supertest'
 import { describe, expect, it } from 'vitest'
 import Database from 'better-sqlite3'
+import { verifiedFourTruthExplain } from './helpers/fourTruthFixture.js'
 import matchingRouter from '../routes/matching.js'
 
 /**
@@ -141,9 +142,9 @@ function seedRichOs(db) {
        VALUES (?, ?, 'Foundation', 'grants.gov', ?, 'https://www.grants.gov/y', 'https://www.grants.gov/y', 'DIRECT_GRANT', 'OPPORTUNITY', 'grant', 1, 1, '["nonprofit_ministry","capacity_building","programs"]', '["community","nonprofit","capacity building","program funding"]', '["Eligible applicants include nonprofit organizations"]', 25000)`,
     ).run(id, `Nonprofit Community Program Grant ${i}`, id)
     db.prepare(
-      `INSERT INTO profile_opportunity_matches (profile_id, opportunity_id, match_score, match_decision, match_explanation, match_reasons, matcher_version)
-       VALUES ('org-1', ?, ?, 'ACCEPT', 'Strong', '[]', 'crawler-os')`,
-    ).run(id, 75 + i)
+      `INSERT INTO profile_opportunity_matches (profile_id, opportunity_id, match_score, match_decision, match_explanation, match_reasons, match_explain_json, matcher_version)
+       VALUES ('org-1', ?, ?, 'ACCEPT', 'Strong', '[]', ?, 'crawler-os')`,
+    ).run(id, 75 + i, verifiedFourTruthExplain())
   }
 }
 

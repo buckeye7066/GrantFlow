@@ -11,7 +11,8 @@
 > click Submit. She still pauses for login, CAPTCHA, 2FA, payment, and
 > signatures that only a human can complete. Private / loopback / metadata
 > addresses remain blocked (SSRF). Set `HAMILTON_ENABLE_BROWSER_AUTOMATION=false`
-> or `HAMILTON_ALLOW_AUTOSUBMIT=false` to force packet-only / draft-only mode.
+> to force packet-only / draft-only mode. External submission otherwise requires
+> the profile owner's current full-automation authorization at the final boundary.
 
 ## Autopilot in one paragraph
 

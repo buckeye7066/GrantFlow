@@ -468,6 +468,10 @@ export async function adminCodeCrawl({ pattern, directory, includeTests = false 
     : REPO_ROOT
 
   const findings = []
+  let directoriesScanned = 0
+  let filesScanned = 0
+  let bytesScanned = 0
+  const unreadablePaths = []
   const ignorePatterns = [
     'node_modules',
     '.git',
@@ -483,6 +487,7 @@ export async function adminCodeCrawl({ pattern, directory, includeTests = false 
 
   async function scanDirectory(dir) {
     try {
+      directoriesScanned += 1
       const entries = await fs.readdir(dir, { withFileTypes: true })
 
       for (const entry of entries) {
@@ -497,9 +502,11 @@ export async function adminCodeCrawl({ pattern, directory, includeTests = false 
           await scanDirectory(fullPath)
         } else if (entry.isFile()) {
           const ext = path.extname(entry.name)
-          if (['.js', '.jsx', '.ts', '.tsx'].includes(ext)) {
+          if (['.js', '.jsx', '.ts', '.tsx', '.mjs', '.cjs'].includes(ext)) {
             try {
               const content = await fs.readFile(fullPath, 'utf8')
+              filesScanned += 1
+              bytesScanned += Buffer.byteLength(content, 'utf8')
               const rawLines = content.split('\n')
               const codeLines = stripCommentsPreservingLayout(content).split('\n')
 
@@ -635,14 +642,17 @@ export async function adminCodeCrawl({ pattern, directory, includeTests = false 
                   })
                 })
               })
-            } catch {
-              /* intentionally ignored: unreadable file — skip this entry */
+            } catch (error) {
+              unreadablePaths.push({ path: relativePath, error: String(error?.message || error).slice(0, 200) })
             }
           }
         }
       }
-    } catch {
-      /* intentionally ignored: directory traversal failure — skip subtree */
+    } catch (error) {
+      unreadablePaths.push({
+        path: path.relative(REPO_ROOT, dir) || '.',
+        error: String(error?.message || error).slice(0, 200),
+      })
     }
   }
 
@@ -662,6 +672,14 @@ export async function adminCodeCrawl({ pattern, directory, includeTests = false 
     scanned_directory: path.relative(REPO_ROOT, searchRoot),
     pattern: pattern ?? null,
     include_tests: includeTests,
+    coverage: {
+      complete: unreadablePaths.length === 0,
+      directories_scanned: directoriesScanned,
+      source_files_scanned: filesScanned,
+      bytes_scanned: bytesScanned,
+      unreadable_count: unreadablePaths.length,
+      unreadable_paths: unreadablePaths.slice(0, 50),
+    },
     findings_count: actionableFindings.length,
     findings: actionableFindings.slice(0, 100), // Limit to 100 results
     intentional_warnings_baseline: {

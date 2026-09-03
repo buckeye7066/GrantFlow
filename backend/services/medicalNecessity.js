@@ -8,6 +8,7 @@
  */
 
 import { createOpenAIClient } from '../utils/openaiClient.js'
+import { invokeTextWithFallback as invokeProviderTextWithFallback } from '../utils/aiProviders.js'
 import { createLogger } from '../utils/logger.js'
 const log = createLogger('medicalNecessity')
 
@@ -312,56 +313,45 @@ export async function generateMedicalNecessityDocument(db, profileId, options = 
     specificEquipment, specificCondition, additionalContext,
   })
 
-  let openai = null
   try {
     const client = createOpenAIClient({ allowMissing: true })
-    openai = client?.openai || null
-    if (!openai) {
-      console.warn('[medicalNecessity] OpenAI client unavailable (no key or misconfigured)')
-    }
-  } catch (err) {
-    log.error('[medicalNecessity] OpenAI client creation failed:', err)
-    openai = null
-  }
-
-  if (!openai) {
-    log.info('[medicalNecessity] No OpenAI key; generating template-based document')
-    return {
-      type: documentType,
-      content: buildTemplateDocument(documentType, medProfile, opportunity, grant, options),
-      generated: 'template',
-      profile: summarizeProfile(medProfile),
-    }
-  }
-
-  try {
-    const completion = await openai.chat.completions.create({
-      model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
-      messages: [
-        { role: 'system', content: getMedNecSystemPrompt(documentType) },
-        { role: 'user', content: prompt },
-      ],
+    const providerResult = await invokeProviderTextWithFallback({
+      openai: client?.openai || null,
+      openaiModel: process.env.OPENAI_MODEL || 'gpt-4o-mini',
+      system: getMedNecSystemPrompt(documentType),
+      prompt,
       temperature: 0.6,
-      max_tokens: 3000,
+      maxTokens: 3000,
     })
 
-    const content = completion.choices?.[0]?.message?.content?.trim() || ''
-    log.info(`[medicalNecessity] Generated ${documentType} for profile ${profileId} (${content.length} chars)`)
-
-    return {
-      type: documentType,
-      content,
-      generated: 'ai',
-      profile: summarizeProfile(medProfile),
-      usage: completion.usage || null,
+    if (providerResult.ok && providerResult.text) {
+      const content = providerResult.text.trim()
+      log.info(`[medicalNecessity] Generated ${documentType} for profile ${profileId} (${content.length} chars)`)
+      return {
+        type: documentType,
+        content,
+        generated: 'ai',
+        provider: providerResult.provider,
+        profile: summarizeProfile(medProfile),
+        usage: providerResult.usage || null,
+      }
     }
-  } catch (err) {
-    log.error('[medicalNecessity] AI generation failed:', err.message)
+
+    log.error('[medicalNecessity] AI generation failed; using grounded template', providerResult.error?.message)
     return {
       type: documentType,
       content: buildTemplateDocument(documentType, medProfile, opportunity, grant, options),
       generated: 'template_fallback',
-      error: err.message,
+      error: providerResult.error?.message || 'Every configured AI provider failed',
+      profile: summarizeProfile(medProfile),
+    }
+  } catch (error) {
+    log.error('[medicalNecessity] AI provider setup failed; using grounded template', error?.message)
+    return {
+      type: documentType,
+      content: buildTemplateDocument(documentType, medProfile, opportunity, grant, options),
+      generated: 'template_fallback',
+      error: error?.message || 'AI provider setup failed',
       profile: summarizeProfile(medProfile),
     }
   }

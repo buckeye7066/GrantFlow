@@ -1,6 +1,7 @@
 import express from 'express'
 import request from 'supertest'
 import Database from 'better-sqlite3'
+import { verifiedFourTruthExplain } from './helpers/fourTruthFixture.js'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   REVIEW_SCORE,
@@ -136,8 +137,9 @@ function seedLifecycleResults(db, profileId) {
       INSERT INTO profile_opportunity_matches (
         profile_id, opportunity_id, match_score, match_decision,
         match_explanation, match_reasons, match_explain_json, matcher_version
-      ) VALUES (?, ?, ?, ?, 'Persisted lifecycle fixture.', '[]', '{}', 'crawler-os')
-    `).run(profileId, row.id, row.score, row.decision)
+      ) VALUES (?, ?, ?, ?, 'Persisted lifecycle fixture.', '[]', ?, 'crawler-os')
+    `).run(profileId, row.id, row.score, row.decision,
+      row.decision === 'ACCEPT' ? verifiedFourTruthExplain() : '{}')
   }
 }
 
@@ -196,7 +198,7 @@ describe('POST /api/real-crawlers/run Crawler OS authority', () => {
         'ACCEPT',
         'Persisted canonical Crawler OS decision.',
         '["ohio residency"]',
-        '{"why":"Persisted canonical Crawler OS decision."}',
+        verifiedFourTruthExplain({ why: 'Persisted canonical Crawler OS decision.' }),
         'crawler-os',
       )
       db.prepare(`
@@ -274,7 +276,7 @@ describe('POST /api/real-crawlers/run Crawler OS authority', () => {
         min_match_score: STRONG_MATCH_SCORE,
         count: 1,
         total_found: 1,
-        display_preference_excluded: 1,
+        display_preference_excluded: 0,
       })
       expect(res.body.results).toHaveLength(1)
       expect(res.body.results[0]).toMatchObject({

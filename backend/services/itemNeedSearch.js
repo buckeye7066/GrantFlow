@@ -68,6 +68,8 @@ import { classifyFundingResult, isRelevantGeo, RESULT_BUCKETS } from '../config/
 import { declaredStateFromTitle } from '../config/opportunityJurisdiction.js'
 import { cleanExtractedText } from '../utils/htmlTextHygiene.js'
 import { isWebDiscoveryEnabled } from './crawlerOsService.js'
+import { hasPositiveFourTruthProof } from '../config/fundingTruthPolicy.js'
+export { hasPositiveFourTruthProof } from '../config/fundingTruthPolicy.js'
 import { createLogger } from '../utils/logger.js'
 
 const log = createLogger('itemNeedSearch')
@@ -121,31 +123,6 @@ function parseObjectField(v) {
   } catch {
     return null
   }
-}
-
-/**
- * Aggregate flags are evidence summaries, not substitutes for the evidence.
- * A malformed/stale payload with `all_passed: true` but one failed leg must
- * therefore fail closed exactly like a missing payload.
- */
-export function hasPositiveFourTruthProof(proof) {
-  const realityStatus = String(proof?.real?.reality_status ?? '').trim().toUpperCase()
-  const capturedAt = Date.parse(String(proof?.real?.evidence_captured_at ?? ''))
-  const matchedNeeds = proof?.meets_profile_need?.matched_needs
-  const eligibility = String(proof?.profile_qualifies?.eligibility ?? '').trim().toLowerCase()
-  return proof?.direct_funding === true &&
-    proof?.all_passed === true &&
-    proof?.real?.passed === true &&
-    (realityStatus === 'VERIFIED' || realityStatus === 'ROLLING') &&
-    proof?.real?.content_hash_present === true &&
-    Number.isFinite(capturedAt) &&
-    proof?.relatable?.passed === true &&
-    String(proof?.relatable?.canonical_decision ?? '').trim().toUpperCase() === 'ACCEPT' &&
-    proof?.meets_profile_need?.passed === true &&
-    proof?.meets_profile_need?.profile_needs_defaulted === false &&
-    Array.isArray(matchedNeeds) && matchedNeeds.length > 0 &&
-    proof?.profile_qualifies?.passed === true &&
-    ['yes', 'eligible', 'qualified', 'true'].includes(eligibility)
 }
 
 /** The row's kind, or null when it declares none (empty/whitespace count as none). */

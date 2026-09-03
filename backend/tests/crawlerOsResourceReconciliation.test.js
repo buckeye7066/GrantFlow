@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import Database from 'better-sqlite3'
+import { verifiedFourTruthExplain } from './helpers/fourTruthFixture.js'
 
 import { persistRun } from '../services/crawlerOsPersistence.js'
 
@@ -435,7 +436,7 @@ describe('Crawler OS resource-preserving reconciliation', () => {
           opportunity_id: 'fresh-accept',
           match_score: 91,
           decision: 'accept',
-          match_explain_json: '{}',
+          match_explain_json: verifiedFourTruthExplain(),
         }]),
         {},
         { primaryProfileId: PROFILE_ID },

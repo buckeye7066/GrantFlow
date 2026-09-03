@@ -1,4 +1,4 @@
-import { runComprehensiveCrawler as processComprehensiveCrawlerJob } from './comprehensiveCrawlerOptimized.js'
+import { processComprehensiveCrawlerJob } from './crawlerOsCompatibility.js'
 import { processNationalProgramsJob } from './nationalPrograms/index.js'
 
 export async function processNationalJob(context) {
@@ -6,7 +6,7 @@ export async function processNationalJob(context) {
   if (mode === 'programs') {
     return processNationalProgramsJob(context)
   }
-  // Backwards compatible: default to existing nationwide opportunity crawl behavior
+  // Default funding discovery is profile-aware Crawler OS; no legacy global engine.
   return processComprehensiveCrawlerJob(context)
 }
 

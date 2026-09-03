@@ -245,6 +245,7 @@ export async function mineCatalogForProfiles({
           matchDecision: decision.decision,
           matchScore: decision.score,
           matchReasons: decision.reasons || [],
+          matchExplain: decision.matchExplain || null,
           missingProfileFields: decision.missingProfileFields || [],
           whyFound: `Robert matched this from the GrantFlow funding catalog (source: ${opp.source || opp.record_origin || 'catalog'}).`,
           searchQueryUsed: 'catalog_mine',

@@ -102,6 +102,28 @@ test('draftEmailForLead refuses suppressed recipients and records draft_blocked'
   }
 })
 
+test('draftEmailForLead blocks a contact-only packet instead of generating generic copy', async () => {
+  const restore = applyDefaultJohnEnv()
+  const db = makeJohnDb()
+  try {
+    const provider = makeFakeOutlookProvider({ aliasMode: 'accept' })
+    const lead = makeQualifiedLead({
+      public_evidence: [{ type: 'contact', name: 'Pat Lee', email: 'pat@example.org' }],
+      contact_points: [{ type: 'email', value: 'pat@example.org', name: 'Pat Lee' }],
+    })
+    const r = await draftEmailForLead({ db, lead, provider })
+    assert.equal(r.ok, false)
+    assert.ok(r.blocked_reasons.includes('insufficient_personalization_evidence'))
+    assert.equal(provider.calls.length, 0)
+    const row = await getDraft(db, r.draft_id)
+    assert.equal(row.subject, null)
+    assert.equal(row.body_text, null)
+  } finally {
+    restore()
+    db.close()
+  }
+})
+
 test('draftEmailForLead refuses leads without public evidence', async () => {
   const restore = applyDefaultJohnEnv()
   const db = makeJohnDb()

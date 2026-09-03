@@ -15,8 +15,28 @@ import { SCORE_SCALE_ID, STRONG_MATCH_SCORE } from '../../backend/config/matchTh
 let db
 beforeEach(() => { db = makeMemoryDb() })
 
+const FOUR_TRUTH_PROOF = {
+  direct_funding: true,
+  all_passed: true,
+  real: {
+    passed: true,
+    reality_status: 'VERIFIED',
+    evidence_url: 'https://example.org/grant',
+    content_hash_present: true,
+    evidence_captured_at: '2026-09-03T00:00:00.000Z',
+  },
+  relatable: { passed: true, canonical_decision: 'ACCEPT' },
+  meets_profile_need: {
+    passed: true,
+    profile_needs_defaulted: false,
+    matched_needs: ['equipment'],
+  },
+  profile_qualifies: { passed: true, eligibility: 'eligible' },
+}
+
 const BASE = {
   matchDecision: 'ACCEPT', matchScore: 20, matchReasons: ['fit'],
+  fourTruthProof: FOUR_TRUTH_PROOF,
   whyFound: 'discovered', opportunityTitle: 'Grant', profileDisplayName: 'Profile',
   config: {
     minToastMatchScore: STRONG_MATCH_SCORE,
@@ -29,12 +49,12 @@ const BASE = {
 describe('robertRecommendationDelivery — durable, dedup\'d toast queue', () => {
   it('selectDeliverable splits high/normal/batch correctly', async () => {
     await createRecommendationIfHelpful({ ...BASE, db, profileId: 'p1', opportunityId: 'o1' }) // strong ACCEPT → high
-    await createRecommendationIfHelpful({ ...BASE, db, profileId: 'p1', opportunityId: 'o2', matchDecision: 'REVIEW', matchScore: 7 })
+    await createRecommendationIfHelpful({ ...BASE, db, profileId: 'p1', opportunityId: 'o2', matchScore: 7 })
     // Force a low-priority by exceeding cap.
     for (let i = 0; i < 5; i += 1) {
       await createRecommendationIfHelpful({ ...BASE, db, profileId: 'p1', opportunityId: `o-pre-${i}` })
     }
-    const next = await createRecommendationIfHelpful({ ...BASE, db, profileId: 'p1', opportunityId: 'o-low', matchDecision: 'REVIEW', matchScore: 6 })
+    const next = await createRecommendationIfHelpful({ ...BASE, db, profileId: 'p1', opportunityId: 'o-low', matchScore: 6 })
     assert.equal(next.created, true)
 
     const slice = await selectDeliverable({ db, profileId: 'p1', config: BASE.config })

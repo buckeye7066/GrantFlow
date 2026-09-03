@@ -50,19 +50,19 @@ shown to refuse them.
 it was used. The ciphertext column and both retrieval pointers are withheld at
 the database level, and the guard proves the base table is denied.
 
-**Auto-submit.** The lanes refuse to run unless `HAMILTON_ALLOW_AUTOSUBMIT` is
-provably `false` **in the process currently serving traffic**. That needs two
-facts, and neither is enough alone:
+**Submission authority.** The lanes refuse to run unless the process posture is
+provably current and reports that Hamilton's irreversible submit action is
+authorized per profile. The audit checks two independent facts:
 
-1. `system_kv.automation_posture` reports `allow_auto_submit: false`; and
-2. the `boot_id` in that row equals the `bootId` from the live
+1. `system_kv.automation_posture` reports
+   `submission_authority: "profile_authorization"` and
+   `profile_authorization_required: true`; and
+2. the posture `boot_id` equals the `bootId` from the live
    `GET /api/health/deployment`.
 
-Without (2) the row could have been written by an earlier deploy that has since
-been replaced by one with auto-submit armed — a stale record that reads safe.
-**"Cannot verify" is treated exactly like "armed": both abort.** The posture
-record is written by `backend/startup/recordAutomationPosture.js` and contains
-booleans only.
+Without (2), the row could be stale. "Cannot verify" aborts the read-only audit
+before the authenticated browser lane opens. The posture contains no profile
+consent or secrets.
 
 **Network.** The application lane denies mutation by default at the Playwright
 route layer. `GET`/`HEAD`/`OPTIONS` pass; the login/refresh/logout routes are

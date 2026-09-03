@@ -2,6 +2,12 @@ import { createOpenAIClient, summarizeOpenAIError } from './openaiClient.js'
 import { safeParseJSON } from './safeJson.js'
 import { createLogger } from './logger.js'
 import { withLLMTimeout, isLLMTimeout, LLM_TIMEOUT_MS } from './llmTimeout.js'
+import {
+  invokeFreeJsonRoutes,
+  invokeFreeTextRoutes,
+  isProviderCreditExhaustion,
+  resolveFreeAiRoutes,
+} from './freeAiRoutes.js'
 const qualityLog = createLogger('utils:aiProviders')
 
 let cachedAnthropic = null
@@ -101,6 +107,9 @@ export async function invokeTextWithFallback({
   maxTokens = 1200,
   openaiModel = null,
   anthropicModel = null,
+  freeRoutes = null,
+  freeClientFactory = null,
+  timeoutMs = null,
 } = {}) {
   const safePrompt = typeof prompt === 'string' ? prompt : JSON.stringify(prompt ?? '')
   const messages = system
@@ -113,14 +122,20 @@ export async function invokeTextWithFallback({
   let openaiError = null
   let anthropicError = null
   let timedOut = false
+  const configuredFreeRoutes = resolveFreeAiRoutes(freeRoutes)
+  const freeReserveMs = configuredFreeRoutes.length > 0
+    ? Math.max(1_000, Number(process.env.FREE_AI_RESERVE_MS || 6_000))
+    : 0
 
   // Shared gateway-safe deadline across BOTH providers — a sequential
   // OpenAI->Anthropic fallback must never sum past the proxy's ~30s cut.
-  const deadlineAt = Date.now() + LLM_TIMEOUT_MS
+  const requestBudgetMs = Math.max(1, Number(timeoutMs ?? LLM_TIMEOUT_MS) || LLM_TIMEOUT_MS)
+  const deadlineAt = Date.now() + requestBudgetMs
   const remainingMs = () => deadlineAt - Date.now()
+  const paidAttemptMs = () => Math.max(0, remainingMs() - freeReserveMs)
 
   // 1) OpenAI (optional)
-  if (openai && remainingMs() > 500) {
+  if (openai && paidAttemptMs() > 25) {
     try {
       const completion = await withLLMTimeout(
         openai.chat.completions.create({
@@ -129,7 +144,7 @@ export async function invokeTextWithFallback({
           temperature,
           max_tokens: maxTokens,
         }),
-        { timeoutMs: remainingMs(), label: 'OpenAI text generation' },
+        { timeoutMs: paidAttemptMs(), label: 'OpenAI text generation' },
       )
       const text = String(completion?.choices?.[0]?.message?.content ?? '').trim()
       return { ok: true, provider: 'openai', text, raw: text, usage: completion?.usage ?? null, openaiError: null, anthropicError: null }
@@ -140,7 +155,7 @@ export async function invokeTextWithFallback({
   }
 
   // 2) Anthropic (only if budget remains)
-  const anthropic = remainingMs() > 500 ? await getAnthropicClient() : null
+  const anthropic = paidAttemptMs() > 25 ? await getAnthropicClient() : null
   if (anthropic) {
     try {
       const response = await withLLMTimeout(
@@ -151,7 +166,7 @@ export async function invokeTextWithFallback({
           system: system ? String(system) : undefined,
           messages: [{ role: 'user', content: safePrompt }],
         }),
-        { timeoutMs: remainingMs(), label: 'Anthropic text generation' },
+        { timeoutMs: paidAttemptMs(), label: 'Anthropic text generation' },
       )
       const text = extractAnthropicText(response)
       return { ok: true, provider: 'anthropic', text, raw: text, usage: null, openaiError, anthropicError: null }
@@ -162,7 +177,31 @@ export async function invokeTextWithFallback({
     }
   }
 
-  // 3) No providers configured / both failed or timed out
+  // 3) No-credit/local and free-tier OpenAI-compatible routes.
+  const freeResult = await invokeFreeTextRoutes({
+    routes: configuredFreeRoutes,
+    clientFactory: freeClientFactory,
+    system,
+    prompt: safePrompt,
+    temperature,
+    maxTokens,
+    timeoutMs: remainingMs(),
+  })
+  if (freeResult.ok) {
+    return {
+      ...freeResult,
+      fallback_reason:
+        isProviderCreditExhaustion(openaiError) || isProviderCreditExhaustion(anthropicError)
+          ? 'paid_provider_credit_or_quota_exhausted'
+          : openaiError || anthropicError
+            ? 'paid_provider_failure'
+            : 'paid_provider_not_configured',
+      openaiError,
+      anthropicError,
+    }
+  }
+
+  // 4) No providers configured / every configured provider failed or timed out
   return {
     ok: false,
     provider: 'fallback',
@@ -172,6 +211,7 @@ export async function invokeTextWithFallback({
     error: new Error(timedOut ? 'AI service timed out — please try again.' : 'No AI provider configured or provider failure'),
     openaiError,
     anthropicError,
+    freeRouteErrors: freeResult.freeRouteErrors,
   }
 }
 
@@ -183,18 +223,27 @@ export async function invokeJsonWithFallback({
   maxTokens = 1200,
   openaiModel = null,
   anthropicModel = null,
+  freeRoutes = null,
+  freeClientFactory = null,
+  timeoutMs = null,
 } = {}) {
   const safePrompt = typeof prompt === 'string' ? prompt : JSON.stringify(prompt ?? '')
   let openaiError = null
   let anthropicError = null
   let timedOut = false
+  const configuredFreeRoutes = resolveFreeAiRoutes(freeRoutes)
+  const freeReserveMs = configuredFreeRoutes.length > 0
+    ? Math.max(1_000, Number(process.env.FREE_AI_RESERVE_MS || 6_000))
+    : 0
 
   // Shared gateway-safe deadline across BOTH providers (see invokeTextWithFallback).
-  const deadlineAt = Date.now() + LLM_TIMEOUT_MS
+  const requestBudgetMs = Math.max(1, Number(timeoutMs ?? LLM_TIMEOUT_MS) || LLM_TIMEOUT_MS)
+  const deadlineAt = Date.now() + requestBudgetMs
   const remainingMs = () => deadlineAt - Date.now()
+  const paidAttemptMs = () => Math.max(0, remainingMs() - freeReserveMs)
 
   // 1) OpenAI (optional)
-  if (openai && remainingMs() > 500) {
+  if (openai && paidAttemptMs() > 25) {
     try {
       const completion = await withLLMTimeout(
         openai.chat.completions.create({
@@ -207,7 +256,7 @@ export async function invokeJsonWithFallback({
             { role: 'user', content: safePrompt },
           ],
         }),
-        { timeoutMs: remainingMs(), label: 'OpenAI JSON generation' },
+        { timeoutMs: paidAttemptMs(), label: 'OpenAI JSON generation' },
       )
       const rawText = String(completion?.choices?.[0]?.message?.content ?? '').trim()
       const parsed = isLikelyJson(rawText) ? safeParseJSON(rawText, null) : tryParseJsonLoose(rawText)
@@ -222,7 +271,7 @@ export async function invokeJsonWithFallback({
   }
 
   // 2) Anthropic (only if budget remains)
-  const anthropic = remainingMs() > 500 ? await getAnthropicClient() : null
+  const anthropic = paidAttemptMs() > 25 ? await getAnthropicClient() : null
   if (anthropic) {
     try {
       const systemText = [
@@ -240,7 +289,7 @@ export async function invokeJsonWithFallback({
           system: systemText || undefined,
           messages: [{ role: 'user', content: safePrompt }],
         }),
-        { timeoutMs: remainingMs(), label: 'Anthropic JSON generation' },
+        { timeoutMs: paidAttemptMs(), label: 'Anthropic JSON generation' },
       )
       const rawText = extractAnthropicText(response)
       const parsed = isLikelyJson(rawText) ? safeParseJSON(rawText, null) : tryParseJsonLoose(rawText)
@@ -255,6 +304,30 @@ export async function invokeJsonWithFallback({
     }
   }
 
+  // 3) No-credit/local and free-tier OpenAI-compatible routes.
+  const freeResult = await invokeFreeJsonRoutes({
+    routes: configuredFreeRoutes,
+    clientFactory: freeClientFactory,
+    system,
+    prompt: safePrompt,
+    temperature,
+    maxTokens,
+    timeoutMs: remainingMs(),
+  })
+  if (freeResult.ok) {
+    return {
+      ...freeResult,
+      fallback_reason:
+        isProviderCreditExhaustion(openaiError) || isProviderCreditExhaustion(anthropicError)
+          ? 'paid_provider_credit_or_quota_exhausted'
+          : openaiError || anthropicError
+            ? 'paid_provider_failure'
+            : 'paid_provider_not_configured',
+      openaiError,
+      anthropicError,
+    }
+  }
+
   return {
     ok: false,
     provider: 'fallback',
@@ -264,6 +337,7 @@ export async function invokeJsonWithFallback({
     error: new Error(timedOut ? 'AI service timed out — please try again.' : 'No AI provider configured or provider failure'),
     openaiError,
     anthropicError,
+    freeRouteErrors: freeResult.freeRouteErrors,
   }
 }
 

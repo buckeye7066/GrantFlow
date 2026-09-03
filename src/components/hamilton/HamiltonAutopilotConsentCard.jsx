@@ -59,7 +59,6 @@ function describeBlocker(b) {
     case "human_review_required": return "An older permission still asks for final human review. Switch full automation off and on again to clear it."
     case "hamilton_autopilot_off": return "The profile's Hamilton auto-apply automation preference is off."
     case "hamilton_auto_submit_off": return "The profile's Hamilton auto-submit automation preference is off."
-    case "HAMILTON_ALLOW_AUTOSUBMIT_disabled": return "Auto-submit is disabled for this deployment (HAMILTON_ALLOW_AUTOSUBMIT)."
     default: return String(b?.reason || b?.kind || "unknown blocker")
   }
 }

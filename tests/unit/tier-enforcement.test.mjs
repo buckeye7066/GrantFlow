@@ -168,8 +168,11 @@ test('tier enforcement is backend-authoritative (pipeline automation, item fundi
         ('00000000-0000-0000-0000-00000000t003', '${adminUserId}', 'email_otp', '${adminEmail}', 0),
         ('00000000-0000-0000-0000-00000000t004', '${userId}', 'email_otp', '${userEmail}', 0);
 
-      INSERT INTO profiles (id, display_name, user_id, status)
-      VALUES ('${profileId}', 'Tiered Profile', '${userId}', 'active');
+      INSERT INTO profiles (id, display_name, user_id, status, primary_type)
+      VALUES ('${profileId}', 'Tiered Profile', '${userId}', 'active', 'nonprofit');
+
+      INSERT INTO profile_pricing (id, profile_id, access_status)
+      VALUES ('00000000-0000-0000-0000-00000000t011', '${profileId}', 'active_paid');
     `)
 
     // Force a tier with all capabilities disabled.
@@ -219,6 +222,16 @@ test('tier enforcement is backend-authoritative (pipeline automation, item fundi
     assert.equal(pipelineDenied.json?.error, 'tier_or_addon_required')
     assert.equal(pipelineDenied.json?.capability, 'enable_pipeline_automation')
 
+    // Move the single payment authority out of good standing. The effective
+    // small-organization tier includes item funding and document AI, so these
+    // capabilities must now be refused specifically because payment is not
+    // active — not because of the unrelated assigned test tier.
+    const paymentDb = new Database(dbPath)
+    paymentDb.pragma('busy_timeout = 5000')
+    paymentDb.prepare('UPDATE profile_pricing SET access_status = ? WHERE profile_id = ?')
+      .run('past_due', profileId)
+    paymentDb.close()
+
     // ITEM_FUNDING: deny non-admin tier.
     const itemDenied = await fetchJson(`http://127.0.0.1:${port}/api/crawlers/jobs`, {
       method: 'POST',
@@ -229,8 +242,8 @@ test('tier enforcement is backend-authoritative (pipeline automation, item fundi
         parameters: { item: 'wheelchair ramp' },
       }),
     })
-    assert.equal(itemDenied.status, 403)
-    assert.equal(itemDenied.json?.error, 'tier_or_addon_required')
+    assert.equal(itemDenied.status, 402)
+    assert.equal(itemDenied.json?.error, 'payment_required')
     assert.equal(itemDenied.json?.capability, 'enable_item_funding')
 
     // DOCUMENT_AI: deny non-admin tier (LLM invoke path).
@@ -241,9 +254,15 @@ test('tier enforcement is backend-authoritative (pipeline automation, item fundi
         prompt: 'Say hello in one sentence.',
       }),
     })
-    assert.equal(aiDenied.status, 403)
-    assert.equal(aiDenied.json?.error, 'tier_or_addon_required')
+    assert.equal(aiDenied.status, 402)
+    assert.equal(aiDenied.json?.error, 'payment_required')
     assert.equal(aiDenied.json?.capability, 'enable_document_ai')
+
+    const restoreDb = new Database(dbPath)
+    restoreDb.pragma('busy_timeout = 5000')
+    restoreDb.prepare('UPDATE profile_pricing SET access_status = ? WHERE profile_id = ?')
+      .run('active_paid', profileId)
+    restoreDb.close()
 
     // A durable add-on independently unlocks the named capability without
     // changing the account's tier.

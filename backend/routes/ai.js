@@ -32,7 +32,11 @@ import {
 import { isProposalCriticEnabled, runProposalCritic } from '../services/proposalCritic.js';
 import { DEFAULT_MIN_SCORE, RELAX_THRESHOLDS, FALLBACK_TOP_N } from '../config/matchThresholds.js';
 import { filterOutPipelineMembers, dedupeOpportunityList } from '../services/pipelineExclusion.js';
-import { createOpenAIClient, summarizeOpenAIError } from '../utils/openaiClient.js';
+import { createOpenAIClient } from '../utils/openaiClient.js';
+import {
+  invokeJsonWithFallback as invokeProviderJsonWithFallback,
+  invokeTextWithFallback as invokeProviderTextWithFallback,
+} from '../utils/aiProviders.js';
 import { buildSchoolLookupFallbackData } from '../services/schoolLookupFallback.js'
 import { enforceTierCapability } from '../middleware/entitlements.js'
 import { fetchPublicText } from '../utils/safeRemoteFetch.js'
@@ -139,14 +143,6 @@ async function createAnthropicClient() {
   }
 }
 
-function extractAnthropicText(response) {
-  const parts = Array.isArray(response?.content) ? response.content : []
-  return parts
-    .map((part) => (typeof part?.text === 'string' ? part.text : typeof part === 'string' ? part : ''))
-    .filter(Boolean)
-    .join('\n')
-    .trim()
-}
 
 function fallbackProposalTemplate({ grant, section }) {
   const applicant = grant?.name || 'Applicant'
@@ -196,39 +192,20 @@ function compactJson(value, maxLen = 2800) {
 }
 
 async function invokeTextWithFallback({ model, system, prompt, temperature, maxTokens }) {
-  const openai = getOpenAIOptional()
-  if (openai) {
-    try {
-      const completion = await openai.chat.completions.create({
-        model: model || DEFAULT_OPENAI_MODEL,
-        messages: system ? [{ role: 'system', content: system }, { role: 'user', content: prompt }] : [{ role: 'user', content: prompt }],
-        temperature: typeof temperature === 'number' ? temperature : 0.3,
-        max_tokens: typeof maxTokens === 'number' ? maxTokens : 1200,
-      })
-      return { text: extractCompletionText(completion), provider: 'openai', usage: completion.usage ?? null }
-    } catch (error) {
-      const summary = summarizeOpenAIError(error)
-      console.warn('[ai] OpenAI failed, will try Anthropic:', summary?.message || error?.message || error)
-    }
+  const result = await invokeProviderTextWithFallback({
+    openai: getOpenAIOptional(),
+    openaiModel: model || DEFAULT_OPENAI_MODEL,
+    system,
+    prompt,
+    temperature: typeof temperature === 'number' ? temperature : 0.3,
+    maxTokens: typeof maxTokens === 'number' ? maxTokens : 1200,
+  })
+  return {
+    text: result.ok ? result.text : null,
+    provider: result.provider,
+    usage: result.usage ?? null,
+    fallback_reason: result.fallback_reason ?? null,
   }
-
-  const anthropic = await createAnthropicClient()
-  if (anthropic) {
-    try {
-      const response = await anthropic.messages.create({
-        model: process.env.ANTHROPIC_MODEL || 'claude-haiku-4-5',
-        max_tokens: typeof maxTokens === 'number' ? maxTokens : 1200,
-        temperature: typeof temperature === 'number' ? temperature : 0.3,
-        system: system || undefined,
-        messages: [{ role: 'user', content: prompt }],
-      })
-      return { text: extractAnthropicText(response), provider: 'anthropic', usage: null }
-    } catch (error) {
-      console.warn('[ai] Anthropic failed:', error?.message || error)
-    }
-  }
-
-  return { text: null, provider: 'fallback', usage: null }
 }
 
 // Match opportunities to a profile
@@ -753,43 +730,26 @@ Return ONLY valid JSON in this format:
   ]
 }`;
 
-    let aiResults;
-    try {
-      let rawText = null
-      if (openai) {
-        const completion = await openai.chat.completions.create({
-          model: DEFAULT_OPENAI_MODEL,
-          messages: [{ role: 'user', content: prompt }],
-          temperature: 0.3,
-          max_tokens: 2000,
-        });
-        rawText = extractCompletionText(completion)
-      } else {
-        const anthropic = await createAnthropicClient()
-        if (anthropic) {
-          const response = await anthropic.messages.create({
-            model: process.env.ANTHROPIC_MODEL || 'claude-haiku-4-5',
-            max_tokens: 2000,
-            temperature: 0.3,
-            messages: [{ role: 'user', content: prompt }],
-          })
-          rawText = extractAnthropicText(response)
-        }
-      }
-
-      aiResults = tryExtractFirstJson(rawText)
-      if (!aiResults) throw new Error('Failed to parse AI response');
-    } catch (parseError) {
-      console.error('Failed to parse AI response:', parseError);
+    const narrativeResult = await invokeProviderJsonWithFallback({
+      openai,
+      openaiModel: DEFAULT_OPENAI_MODEL,
+      system: 'Return only source-grounded, non-authoritative observations as valid JSON. Do not score, rank, decide fit, state qualification, or decide eligibility. GrantFlow\'s deterministic canonical decision engine owns those judgments.',
+      prompt,
+      temperature: 0.3,
+      maxTokens: 2000,
+    })
+    const aiResults = narrativeResult.ok ? narrativeResult.json : null
+    if (!aiResults || typeof aiResults !== 'object') {
       // Canonical evaluation already ran. Provider failure removes only the
       // optional narrative layer; it never substitutes an invented score.
       return res.json({
         opportunities: canonicalRows.slice(0, limit),
         count: Math.min(opportunities.length, limit),
-        ai_enhanced: false
+        ai_enhanced: false,
+        ai_provider: narrativeResult.provider,
       });
     }
-    
+
     // AI output is deliberately segregated from the canonical match fields.
     // Legacy/malicious `score`, `match_score`, `decision`, or qualification
     // keys are ignored even if a provider returns them.
@@ -2140,76 +2100,56 @@ router.post('/school-lookup', async (req, res) => {
 
 Return ONLY the JSON object, no backticks, no explanation.`
 
+    const lookupPrompt = `Look up the following information for "${trimmedName}" and return ONLY a JSON object with these exact keys. Use "—" for any value you cannot find. Do not include any other text, markdown, or explanation.${SCHOOL_LOOKUP_PROMPT_BODY}`
+    let parsed = null
+    let provider = 'fallback'
     const anthropic = await createAnthropicClient();
-    if (!anthropic) {
-      // Fall back to OpenAI without web search
-      const result = await invokeTextWithFallback({
-        prompt: `Look up the following information for "${trimmedName}" and return ONLY a JSON object with these exact keys. Use "—" for any value you cannot find. Do not include any other text, markdown, or explanation.${SCHOOL_LOOKUP_PROMPT_BODY}`,
-        temperature: 0.1,
-        maxTokens: 1200,
-      });
 
-      if (!result.text) {
-        return res.json({
-          success: true,
-          school_name: trimmedName,
-          data: fallbackData,
-          provider: 'fallback',
-          warning: 'AI provider unavailable; returned registry-backed fallback data.',
+    // Preserve Anthropic web-search enrichment when it is funded and healthy.
+    // If its key is exhausted or the call fails, continue into the same
+    // paid-to-free provider chain used by every other AI route.
+    if (anthropic) {
+      try {
+        const response = await anthropic.messages.create({
+          model: process.env.ANTHROPIC_MODEL_SCHOOL_LOOKUP || 'claude-sonnet-4-6',
+          max_tokens: 1200,
+          tools: [{ type: 'web_search_20250305', name: 'web_search', max_uses: 5 }],
+          messages: [{ role: 'user', content: lookupPrompt }],
         });
+        const textBlocks = (response.content || [])
+          .filter((block) => block.type === 'text')
+          .map((block) => block.text)
+          .join('\n');
+        parsed = tryExtractFirstJson(textBlocks)
+        if (parsed) provider = 'anthropic'
+      } catch (error) {
+        routeLogger.warn('[school-lookup] Anthropic web search failed; using provider fallback', {
+          message: error?.message || String(error),
+        })
       }
-
-      const parsed = tryExtractFirstJson(result.text);
-      if (!parsed) {
-        return res.json({
-          success: true,
-          school_name: trimmedName,
-          data: fallbackData,
-          provider: 'fallback',
-          warning: 'Failed to parse AI response; returned registry-backed fallback data.',
-        });
-      }
-
-      // Same registry-merge as the Anthropic path so the no-web-search
-      // OpenAI path also benefits from curated portal URLs / fafsa code.
-      const mergedNoSearch = { ...fallbackData }
-      for (const [k, v] of Object.entries(parsed)) {
-        if (v && v !== '—' && v !== '') mergedNoSearch[k] = v
-      }
-      return res.json({ success: true, school_name: trimmedName, data: mergedNoSearch, provider: result.provider });
-    }
-
-    // Use Anthropic with web search for best results
-    const response = await anthropic.messages.create({
-      model: process.env.ANTHROPIC_MODEL_SCHOOL_LOOKUP || 'claude-sonnet-4-6',
-      max_tokens: 1200,
-      tools: [{ type: 'web_search_20250305', name: 'web_search', max_uses: 5 }],
-      messages: [{
-        role: 'user',
-        content: `Look up the following information for "${trimmedName}" and return ONLY a JSON object with these exact keys. Use "—" for any value you cannot find. Do not include any other text, markdown, or explanation.${SCHOOL_LOOKUP_PROMPT_BODY}`
-      }],
-    });
-
-    const textBlocks = (response.content || [])
-      .filter(b => b.type === 'text')
-      .map(b => b.text)
-      .join('\n');
-
-    let parsed = null;
-    try {
-      parsed = JSON.parse(textBlocks.trim());
-    } catch {
-      parsed = tryExtractFirstJson(textBlocks);
     }
 
     if (!parsed) {
-      console.warn('[school-lookup] Could not parse response:', textBlocks.slice(0, 300));
+      const fallbackResult = await invokeProviderJsonWithFallback({
+        openai: getOpenAIOptional(),
+        openaiModel: DEFAULT_OPENAI_MODEL,
+        prompt: lookupPrompt,
+        temperature: 0.1,
+        maxTokens: 1200,
+      })
+      if (fallbackResult.ok) {
+        parsed = fallbackResult.json
+        provider = fallbackResult.provider
+      }
+    }
+
+    if (!parsed || typeof parsed !== 'object') {
       return res.json({
         success: true,
         school_name: trimmedName,
         data: fallbackData,
         provider: 'fallback',
-        warning: 'Failed to parse AI response; returned registry-backed fallback data.',
+        warning: 'Every configured AI provider failed; returned registry-backed fallback data.',
       });
     }
 

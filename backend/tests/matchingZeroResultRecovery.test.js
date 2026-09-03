@@ -145,11 +145,11 @@ function createApp(db) {
   return app
 }
 
-describe('matching zero-result recovery (no "0 included of X found")', () => {
+describe('matching zero-result recovery respects the four-truth boundary', () => {
   // Matching router cold-import is heavy (profile helpers + pipeline + email).
   // Keep assertions tight; give the request path room so CI/local do not flake
   // on import cost after the recovery ladder already logged a successful resurface.
-  it('surfaces multiple sources via the recovery ladder when all candidates are below the floor', { timeout: 60000 }, async () => {
+  it('does not surface unproven direct REVIEW rows just to avoid a zero-result response', { timeout: 60000 }, async () => {
     const db = new Database(':memory:')
     createSchema(db)
     seedBelowFloor(db)
@@ -163,28 +163,19 @@ describe('matching zero-result recovery (no "0 included of X found")', () => {
       expect(res.status).toBe(200)
       expect(res.body.engine).toBe('crawler-os')
 
-      // Mission rule: candidates exist → results must be returned, not 0.
-      expect(res.body.coverage_summary.total_candidates).toBeGreaterThan(0)
-      expect(res.body.returned).toBeGreaterThan(1)
-      expect(res.body.opportunities.length).toBeGreaterThan(1)
-
-      // Counts map 1:1: returned can never exceed the scored pool.
-      expect(res.body.returned).toBeLessThanOrEqual(res.body.total_scored)
-      // Discover Grants contract aliases (included / total_found).
-      expect(res.body.included).toBe(res.body.returned)
-      expect(res.body.included).toBe(res.body.opportunities.length)
-      expect(res.body.total_found).toBeGreaterThanOrEqual(res.body.included)
-      expect(res.body.coverage_summary.included).toBe(res.body.included)
-
-      // The recovery is surfaced honestly, not silent.
-      expect(res.body.relaxation).toBeTruthy()
-      expect(res.body.relaxation.applied).toBe(true)
+      // A low result count is not permission to relabel an unproven direct
+      // source as funding. Recovery may broaden discovery, but admission stays
+      // fail-closed until the canonical engine records all four truths.
+      expect(res.body.returned).toBe(0)
+      expect(res.body.opportunities).toEqual([])
+      expect(res.body.included).toBe(0)
+      expect(res.body.relaxation?.eligibility_relaxed).not.toBe(true)
     } finally {
       db.close()
     }
   })
 
-  it('HARD INELIGIBILITY IS NEVER OUTRUNNABLE: recovery never returns a REJECT/ineligible/relaxed row', { timeout: 60000 }, async () => {
+  it('recovery never returns an unproven, REJECT, ineligible, or relaxed direct row', { timeout: 60000 }, async () => {
     // The 2026-07-28 audit found Tier B re-canonicalized raw candidates with
     // rejectHardIneligible:false and RELABELED live-decision REJECT rows to
     // match_decision:'REVIEW' + eligibility_relaxed:true — a path that, for any
@@ -205,7 +196,7 @@ describe('matching zero-result recovery (no "0 included of X found")', () => {
         .query({ min_score: 101, limit: 2000, skip_readiness_check: 1 })
 
       expect(res.status).toBe(200)
-      expect(res.body.returned).toBeGreaterThan(0) // recovery DID surface eligible rows
+      expect(res.body.returned).toBe(0)
       for (const o of res.body.opportunities ?? []) {
         expect(String(o.match_decision ?? o.decision ?? '').toUpperCase()).not.toBe('REJECT')
         expect(o.eligible).not.toBe(false)

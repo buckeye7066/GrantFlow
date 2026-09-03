@@ -1,14 +1,10 @@
 /**
- * Guard tests for backend/startup/recordAutomationPosture.js.
+ * Guard tests for the running process's Hamilton automation posture.
  *
- * This record is a SAFETY CONTROL, not telemetry: the production-audit bridge
- * refuses to open a browser against production unless it can read
- * `allow_auto_submit: false` out of it. So the failure that matters is the
- * quiet one — a posture that reports "disabled" while the gate it describes is
- * actually armed. Every test below is written to fail if that drift is
- * possible, which is why the armed case is asserted as explicitly as the
- * disabled one (a recorder hardcoded to `false` would pass a disabled-only
- * test and be catastrophically wrong).
+ * The posture is a safety control: it records profile-scoped submission
+ * authority and a boot id so the production audit can prove it came from the
+ * process currently serving traffic. A retired process-wide flag must neither
+ * appear in the record nor change that authority.
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
@@ -42,8 +38,10 @@ function readPosture(db) {
   return row ? JSON.parse(row.value) : null
 }
 
+const RETIRED_AUTOSUBMIT_KEY = ['HAMILTON', 'ALLOW', 'AUTOSUBMIT'].join('_')
+
 const ENV_KEYS = [
-  'HAMILTON_ALLOW_AUTOSUBMIT',
+  RETIRED_AUTOSUBMIT_KEY,
   'HAMILTON_ENABLE_BROWSER_AUTOMATION',
   'HAMILTON_RUN_ON_SCHEDULE',
   'HAMILTON_TAILORED_APPROVAL_GATE',
@@ -66,35 +64,24 @@ describe('buildAutomationPosture', () => {
     }
   })
 
-  // SUPERSEDED DEFAULT. This case used to assert `false` for an unset flag,
-  // matching isAutoSubmitGloballyEnabled()'s old `|| 'false'` default. The
-  // owner flipped that default ON on 2026-08-20 ("full automation means full
-  // automation"; docs/agent-sync/2026-08-20-hamilton-real-portal-submit.md),
-  // so an unset flag now means ARMED. The posture must say so — this record is
-  // a safety control, and reporting "disabled" for an armed process is exactly
-  // the drift the file exists to prevent. Note the direction of the risk: this
-  // makes the production-audit bridge REFUSE by default, never proceed.
-  it('reports allow_auto_submit TRUE when the flag is unset (default is now ARMED)', () => {
-    expect(buildAutomationPosture().allow_auto_submit).toBe(true)
+  it('records profile authorization as the only submission authority', () => {
+    const posture = buildAutomationPosture()
+    expect(posture.submission_authority).toBe('profile_authorization')
+    expect(posture.profile_authorization_required).toBe(true)
+    expect(posture.external_submission_possible).toBe(true)
+    expect(posture).not.toHaveProperty('allow_auto_submit')
   })
 
-  it('reports allow_auto_submit FALSE when the flag is explicitly "false"', () => {
-    process.env.HAMILTON_ALLOW_AUTOSUBMIT = 'false'
-    expect(buildAutomationPosture().allow_auto_submit).toBe(false)
-  })
-
-  // The load-bearing case. A recorder hardcoded to `false` would silently
-  // authorize an audit against an ARMED production; this and the unset case
-  // above are what catch that, while the explicit-"false" case above catches a
-  // recorder hardcoded to `true`. Both directions must stay covered.
-  it('reports allow_auto_submit TRUE when the flag is armed', () => {
-    process.env.HAMILTON_ALLOW_AUTOSUBMIT = 'true'
-    expect(buildAutomationPosture().allow_auto_submit).toBe(true)
-  })
-
-  it('is case-insensitive about the armed value, matching the real gate', () => {
-    process.env.HAMILTON_ALLOW_AUTOSUBMIT = 'TRUE'
-    expect(buildAutomationPosture().allow_auto_submit).toBe(true)
+  it('ignores the retired HAMILTON_ALLOW_AUTOSUBMIT environment variable', () => {
+    process.env[RETIRED_AUTOSUBMIT_KEY] = 'false'
+    const disabled = buildAutomationPosture()
+    process.env[RETIRED_AUTOSUBMIT_KEY] = 'true'
+    const enabled = buildAutomationPosture()
+    expect(disabled.submission_authority).toBe('profile_authorization')
+    expect(enabled.submission_authority).toBe('profile_authorization')
+    expect(disabled).not.toHaveProperty('allow_auto_submit')
+    expect(enabled).not.toHaveProperty('allow_auto_submit')
+    delete process.env[RETIRED_AUTOSUBMIT_KEY]
   })
 
   // Absence means the approval gate is ON (tailoredNarrative.js). Reading an
@@ -121,7 +108,8 @@ describe('recordAutomationPosture', () => {
     const posture = readPosture(db)
     expect(posture).not.toBeNull()
     expect(posture.boot_id).toBe(BOOT_ID)
-    expect(typeof posture.allow_auto_submit).toBe('boolean')
+    expect(posture.submission_authority).toBe('profile_authorization')
+    expect(posture.profile_authorization_required).toBe(true)
   })
 
   it('UPDATEs in place rather than accumulating rows', async () => {

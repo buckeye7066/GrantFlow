@@ -1,5 +1,6 @@
 import { REVIEW_SCORE } from '../../config/matchThresholds.js'
 import { SURFACED_MATCHER_VERSIONS_SQL } from '../../config/matchSurfacing.js'
+import { hasPositiveFourTruthProof } from '../../config/fundingTruthPolicy.js'
 
 /**
  * The opportunity kinds rules 3 and 4 below govern: navigational evidence, not
@@ -77,8 +78,8 @@ function isMissingIntegritySchema(error) {
     code === '42703' ||
     /no such table:\s*(profile_opportunity_matches|funding_opportunities)/i.test(message) ||
     /relation\s+["']?(profile_opportunity_matches|funding_opportunities)["']?\s+does not exist/i.test(message) ||
-    /no such column:\s*(match_decision|match_score|matcher_version|match_explain_json|opportunity_kind|updated_at)/i.test(message) ||
-    /column\s+["']?(match_decision|match_score|matcher_version|match_explain_json|opportunity_kind|updated_at)["']?\s+does not exist/i.test(message)
+    /no such column:\s*(?:\w+\.)?(match_decision|match_score|matcher_version|match_explain_json|opportunity_kind|updated_at)/i.test(message) ||
+    /column\s+["']?(?:\w+\.)?(match_decision|match_score|matcher_version|match_explain_json|opportunity_kind|updated_at)["']?\s+does not exist/i.test(message)
   )
 }
 
@@ -107,6 +108,7 @@ export async function normalizePersistedMatchDecisionIntegrity(db, options = {})
     scanned_canonical_evidence: 0,
     removed_rejects: 0,
     removed_canonical_rejects: 0,
+    removed_unproven_direct_accepts: 0,
     removed_below_review_resources: 0,
     normalized_resources: 0,
     repaired: 0,
@@ -127,10 +129,11 @@ export async function normalizePersistedMatchDecisionIntegrity(db, options = {})
     // Canonical-decision evidence is JSON text in both SQLite and PostgreSQL.
     // Parse it in JavaScript rather than relying on dialect-specific JSON SQL.
     const evidenceRows = await connection.prepare(
-      `SELECT m.profile_id, m.opportunity_id, m.match_explain_json
+`SELECT m.profile_id, m.opportunity_id, m.match_explain_json,
+              m.match_decision, fo.opportunity_kind
          FROM profile_opportunity_matches m
+         JOIN funding_opportunities fo ON fo.id = m.opportunity_id
         WHERE m.matcher_version IN ${SURFACED_MATCHER_VERSIONS_SQL}
-          AND m.match_explain_json IS NOT NULL
           ${aliasedScope.sql}`,
     ).all(...aliasedScope.params)
 
@@ -140,11 +143,24 @@ export async function normalizePersistedMatchDecisionIntegrity(db, options = {})
           AND matcher_version IN ${SURFACED_MATCHER_VERSIONS_SQL}`,
     )
     let removedCanonicalRejects = 0
+    let removedUnprovenDirectAccepts = 0
     for (const row of Array.isArray(evidenceRows) ? evidenceRows : []) {
-      if (parseCanonicalDecision(row.match_explain_json) !== 'reject') continue
-      removedCanonicalRejects += changes(
-        await deleteCanonicalReject.run(String(row.profile_id), String(row.opportunity_id)),
+      if (parseCanonicalDecision(row.match_explain_json) === 'reject') {
+        removedCanonicalRejects += changes(
+          await deleteCanonicalReject.run(String(row.profile_id), String(row.opportunity_id)),
+        )
+        continue
+      }
+      const pointer = RESOURCE_OPPORTUNITY_KINDS.includes(
+        String(row.opportunity_kind ?? '').trim().toUpperCase(),
       )
+      if (!pointer &&
+          String(row.match_decision ?? '').trim().toLowerCase() === 'accept' &&
+          !hasPositiveFourTruthProof(row)) {
+        removedUnprovenDirectAccepts += changes(
+          await deleteCanonicalReject.run(String(row.profile_id), String(row.opportunity_id)),
+        )
+      }
     }
 
     const removedBelowReview = await connection.prepare(
@@ -180,12 +196,14 @@ export async function normalizePersistedMatchDecisionIntegrity(db, options = {})
       scanned_canonical_evidence: Array.isArray(evidenceRows) ? evidenceRows.length : 0,
       removed_rejects: changes(removedRejects),
       removed_canonical_rejects: removedCanonicalRejects,
+      removed_unproven_direct_accepts: removedUnprovenDirectAccepts,
       removed_below_review_resources: changes(removedBelowReview),
       normalized_resources: changes(normalizedResources),
       profile_count: plainScope.ids.length,
       reason: null,
     }
     result.repaired = result.removed_rejects + result.removed_canonical_rejects +
+      result.removed_unproven_direct_accepts +
       result.removed_below_review_resources + result.normalized_resources
     return result
   }

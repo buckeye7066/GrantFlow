@@ -95,11 +95,11 @@ describe('funderServesDeclaredNeed — the recall net gate', () => {
   })
 })
 
-describe('qualifiesForDisplay — the vetted slice surfaces below the numeric floor', () => {
+describe('qualifiesForDisplay — vetted sources do not bypass funding truth', () => {
   const HIGH_FLOOR = 40
-  it('a vetted funder at REVIEW below the floor SURFACES (recommendable at REVIEW)', () => {
+  it('a vetted funder at REVIEW remains hidden until the profile positively qualifies', () => {
     const row = funder({ sponsor: 'PAN Foundation', match_decision: 'review', match_score: 8 })
-    expect(qualifiesForDisplay(row, HIGH_FLOOR)).toBe(true)
+    expect(qualifiesForDisplay(row, HIGH_FLOOR)).toBe(false)
   })
   it('a NON-vetted awardable at REVIEW below the floor stays HIDDEN (no bar lowered globally)', () => {
     const row = funder({ sponsor: 'Random Research Institute', title: 'R01 Grant', match_decision: 'review', match_score: 8 })

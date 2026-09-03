@@ -234,6 +234,16 @@ router.get('/profiles/:id/funding-sources', async (req, res) => {
         match_confidence: row.match_confidence ?? null,
         match_decision: row.match_decision,
         why: row.match_explanation,
+        // Keep the persisted four-truth receipt attached through the final
+        // presentation reshape. qualifiesForDisplay() is intentionally
+        // fail-closed for direct funding and cannot infer this proof from a
+        // score or historical ACCEPT label.
+        match_explain_json: row.match_explain_json ?? null,
+        four_truth_proof:
+          row.four_truth_proof ??
+          (typeof row.match_explain_json === 'object'
+            ? row.match_explain_json?.four_truth_proof ?? null
+            : null),
         opportunity_kind: kind || null,
         is_directory: isFundingResource(row),
         trust_tier: row.source_trust_tier ?? null,

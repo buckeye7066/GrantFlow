@@ -1,9 +1,9 @@
 /**
  * John — orchestrator behaviour when a lead is too thin to personalize.
  *
- * John should ask Yana for enrichment and defer drafting (giving her a cycle to
- * respond), but never stall forever: past the deferral cap he drafts the best
- * available version.
+ * John asks Yana for enrichment and defers drafting while evidence is thin.
+ * Exhausting the deferral cap must not turn a contact-only lead into a generic
+ * email: the lead remains blocked until Yana supplies a substantive hook.
  */
 
 import test from 'node:test'
@@ -72,10 +72,10 @@ test('runJohn defers a thin lead and files an enrichment request with Yana', asy
   }
 })
 
-test('past the deferral cap, John drafts the best available version anyway', async () => {
+test('past the deferral cap, John still refuses a generic contact-only draft', async () => {
   const restore = applyEnv({
     ...envBase(),
-    JOHN_MAX_ENRICHMENT_DEFERRALS: '0', // never defer — draft immediately
+    JOHN_MAX_ENRICHMENT_DEFERRALS: '0', // no deferral, but evidence remains mandatory
   })
   const db = makeJohnDb()
   try {
@@ -85,8 +85,9 @@ test('past the deferral cap, John drafts the best available version anyway', asy
 
     assert.equal(r.enrichment_requested, 1, 'Yana is still told the lead was thin')
     assert.equal(r.deferred_for_enrichment, 0)
-    assert.equal(r.drafts_created, 1)
-    assert.equal(provider.calls.length, 1)
+    assert.equal(r.drafts_created, 0)
+    assert.equal(r.drafts_blocked, 1)
+    assert.equal(provider.calls.length, 0, 'contact-only evidence never reaches Outlook')
   } finally {
     restore()
     db.close()

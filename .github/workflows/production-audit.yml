@@ -84,10 +84,10 @@ jobs:
 
       # ---- production containment gate --------------------------------
       # Proves: scoped non-superuser role, read-only session, writes refused,
-      # sensitive tables denied, and HAMILTON_ALLOW_AUTOSUBMIT disabled in the
-      # process actually serving traffic. Any failure stops the job here.
+      # sensitive tables denied, and profile-scoped Hamilton submission authority
+      # recorded by the process actually serving traffic. Any failure stops the job here.
 
-      - name: Verify database guard and auto-submit posture
+      - name: Verify database guard and submission authority
         env:
           GRANTFLOW_PROD_AUDIT_DATABASE_URL: ${{ secrets.GRANTFLOW_PROD_AUDIT_DATABASE_URL }}
         run: |

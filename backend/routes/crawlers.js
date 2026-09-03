@@ -1709,86 +1709,30 @@ router.get('/auto-discovery-status/:profileId', async (req, res) => {
 // Bulk populate opportunities from comprehensive crawler templates
 // Admin-only endpoint to generate funding opportunities for all ZIP codes
 router.post('/bulk-populate', async (req, res) => {
-  // Allow admin auth OR a special bulk key for automated population
   const bulkKey = req.headers['x-bulk-key'] || req.body?.bulk_key
   const expectedKey = process.env.BULK_POPULATE_KEY || null
-  
-  const isAdmin = Boolean(req.ctx?.isAdmin)
-  const hasValidKey = Boolean(expectedKey) && bulkKey === expectedKey
-  
-  if (!isAdmin && !hasValidKey) {
+  if (!req.ctx?.isAdmin && !(expectedKey && bulkKey === expectedKey)) {
     return res.status(403).json({ error: 'Admin access or valid bulk key required' })
   }
-  
-  try {
-    const { limit_per_zip = 8, max_zips = 5000 } = req.body || {}
-    const dataDir = join(__dirname, '..', 'data', 'crawlers')
-    const zipFile = join(dataDir, 'zip_coordinates.json')
-    
-    if (!fs.existsSync(zipFile)) {
-      return res.status(500).json({ error: 'ZIP coordinates file not found' })
-    }
-    
-    let zipMap
-    try {
-      zipMap = JSON.parse(fs.readFileSync(zipFile, 'utf8'))
-    } catch (err) {
-      return res.status(500).json({ error: 'Failed to parse ZIP coordinates file: ' + err.message })
-    }
-    const allZipCodes = Object.keys(zipMap).slice(0, max_zips)
-    
-    routeLogger.info(`[bulk-populate] Starting population of ${allZipCodes.length} ZIP codes with ${limit_per_zip} opportunities each`)
-    
-    // Import the crawler function
-    const { processComprehensiveCrawlerJob } = await import('../services/crawlerOsCompatibility.js')
-    
-    const batchSize = 100
-    let totalInserted = 0
-    let totalEvaluated = 0
-    const errors = []
-    
-    for (let i = 0; i < allZipCodes.length; i += batchSize) {
-      const batch = allZipCodes.slice(i, i + batchSize)
-      
-      try {
-        const job = {
-          id: `bulk-populate-${i}-${Date.now()}`,
-          type: 'comprehensive',
-          parameters: {
-            zip_list: batch,
-            limit_per_zip: limit_per_zip
-          }
-        }
-        
-        const result = await processComprehensiveCrawlerJob({
-          db: req.db,
-          job,
-          dataDir,
-          profileContext: null
-        })
-        
-        totalInserted += result.inserted || 0
-        totalEvaluated += result.evaluated || 0
-        
-        routeLogger.info(`[bulk-populate] Batch ${Math.floor(i/batchSize) + 1}/${Math.ceil(allZipCodes.length/batchSize)}: ${result.inserted} opportunities`)
-      } catch (batchErr) {
-        errors.push({ batch: i, error: batchErr.message })
-        console.error(`[bulk-populate] Batch ${i} error:`, batchErr.message)
-      }
-    }
-    
-    routeLogger.info(`[bulk-populate] Complete: ${totalInserted} opportunities inserted from ${allZipCodes.length} ZIPs`)
-    
-    res.json({
-      success: true,
-      zip_codes_processed: allZipCodes.length,
-      opportunities_inserted: totalInserted,
-      opportunities_evaluated: totalEvaluated,
-      errors: errors.length > 0 ? errors : undefined
+  const profileId = String(req.body?.profile_id || '').trim()
+  if (!profileId) {
+    return res.status(400).json({
+      success: false,
+      error: 'profile_id_required',
+      message: 'Comprehensive crawling is profile-driven. Supply profile_id so the planner can activate appropriate sources and evaluate all four funding truths.',
     })
+  }
+  try {
+    const { processComprehensiveCrawlerJob } = await import('../services/crawlerOsCompatibility.js')
+    const result = await processComprehensiveCrawlerJob({
+      db: req.db,
+      job: { id: `profile-crawl-${Date.now()}`, type: 'comprehensive', parameters: { profile_id: profileId } },
+    })
+    if (!result.success) return res.status(422).json(result)
+    return res.json(result)
   } catch (error) {
-    routeLogger.error('Error in bulk populate:', error)
-    res.status(500).json(formatError(error))
+    routeLogger.error('Error in profile-scoped comprehensive crawl:', error)
+    return res.status(500).json(formatError(error))
   }
 })
 
@@ -1805,7 +1749,10 @@ router.post('/crawl-all-counties', async (req, res) => {
     routeLogger.info('[crawl-all-counties] Starting county-level funding crawl...')
     
     const { crawlAllCounties } = await import('../services/crawlerOsCompatibility.js')
-    const result = await crawlAllCounties(req.db)
+    const profileId = String(req.body?.profile_id || '').trim()
+    if (!profileId) return res.status(400).json({ success: false, error: 'profile_id_required' })
+    const result = await crawlAllCounties(req.db, { profileId })
+    if (!result.success) return res.status(422).json(result)
     
     const totalCount = Number(
       (await req.db.prepare('SELECT COUNT(*) as count FROM funding_opportunities WHERE is_active = ?').get(true))?.count || 0,
@@ -1813,15 +1760,14 @@ router.post('/crawl-all-counties', async (req, res) => {
     
     res.json({
       success: true,
-      message: `Crawled ${result.counties} counties across ${result.states} states`,
-      states_processed: result.states,
-      counties_processed: result.counties,
-      opportunities_per_county: 5,
+      profile_id: profileId,
+      engine: result.engine,
+      activation_authority: result.activation_authority,
       inserted: result.inserted,
-      updated: result.updated,
+      evaluated: result.evaluated,
+      rejected: result.rejected,
       errors: result.errors,
-      total_opportunities: totalCount,
-      note: 'Each county now has United Way, Food Bank, Housing Authority, Community Action, and Salvation Army entries'
+      total_opportunities: totalCount
     })
   } catch (error) {
     routeLogger.error('[crawl-all-counties] Error:', error)
@@ -1845,14 +1791,20 @@ router.post('/crawl-state-counties/:state', async (req, res) => {
   
   try {
     const { crawlStateCounties } = await import('../services/crawlerOsCompatibility.js')
-    const result = await crawlStateCounties(req.db, state)
+    const profileId = String(req.body?.profile_id || '').trim()
+    if (!profileId) return res.status(400).json({ success: false, error: 'profile_id_required' })
+    const result = await crawlStateCounties(req.db, state, { profileId })
+    if (!result.success) return res.status(422).json(result)
     
     res.json({
       success: true,
+      profile_id: profileId,
       state,
-      counties_processed: result.counties,
+      engine: result.engine,
+      activation_authority: result.activation_authority,
       inserted: result.inserted,
-      updated: result.updated,
+      evaluated: result.evaluated,
+      rejected: result.rejected,
       errors: result.errors
     })
   } catch (error) {
@@ -2124,8 +2076,11 @@ router.post('/crawl-grants-gov', async (req, res) => {
     
     const { crawlGrantsGov } = await import('../services/crawlerOsCompatibility.js')
     
+    const profileId = String(req.body?.profile_id || '').trim()
+    if (!profileId) return res.status(400).json({ success: false, error: 'profile_id_required' })
     const maxPages = req.body?.max_pages || 5
-    const result = await crawlGrantsGov(req.db, { maxPages, rowsPerPage: 100 })
+    const result = await crawlGrantsGov(req.db, { profileId, maxPages, rowsPerPage: 100 })
+    if (!result.success) return res.status(422).json(result)
     
     const totalCount = Number(
       (await req.db.prepare('SELECT COUNT(*) as count FROM funding_opportunities WHERE is_active = ?').get(true))?.count || 0,
@@ -2133,12 +2088,14 @@ router.post('/crawl-grants-gov', async (req, res) => {
     
     res.json({
       success: true,
-      message: `Crawled Grants.gov: ${result.inserted} new, ${result.updated} updated`,
+      message: `Crawled Grants.gov for profile ${profileId}: ${result.inserted} stored, ${result.evaluated} evaluated`,
+      profile_id: profileId,
+      activation_authority: result.activation_authority,
       inserted: result.inserted,
       updated: result.updated,
       errors: result.errors,
       total_opportunities: totalCount,
-      note: 'All opportunities are REAL federal grants from Grants.gov'
+      note: 'Only sources passing the canonical reality and four-truth gates are returned as recommendations'
     })
   } catch (error) {
     routeLogger.error('[crawl-grants-gov] Error:', error)
@@ -2203,21 +2160,38 @@ router.post('/seed-all-real', async (req, res) => {
     routeLogger.info('[seed-all-real] Starting comprehensive real funding seed...')
     
     const { seedAllRealFunding, getOpportunityCountsByState } = await import('../services/crawlerOsCompatibility.js')
-    
-    const result = await seedAllRealFunding(req.db)
-    const counts = getOpportunityCountsByState(req.db)
-    
-    // Count minimum available per ZIP (national programs available everywhere)
-    const minPerZip = counts.nationwide
-    
+    const profileId = String(req.body?.profile_id || '').trim()
+    if (!profileId) {
+      return res.status(400).json({
+        success: false,
+        error: 'profile_id is required',
+        message: 'Crawler OS cannot seed direct funding without a profile to evaluate source activation and all four funding truths.',
+      })
+    }
+
+    const result = await seedAllRealFunding(req.db, { profileId })
+    if (!result?.success) {
+      return res.status(422).json({ success: false, ...result })
+    }
+    const counts = await getOpportunityCountsByState(req.db)
+
+    // This is catalog inventory, not a claim that every row is funding for
+    // every ZIP. Profile-specific recommendations still require four-truth
+    // proof through Crawler OS.
+    const minPerZip = Number(counts.national ?? counts.nationwide ?? 0)
+
     res.json({
       success: true,
-      message: `Seeded ${result.total} REAL funding opportunities`,
-      national_programs: result.national.inserted + result.national.updated,
-      state_programs: result.states.inserted + result.states.updated,
-      total_opportunities: result.total,
+      engine: result.engine,
+      profile_id: profileId,
+      message: `Crawler OS evaluated ${result.evaluated} profile-scoped matches and inserted ${result.inserted} catalog opportunities.`,
+      inserted: result.inserted,
+      evaluated: result.evaluated,
+      rejected: result.rejected,
+      sources: result.sources,
+      total_opportunities: result.inserted,
       minimum_per_zip: minPerZip,
-      note: 'All opportunities have verified, clickable URLs to real funding sources'
+      counts_by_state: counts,
     })
   } catch (error) {
     routeLogger.error('[seed-all-real] Error:', error)
@@ -2480,32 +2454,35 @@ router.post('/real-crawl', async (req, res) => {
   }
   
   try {
-    const { state = null, all_states = false } = req.body || {}
-    
-    // Dynamic import of the real crawler
-    const { crawlRealOpportunities, crawlAllStates } = await import('../services/crawlerOsCompatibility.js')
-    
-    routeLogger.info(`[real-crawl] Starting real opportunity crawl${state ? ` for ${state}` : all_states ? ' for all states' : ' (national)'}...`)
-    
-    let result
-    if (all_states) {
-      result = await crawlAllStates(req.db, (progress) => {
-        routeLogger.info(`[real-crawl] Progress: ${JSON.stringify(progress)}`)
-      })
-    } else {
-      result = await crawlRealOpportunities(req.db, state, {
-        onProgress: (progress) => {
-          routeLogger.info(`[real-crawl] Progress: ${JSON.stringify(progress)}`)
-        }
+    const { state = null, all_states = false, profile_id } = req.body || {}
+    const profileId = String(profile_id || '').trim()
+    if (!profileId) {
+      return res.status(400).json({
+        success: false,
+        error: 'profile_id is required',
+        message: 'Crawler OS requires a profile so crawler activation, need fit, and eligibility can be evaluated.',
       })
     }
-    
-    routeLogger.info(`[real-crawl] Complete: ${result.inserted || result.total_inserted} inserted`)
-    
-    res.json({
-      success: true,
-      ...result
-    })
+
+    // Dynamic import of the Crawler OS compatibility seam.
+    const { crawlRealOpportunities, crawlAllStates } = await import('../services/crawlerOsCompatibility.js')
+
+    routeLogger.info(`[real-crawl] Starting profile-scoped crawl for ${profileId}${state ? ` in ${state}` : all_states ? ' across planned local lanes' : ''}...`)
+
+    const onProgress = (progress) => {
+      routeLogger.info(`[real-crawl] Progress: ${JSON.stringify(progress)}`)
+    }
+    const options = { profileId, state, onProgress }
+    const result = all_states
+      ? await crawlAllStates(req.db, options)
+      : await crawlRealOpportunities(req.db, options)
+
+    if (!result?.success) {
+      return res.status(422).json({ success: false, ...result })
+    }
+    routeLogger.info(`[real-crawl] Complete: ${result.inserted || 0} inserted`)
+
+    res.json({ success: true, ...result })
   } catch (error) {
     routeLogger.error('[real-crawl] Error:', error)
     res.status(500).json(formatError(error))

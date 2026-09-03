@@ -33,7 +33,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright';
 import { redact, redactString } from './redact.mjs';
-import { assertAutoSubmitDisabled } from './db-audit.mjs';
+import { assertReadOnlyAuditPosture } from './db-audit.mjs';
 
 // ---------------------------------------------------------------------------
 // Mutation policy
@@ -241,17 +241,17 @@ async function main() {
 
   // ---- HARD GATE --------------------------------------------------------
   // Before a browser exists. "Cannot verify" and "armed" are the same answer.
-  console.log('Auto-submit gate:');
-  const posture = await assertAutoSubmitDisabled({ baseUrl });
+  console.log('Hamilton authority gate:');
+  const posture = await assertReadOnlyAuditPosture({ baseUrl });
   if (!posture?.verified) {
     console.error(
-      '\nREFUSING to open a browser against production: HAMILTON_ALLOW_AUTOSUBMIT is ' +
-        'not provably disabled in the running process ' +
-        `(reason: ${posture?.reason || 'allow_auto_submit is not false, or the boot id did not match'}).`,
+      '\nREFUSING to open a browser against production: Hamilton submission authority ' +
+        'is not provably profile-scoped in the running process ' +
+        `(reason: ${posture?.reason || 'profile authority contract or boot id did not match'}).`,
     );
     process.exit(4);
   }
-  console.log('Gate passed: auto-submit is disabled in the process serving traffic.\n');
+  console.log('Gate passed: profile-scoped submission authority is active in the process serving traffic.\n');
 
   const allowPortalRead = args.portalReads && args.portalHosts.length > 0 && args.profiles.length > 0;
   if (args.portalReads && !allowPortalRead) {

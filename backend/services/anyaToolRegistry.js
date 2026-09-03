@@ -39,6 +39,7 @@ import {
 } from './anyaBrainService.js'
 import { getSystemDiagnostics, analyzeSystemHealth } from './diagnosticsService.js'
 import { ADMIN_EMAIL } from '../config/constants.js'
+import { invokeTextWithFallback as invokeProviderTextWithFallback } from '../utils/aiProviders.js'
 import { resolveInternalSelfBaseUrl } from '../utils/internalSelfBaseUrl.js'
 
 /**
@@ -74,9 +75,14 @@ import { getBackgroundCodeCrawlState, startBackgroundCodeCrawlAndRepair, getBack
 import { runMissionAudit } from './missionAuditService.js'
 import { AUDIT_CATEGORIES, SEVERITY, logAuditEvent } from './auditService.js'
 import { trustedOriginClause, trustedSourceClause } from '../utils/recordOrigins.js'
-import { normalizeState, statesMatch } from '../utils/stateNormalization.js'
-import { scoreOpportunity, computeMatchDecision } from './matchEngine.js'
+import { computeMatchDecision } from './matchEngine.js'
+import { qualifiesForDisplay, SURFACED_MATCHER_VERSIONS_SQL } from '../config/matchSurfacing.js'
+import { fundingTruthProofFrom } from '../config/fundingTruthPolicy.js'
 import { loadProfileContext } from './profileHelpers.js'
+import { deriveProfileItemNeeds } from '../config/profileItemNeeds.js'
+import { searchItemNeeds } from './itemNeedSearch.js'
+import { resolveProfileEntitlement } from './billing/entitlementService.js'
+import { CAPABILITY_KEYS } from '../../shared/tierCatalog.js'
 import {
   loadAnyaProfileSnapshot,
   ANYA_PROFILE_TOOL_MAX_CHARS,
@@ -186,107 +192,6 @@ function cleanList(list, max = 3) {
     .map((entry) => (typeof entry === 'string' ? entry.trim() : ''))
     .filter(Boolean)
     .slice(0, max)
-}
-
-function findMatchingCategories(oppCategories, profileCategories) {
-  if (!oppCategories || oppCategories.length === 0 || !profileCategories || profileCategories.length === 0) {
-    return []
-  }
-
-  // v4: Use word-boundary-aware matching to prevent false positives.
-  // Previously "care" would match "healthcare" and "cat" would match "education".
-  // Now we require either exact match or that the substring is a complete word boundary.
-  return oppCategories.filter(c => {
-    const cLower = c.toLowerCase().trim()
-    return profileCategories.some(pc => {
-      const pcLower = pc.toLowerCase().trim()
-      if (cLower === pcLower) return true
-      // Only allow substring match if the shorter string is at least 4 chars
-      // and appears as a word boundary in the longer string
-      if (pcLower.length >= 4 && cLower.length >= 4) {
-        const shorter = cLower.length <= pcLower.length ? cLower : pcLower
-        const longer = cLower.length <= pcLower.length ? pcLower : cLower
-        const rx = new RegExp(`\\b${shorter.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i')
-        return rx.test(longer)
-      }
-      return false
-    })
-  })
-}
-
-function generateMatchReasons(opp, profile) {
-  const reasons = []
-
-  // Location match — v4: use normalizeState for robust comparison
-  if (opp.state && profile?.state) {
-    if (statesMatch(opp.state, profile.state)) {
-      reasons.push(`Location match: Both in ${normalizeState(opp.state) || opp.state}`)
-    }
-  } else if (opp.is_national || opp.state === 'nationwide') {
-    reasons.push('Available nationwide')
-  }
-  
-  // Category alignment
-  const oppCategories = cleanList(safeParseJSON(opp.categories, []), 10)
-  const profileCategories = cleanList(safeParseJSON(profile?.categories, []), 10)
-  const matchingCategories = findMatchingCategories(oppCategories, profileCategories)
-  if (matchingCategories.length > 0) {
-    reasons.push(`Category alignment: ${matchingCategories.slice(0, 2).join(', ')}`)
-  }
-  
-  // Organization type / eligibility
-  if (profile?.organization_type) {
-    const eligibility = cleanList(safeParseJSON(opp.eligibility_bullets, []), 10)
-    const hasMatch = eligibility.some(e => 
-      e.toLowerCase().includes(profile.organization_type.toLowerCase())
-    )
-    if (hasMatch) {
-      reasons.push(`Eligibility fit: Accepts ${profile.organization_type} organizations`)
-    }
-  }
-  
-  // Check for special profile attributes
-  if (profile?.serves_veterans && opp.keywords) {
-    const keywords = cleanList(safeParseJSON(opp.keywords, []), 20)
-    if (keywords.some(k => k.toLowerCase().includes('veteran'))) {
-      reasons.push('Serves veterans - matching funder priority')
-    }
-  }
-  
-  if (profile?.serves_disabled && opp.keywords) {
-    const keywords = cleanList(safeParseJSON(opp.keywords, []), 20)
-    if (keywords.some(k => k.toLowerCase().includes('disabilit'))) {
-      reasons.push('Serves individuals with disabilities - matching funder focus')
-    }
-  }
-  
-  return reasons
-}
-
-function generateFitExplanation(opp, profile, matchReasons) {
-  if (matchReasons.length === 0) {
-    return 'This opportunity may be relevant based on general criteria.'
-  }
-  
-  const primaryReason = matchReasons[0]
-  const oppType = opp.opportunity_type || 'grant'
-  const sponsor = opp.sponsor || 'this funder'
-  
-  let explanation = `This ${oppType} is a strong match because `
-  
-  if (primaryReason.includes('Location match')) {
-    explanation += `your organization operates in the same geographic area that ${sponsor} serves. `
-  } else if (primaryReason.includes('Category alignment')) {
-    explanation += `your organization's focus areas align with ${sponsor}'s funding priorities. `
-  } else {
-    explanation += `it aligns with your organization's profile. `
-  }
-  
-  if (matchReasons.length > 1) {
-    explanation += `Additionally, ${matchReasons.slice(1).join(', ').toLowerCase()}.`
-  }
-  
-  return explanation
 }
 
 function formatAmountRange(min, max, description) {
@@ -431,116 +336,54 @@ async function performCodeSearch({ query, scopePath, maxResults = 20 }) {
   }
 }
 
-function collectGrantMatches(db, profileId, limit) {
-  const activePredicate = db?.dialect === 'postgres' ? 'is_active = TRUE' : 'is_active = 1'
-  const primary = db
-    .prepare(
-      `
-        SELECT id, title, sponsor, deadline, amount_min, amount_max, amount_description,
-               application_url, state, opportunity_type, requires_match, match_percentage,
-               eligibility_bullets, categories, source, source_url, updated_at, match_reasons,
-               description, regions, keywords, link_status
-        FROM funding_opportunities
-        WHERE ${activePredicate} AND profile_id = ?
-          AND ${trustedOriginClause()}
-          AND ${trustedSourceClause()}
-        ORDER BY updated_at DESC
-        LIMIT ?
-      `,
-    )
-    .all(profileId, limit)
+async function collectGrantMatches(db, profileId, limit) {
+  const activePredicate = db?.dialect === 'postgres'
+    ? '(fo.is_active IS NULL OR fo.is_active = TRUE)'
+    : '(fo.is_active IS NULL OR fo.is_active = 1)'
+  const scanLimit = Math.max(limit, limit * 4)
+  // Compile-time SQL fragments from closed registries only. The `safe*` names
+  // make the repository SQL auditor verify that no request input reaches them.
+  const safeMatcherVersionsSql = SURFACED_MATCHER_VERSIONS_SQL
+  const safeTrustedOriginSql = trustedOriginClause('fo')
+  const safeTrustedSourceSql = trustedSourceClause('fo')
+  const rows = await db.prepare(
+    `SELECT fo.*, m.match_score, m.match_decision, m.match_explanation,
+            m.match_explain_json, m.matcher_version, m.updated_at AS match_updated_at
+       FROM profile_opportunity_matches m
+       JOIN funding_opportunities fo ON fo.id = m.opportunity_id
+      WHERE m.profile_id = ?
+        AND m.matcher_version IN ${safeMatcherVersionsSql}
+        AND ${activePredicate}
+        AND ${safeTrustedOriginSql}
+        AND ${safeTrustedSourceSql}
+      ORDER BY m.match_score DESC, m.updated_at DESC
+      LIMIT ?`,
+  ).all(String(profileId), scanLimit)
 
-  if (primary.length >= limit) {
-    return primary
-  }
-
-  const seen = new Set(primary.map((opp) => opp.id))
-  const remaining = limit - primary.length
-
-  // v4 FIX: Fallback query now filters by profile state or national opportunities.
-  // Previously this query had NO profile_id filter, causing "profile bleed" where
-  // unrelated global opportunities would be shown to users.
-  let profileState = null
-  try {
-    const profileRow = db.prepare('SELECT state FROM profiles WHERE id = ?').get(profileId)
-    profileState = normalizeState(profileRow?.state)
-  } catch { /* profiles table may not have state column */ }
-
-  let fallback
-  if (profileState) {
-    fallback = db
-      .prepare(
-        `
-          SELECT id, title, sponsor, deadline, amount_min, amount_max, amount_description,
-                 application_url, state, opportunity_type, requires_match, match_percentage,
-                 eligibility_bullets, categories, source, source_url, updated_at, match_reasons,
-                 description, regions, keywords, link_status
-          FROM funding_opportunities
-          WHERE ${activePredicate}
-            AND (state = ? OR state = 'nationwide' OR is_national = ${db?.dialect === 'postgres' ? 'TRUE' : '1'})
-            AND ${trustedOriginClause()}
-            AND ${trustedSourceClause()}
-          ORDER BY updated_at DESC
-          LIMIT ?
-        `,
-      )
-      .all(profileState, (remaining * 3) || remaining)
-  } else {
-    // No state known — only return national opportunities as fallback
-    fallback = db
-      .prepare(
-        `
-          SELECT id, title, sponsor, deadline, amount_min, amount_max, amount_description,
-                 application_url, state, opportunity_type, requires_match, match_percentage,
-                 eligibility_bullets, categories, source, source_url, updated_at, match_reasons,
-                 description, regions, keywords, link_status
-          FROM funding_opportunities
-          WHERE ${activePredicate}
-            AND (state = 'nationwide' OR is_national = ${db?.dialect === 'postgres' ? 'TRUE' : '1'})
-            AND ${trustedOriginClause()}
-            AND ${trustedSourceClause()}
-          ORDER BY updated_at DESC
-          LIMIT ?
-        `,
-      )
-      .all((remaining * 3) || remaining)
-  }
-
-  const merged = [...primary]
-  fallback.forEach((opp) => {
-    if (merged.length >= limit) return
-    if (seen.has(opp.id)) return
-    seen.add(opp.id)
-    merged.push(opp)
-  })
-
-  return merged
+  // This is a read of the canonical rolling match snapshot, not a second
+  // catalog scorer. Direct funding needs ACCEPT + all four truth proofs;
+  // pointer resources remain explicitly labelled as research paths.
+  return (rows || [])
+    .filter((row) => qualifiesForDisplay(row))
+    .slice(0, limit)
 }
 
-function formatGrantSummaries(opportunities, profile = null) {
+function formatGrantSummaries(opportunities) {
   return opportunities.map((opp) => {
     const eligibility = cleanList(safeParseJSON(opp.eligibility_bullets, []))
     const categories = cleanList(safeParseJSON(opp.categories, []))
     const amountRange = formatAmountRange(opp.amount_min, opp.amount_max, opp.amount_description)
     const daysRemaining = daysUntil(opp.deadline)
     
-    // Get or generate match reasons
-    let matchReasons = cleanList(safeParseJSON(opp.match_reasons, []), 10)
-    if (matchReasons.length === 0 && profile) {
-      matchReasons = generateMatchReasons(opp, profile)
-    }
-    
-    // Calculate match score
-    let matchScore = null
-    if (profile) {
-      matchScore = scoreOpportunity(profile, opp).score
-    }
-    
-    // Generate fit explanation
-    let fitExplanation = null
-    if (profile) {
-      fitExplanation = generateFitExplanation(opp, profile, matchReasons)
-    }
+    const matchExplain = safeParseJSON(opp.match_explain_json, {}) || {}
+    const matchReasons = cleanList(
+      matchExplain.matched_profile_facts || safeParseJSON(opp.match_reasons, []),
+      10,
+    )
+    const matchScore = Number.isFinite(Number(opp.match_score))
+      ? Number(opp.match_score)
+      : null
+    const fitExplanation = opp.match_explanation || null
 
     return {
       id: opp.id,
@@ -604,33 +447,21 @@ async function summarizeGrants(db, params, context) {
   }
 
   const limit = Math.max(1, Math.min(Number(params?.limit) || DEFAULT_GRANT_LIMIT, 10))
-  const opportunities = collectGrantMatches(db, profileId, limit)
-  const formatted = formatGrantSummaries(opportunities, enrichedProfile)
+  const opportunities = await collectGrantMatches(db, profileId, limit)
+  const formatted = formatGrantSummaries(opportunities)
 
-  // Re-run the canonical decision engine for each opportunity so the returned
-  // explanation lines up with what matching/discovery would show. We attach
-  // the matched_profile_facts payload so the UI/Anya can display "what facts
-  // from your profile caused this" without re-deriving anything.
+  // Report the exact stored decision/proof that made each row visible. Anya
+  // must not recalculate a different score while explaining the user's list.
   for (let i = 0; i < formatted.length; i++) {
-    try {
-      const opp = opportunities[i]
-      if (!opp) continue
-      const decision = computeMatchDecision(
-        context_profile.profile,
-        opp,
-        { profileSections: context_profile.sections, signals: context_profile.signals },
-      )
-      formatted[i].canonical_match = {
-        score: decision.score,
-        decision: decision.decision,
-        confidence: decision.confidence,
-        matched_profile_facts: decision.matched_profile_facts ?? [],
-        ineligibility_reasons: decision.ineligibilityReasons ?? [],
-        matcher_version: decision.matcherVersion,
-      }
-    } catch (decisionErr) {
-      // Never fail the whole summary on a single bad row.
-      formatted[i].canonical_match = { error: decisionErr?.message ?? String(decisionErr) }
+    const opp = opportunities[i]
+    const explain = safeParseJSON(opp?.match_explain_json, {}) || {}
+    formatted[i].canonical_match = {
+      score: Number.isFinite(Number(opp?.match_score)) ? Number(opp.match_score) : null,
+      decision: String(opp?.match_decision || '').toUpperCase() || null,
+      matched_profile_facts: explain.matched_profile_facts || [],
+      ineligibility_reasons: explain.ineligibility_reasons || [],
+      matcher_version: opp?.matcher_version || null,
+      four_truth_proof: fundingTruthProofFrom(opp),
     }
   }
 
@@ -1007,12 +838,6 @@ registerTool({
 
     const getOpenAI = context?.getOpenAI
     const openai = typeof getOpenAI === 'function' ? getOpenAI() : null
-    if (!openai) {
-      const error = new Error('OpenAI client not configured for code.suggestPatch')
-      error.status = 503
-      throw error
-    }
-
     const system = [
       'You are a code advisor.',
       'Return ONLY a unified diff patch (no markdown, no explanations).',
@@ -1027,17 +852,20 @@ registerTool({
       truncated,
     ].join('\n')
 
-    const response = await openai.chat.completions.create({
-      model: process.env.ANYA_OPENAI_MODEL || 'gpt-4o-mini',
+    const providerResult = await invokeProviderTextWithFallback({
+      openai,
+      openaiModel: process.env.ANYA_OPENAI_MODEL || 'gpt-4o-mini',
+      system,
+      prompt: userPrompt,
       temperature: 0.2,
-      max_tokens: 1200,
-      messages: [
-        { role: 'system', content: system },
-        { role: 'user', content: userPrompt },
-      ],
+      maxTokens: 1200,
     })
-
-    const patch = response?.choices?.[0]?.message?.content ?? ''
+    if (!providerResult.ok || !providerResult.text) {
+      const error = providerResult.error || new Error('Every configured AI provider failed for code.suggestPatch')
+      error.status = 503
+      throw error
+    }
+    const patch = providerResult.text
     return {
       file: filePath,
       patch: String(patch || '').trim(),
@@ -1623,6 +1451,96 @@ registerTool({
       message: unset
         ? `Done — ${target.name} is back to "planning" and all schools' funding cards are visible in the feed again.`
         : `Done — ${target.name} is marked as the school you are attending. Other still-active applications were moved to "deferred", and the funding feed is now scoped to ${target.name}.`,
+    }
+  },
+})
+
+registerTool({
+  name: 'profile.searchItemFunding',
+  description: 'Search for profile-specific funding and assistance for concrete items. If items are omitted, derive the list from all stored profile sections (including assistance and mobility needs). Exact free-text wording is always searched first. Results separate verified direct funding from research leads and enforce the profile tier/add-on entitlement.',
+  schema: {
+    type: 'object',
+    properties: {
+      profileId: { type: 'string', description: 'The profile whose facts, location, eligibility, and billing entitlement govern the search.' },
+      items: {
+        type: 'array',
+        description: 'Optional exact item phrases from the user, such as "15 passenger bus" or "durable medical equipment". Omit to derive needs from the profile.',
+        items: { type: 'string' },
+        maxItems: 5,
+      },
+      item: { type: 'string', description: 'Optional single exact free-text item phrase; combined with items when both are supplied.' },
+      variant: { type: 'string', enum: ['funding', 'gift'], description: 'Search funding by default, or in-kind gifts.' },
+      maxResults: { type: 'integer', minimum: 1, maximum: 20 },
+    },
+    required: ['profileId'],
+    additionalProperties: false,
+  },
+  handler: async (params, context) => {
+    if (!context?.db) throw new Error('Database connection unavailable')
+    const profileId = String(params?.profileId || '').trim()
+    if (!profileId) throw new Error('profileId is required')
+    if (!ensureProfileAccess(context?.ctx, profileId)) {
+      const error = new Error('Not authorized to search item funding for this profile')
+      error.status = 403
+      throw error
+    }
+
+    const entitlement = await resolveProfileEntitlement(context.db, {
+      profileId,
+      capabilityKey: CAPABILITY_KEYS.ITEM_FUNDING,
+      isAdmin: context?.ctx?.isAdmin === true,
+    })
+    if (!entitlement.allowed) {
+      const error = new Error('Item funding search is not included in this profile tier or active add-ons')
+      error.status = 402
+      error.code = 'entitlement_required'
+      error.entitlement = entitlement
+      throw error
+    }
+
+    const profileContext = await loadProfileContext(context.db, profileId)
+    const explicitItems = [
+      ...(Array.isArray(params?.items) ? params.items : []),
+      params?.item,
+    ]
+      .map((value) => String(value || '').trim())
+      .filter(Boolean)
+
+    const derivedItemReport = explicitItems.length === 0
+      ? deriveProfileItemNeeds(profileContext.profile, profileContext.sections)
+      : null
+    const requestedItems = explicitItems.length > 0
+      ? explicitItems
+      : (Array.isArray(derivedItemReport?.needs) ? derivedItemReport.needs : [])
+    if (requestedItems.length === 0) {
+      return {
+        profile_id: profileId,
+        requested_count: 0,
+        searched_count: 0,
+        total_found: 0,
+        total_direct_funding: 0,
+        total_research_leads: 0,
+        items: [],
+        derived_from_profile: true,
+        message: 'No concrete item needs are stored yet. Add an item, assistance need, disability mobility need, or equipment need to the profile and search again.',
+      }
+    }
+
+    const results = await searchItemNeeds(context.db, {
+      profileId,
+      items: requestedItems,
+      profileContext,
+      variant: params?.variant === 'gift' ? 'gift' : 'funding',
+      maxResults: Math.max(1, Math.min(Number(params?.maxResults) || 12, 20)),
+    })
+    return {
+      ...results,
+      derived_from_profile: explicitItems.length === 0,
+      entitlement: {
+        capability: entitlement.capability,
+        tier_id: entitlement.tier_id || null,
+        source: entitlement.source,
+      },
     }
   },
 })
@@ -3814,26 +3732,23 @@ async function generateGrantWritingDocument(context, { systemDirective, opportun
 
   const getOpenAI = context?.getOpenAI
   const openai = typeof getOpenAI === 'function' ? getOpenAI() : null
-  if (!openai) {
-    return {
-      content: null,
-      generated: 'unavailable',
-      note: 'The AI writing service is not configured, so a finished draft could not be generated here. The opportunity and profile facts are included so the draft can be written manually.',
-    }
-  }
-
   try {
-    const response = await openai.chat.completions.create({
-      model: process.env.ANYA_OPENAI_MODEL || process.env.OPENAI_MODEL || 'gpt-4o-mini',
+    const providerResult = await invokeProviderTextWithFallback({
+      openai,
+      openaiModel: process.env.ANYA_OPENAI_MODEL || process.env.OPENAI_MODEL || 'gpt-4o-mini',
+      system: systemDirective,
+      prompt: userPrompt,
       temperature: 0.6,
-      max_tokens: 3000,
-      messages: [
-        { role: 'system', content: systemDirective },
-        { role: 'user', content: userPrompt },
-      ],
+      maxTokens: 3000,
     })
-    const content = response?.choices?.[0]?.message?.content?.trim() || ''
-    return { content: content || null, generated: content ? 'ai' : 'empty', usage: response?.usage || null }
+    const content = providerResult.ok ? providerResult.text?.trim() || '' : ''
+    if (!content) throw providerResult.error || new Error('Every configured AI provider failed')
+    return {
+      content,
+      generated: 'ai',
+      provider: providerResult.provider,
+      usage: providerResult.usage || null,
+    }
   } catch (err) {
     console.error('[grants.write] AI generation failed:', err.message)
     return { content: null, generated: 'error', error: err.message }

@@ -118,6 +118,23 @@ truth: `shared/freeWeek.js` (enforced in `backend/utils/tierGating.js` and
   - **`ANTHROPIC_API_KEY`**
   - Used by Anya status/tools. Core flows must still work without it.
 
+- **Free/local AI failover (OpenAI-compatible)**
+  - Used after OpenAI and Anthropic are missing, out of credit/quota, rate-limited, timed out, or return an unusable response. GrantFlow tries configured routes in order and reports the actual provider as `free:<route-id>`; it never turns a provider failure into fabricated output.
+  - **Ollama/local shorthand:** set `OLLAMA_BASE_URL` to the server's OpenAI-compatible `/v1` URL and `OLLAMA_MODEL` to an installed model. `OLLAMA_API_KEY` is optional for gateways that require one.
+  - **Generic shorthand:** set `FREE_AI_BASE_URL`, `FREE_AI_MODEL`, and optionally `FREE_AI_API_KEY`.
+  - **Multiple routes:** set `FREE_AI_ROUTES` to a JSON array such as:
+    ```json
+    [
+      { "id": "local-primary", "base_url": "http://ollama:11434/v1", "model": "your-installed-model" },
+      { "id": "free-tier-backup", "base_url": "https://provider.example/v1", "model": "provider-model", "api_key_env": "FREE_TIER_PROVIDER_KEY" }
+    ]
+    ```
+    Put only the secret's environment-variable **name** in `api_key_env`; set its value separately in Railway. Do not embed credentials in URLs or in `FREE_AI_ROUTES`.
+  - **`FREE_AI_TIMEOUT_MS`** — per-client timeout in milliseconds (default `12000`).
+  - **`FREE_AI_MAX_RETRIES`** — SDK retries per free route (default `0`; GrantFlow already advances to the next route).
+  - **`FREE_AI_RESERVE_MS`** — part of the shared request deadline reserved for free-route failover (default `6000`).
+  - Free/local chat fallback is read-only unless a provider completed a registered GrantFlow tool call. It cannot claim that Anya saved, submitted, deleted, or changed profile data.
+
 - **Email (Resend)** - Required for email-based OTP login
   - **`RESEND_API_KEY`** - API key from resend.com dashboard
     - **MUST be set in Railway** (backend runtime, not Vercel)
@@ -139,7 +156,6 @@ truth: `shared/freeWeek.js` (enforced in `backend/utils/tierGating.js` and
   - **`HAMILTON_ENABLE_BROWSER_AUTOMATION`** - `"true"` to let Hamilton drive a real Playwright browser; otherwise she degrades to the lawful pdf/docx packet.
   - **`HAMILTON_TAILORED_APPROVAL_GATE`** - defaults ON. Set to `"0"` to disable the per-funder tailored-application auto-submit gate (operational escape hatch only). When ON, Hamilton may auto-submit a portal card ONLY when its tailored narrative is approved/edited, has no outstanding missing questions, and the profile's `hamilton_auto_submit` toggle is on.
   - **`HAMILTON_BROWSER_AUTOMATION_HOST_ALLOWLIST`** - Optional comma-separated host allowlist (e.g. `tn.gov,mtsu.edu`). Empty = no restriction.
-  - **`HAMILTON_ALLOW_AUTOSUBMIT`** - `"true"` to let Hamilton submit portal applications (per-source authorization still gates it).
   - **`HAMILTON_BROWSER_STORAGE_DIR`** - Optional on-disk dir for legacy storageState files (path-traversal guard root). Sessions are stored encrypted in Postgres regardless; Railway disk is ephemeral.
 
 - **Hamilton cloud interactive login (Option B — in-app portal session capture)**

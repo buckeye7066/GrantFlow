@@ -145,11 +145,9 @@ beforeEach(() => {
   savedEnv.gate = process.env.HAMILTON_TAILORED_APPROVAL_GATE
   savedEnv.uploads = process.env.UPLOADS_DIR
   savedEnv.confdir = process.env.HAMILTON_CONFIRMATION_DIR
-  savedEnv.autosubmit = process.env.HAMILTON_ALLOW_AUTOSUBMIT
   process.env.HAMILTON_ENABLE_BROWSER_AUTOMATION = 'true'
   process.env.HAMILTON_BROWSER_AUTOMATION_HOST_ALLOWLIST = ''
   process.env.HAMILTON_TAILORED_APPROVAL_GATE = '0'
-  process.env.HAMILTON_ALLOW_AUTOSUBMIT = 'true'
 })
 afterEach(() => {
   process.env.HAMILTON_ENABLE_BROWSER_AUTOMATION = savedEnv.enabled
@@ -160,8 +158,6 @@ afterEach(() => {
   else process.env.UPLOADS_DIR = savedEnv.uploads
   if (savedEnv.confdir === undefined) delete process.env.HAMILTON_CONFIRMATION_DIR
   else process.env.HAMILTON_CONFIRMATION_DIR = savedEnv.confdir
-  if (savedEnv.autosubmit === undefined) delete process.env.HAMILTON_ALLOW_AUTOSUBMIT
-  else process.env.HAMILTON_ALLOW_AUTOSUBMIT = savedEnv.autosubmit
   while (tmpDirs.length) {
     try { fs.rmSync(tmpDirs.pop(), { recursive: true, force: true }) } catch { /* ignore */ }
   }

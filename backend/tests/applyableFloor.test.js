@@ -19,6 +19,7 @@
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import Database from 'better-sqlite3'
+import { withVerifiedFourTruth, verifiedFourTruthExplain } from './helpers/fourTruthFixture.js'
 
 import {
   classifyApplyabilityShim,
@@ -159,8 +160,8 @@ describe('auditProfileResultCoverageFromData — the applyable+typed count', () 
     applyableFloor: 3,
   }
   const rows = [
-    { match_score: 50, match_decision: 'accept', title: 'TN Nursing Scholarship', opportunity_kind: 'scholarship', application_url: 'https://a.org/apply' },
-    { match_score: 50, match_decision: 'accept', title: 'SSI benefit', opportunity_kind: 'benefit' }, // awardable but info_only (no form)
+    withVerifiedFourTruth({ match_score: 50, match_decision: 'accept', title: 'TN Nursing Scholarship', opportunity_kind: 'scholarship', application_url: 'https://a.org/apply' }),
+    withVerifiedFourTruth({ match_score: 50, match_decision: 'accept', title: 'SSI benefit', opportunity_kind: 'benefit' }), // awardable but info_only (no form)
     { match_score: 50, match_decision: 'accept', title: 'Local resource directory', opportunity_kind: 'DIRECTORY' }, // pointer → not awardable
   ]
 
@@ -206,7 +207,7 @@ describe('auditProfileResultCoverageFromData — the applyable+typed count', () 
   })
 
   it('at or above the floor does not fire', () => {
-    const many = Array.from({ length: 4 }, (_, i) => ({
+    const many = Array.from({ length: 4 }, (_, i) => withVerifiedFourTruth({
       match_score: 50, match_decision: 'accept', title: `Scholarship ${i}`, opportunity_kind: 'scholarship', application_url: `https://a${i}.org/apply`,
     }))
     const a = auditProfileResultCoverageFromData({ profileId: 'p', surfacedRows: many, thesis: { is_student: true }, ...preds })
@@ -277,7 +278,8 @@ function makeDb() {
     );
     CREATE TABLE profile_sections (profile_id TEXT, section_key TEXT, data TEXT, updated_at TEXT);
     CREATE TABLE profile_opportunity_matches (
-      profile_id TEXT, opportunity_id TEXT, match_score INTEGER, match_decision TEXT, matcher_version TEXT
+      profile_id TEXT, opportunity_id TEXT, match_score INTEGER, match_decision TEXT, matcher_version TEXT,
+      match_explain_json TEXT
     );
     CREATE TABLE funding_opportunities (
       id TEXT PRIMARY KEY, title TEXT, sponsor TEXT, description TEXT, categories TEXT,
@@ -297,8 +299,8 @@ function addApplyableTypedRow(db) {
   db.prepare(`INSERT INTO funding_opportunities (id, title, opportunity_kind, application_url, is_active)
               VALUES (?,?,?,?,1)`)
     .run('opp-1', 'State Small Business Relief Grant', 'grant', 'https://grants.example.org/apply')
-  db.prepare('INSERT INTO profile_opportunity_matches VALUES (?,?,?,?,?)')
-    .run('olivia', 'opp-1', 60, 'ACCEPT', 'crawler-os')
+  db.prepare('INSERT INTO profile_opportunity_matches VALUES (?,?,?,?,?,?)')
+    .run('olivia', 'opp-1', 60, 'ACCEPT', 'crawler-os', verifiedFourTruthExplain())
 }
 
 // The audit the sweep would have produced for a below-floor Olivia.

@@ -22,6 +22,7 @@ import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import path from 'node:path'
 import Database from 'better-sqlite3'
+import { verifiedFourTruthExplain } from './helpers/fourTruthFixture.js'
 
 let runLiveMock = vi.fn(async () => ({ ok: true }))
 vi.mock('../services/crawlerOsService.js', async (importOriginal) => {
@@ -45,7 +46,7 @@ function makeDb() {
     CREATE TABLE profile_sections (profile_id TEXT, section_key TEXT, data TEXT, updated_at TEXT);
     CREATE TABLE profile_opportunity_matches (
       profile_id TEXT, opportunity_id TEXT, match_score INTEGER,
-      match_decision TEXT, matcher_version TEXT
+      match_decision TEXT, matcher_version TEXT, match_explain_json TEXT
     );
     CREATE TABLE funding_opportunities (
       id TEXT PRIMARY KEY, title TEXT, sponsor TEXT, description TEXT, categories TEXT,
@@ -65,8 +66,8 @@ function seed(db, profileId, { awards = 0, locators = 0, name = profileId } = {}
     const oid = `${profileId}-o${i++}`
     db.prepare('INSERT INTO funding_opportunities (id, title, opportunity_kind, is_active) VALUES (?,?,?,1)')
       .run(oid, `${kind} ${i}`, kind)
-    db.prepare('INSERT INTO profile_opportunity_matches VALUES (?,?,?,?,?)')
-      .run(profileId, oid, 40, decision, 'crawler-os')
+    db.prepare('INSERT INTO profile_opportunity_matches VALUES (?,?,?,?,?,?)')
+      .run(profileId, oid, 40, decision, 'crawler-os', decision === 'ACCEPT' ? verifiedFourTruthExplain() : null)
   }
   for (let k = 0; k < awards; k += 1) put('direct_grant', 'ACCEPT')
   for (let k = 0; k < locators; k += 1) put('directory', 'REVIEW')

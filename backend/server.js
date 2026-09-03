@@ -1082,11 +1082,11 @@ if (!app.locals.db_startup_error) {
   }
 
   // Publish this process's automation posture (booleans only, no secrets) so an
-  // external auditor holding ONLY the scoped read-only DB role can prove
-  // HAMILTON_ALLOW_AUTOSUBMIT is disabled before it touches an authenticated
-  // surface. Runs after ensureSchemaInvariants so system_kv is guaranteed to
-  // exist. Best-effort by design: a missing row makes the audit abort ("cannot
-  // verify" = refuse), never proceed, so failing here can only be conservative.
+  // external auditor holding ONLY the scoped read-only DB role can prove the
+  // running process uses profile-owned authorization at every irreversible
+  // Hamilton boundary. Runs after ensureSchemaInvariants so system_kv exists.
+  // Best-effort by design: a missing row makes the audit abort ("cannot verify"
+  // = refuse), never proceed, so failing here can only be conservative.
   try {
     const { recordAutomationPosture } = await import('./startup/recordAutomationPosture.js')
     await recordAutomationPosture(db, { logger: console })

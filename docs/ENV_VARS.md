@@ -8,9 +8,9 @@ requirements remain in `docs/ENVIRONMENT.md`.
 
 ## Summary
 
-- Total vars: **954**
-- Vars referenced in code: **954**
-- Vars listed in env templates: **951**
+- Total vars: **965**
+- Vars referenced in code: **965**
+- Vars listed in env templates: **962**
 
 ## Inventory
 
@@ -36,6 +36,7 @@ requirements remain in `docs/ENVIRONMENT.md`.
 | `ADVERSARIAL_VERIFIER_MAX_TOKENS` | Yes | Yes | Backend/Node |
 | `ADVERSARIAL_VERIFIER_MODEL` | Yes | Yes | Backend/Node |
 | `AGENT_CONTROL_ADMIN_EMAIL` | Yes | Yes | Backend/Node |
+| `AIBUS_VAULT` | Yes | Yes | Backend/Node |
 | `ALERT_FAILURE_THRESHOLD` | Yes | Yes | Backend/Node |
 | `ALERT_QUEUE_BACKLOG_THRESHOLD` | Yes | Yes | Backend/Node |
 | `ALLOW_AUTO_ROUTE_GENERATION` | Yes | Yes | Backend/Node |
@@ -90,8 +91,6 @@ requirements remain in `docs/ENVIRONMENT.md`.
 | `ANYA_ADMIN_GEO_OVERPASS_RADIUS_KM` | Yes | Yes | Backend/Node |
 | `ANYA_ADMIN_GEO_STATE_PACING_MS` | Yes | Yes | Backend/Node |
 | `ANYA_ADMIN_TOKEN` | Yes | Yes | Backend/Node |
-| `ANYA_ANTHROPIC_COOLDOWN_MS` | Yes | Yes | Backend/Node |
-| `ANYA_ANTHROPIC_FAILURE_THRESHOLD` | Yes | Yes | Backend/Node |
 | `ANYA_ANTHROPIC_MAX_RETRIES` | Yes | Yes | Backend/Node |
 | `ANYA_ANTHROPIC_TIMEOUT_MS` | Yes | Yes | Backend/Node |
 | `ANYA_API_KEY` | Yes | Yes | Backend/Node |
@@ -365,6 +364,13 @@ requirements remain in `docs/ENVIRONMENT.md`.
 | `FEATURE_DETAILED_MATCHING` | Yes | Yes | Backend/Node |
 | `FEATURE_GEO_CRAWL` | Yes | Yes | Backend/Node |
 | `FIRST_LOGIN_REPORT_EMAIL` | Yes | Yes | Backend/Node |
+| `FREE_AI_API_KEY` | Yes | Yes | Backend/Node |
+| `FREE_AI_BASE_URL` | Yes | Yes | Backend/Node |
+| `FREE_AI_MAX_RETRIES` | Yes | Yes | Backend/Node |
+| `FREE_AI_MODEL` | Yes | Yes | Backend/Node |
+| `FREE_AI_RESERVE_MS` | Yes | Yes | Backend/Node |
+| `FREE_AI_ROUTES` | Yes | Yes | Backend/Node |
+| `FREE_AI_TIMEOUT_MS` | Yes | Yes | Backend/Node |
 | `FROM_EMAIL` | Yes | Yes | Backend/Node |
 | `FRONTEND_BASE_URL` | Yes | Yes | Backend/Node |
 | `FRONTEND_COMPONENTS_PATH` | Yes | Yes | Backend/Node |
@@ -453,7 +459,6 @@ requirements remain in `docs/ENVIRONMENT.md`.
 | `GRANT_STRUCTURAL_RECLAIM_LIMIT` | Yes | Yes | Backend/Node |
 | `HAMILTON_ADMIN_EMAIL` | Yes | Yes | Backend/Node |
 | `HAMILTON_ADMIN_VAULT_PROFILE_ID` | Yes | Yes | Backend/Node |
-| `HAMILTON_ALLOW_AUTOSUBMIT` | Yes | Yes | Backend/Node |
 | `HAMILTON_AUTOPILOT_MAX_PAGES` | Yes | Yes | Backend/Node |
 | `HAMILTON_AUTOPILOT_NAV_TIMEOUT_MS` | Yes | Yes | Backend/Node |
 | `HAMILTON_AUTOPILOT_STEP_TIMEOUT_MS` | Yes | Yes | Backend/Node |
@@ -484,9 +489,7 @@ requirements remain in `docs/ENVIRONMENT.md`.
 | `HAMILTON_SIGNUP_VERIFY_POLL_MS` | Yes | Yes | Backend/Node |
 | `HAMILTON_SIGNUP_VERIFY_WAIT_MS` | Yes | Yes | Backend/Node |
 | `HAMILTON_STOP_RECHECK_LIMIT` | Yes | Yes | Backend/Node |
-| `HAMILTON_SUGGEST_MAX_RETRIES` | Yes | Yes | Backend/Node |
 | `HAMILTON_SUGGEST_MODEL` | Yes | Yes | Backend/Node |
-| `HAMILTON_SUGGEST_TIMEOUT_MS` | Yes | Yes | Backend/Node |
 | `HAMILTON_SYNC_ON_CAPTURE` | Yes | Yes | Backend/Node |
 | `HAMILTON_TAILORED_APPROVAL_GATE` | Yes | Yes | Backend/Node |
 | `HAMILTON_VAULT_UNLOCK_TTL_MS` | Yes | Yes | Backend/Node |
@@ -548,10 +551,8 @@ requirements remain in `docs/ENVIRONMENT.md`.
 | `JOHN_WEB_RESEARCH` | Yes | Yes | Backend/Node |
 | `JWT_SECRET` | Yes | Yes | Backend/Node |
 | `LAPTOP_CONNECTOR_API` | Yes | Yes | Backend/Node |
-| `LAPTOP_CONNECTOR_MAX_RETRIES` | Yes | Yes | Backend/Node |
 | `LAPTOP_CONNECTOR_MAX_TEXT` | Yes | Yes | Backend/Node |
 | `LAPTOP_CONNECTOR_MODEL` | Yes | Yes | Backend/Node |
-| `LAPTOP_CONNECTOR_TIMEOUT_MS` | Yes | Yes | Backend/Node |
 | `LAPTOP_CONNECTOR_TOKEN` | Yes | Yes | Backend/Node |
 | `LARRY_ENABLED` | Yes | Yes | Backend/Node |
 | `LARRY_RUN_ON_SCHEDULE` | Yes | Yes | Backend/Node |
@@ -622,9 +623,17 @@ requirements remain in `docs/ENVIRONMENT.md`.
 | `NOFO_PARSE_CHUNK_OVERLAP` | Yes | Yes | Backend/Node |
 | `NOFO_PARSE_MAX_TEXT_CHARS` | Yes | Yes | Backend/Node |
 | `NON_GRANT_PIPELINE_LIMIT` | Yes | Yes | Backend/Node |
+| `OBSIDIAN_MEMORY_AGENT` | Yes | Yes | Backend/Node |
+| `OBSIDIAN_MEMORY_AIBUS_PATH` | Yes | Yes | Backend/Node |
+| `OBSIDIAN_MEMORY_BRIDGE_TOKEN` | Yes | Yes | Backend/Node |
+| `OBSIDIAN_MEMORY_BRIDGE_URL` | Yes | Yes | Backend/Node |
+| `OBSIDIAN_MEMORY_PYTHON` | Yes | Yes | Backend/Node |
 | `OCR_PDF_DPI` | Yes | Yes | Backend/Node |
 | `OCR_PDF_MAX_PAGES` | Yes | Yes | Backend/Node |
 | `OCR_PROVIDER` | Yes | Yes | Backend/Node |
+| `OLLAMA_API_KEY` | Yes | Yes | Backend/Node |
+| `OLLAMA_BASE_URL` | Yes | Yes | Backend/Node |
+| `OLLAMA_MODEL` | Yes | Yes | Backend/Node |
 | `ONBOARDING_VERIFY_BASE` | Yes | Yes | Backend/Node |
 | `OPENAI_API_KEY` | Yes | Yes | Backend/Node |
 | `OPENAI_MAX_RETRIES` | Yes | Yes | Backend/Node |
@@ -707,6 +716,7 @@ requirements remain in `docs/ENVIRONMENT.md`.
 | `PROPOSAL_CRITIC` | Yes | Yes | Backend/Node |
 | `PUBLIC_APP_URL` | Yes | Yes | Backend/Node |
 | `PUBLIC_URL` | Yes | Yes | Backend/Node |
+| `PYTHON` | Yes | Yes | Backend/Node |
 | `QUEUE_DRAIN_INTERVAL_MS` | Yes | Yes | Backend/Node |
 | `QUEUE_POLL_ENABLED` | Yes | Yes | Backend/Node |
 | `QUEUE_POLL_INTERVAL_MS` | Yes | Yes | Backend/Node |
@@ -1187,6 +1197,14 @@ requirements remain in `docs/ENVIRONMENT.md`.
   - `backend/services/agentControl/agentControlOrchestrator.js:L173` (process.env)
   - `backend/services/anyaAutonomousFunctionTesting.js:L238` (process.env)
   - `backend/tests/samCanonicalAdminEmail.test.js:L31–L77` (process.env)
+
+### `AIBUS_VAULT`
+
+- **Templates**:
+  - `.env.example:61` = ``
+  - `backend/.env.example:32` = ``
+- **Code references**:
+  - `scripts/obsidian-memory.mjs:L14` (process.env)
 
 ### `ALERT_FAILURE_THRESHOLD`
 
@@ -4929,16 +4947,6 @@ requirements remain in `docs/ENVIRONMENT.md`.
   - `backend/tests/hamiltonPortalSignupAdapter.test.js:L18` (process.env)
   - `backend/tests/portalAutopilotCobrowseAndMerge.test.js:L20` (process.env)
 
-### `HAMILTON_ALLOW_AUTOSUBMIT`
-
-- **Templates**:
-  - `.env.example:474` = ``
-  - `backend/.env.example:445` = ``
-- **Code references**:
-  - `backend/tests/automationPosture.test.js:L74–L87` (process.env)
-  - `backend/tests/hamiltonAutoSubmitAuthorizedLeg.test.js:L158–L218` (process.env)
-  - `backend/tests/hamiltonConfirmationProof.test.js:L117–L133` (process.env)
-
 ### `HAMILTON_AUTOPILOT_MAX_PAGES`
 
 - **Templates**:
@@ -5209,14 +5217,6 @@ requirements remain in `docs/ENVIRONMENT.md`.
 - **Code references**:
   - `backend/startup/enforceInvariants.js:L1911` (process.env)
 
-### `HAMILTON_SUGGEST_MAX_RETRIES`
-
-- **Templates**:
-  - `.env.example:505` = ``
-  - `backend/.env.example:476` = ``
-- **Code references**:
-  - `backend/services/hamilton/hamiltonPortalLoginSuggester.js:L125` (process.env)
-
 ### `HAMILTON_SUGGEST_MODEL`
 
 - **Templates**:
@@ -5224,14 +5224,6 @@ requirements remain in `docs/ENVIRONMENT.md`.
   - `backend/.env.example:477` = ``
 - **Code references**:
   - `backend/services/hamilton/hamiltonPortalLoginSuggester.js:L130` (process.env)
-
-### `HAMILTON_SUGGEST_TIMEOUT_MS`
-
-- **Templates**:
-  - `.env.example:507` = ``
-  - `backend/.env.example:478` = ``
-- **Code references**:
-  - `backend/services/hamilton/hamiltonPortalLoginSuggester.js:L124` (process.env)
 
 ### `HAMILTON_SYNC_ON_CAPTURE`
 
@@ -5747,14 +5739,6 @@ requirements remain in `docs/ENVIRONMENT.md`.
   - `tools/laptop-connector/capture.js:L145` (process.env)
   - `tools/laptop-connector/scan.js:L101` (process.env)
 
-### `LAPTOP_CONNECTOR_MAX_RETRIES`
-
-- **Templates**:
-  - `.env.example:569` = ``
-  - `backend/.env.example:540` = ``
-- **Code references**:
-  - `backend/services/laptopConnector/laptopAnalyzer.js:L35` (process.env)
-
 ### `LAPTOP_CONNECTOR_MAX_TEXT`
 
 - **Templates**:
@@ -5770,14 +5754,6 @@ requirements remain in `docs/ENVIRONMENT.md`.
   - `backend/.env.example:542` = ``
 - **Code references**:
   - `backend/services/laptopConnector/laptopAnalyzer.js:L40` (process.env)
-
-### `LAPTOP_CONNECTOR_TIMEOUT_MS`
-
-- **Templates**:
-  - `.env.example:572` = ``
-  - `backend/.env.example:543` = ``
-- **Code references**:
-  - `backend/services/laptopConnector/laptopAnalyzer.js:L34` (process.env)
 
 ### `LAPTOP_CONNECTOR_TOKEN`
 
@@ -6428,6 +6404,46 @@ requirements remain in `docs/ENVIRONMENT.md`.
   - `backend/.env.example:612` = ``
 - **Code references**:
   - `backend/tests/enforceInvariants.test.js:L2935–L3055` (process.env)
+
+### `OBSIDIAN_MEMORY_AGENT`
+
+- **Templates**:
+  - `.env.example:692` = ``
+  - `backend/.env.example:663` = ``
+- **Code references**:
+  - `scripts/obsidian-memory.mjs:L86–L87` (process.env)
+
+### `OBSIDIAN_MEMORY_AIBUS_PATH`
+
+- **Templates**:
+  - `.env.example:693` = ``
+  - `backend/.env.example:664` = ``
+- **Code references**:
+  - `scripts/obsidian-memory.mjs:L15` (process.env)
+
+### `OBSIDIAN_MEMORY_BRIDGE_TOKEN`
+
+- **Templates**:
+  - `.env.example:694` = `<REPLACE_ME>`
+  - `backend/.env.example:665` = `<REPLACE_ME>`
+- **Code references**:
+  - `scripts/obsidian-memory.mjs:L25` (process.env)
+
+### `OBSIDIAN_MEMORY_BRIDGE_URL`
+
+- **Templates**:
+  - `.env.example:695` = `http://127.0.0.1:8080`
+  - `backend/.env.example:666` = `http://127.0.0.1:8080`
+- **Code references**:
+  - `scripts/obsidian-memory.mjs:L24` (process.env)
+
+### `OBSIDIAN_MEMORY_PYTHON`
+
+- **Templates**:
+  - `.env.example:696` = ``
+  - `backend/.env.example:667` = ``
+- **Code references**:
+  - `scripts/obsidian-memory.mjs:L16` (process.env)
 
 ### `OCR_PDF_DPI`
 
@@ -7158,6 +7174,14 @@ requirements remain in `docs/ENVIRONMENT.md`.
   - `backend/routes/auth.js:L201` (process.env)
   - `backend/routes/stripe.js:L24` (process.env)
   - `backend/services/diagnosticsService.js:L415` (process.env)
+
+### `PYTHON`
+
+- **Templates**:
+  - `.env.example:786` = ``
+  - `backend/.env.example:757` = ``
+- **Code references**:
+  - `scripts/obsidian-memory.mjs:L16` (process.env)
 
 ### `QUEUE_DRAIN_INTERVAL_MS`
 

@@ -359,9 +359,15 @@ export async function auditProfileResultCoverage(db, profileId, { floor = DEFAUL
   // amount-enrichment nets read them), but a minimal test/older schema may not,
   // so the URL-carrying SELECT falls back to the base SELECT — applyability then
   // classifies url-less rows as info_only, never a throw (MISSING = NEUTRAL).
-  const baseCols = `m.match_score, m.match_decision, o.title, o.sponsor, o.description, o.categories,
+  const legacyBaseCols = `m.match_score, m.match_decision, o.title, o.sponsor, o.description, o.categories,
               o.opportunity_kind, o.deadline, o.deadline_at, o.deadline_type,
               (UPPER(COALESCE(o.opportunity_kind,'')) IN ('DIRECTORY','PAST_AWARD_INTEL')) AS is_directory`
+  // Four-truth proof is part of the user-facing admission contract. Loading
+  // only score/decision here made a genuinely verified direct award look
+  // unproven to qualifiesForDisplay(), collapsing coverage and backfill counts
+  // to zero. Older schemas may not have the proof column; their direct rows
+  // intentionally remain fail-closed while pointer rows stay auditable.
+  const baseCols = `m.match_explain_json, ${legacyBaseCols}`
   const buildSurfacedSql = (cols) =>
     `SELECT ${cols}
          FROM profile_opportunity_matches m
@@ -374,7 +380,13 @@ export async function auditProfileResultCoverage(db, profileId, { floor = DEFAUL
       .prepare(buildSurfacedSql(`${baseCols}, o.application_url, o.source_url, o.evidence_url`))
       .all(profileId)
   } catch {
-    surfacedRows = await db.prepare(buildSurfacedSql(baseCols)).all(profileId)
+    try {
+      surfacedRows = await db.prepare(buildSurfacedSql(baseCols)).all(profileId)
+    } catch {
+      surfacedRows = await db
+        .prepare(buildSurfacedSql(`NULL AS match_explain_json, ${legacyBaseCols}`))
+        .all(profileId)
+    }
   }
 
   let unsurfacedCount = 0

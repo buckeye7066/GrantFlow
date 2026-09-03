@@ -2,6 +2,7 @@ import crypto from 'crypto'
 import JSZip from 'jszip'
 import { writeApplicationArtifact } from './storageAdapter.js'
 import { createOpenAIClient } from '../utils/openaiClient.js'
+import { invokeTextWithFallback as invokeProviderTextWithFallback } from '../utils/aiProviders.js'
 import { requiresMedicalNecessity, generateMedicalNecessityDocument, DOCUMENT_TYPES } from '../services/medicalNecessity.js'
 import { assertAllowedKeySet, buildEqualityWhereClause, assertSafeIdentifier } from '../utils/safeSql.js'
 import { getScopedOpportunityForApplication } from '../utils/scopedOpportunity.js'
@@ -1447,17 +1448,10 @@ export async function generateApplicationSections(db, grant, opportunity, profil
       )
     }
   }
-  if (!openai) {
-    console.log('[autoPopulate] No OpenAI key; generating template-based content only')
-    return generateTemplateSections(db, grant, opportunity, profile, sectionDefs)
-  }
-
   const grantContext = buildGrantContext(grant, opportunity)
   const profileContext = buildProfileContext(profile)
   const startedAt = Date.now()
   const wallBudgetMs = Number(options.totalBudgetMs ?? AUTO_POPULATE_TOTAL_BUDGET_MS)
-  const wallController = new AbortController()
-  const wallTimer = setTimeout(() => wallController.abort(), wallBudgetMs)
 
   const tasks = sectionDefs.map(async (section) => {
     const sectionStartedAt = Date.now()
@@ -1492,22 +1486,22 @@ export async function generateApplicationSections(db, grant, opportunity, profil
     }
     try {
       const prompt = buildSectionPrompt(section.section_key, section.title, grantContext, profileContext, grant)
-      const completion = await openai.chat.completions.create(
-        {
-          model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
-          messages: [
-            { role: 'system', content: GRANT_WRITER_SYSTEM_PROMPT },
-            { role: 'user', content: prompt },
-          ],
-          temperature: 0.7,
-          max_tokens: 1200,
-        },
-        {
-          signal: wallController.signal,
-          timeout: AUTO_POPULATE_PER_SECTION_TIMEOUT_MS,
-        },
-      )
-      const text = completion?.choices?.[0]?.message?.content?.trim() || ''
+      const providerResult = await invokeProviderTextWithFallback({
+        openai,
+        openaiModel: process.env.OPENAI_MODEL || 'gpt-4o-mini',
+        system: GRANT_WRITER_SYSTEM_PROMPT,
+        prompt,
+        temperature: 0.7,
+        maxTokens: 1200,
+        timeoutMs: Math.max(
+          1,
+          Math.min(AUTO_POPULATE_PER_SECTION_TIMEOUT_MS, startedAt + wallBudgetMs - Date.now()),
+        ),
+      })
+      if (!providerResult.ok || !providerResult.text) {
+        throw providerResult.error || new Error('Every configured AI provider failed')
+      }
+      const text = providerResult.text.trim()
       result[section.section_key] = text
       return {
         section_key: section.section_key,
@@ -1534,10 +1528,9 @@ export async function generateApplicationSections(db, grant, opportunity, profil
   })
 
   const settled = await Promise.allSettled(tasks)
-  clearTimeout(wallTimer)
-
   const summary = settled.map((s) => (s.status === 'fulfilled' ? s.value : { ok: false }))
   const okCount = summary.filter((s) => s.ok).length
+  if (okCount === 0) return generateTemplateSections(db, grant, opportunity, profile, sectionDefs)
   const totalMs = Date.now() - startedAt
   console.log(
     `[autoPopulate] AI fan-out complete: ${okCount}/${sectionDefs.length} sections in ${totalMs}ms (per-section ${AUTO_POPULATE_PER_SECTION_TIMEOUT_MS}ms, wall ${wallBudgetMs}ms)`,

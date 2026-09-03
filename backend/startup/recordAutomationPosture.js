@@ -3,30 +3,24 @@
  *
  * WHY: the production audit bridge runs in GitHub Actions, which deliberately
  * holds NO Railway credentials (a Railway token in CI would be a far larger
- * exposure than the audit is worth). So the auditor cannot ask Railway what
- * HAMILTON_ALLOW_AUTOSUBMIT is set to. It has exactly two channels into
+ * exposure than the audit is worth). It has exactly two channels into
  * production: the scoped read-only database role, and the public HTTP surface.
- * This writes the answer into the first one.
+ * This publishes the active submission authority through the first channel.
  *
- * WHAT IS AND IS NOT PUBLISHED: booleans only — whether each gate is armed.
- * No values, no secrets, no connection material. Knowing "auto-submit is off"
- * is precisely what an auditor must be able to prove before it is allowed to
- * touch an authenticated surface.
+ * WHAT IS AND IS NOT PUBLISHED: booleans and authority identifiers only — no
+ * profile consent, values, secrets, or connection material. The audit proves
+ * Hamilton requires profile-scoped authorization and that the posture came
+ * from the process currently serving traffic.
  *
- * THE STALENESS TRAP: a row saying `allow_auto_submit: false` is worthless on
- * its own — it may have been written by a deploy that has since been replaced
- * by one where the flag is armed. Environment changes only take effect on a
- * redeploy, so the honest question is not "is this row recent?" but "did the
- * process serving traffic right now write it?". BOOT_ID answers that: it is
+ * THE STALENESS TRAP: an authority row is worthless on its own — it may have
+ * been written by a deploy that has since been replaced. BOOT_ID answers the
+ * honest question, "did the process serving traffic right now write it?". It is
  * minted per process, stored here, and echoed by GET /api/health/deployment.
  * The auditor compares the two and refuses to proceed unless they match.
  */
 
 import { BOOT_ID } from '../config/bootId.js'
-import {
-  isAutoSubmitGloballyEnabled,
-  isBrowserAutomationEnabled,
-} from '../services/hamiltonApplicationAgent.js'
+import { isBrowserAutomationEnabled } from '../services/hamiltonApplicationAgent.js'
 
 export const AUTOMATION_POSTURE_KV_KEY = 'automation_posture'
 
@@ -38,17 +32,20 @@ function changesOf(result) {
 }
 
 /**
- * Resolve the posture WITHOUT re-implementing any gate.
- *
- * `isAutoSubmitGloballyEnabled` is the same function hamiltonApplicationAgent
- * consults before it will submit anything, so this record cannot drift from the
- * behavior it describes. Re-deriving it from process.env here would create a
- * second source of truth that reads green while the real gate says otherwise.
+ * Resolve the posture without claiming that a retired process-wide feature
+ * flag controls submission. The canonical orchestrator authorizes each
+ * irreversible action from the profile owner's stored consent and re-reads it
+ * immediately before the final click.
  */
 export function buildAutomationPosture(env = process.env) {
   return {
-    // The gate that matters: the audit aborts unless this is false.
-    allow_auto_submit: isAutoSubmitGloballyEnabled(),
+    // There is intentionally no process-wide auto-submit veto. Audits that
+    // require a non-mutating target must use a profile with no full-automation
+    // authorization; old auditors looking for allow_auto_submit:false now fail
+    // closed because this obsolete field is absent.
+    submission_authority: 'profile_authorization',
+    profile_authorization_required: true,
+    external_submission_possible: true,
     browser_automation: isBrowserAutomationEnabled(),
     run_on_schedule: String(env.HAMILTON_RUN_ON_SCHEDULE || 'false').toLowerCase() === 'true',
     // Unset means the approval gate is ON (tailoredNarrative.js), so absence is
@@ -80,9 +77,7 @@ export async function recordAutomationPosture(db, { logger = console } = {}) {
         .prepare('INSERT INTO system_kv (key, value, updated_at) VALUES (?, ?, ?)')
         .run(AUTOMATION_POSTURE_KV_KEY, value, now)
     }
-    if (posture.allow_auto_submit) {
-      logger?.warn?.('[automation-posture] HAMILTON_ALLOW_AUTOSUBMIT is ARMED in this process')
-    }
+    logger?.info?.('[automation-posture] external submission requires current profile authorization')
     return posture
   } catch (err) {
     logger?.warn?.('[automation-posture] could not record posture (non-fatal):', err?.message || err)

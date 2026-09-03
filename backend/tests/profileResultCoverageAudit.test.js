@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { auditProfileResultCoverageFromData, MIN_HEALTHY_SURFACED } from '../services/coverageAudit/profileResultCoverageAudit.js'
+import { withVerifiedFourTruth } from './helpers/fourTruthFixture.js'
 
 const student = (schools, county = 'Bradley County') => ({
   is_student: true,
@@ -8,7 +9,7 @@ const student = (schools, county = 'Bradley County') => ({
 })
 
 function accept(title, sponsor = '') {
-  return { match_score: 80, match_decision: 'accept', title, sponsor }
+  return withVerifiedFourTruth({ match_score: 80, match_decision: 'accept', title, sponsor })
 }
 
 describe('profileResultCoverageAudit — detection', () => {
@@ -99,7 +100,7 @@ describe('profileResultCoverageAudit — detection', () => {
       profileId: 'p7',
       surfacedRows: [
         { match_score: 60, match_decision: 'review', title: 'weak' }, // below floor, not accept → hidden
-        { match_score: 72, match_decision: 'accept', title: 'HOPE' }, // accept below 75 → surfaced
+        withVerifiedFourTruth({ match_score: 72, match_decision: 'accept', title: 'HOPE' }), // accept below 75 → surfaced
         { is_directory: true, title: 'dir' }, // unscored directory → surfaced
         // A directory the engine affirmatively scored irrelevant (< REVIEW band)
         // no longer surfaces — 2026-07-05 rule (student-aid directory scored 0
@@ -134,7 +135,7 @@ describe('profileResultCoverageAudit — detection', () => {
   })
 
   it('excludes deadline-passed rows from the actionable count', () => {
-    const past = { match_score: 80, match_decision: 'accept', title: 'Expired Grant', deadline_at: '2020-01-01T00:00:00Z' }
+    const past = withVerifiedFourTruth({ match_score: 80, match_decision: 'accept', title: 'Expired Grant', deadline_at: '2020-01-01T00:00:00Z' })
     const a = auditProfileResultCoverageFromData({
       profileId: 'p-expired',
       surfacedRows: [past, past, accept('Live Grant')],
@@ -148,7 +149,7 @@ describe('profileResultCoverageAudit — detection', () => {
   })
 
   it('treats a rolling/ongoing deadline in the past as still open (actionable)', () => {
-    const rolling = { match_score: 80, match_decision: 'accept', title: 'Rolling Grant', deadline: '2020-01-01', deadline_type: 'rolling' }
+    const rolling = withVerifiedFourTruth({ match_score: 80, match_decision: 'accept', title: 'Rolling Grant', deadline: '2020-01-01', deadline_type: 'rolling' })
     const a = auditProfileResultCoverageFromData({
       profileId: 'p-rolling',
       surfacedRows: [rolling, accept('B'), accept('C')],

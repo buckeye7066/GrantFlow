@@ -54,7 +54,7 @@ function explainMatchRow(row, floor) {
   // diagnostic contradicting the product it diagnoses.
   const isDirectory = isPointerKind(row.opportunity_kind)
   const surfaced = qualifiesForDisplay(
-    { is_directory: isDirectory, match_decision: row.match_decision, match_score: row.match_score },
+    { ...row, is_directory: isDirectory },
     floor,
   )
 

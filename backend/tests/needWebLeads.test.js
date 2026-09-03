@@ -57,6 +57,38 @@ describe('buildNeedWebQueries', () => {
     expect(queries.some((q) => q.toLowerCase().includes(needText.toLowerCase()))).toBe(true)
   })
 
+  it('preserves an exact 15-passenger bus request and adds profile geography', () => {
+    const ctx = {
+      profile: { primary_type: 'nonprofit', state: 'OH' },
+      signals: {
+        applicantTypes: new Set(['nonprofit']),
+        location: { city: 'Dayton', county: 'Montgomery', state: 'OH' },
+        needs: new Set(['youth transportation']),
+      },
+    }
+    const needText = '15 passenger bus'
+    const queries = buildNeedWebQueries(needText, expandNeed(needText), ctx)
+
+    expect(queries[0]).toContain('"15 passenger bus"')
+    expect(queries.some((query) => /Montgomery County|Dayton|OH/.test(query))).toBe(true)
+    expect(queries.some((query) => /nonprofit/.test(query))).toBe(true)
+  })
+
+  it('recognizes DME as durable medical equipment instead of a generic medical request', () => {
+    const expanded = expandNeed('DME for a disabled individual')
+    expect(expanded.matchedKey).toBe('dme')
+    expect(expanded.canonicalNeed).toBe('durable_medical_equipment')
+    expect(expanded.synonyms).toContain('durable medical equipment')
+
+    const queries = buildNeedWebQueries(
+      'DME for a disabled individual',
+      expanded,
+      { profile: { primary_type: 'disabled_adult', state: 'TN' } },
+    )
+    expect(queries[0]).toContain('"DME for a disabled individual"')
+    expect(queries.some((query) => /durable medical equipment|DME assistance/i.test(query))).toBe(true)
+  })
+
   it("variant 'gift' flips intent to donation / in-kind programs", () => {
     const expanded = expandNeed('passenger van')
     const queries = buildNeedWebQueries('passenger van', expanded, nonprofitContext, { variant: 'gift' })

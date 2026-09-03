@@ -95,33 +95,39 @@ describe('keep-alive liveness verdict', () => {
     _resetCredentialSchemaCache()
   })
 
-  it('a real-domain session is skipped without launching a browser', async () => {
+  it('refreshes a real public portal session without manufacturing an alive verdict', async () => {
     const est = new Date(Date.now() - 3 * 86_400_000).toISOString()
     await seedSession(db, { host: 'leic.tennessee.edu', establishedAt: est })
 
-    const launchBrowser = vi.fn(async () => { throw new Error('real-domain browser must not launch') })
+    const record = {}
+    const launchBrowser = vi.fn(makeLauncher({
+      'https://leic.tennessee.edu/': {
+        finalUrl: 'https://leic.tennessee.edu/',
+        text: 'Lincoln Memorial University extended campus information and student resources.',
+      },
+    }, { record }))
 
     const out = await runSessionKeepAliveSweep(db, { launchBrowser })
 
+    expect(record.requested).toBe('https://leic.tennessee.edu/')
     expect(out.refreshed).toBe(0)
-    expect(out.unverified).toBe(0)
-    expect(out.skipped).toBe(1)
+    expect(out.unverified).toBe(1)
+    expect(out.skipped).toBe(0)
     expect(out.expired).toBe(0)
-    expect(out.results[0].outcome).toBe('skipped')
-    expect(launchBrowser).not.toHaveBeenCalled()
+    expect(out.results[0].outcome).toBe('unverified')
+    expect(launchBrowser).toHaveBeenCalledTimes(1)
 
-    // And nothing enters the lifetime ledger from a probe that could not tell.
+    // A homepage can refresh cookies but cannot prove authentication.
     const s = summarizeHostLifetime(await loadLifetimeLedger(db), 'leic.tennessee.edu')
     expect(s.samples).toBe(0)
     expect(out.observed).toBe(0)
 
-    // The row must NOT carry a confirmed-alive stamp.
     const meta = JSON.parse(
       db.prepare('SELECT metadata_json FROM hamilton_saved_sessions WHERE portal_host = ?')
         .get('leic.tennessee.edu').metadata_json,
     )
     expect(meta.keepalive_confirmed_alive_at).toBeUndefined()
-    expect(meta.keepalive_refreshes).toBeUndefined()
+    expect(meta.keepalive_refreshes).toBe(1)
   })
 
   it('probes the auth-gated reserved fixture path without real egress', async () => {

@@ -154,56 +154,101 @@ export function buildEvidencePack(profile, kind) {
   const sec = (key) => coerceSection(
     profile?.[key] ?? profile?.sections?.[key],
   )
-  const basic = sec('basic_information')
-  const essays = sec('essays')
-  const financial = { ...sec('financial'), ...sec('financial_information') }
-  const education = sec('education_information')
-  const employment = sec('employment_information')
-  const health = sec('health_information')
-  const housing = sec('housing_information')
-  const additional = sec('additional_information')
-  const org = { ...sec('organization'), ...sec('organization_details') }
+  const mergeSections = (...keys) => Object.assign({}, ...keys.map(sec))
+  const basic = mergeSections('personal_information', 'contact_information', 'basic_information')
+  const essays = mergeSections('essays', 'narrative')
+  const financial = mergeSections('financial', 'financial_information', 'government_assistance')
+  const education = mergeSections('education', 'education_information', 'student_info')
+  const employment = mergeSections('occupation', 'employment', 'employment_information')
+  const health = mergeSections('medical_history', 'health_medical', 'health_information')
+  const housing = mergeSections('housing', 'housing_information')
+  const family = mergeSections('family', 'family_life', 'demographics')
+  const military = sec('military_service')
+  const org = {
+    ...(profile?.organization && typeof profile.organization === 'object' ? profile.organization : {}),
+    ...mergeSections(
+      'organization',
+      'organization_details',
+      'programs_services',
+      'nonprofit_compliance',
+      'small_business_details',
+    ),
+  }
   const uniApps = sec('university_applications')
 
   const evidence = {}
-  const put = (label, value) => { if (nonEmpty(value)) evidence[label] = String(value).slice(0, 1500) }
+  const put = (label, value, max = 1500) => {
+    if (nonEmpty(value)) evidence[label] = String(value).slice(0, max)
+  }
+  const putObject = (label, value, max = 1600) => {
+    if (!value || typeof value !== 'object' || Object.keys(value).length === 0) return
+    put(label, JSON.stringify(value), max)
+  }
 
   put('applicant_name', [basic.first_name, basic.last_name].filter(Boolean).join(' ') || profile?.display_name)
-  put('location', [basic.city, basic.state, basic.zip].filter(Boolean).join(', '))
-  put('email', basic.email)
-  put('phone', basic.phone)
+  put('location', [
+    basic.city || profile?.city || profile?.signals?.location?.city,
+    basic.state || profile?.state || profile?.signals?.location?.state,
+    basic.zip || profile?.postal_code || profile?.zip || profile?.signals?.location?.zip,
+  ].filter(Boolean).join(', '))
+  put('email', basic.email || profile?.email)
+  put('phone', basic.phone || profile?.phone)
   put('household_size', basic.household_size || financial.household_size)
   put('annual_income', financial.annual_income || financial.household_income || basic.annual_income)
-  put('fafsa_status', financial.fafsa_status)
+  put('assistance_needs', financial.assistance_needs || financial.current_benefits)
+  put('fafsa_status', financial.fafsa_status || education.fafsa_status)
   put('financial_hardship', essays.financial_hardship || financial.hardship)
 
   // Narrative evidence — the richest grounding material.
-  put('mission_or_personal_statement', essays.personal_statement || essays.primary || org.mission || profile?.mission)
-  put('goals', essays.goals || essays.career_goals)
-  put('statement_of_need', essays.statement_of_need)
+  put(
+    'mission_or_personal_statement',
+    essays.personal_statement || essays.primary || essays.mission_statement ||
+      org.mission || org.mission_statement || profile?.mission,
+    3000,
+  )
+  put('goals', essays.goals || essays.career_goals || education.career_goals, 2500)
+  put('statement_of_need', essays.statement_of_need || essays.need_statement, 3000)
 
   if (kind === 'organization') {
-    put('organization_name', org.name || profile?.organization_name)
+    put('organization_name', org.name || org.organization_name || profile?.organization_name || profile?.display_name)
+    put('organization_type', org.organization_type || profile?.organization_type || profile?.primary_type)
     put('ein', org.ein || profile?.ein)
-    put('annual_budget', org.annual_budget || profile?.annual_budget)
-    put('programs', org.programs || org.services)
-    put('years_operating', org.years_operating || org.founded)
+    put('annual_budget', org.annual_budget || org.operating_budget || profile?.annual_budget)
+    put('programs', org.programs || org.services || org.programs_description, 2500)
+    put('years_operating', org.years_operating || org.founded || org.year_founded)
     put('staff_capacity', org.staff || org.staff_capacity || org.team)
-    put('past_outcomes', org.outcomes || org.impact)
+    put('past_outcomes', org.outcomes || org.impact || org.impact_metrics, 2500)
+    putObject('organization_compliance_and_capacity', org, 3000)
   } else {
-    put('education', JSON.stringify(education).slice(0, 900) === '{}' ? '' : JSON.stringify(education).slice(0, 900))
-    put('employment', JSON.stringify(employment).slice(0, 700) === '{}' ? '' : JSON.stringify(employment).slice(0, 700))
-    put('health_context', JSON.stringify(health).slice(0, 500) === '{}' ? '' : JSON.stringify(health).slice(0, 500))
-    put('housing_context', JSON.stringify(housing).slice(0, 500) === '{}' ? '' : JSON.stringify(housing).slice(0, 500))
+    putObject('education', education, 1800)
+    putObject('employment', employment, 1400)
+    putObject('health_context', health, 1800)
+    putObject('housing_context', housing, 1400)
+    putObject('family_and_demographics', family, 1800)
+    putObject('military_service', military, 1200)
     if (Array.isArray(uniApps?.applications) && uniApps.applications.length > 0) {
-      const a = uniApps.applications[0]
-      put('school', a.name)
-      put('program_major', a.major || a.program)
-      put('degree_level', a.degree_level)
-      put('expected_graduation', a.expected_graduation)
+      const committed = uniApps.applications.find((a) =>
+        ['committed', 'enrolled', 'attending'].includes(String(a?.status || '').toLowerCase()))
+      const app = committed || uniApps.applications[0]
+      put('school', app.name)
+      put('program_major', app.major || app.program)
+      put('degree_level', app.degree_level)
+      put('expected_graduation', app.expected_graduation)
     }
   }
-  put('additional_context', JSON.stringify(additional).slice(0, 600) === '{}' ? '' : JSON.stringify(additional).slice(0, 600))
+
+  // These are canonical, derived profile facts used by the matcher. Including
+  // them makes requirement mapping use the entire stored profile rather than a
+  // hard-coded handful of historical section names.
+  putObject('derived_profile_signals', profile?.signals, 3000)
+  putObject('normalized_eligibility_facts', profile?.profileNorm, 3000)
+  if (Array.isArray(profile?.documents) && profile.documents.length > 0) {
+    const documents = profile.documents.map((document) => ({
+      name: document?.name || document?.title || null,
+      text: String(document?.extracted_text || '').slice(0, 1200),
+    }))
+    putObject('uploaded_document_evidence', documents, 4000)
+  }
 
   return evidence
 }

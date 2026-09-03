@@ -1,5 +1,6 @@
 import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
+import { VERIFIED_FOUR_TRUTH_PROOF } from './helpers/fourTruthFixture.js'
 import {
   ACCEPT_SCORE,
   REVIEW_SCORE,
@@ -44,6 +45,7 @@ function storedMatch(overrides = {}) {
     match_score: ACCEPT_SCORE,
     match_decision: 'ACCEPT',
     match_explanation: 'Persisted canonical decision.',
+    four_truth_proof: VERIFIED_FOUR_TRUTH_PROOF,
     ...overrides,
   }
 }
@@ -89,7 +91,7 @@ describe('real crawler display authority', () => {
     expect(attached.link_status).toBe('unverified')
   })
 
-  it('preserves stored ACCEPT and REVIEW artifacts without rescoring', () => {
+  it('preserves verified ACCEPT but withholds unproven direct REVIEW without rescoring', () => {
     const accept = storedMatch()
     const review = storedMatch({
       id: 'stored-review',
@@ -104,7 +106,7 @@ describe('real crawler display authority', () => {
       { minScore: REVIEW_SCORE },
     )
 
-    expect(selection.opportunities).toHaveLength(2)
+    expect(selection.opportunities).toHaveLength(1)
     expect(selection.score_scale_id).toBe(SCORE_SCALE_ID)
     expect(selection.opportunities.map(({ id, match_score, match_decision }) => ({
       id,
@@ -112,7 +114,6 @@ describe('real crawler display authority', () => {
       match_decision,
     }))).toEqual([
       { id: accept.id, match_score: ACCEPT_SCORE, match_decision: 'ACCEPT' },
-      { id: review.id, match_score: REVIEW_SCORE, match_decision: 'REVIEW' },
     ])
   })
 

@@ -69,9 +69,6 @@ export function isBrowserAutomationEnabled() {
   return envFlagEnabled(ENV.HAMILTON_ENABLE_BROWSER_AUTOMATION, true)
 }
 
-export function isAutoSubmitGloballyEnabled() {
-  return envFlagEnabled(ENV.HAMILTON_ALLOW_AUTOSUBMIT, true)
-}
 
 /**
  * Permanent compatibility boundary: even if a legacy adapter incorrectly

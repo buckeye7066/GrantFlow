@@ -23,6 +23,8 @@ import { describe, it, expect } from 'vitest'
 import {
   ITEM_NEED_RULES,
   SUPPORT_NEED_ITEMS,
+  ASSISTANCE_NEED_ITEMS,
+  MOBILITY_NEED_ITEMS,
   DISABILITY_TYPE_ITEMS,
   HEALTH_FLAG_ITEMS,
   CREDENTIAL_ROLE_ITEMS,
@@ -166,6 +168,7 @@ describe('profileItemNeeds — the registry', () => {
     // format assertion above is what actually pins it as non-prose.
     const proseNames = new Set(getUnscoredProseFieldNames())
     proseNames.delete('item_needs')
+    proseNames.delete('assistance_needs')
     const src = readCode()
     for (const name of proseNames) {
       expect(src, `reads prose field "${name}"`).not.toMatch(new RegExp(`\\.${name}\\b`))
@@ -183,7 +186,7 @@ describe('profileItemNeeds — the registry', () => {
   it('every vocabulary entry produces a usable item and a search phrase', () => {
     // A vocabulary row with no `needText` would derive an item that the item
     // search could never look for — a list entry with no action behind it.
-    const vocabs = { SUPPORT_NEED_ITEMS, DISABILITY_TYPE_ITEMS, HEALTH_FLAG_ITEMS, CREDENTIAL_ROLE_ITEMS, ITEM_TAG_VOCABULARY }
+    const vocabs = { SUPPORT_NEED_ITEMS, ASSISTANCE_NEED_ITEMS, MOBILITY_NEED_ITEMS, DISABILITY_TYPE_ITEMS, HEALTH_FLAG_ITEMS, CREDENTIAL_ROLE_ITEMS, ITEM_TAG_VOCABULARY }
     for (const [name, vocab] of Object.entries(vocabs)) {
       for (const [key, entry] of Object.entries(vocab)) {
         expect(entry.item, `${name}.${key} has no item`).toBeTruthy()
@@ -212,6 +215,21 @@ describe('profileItemNeeds — provenance', () => {
       expect(ruleIds.has(need.evidence), `${need.item} cites unknown field ${need.evidence}`).toBe(true)
       expect(need.need_text).toBeTruthy()
     }
+  })
+
+  it('derives assistance categories and concrete mobility equipment from structured profile fields', () => {
+    const out = deriveProfileItemNeeds(
+      { primary_type: 'disabled_adult' },
+      {
+        financial_information: { assistance_needs: ['housing', 'transportation'] },
+        medical_history: { mobility_needs: 'uses a wheelchair and needs a shower chair' },
+      },
+    )
+    const byItem = new Map(out.needs.map((need) => [need.item, need]))
+    expect(byItem.get('Housing assistance')?.evidence).toBe('financial_information.assistance_needs')
+    expect(byItem.get('Transportation assistance')?.evidence).toBe('financial_information.assistance_needs')
+    expect(byItem.get('Wheelchair')?.evidence).toBe('medical_history.mobility_needs')
+    expect(byItem.get('Shower chair')?.evidence).toBe('medical_history.mobility_needs')
   })
 
   it("Dr. White's RN declaration is what makes a licensure item appear", () => {

@@ -606,6 +606,16 @@ export default function AdminDiagnostics() {
   const ENV_EDIT_ALLOWLIST = new Set([
     'OPENAI_API_KEY',
     'ANTHROPIC_API_KEY',
+    'FREE_AI_ROUTES',
+    'FREE_AI_BASE_URL',
+    'FREE_AI_MODEL',
+    'FREE_AI_API_KEY',
+    'FREE_AI_TIMEOUT_MS',
+    'FREE_AI_MAX_RETRIES',
+    'FREE_AI_RESERVE_MS',
+    'OLLAMA_BASE_URL',
+    'OLLAMA_MODEL',
+    'OLLAMA_API_KEY',
     'RESEND_API_KEY',
     'FROM_EMAIL',
     'AUTH_NOTIFY_ON_LOGIN',
@@ -622,6 +632,8 @@ export default function AdminDiagnostics() {
   const ENV_SECRET_KEYS = new Set([
     'OPENAI_API_KEY',
     'ANTHROPIC_API_KEY',
+    'FREE_AI_API_KEY',
+    'OLLAMA_API_KEY',
     'RESEND_API_KEY',
     'ANYA_ADMIN_TOKEN',
     // Funding provider keys should be treated as secrets too.

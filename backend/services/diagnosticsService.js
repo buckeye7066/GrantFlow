@@ -4,6 +4,7 @@ import { fileURLToPath } from 'url';
 import { dirname } from 'path';
 import { ensureAdminSchemaRepair } from './adminSchemaRepair.js';
 import { PAGE_FACT_MIGRATION_COLUMN_NAMES } from '../crawler-os/pageFacts.js';
+import { getConfiguredFreeAiRoutes } from '../utils/freeAiRoutes.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -405,6 +406,7 @@ function getEnvironmentFlags() {
     API_DATA_GOV_KEY_present: Boolean(process.env.API_DATA_GOV_KEY),
     OPENAI_API_KEY_present: Boolean(process.env.OPENAI_API_KEY),
     ANTHROPIC_API_KEY_present: Boolean(process.env.ANTHROPIC_API_KEY),
+    FREE_AI_ROUTES_configured: getConfiguredFreeAiRoutes().length,
     RESEND_API_KEY_present: Boolean(process.env.RESEND_API_KEY),
     FROM_EMAIL_set: Boolean(process.env.FROM_EMAIL),
     AUTH_NOTIFY_ON_LOGIN_enabled: String(process.env.AUTH_NOTIFY_ON_LOGIN || '').toLowerCase() === 'true',
@@ -655,8 +657,12 @@ export function analyzeSystemHealth(diagnostics) {
   }
   
   // Check environment
-  if (!diagnostics.env_flags.ANTHROPIC_API_KEY_present && !diagnostics.env_flags.OPENAI_API_KEY_present) {
-    warnings.push('No AI API key configured (ANTHROPIC_API_KEY or OPENAI_API_KEY)');
+  if (
+    !diagnostics.env_flags.ANTHROPIC_API_KEY_present &&
+    !diagnostics.env_flags.OPENAI_API_KEY_present &&
+    !(Number(diagnostics.env_flags.FREE_AI_ROUTES_configured) > 0)
+  ) {
+    warnings.push('No AI provider configured (paid or free/local route)');
   }
   
   // Check for recent REAL errors only. Benign (expected no-input / skipped)

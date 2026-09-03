@@ -2,6 +2,7 @@ import express from 'express'
 import request from 'supertest'
 import { describe, expect, it } from 'vitest'
 import Database from 'better-sqlite3'
+import { verifiedFourTruthExplain } from './helpers/fourTruthFixture.js'
 import matchingRouter from '../routes/matching.js'
 
 function createDb() {
@@ -169,6 +170,8 @@ function createDb() {
       ('profile-pa-business', 'pa-grant-1', 86, 'accept', 'Crawler OS matched Pennsylvania business equipment signals.', '["profile_need_match","location_match"]', 'crawler-os', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP),
       ('profile-no-state', 'real-grant-1', 58, 'review', 'Crawler OS matched only nationwide funding because profile state is unavailable.', '["nationwide_scope"]', 'crawler-os', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP);
   `)
+  db.prepare("UPDATE profile_opportunity_matches SET match_decision = 'accept', match_explain_json = ?")
+    .run(verifiedFourTruthExplain())
   return db
 }
 

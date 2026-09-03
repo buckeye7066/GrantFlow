@@ -26,7 +26,7 @@
 
 import { REVIEW_SCORE } from './matchThresholds.js'
 import { isPointerKind } from './opportunityKindClasses.js'
-import { isVettedNationalAssistanceFunder } from './nationalAssistanceFunders.js'
+import { hasPositiveFourTruthProof } from './fundingTruthPolicy.js'
 
 /**
  * Matcher versions that represent legitimate, profile-scoped matches meant to
@@ -198,42 +198,19 @@ export function opportunityLifecycleVisibilitySql({ tableAlias = '', dialect = '
 }
 
 /**
- * Whether a scored row should be SHOWN to the profile, given the requested
- * display floor.
+ * Whether a stored row may be shown to this profile.
  *
- * A row surfaces when ANY of:
- *   1. It is a directory/referral scoring at least DIRECTORY_MIN_SCORE (or
- *      never scored) — mission rule: directories survive the display floor,
- *      BUT an engine score below the REVIEW band means the engine affirmatively
- *      judged it irrelevant to this profile (e.g. a federal student-aid
- *      directory scored 0 for a senior citizen). Those stay hidden.
- *   2. The stored engine decision is ACCEPT. The canonical decision engine has
- *      already applied eligibility, geography, population, and actionability
- *      rules. A route-level display preference must not re-adjudicate that
- *      persisted verdict.
- *   3. Its score clears the requested display floor.
- *
- * A stored REJECT never surfaces, regardless of a stale numeric score.
- *
- * This raises recall WITHOUT lowering the quality bar: REVIEW / weak matches
- * below the floor still do not surface here — only the engine-certified ACCEPTs.
- *
- * @param {{is_directory?: boolean, is_directory_resource?: boolean, opportunity_kind?: string, match_decision?: string, match_score?: number|string}} row
- * @param {number} minScore requested display floor
- * @returns {boolean}
- */
-/**
- * Directories bypass the requested display floor but not the engine's own
- * REVIEW band: a scored directory below this is an affirmative "irrelevant to
- * this profile" judgment (e.g. student-aid directory scored 0 for a senior),
- * not a borderline match.
+ * Pointer resources remain clearly labelled research leads and follow their
+ * REVIEW-band rule. A direct funding source is different: neither a score nor a
+ * historical ACCEPT is permission to surface it. It requires the current ACCEPT
+ * plus the persisted four-truth proof produced by the canonical engine.
  */
 export const DIRECTORY_MIN_SCORE = REVIEW_SCORE
 
-export function qualifiesForDisplay(row, minScore) {
+export function qualifiesForDisplay(row, _minScore) {
   if (!row) return false
   if (!isOpportunityLifecycleVisible(row)) return false
-  const decision = String(row.match_decision || '').toUpperCase()
+  const decision = String(row.match_decision || row.decision || '').toUpperCase()
   if (decision === 'REJECT') return false
 
   const pointer = Boolean(
@@ -242,27 +219,15 @@ export function qualifiesForDisplay(row, minScore) {
     isPointerKind(row.opportunity_kind || row.opportunity_type || row.type),
   )
   if (pointer) {
-    // Never-scored (null/blank) ≠ scored-irrelevant: Number(null) is 0, so an
-    // unscored directory must be detected BEFORE numeric coercion or it would
-    // be hidden as if the engine had judged it a zero.
+    // Never-scored is unknown, not irrelevant. A scored pointer must reach the
+    // REVIEW band, and it is never represented as direct funding.
     const raw = row.match_score
     if (raw === null || raw === undefined || raw === '') return true
     const dirScore = Number(raw)
     return !Number.isFinite(dirScore) || dirScore >= DIRECTORY_MIN_SCORE
   }
-  if (decision === 'ACCEPT') return true
-  // VETTED national assistance funder (medication/disability/hardship/senior):
-  // a real award a broadly-eligible person can RECEIVE, but the ratio-score
-  // systematically lands it at REVIEW below the floor for exactly the disabled/
-  // senior/low-income profiles it serves — who otherwise see only DIRECTORIES.
-  // Surface it when the engine did NOT reject it (REJECT already returned false
-  // above), as an honest "you may qualify — verify eligibility" recommendation,
-  // the same principle that surfaces a directory at REVIEW. Scoped to the vetted
-  // slice in config/nationalAssistanceFunders.js — never "any assistance-titled
-  // row" (that set is full of foreign grants, job postings, and research grants).
-  if (isVettedNationalAssistanceFunder(row)) return true
-  const score = Number(row.match_score)
-  return Number.isFinite(score) && score >= Number(minScore)
+
+  return decision === 'ACCEPT' && hasPositiveFourTruthProof(row)
 }
 
 export default {

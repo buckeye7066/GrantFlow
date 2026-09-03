@@ -9,7 +9,7 @@ import { crawlGrantsGov } from '../services/crawlerOsCompatibility.js'
 import { upsertFundingOpportunity } from '../services/opportunityInserter.js'
 import { searchStateBenefits } from '../services/connectors/benefitsGovConnector.js'
 import { createOpenAIClient } from '../utils/openaiClient.js'
-import { extractCompletionText } from '../utils/openai.js'
+import { invokeTextWithFallback as invokeProviderTextWithFallback } from '../utils/aiProviders.js'
 import { safeParseJSON } from '../utils/safeJson.js'
 import { requireTierCapability, TIER_CAPABILITIES } from '../utils/tierGating.js'
 import { extractStateFromContext, loadProfileContext } from '../services/profileHelpers.js'
@@ -142,17 +142,17 @@ function fallbackGrantAnalysisMarkdown({ title }) {
 
 async function invokeOpenAiOptional(prompt) {
   const openai = createOpenAIClient({ allowMissing: true }).openai
-  if (!openai) return { text: null, provider: 'fallback' }
-  try {
-    const completion = await openai.chat.completions.create({
-      model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
-      messages: [{ role: 'user', content: prompt }],
-      temperature: 0.3,
-      max_tokens: 1200,
-    })
-    return { text: extractCompletionText(completion), provider: 'openai' }
-  } catch {
-    return { text: null, provider: 'fallback' }
+  const result = await invokeProviderTextWithFallback({
+    openai,
+    openaiModel: process.env.OPENAI_MODEL || 'gpt-4o-mini',
+    prompt,
+    temperature: 0.3,
+    maxTokens: 1200,
+  })
+  return {
+    text: result.ok ? result.text : null,
+    provider: result.provider,
+    fallback_reason: result.fallback_reason ?? null,
   }
 }
 
@@ -163,13 +163,21 @@ router.post('/crawlGrantsGov', async (req, res) => {
   // profile id for billing.
   const user = requireAdminCrawlerUser(req, res)
   if (!user) return
+  const profileId = String(req.body?.profile_id || req.body?.profileId || '').trim()
+  if (!profileId) {
+    return res.status(400).json({
+      ok: false,
+      error: 'profile_id_required',
+      message: 'Grants.gov crawling is profile-driven; supply profile_id.',
+    })
+  }
 
   const logId = createLogId()
   const startedAt = Date.now()
   await insertCrawlLog(req.db, {
     id: logId,
     source: 'grants_gov',
-    metadata: { requested_at: nowIso(), user_id: user?.userId ?? null },
+    metadata: { requested_at: nowIso(), user_id: user?.userId ?? null, profile_id: profileId },
   })
 
   // Background execution (non-blocking).
@@ -178,7 +186,8 @@ router.post('/crawlGrantsGov', async (req, res) => {
       const options = req.body ?? {}
       const maxPages = Math.max(1, Math.min(Number(options.maxPages ?? 1), 10))
       const rowsPerPage = Math.max(10, Math.min(Number(options.rowsPerPage ?? 50), 200))
-      const result = await crawlGrantsGov(req.db, { maxPages, rowsPerPage })
+      const result = await crawlGrantsGov(req.db, { profileId, maxPages, rowsPerPage })
+      if (!result?.success) throw new Error(result?.message || result?.error || 'crawler_os_run_failed')
       const inserted = Number(result?.inserted ?? 0)
       const updated = Number(result?.updated ?? 0)
       const errors = Number(result?.errors ?? 0)
@@ -209,7 +218,7 @@ router.post('/crawlGrantsGov', async (req, res) => {
     }
   }, 0)
 
-  return res.json({ ok: true, crawl_log_id: logId })
+  return res.json({ ok: true, crawl_log_id: logId, profile_id: profileId, activation_authority: 'crawler-os/planner' })
 })
 
 // POST /api/crawlBenefitsGov (legacy function endpoint)

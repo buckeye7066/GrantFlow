@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import Database from 'better-sqlite3'
+import { verifiedFourTruthExplain } from './helpers/fourTruthFixture.js'
 import {
   buildGapLearningUpdate,
   classifyGaps,
@@ -211,7 +212,7 @@ function createDb() {
     );
     CREATE TABLE profile_opportunity_matches (
       profile_id TEXT, opportunity_id TEXT, match_score REAL,
-      match_decision TEXT, matcher_version TEXT
+      match_decision TEXT, matcher_version TEXT, match_explain_json TEXT
     );
     CREATE TABLE anya_brain_memory (
       id TEXT PRIMARY KEY, created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
@@ -285,8 +286,8 @@ describe('liveCrawlGapLearning — learnFromCrawlGaps (DB)', () => {
     for (let i = 0; i < 22; i++) {
       db.prepare("INSERT INTO funding_opportunities (id, title, opportunity_kind, is_active) VALUES (?, ?, 'GRANT', 1)")
         .run(`o${i}`, `Real Award ${i}`)
-      db.prepare("INSERT INTO profile_opportunity_matches (profile_id, opportunity_id, match_score, match_decision, matcher_version) VALUES (?, ?, ?, 'accept', 'crawler-os')")
-        .run('healthy', `o${i}`, 82)
+      db.prepare("INSERT INTO profile_opportunity_matches (profile_id, opportunity_id, match_score, match_decision, matcher_version, match_explain_json) VALUES (?, ?, ?, 'accept', 'crawler-os', ?)")
+        .run('healthy', `o${i}`, 82, verifiedFourTruthExplain())
     }
 
     const res = await learnFromCrawlGaps(db, { profileId: 'healthy', thesis: emptyThesis, displayName: 'Healthy Profile' })
@@ -311,8 +312,8 @@ describe('liveCrawlGapLearning — learnFromCrawlGaps (DB)', () => {
     for (let i = 0; i < 3; i++) {
       db.prepare("INSERT INTO funding_opportunities (id, title, opportunity_kind, is_active) VALUES (?, ?, 'GRANT', 1)")
         .run(`t${i}`, `Real Award ${i}`)
-      db.prepare("INSERT INTO profile_opportunity_matches (profile_id, opportunity_id, match_score, match_decision, matcher_version) VALUES (?, ?, ?, 'accept', 'crawler-os')")
-        .run('thin', `t${i}`, 82)
+      db.prepare("INSERT INTO profile_opportunity_matches (profile_id, opportunity_id, match_score, match_decision, matcher_version, match_explain_json) VALUES (?, ?, ?, 'accept', 'crawler-os', ?)")
+        .run('thin', `t${i}`, 82, verifiedFourTruthExplain())
     }
     const res = await learnFromCrawlGaps(db, { profileId: 'thin', thesis: emptyThesis, displayName: 'Thin Profile' })
     expect(res.has_gap).toBe(true)

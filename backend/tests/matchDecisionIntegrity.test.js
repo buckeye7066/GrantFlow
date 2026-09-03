@@ -27,6 +27,21 @@ function makeDb() {
   return db
 }
 
+const positiveProof = {
+  direct_funding: true,
+  all_passed: true,
+  real: {
+    passed: true,
+    reality_status: 'VERIFIED',
+    evidence_url: 'https://funder.example/program',
+    evidence_captured_at: '2026-09-03T00:00:00.000Z',
+    content_hash_present: true,
+  },
+  relatable: { passed: true, canonical_decision: 'ACCEPT' },
+  meets_profile_need: { passed: true, matched_needs: ['housing'], profile_needs_defaulted: false },
+  profile_qualifies: { passed: true, eligibility: 'yes' },
+}
+
 function insert(db, {
   id,
   profileId = 'profile-1',
@@ -34,6 +49,7 @@ function insert(db, {
   score = 10,
   decision = 'accept',
   canonicalDecision = null,
+  proof = null,
   matcherVersion = 'crawler-os',
 }) {
   db.prepare('INSERT INTO funding_opportunities (id, opportunity_kind) VALUES (?, ?)').run(id, kind)
@@ -48,7 +64,9 @@ function insert(db, {
     id,
     score,
     decision,
-    canonicalDecision ? JSON.stringify({ canonical_decision: canonicalDecision }) : null,
+    canonicalDecision || proof
+      ? JSON.stringify({ canonical_decision: canonicalDecision, four_truth_proof: proof })
+      : null,
     matcherVersion,
   )
 }
@@ -99,6 +117,13 @@ describe('normalizePersistedMatchDecisionIntegrity', () => {
       kind: 'DIRECT_GRANT',
       score: 14,
       decision: 'accept',
+      proof: positiveProof,
+    })
+    insert(db, {
+      id: 'direct-unproven',
+      kind: 'DIRECT_GRANT',
+      score: 99,
+      decision: 'accept',
     })
 
     const result = await normalizePersistedMatchDecisionIntegrity(db)
@@ -107,9 +132,10 @@ describe('normalizePersistedMatchDecisionIntegrity', () => {
       ok: true,
       removed_rejects: 1,
       removed_canonical_rejects: 1,
+      removed_unproven_direct_accepts: 1,
       removed_below_review_resources: 1,
       normalized_resources: 2,
-      repaired: 5,
+      repaired: 6,
     })
     expect(match(db, 'profile-1', 'persisted-reject')).toBeUndefined()
     expect(match(db, 'profile-1', 'canonical-reject')).toBeUndefined()
@@ -117,6 +143,7 @@ describe('normalizePersistedMatchDecisionIntegrity', () => {
     expect(match(db, 'profile-1', 'resource-review')?.match_decision).toBe('review')
     expect(match(db, 'profile-1', 'resource-unscored')?.match_decision).toBe('review')
     expect(match(db, 'profile-1', 'direct-accept')?.match_decision).toBe('accept')
+    expect(match(db, 'profile-1', 'direct-unproven')).toBeUndefined()
 
     const second = await normalizePersistedMatchDecisionIntegrity(db)
     expect(second).toMatchObject({ ok: true, repaired: 0 })
