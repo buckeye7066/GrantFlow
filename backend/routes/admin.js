@@ -4282,7 +4282,7 @@ router.post('/crawlers/audit-live', async (req, res) => {
         try {
           if (crawlerType === 'item_matching') {
             const itemResult = await withTimeout(
-              crawlItemFunding({ id: profileId }, { item_request }),
+              crawlItemFunding({ id: profileId }, { db: req.db, item_request }),
               boundedTimeoutMs,
               `audit:item_matching`,
             );
