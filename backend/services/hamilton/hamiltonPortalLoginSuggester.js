@@ -147,7 +147,7 @@ async function aiResolveLoginUrl(portalName) {
     log.warn('ai_resolve_login_url_failed', { err: err?.message })
     return null
   }
-
+}
 
 /**
  * Best-effort portal-login suggestion.
