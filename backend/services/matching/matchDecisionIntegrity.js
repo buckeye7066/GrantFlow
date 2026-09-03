@@ -78,8 +78,8 @@ function isMissingIntegritySchema(error) {
     code === '42703' ||
     /no such table:\s*(profile_opportunity_matches|funding_opportunities)/i.test(message) ||
     /relation\s+["']?(profile_opportunity_matches|funding_opportunities)["']?\s+does not exist/i.test(message) ||
-    /no such column:\s*(match_decision|match_score|matcher_version|match_explain_json|opportunity_kind|updated_at)/i.test(message) ||
-    /column\s+["']?(match_decision|match_score|matcher_version|match_explain_json|opportunity_kind|updated_at)["']?\s+does not exist/i.test(message)
+    /no such column:\s*(?:\w+\.)?(match_decision|match_score|matcher_version|match_explain_json|opportunity_kind|updated_at)/i.test(message) ||
+    /column\s+["']?(?:\w+\.)?(match_decision|match_score|matcher_version|match_explain_json|opportunity_kind|updated_at)["']?\s+does not exist/i.test(message)
   )
 }
 
