@@ -324,25 +324,56 @@ export function buildNeedWebQueries(needText, expandedNeed = null, profileContex
   const profile = profileContext?.profile ?? {}
   const signals = profileContext?.signals ?? {}
   const loc = signals?.location ?? {}
+  const city = loc.city || profile.city || null
+  const county = loc.county || profile.county || null
   const state = loc.state || profile.state || null
+  const cityState = [city, state].filter(Boolean).join(' ')
+  const countyLabel = county ? (/county/i.test(county) ? county : `${county} County`) : null
+  const locality = countyLabel || cityState || state || ''
 
-  const type = String(
-    profile.primary_type || profile.applicant_type || signals.entityType || '',
-  ).replace(/_/g, ' ').trim().toLowerCase()
+  // Applicant identity comes from both the persisted profile row and the
+  // canonical derived signals. A coarse/missing primary_type must not erase a
+  // more specific applicant type derived from the rest of the profile.
+  const applicantTypes = [
+    profile.primary_type,
+    profile.applicant_type,
+    signals.entityType,
+    ...asArray(signals.applicantTypes),
+  ].map((value) => String(value || '').replace(/_/g, ' ').trim().toLowerCase()).filter(Boolean)
+  const type = applicantTypes.join(' ')
   const applicantNoun =
-    type.includes('nonprofit') || type.includes('501') || type.includes('church') || type.includes('ministry')
+    /nonprofit|501|church|ministry|foundation/.test(type)
       ? 'nonprofit'
-      : type.includes('business')
+      : /business|company|entrepreneur/.test(type)
         ? 'small business'
-        : type.includes('school')
+        : /school|college|university|education agency/.test(type)
           ? 'school'
-          : ''
+          : /student/.test(type)
+            ? 'student'
+            : /veteran/.test(type)
+              ? 'veteran'
+              : /individual|person|family|disabled|senior/.test(type)
+                ? 'individual'
+                : ''
 
-  // Core term: prefer the taxonomy PHRASE that matched (it strips filler like
-  // "help to pay for an …"), but only when it is a phrase — a single-word key
-  // like "vehicle" is a category, not the user's item.
+  // The exact free-text request is always searched first. Taxonomy expansion
+  // broadens later queries; it may never replace or truncate the words the
+  // profile owner entered (for example, "15 passenger bus", not merely
+  // "vehicle", and "DME", not merely "medical").
+  const exactNeed = need.replace(/["“”]/g, ' ').replace(/\s+/g, ' ').trim()
   const matchedKey = String(expandedNeed?.matchedKey || '').trim()
-  const core = matchedKey.includes(' ') ? matchedKey : need
+  const core = matchedKey.includes(' ') ? matchedKey : exactNeed
+
+  // Reuse the canonical whole-profile term builder to add one mission/need
+  // anchor without leaking names, contact details, IDs, or raw profile prose
+  // into a search provider. This is the same structured profile vocabulary the
+  // federal source planner consumes.
+  let profileTerms = []
+  try {
+    profileTerms = buildGrantsGovQueryTerms(profileContext, { limit: 8 })
+      .map((value) => String(value || '').trim())
+      .filter((value) => value && !exactNeed.toLowerCase().includes(value.toLowerCase()))
+  } catch { profileTerms = [] }
 
   const queries = []
   const push = (q) => {
@@ -351,24 +382,28 @@ export function buildNeedWebQueries(needText, expandedNeed = null, profileContex
   }
 
   if (variant === 'gift') {
-    push(`"${core}" donation program ${applicantNoun}`)
-    push(`organizations that donate ${core}`)
-    push(`free ${core} ${applicantNoun || 'program'} ${state || ''}`)
-    push(`${core} in-kind donation ${state || ''}`)
+    push(`"${exactNeed}" donation program ${applicantNoun} ${state || ''}`)
+    push(`organizations that donate "${exactNeed}" ${locality}`)
+    push(`free "${exactNeed}" ${applicantNoun || 'assistance program'} ${locality}`)
+    if (core.toLowerCase() !== exactNeed.toLowerCase()) {
+      push(`"${core}" in-kind donation ${applicantNoun} ${state || ''}`)
+    }
   } else {
-    push(`"${core}" grant ${applicantNoun}`)
-    push(`"${core}" funding assistance ${state || ''}`)
-    push(`grant to pay for ${core} ${applicantNoun}`)
-    // One taxonomy-broadened query (first synonym that differs from the core)
+    push(`"${exactNeed}" grant ${applicantNoun} ${state || ''}`)
+    push(`"${exactNeed}" funding assistance ${locality}`)
+    push(`grant to pay for "${exactNeed}" ${applicantNoun} ${locality}`)
+    if (core.toLowerCase() !== exactNeed.toLowerCase()) {
+      push(`"${core}" grant ${applicantNoun} ${state || ''}`)
+    }
+    // One taxonomy-broadened query, after the exact request has already been
+    // preserved in multiple search shapes.
     const syn = (expandedNeed?.synonyms || []).find(
       (s) => s && String(s).toLowerCase() !== core.toLowerCase(),
     )
-    if (syn) push(`${syn} ${applicantNoun ? `${applicantNoun} ` : ''}grant ${state || ''}`)
+    if (syn) push(`"${syn}" ${applicantNoun ? `${applicantNoun} ` : ''}grant ${state || ''}`)
   }
-  // When the core was distilled from a longer sentence, keep ONE raw-text query
-  // so nothing the user typed is silently dropped.
-  if (core.toLowerCase() !== need.toLowerCase()) {
-    push(`${need} ${variant === 'gift' ? 'donation' : 'grant'}`)
+  if (profileTerms[0]) {
+    push(`"${exactNeed}" "${profileTerms[0]}" ${variant === 'gift' ? 'donation' : 'grant'} ${locality}`)
   }
 
   const seen = new Set()
