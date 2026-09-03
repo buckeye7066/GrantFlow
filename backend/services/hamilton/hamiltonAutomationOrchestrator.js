@@ -120,7 +120,6 @@ import { emitIdentityRequest } from './hamiltonIdentityRequest.js'
 import { makeHamiltonGraphTokenProvider } from './hamiltonGraphToken.js'
 import { getPolicyFor } from './hamiltonPortalPolicyRegistry.js'
 import { isSearchEngineUrl } from '../../config/urlRules.js'
-import { isAutoSubmitGloballyEnabled } from '../hamiltonApplicationAgent.js'
 import {
   isControlledBetaSyntheticBrowserUrl,
   isHamiltonBrowserTargetAllowed,
@@ -268,8 +267,15 @@ export function browserAutomationPermittedForUrl(url, { extraAllowedHosts = [], 
  * full automation the host allowlist is bypassed (owner doctrine 2026-08-22):
  * any public HTTPS portal is a valid submit target.
  */
-export function reviewedPortalSubmissionExecutionAvailable(url, { fullAutomation = false } = {}) {
-  return browserAutomationPermittedForUrl(url, { ignoreHostAllowlist: fullAutomation === true })
+export function reviewedPortalSubmissionExecutionAvailable(
+  url,
+  { fullAutomation = false, extraAllowedHosts = [] } = {},
+) {
+  // Full automation is the profile user's explicit authorization to drive a
+  // public portal. Operational beta flags may narrow assist-only runs, but they
+  // may not silently override that consent. The SSRF/public-HTTPS floor remains.
+  if (fullAutomation === true) return isHamiltonBrowserTargetAllowed(url)
+  return browserAutomationPermittedForUrl(url, { extraAllowedHosts })
 }
 
 /**
@@ -2043,6 +2049,14 @@ async function runAutopilotPathway(db, {
   const profilePortalHosts = deriveProfilePortalHosts({ profile, opportunity, grant })
   const extraAllowedHosts = [...new Set([...credentialedDomains, ...profilePortalHosts])]
 
+  // Resolve standing profile authorization before deciding whether a portal is
+  // executable. Previously this happened after the browser gate, so the global
+  // beta switch/allowlist could force a packet even when full automation was on.
+  let fullAutomationActive = false
+  try {
+    fullAutomationActive = Boolean((await isFullAutomationEnabled(db, task.profile_id))?.enabled)
+  } catch { fullAutomationActive = false }
+
   // Legal gate (authoritative): the per-host policy registry is the compliance
   // boundary. Automation is permitted on every host by default and BLOCKED only
   // where a portal's terms forbid agent automation (automation_allowed === false,
@@ -2068,7 +2082,10 @@ async function runAutopilotPathway(db, {
     })
     if (federal) return federal
   }
-  if (policyForbidsAutomation || !browserAutomationPermittedForUrl(url, { extraAllowedHosts })) {
+  if (policyForbidsAutomation || !reviewedPortalSubmissionExecutionAvailable(url, {
+    fullAutomation: fullAutomationActive,
+    extraAllowedHosts,
+  })) {
     const reason = policyForbidsAutomation
       ? `portal terms forbid agent automation (${portalHostForPolicy || 'this host'}); Hamilton respects the site's ToS and uses the lawful ${portalPolicy.fallback_path || 'pdf_docx'} packet instead`
       : !isBrowserAutomationEnabled()
@@ -2155,18 +2172,15 @@ async function runAutopilotPathway(db, {
   // One decision contract: the live task's allow_auto_submit field is intent,
   // the active persisted submit authorization is authority, and a stored
   // final-review preference is a veto. The request and retired legacy flag are
-  // deliberately not decision inputs. The environment flag remains an
-  // operational kill switch for every auto-submit path.
+  // deliberately not decision inputs. Profile authorization is the authority;
+  // environment posture cannot silently revoke it.
   let submissionDecision = await resolveSubmissionDecision(db, {
     profileId: task.profile_id,
     fundingSourceId: opportunity?.id || grant?.id || null,
     taskId: task.id,
     taskAllowAutoSubmit: task?.allow_auto_submit,
   })
-  let allowAutoSubmit = submissionDecision.allow_auto_submit && isAutoSubmitGloballyEnabled()
-  if (submissionDecision.allow_auto_submit && !isAutoSubmitGloballyEnabled()) {
-    submissionDecision = { ...submissionDecision, allow_auto_submit: false, reason: 'global_auto_submit_disabled' }
-  }
+  let allowAutoSubmit = submissionDecision.allow_auto_submit
   // Is full automation authorized for this profile RIGHT NOW? The auto-submit
   // consent lives in TWO stores: the authorization (submit_applications +
   // allow_auto_submit + no require_human_review veto) and a SEPARATE profile
@@ -2179,10 +2193,6 @@ async function runAutopilotPathway(db, {
   // same rule resolveSubmissionDecision now follows — so an active full-automation
   // grant satisfies the preference checks below. Fail closed (false) on any read
   // error so a broken read never widens submit.
-  let fullAutomationActive = false
-  try {
-    fullAutomationActive = Boolean((await isFullAutomationEnabled(db, task.profile_id))?.enabled)
-  } catch { fullAutomationActive = false }
   // Condition-2 asks (labels of required fields Hamilton could not answer),
   // populated after the engine returns and read by the completed_draft branch.
   let unansweredAskLabels = []
@@ -2347,7 +2357,6 @@ async function runAutopilotPathway(db, {
       taskAllowAutoSubmit: liveTask.allow_auto_submit,
     })
     if (!fresh.allow_auto_submit) return { allow: false, reason: fresh.reason, decision: fresh }
-    if (!isAutoSubmitGloballyEnabled()) return { allow: false, reason: 'global_auto_submit_disabled', decision: fresh }
     // Re-read the profile at the irreversible boundary. The launch-time bundle
     // can be minutes old; using it here meant turning the profile-level
     // auto-submit switch OFF during a live run did not veto the eventual click.
@@ -2376,7 +2385,7 @@ async function runAutopilotPathway(db, {
       return { allow: false, reason: 'profile_auto_submit_disabled', decision: fresh }
     }
     // Re-check executable coverage at the click boundary as well as launch.
-    if (!reviewedPortalSubmissionExecutionAvailable(url, { fullAutomation: fullAutomationActive })) {
+    if (!reviewedPortalSubmissionExecutionAvailable(url, { fullAutomation: fullAutomationLive })) {
       return { allow: false, reason: 'portal_url_not_browser_executable', decision: fresh }
     }
     if (grant?.id) {
@@ -3769,7 +3778,7 @@ async function runAutopilotPathway(db, {
     // WHY did Hamilton draft instead of submitting? Surface the exact withhold
     // reason on the card so "waiting for review" is diagnosable instead of an
     // opaque generic message. The reason comes from the engine's submit boundary
-    // (submit_withheld_reason: not_requested / global_auto_submit_disabled /
+    // (submit_withheld_reason: not_requested /
     // human_review_required / profile_auto_submit_disabled /
     // portal_url_not_browser_executable) or the orchestrator's auto-submit gate
     // (automation_off / missing_info). This is what tells us which consent gate
