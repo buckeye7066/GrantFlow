@@ -10,6 +10,8 @@
  *   That's it — read-side queries automatically include it because they use a blocklist.
  */
 
+import { opportunityLifecycleVisibilityPortableSql } from '../config/matchSurfacing.js'
+
 export const ALLOWED_RECORD_ORIGINS = new Set([
   'live_crawl',
   'curated_verified',
@@ -52,17 +54,28 @@ export const ALLOWED_RECORD_ORIGINS = new Set([
 export const UNTRUSTED_ORIGINS = ['synthetic', 'manual']
 
 /**
- * Returns a SQL fragment: (record_origin IS NULL OR record_origin NOT IN ('synthetic','manual'))
+ * Returns the shared READ-SIDE catalog trust fragment. A row is readable only
+ * when both conditions hold:
+ *   1. its origin is not explicitly untrusted; and
+ *   2. the canonical lifecycle contract says it is active and not hidden.
+ *
+ * The lifecycle composition is deliberate. `trustedOriginClause()` is the
+ * long-standing read guard used by AI matching, discovery, Anya, crawler result
+ * selection, college aid lookup, and backfill paths. Keeping quarantine here
+ * prevents any one of those readers from accidentally treating `is_hidden` as
+ * optional. The lifecycle predicate itself remains owned by matchSurfacing.js.
+ *
  * Safe for both SQLite and Postgres.
- * @param {string} [alias] - Optional table alias, e.g. 'fo' → 'fo.record_origin'
+ * @param {string} [alias] - Optional table alias, e.g. 'fo'
  */
 export function trustedOriginClause(alias) {
   if (alias !== undefined && !/^[A-Za-z_][A-Za-z0-9_]*$/.test(alias)) {
-  throw new Error(`trustedOriginClause: invalid alias '${alias}'`)
-}
-const col = alias ? `${alias}.record_origin` : 'record_origin'
+    throw new Error(`trustedOriginClause: invalid alias '${alias}'`)
+  }
+  const col = alias ? `${alias}.record_origin` : 'record_origin'
   const quoted = UNTRUSTED_ORIGINS.map(o => `'${escapeSqlStringLiteral(o)}'`).join(',')
-  return `(${col} IS NULL OR ${col} NOT IN (${quoted}))`
+  const lifecycle = opportunityLifecycleVisibilityPortableSql({ tableAlias: alias || '' })
+  return `(${lifecycle} AND (${col} IS NULL OR ${col} NOT IN (${quoted})))`
 }
 
 /**
@@ -79,7 +92,7 @@ export const UNTRUSTED_SOURCES = ['synthetic', 'template', 'fake']
 
 /**
  * Returns a SQL fragment for the `source` column blocklist.
- * e.g. (source IS NULL OR source NOT IN ('synthetic','template','comprehensive_crawler','fake'))
+ * e.g. (source IS NULL OR source NOT IN ('synthetic','template','fake'))
  * @param {string} [alias] - Optional table alias, e.g. 'fo' → 'fo.source'
  */
 export function trustedSourceClause(alias) {
