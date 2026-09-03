@@ -8,9 +8,9 @@ requirements remain in `docs/ENVIRONMENT.md`.
 
 ## Summary
 
-- Total vars: **960**
-- Vars referenced in code: **960**
-- Vars listed in env templates: **957**
+- Total vars: **958**
+- Vars referenced in code: **958**
+- Vars listed in env templates: **955**
 
 ## Inventory
 
@@ -550,10 +550,8 @@ requirements remain in `docs/ENVIRONMENT.md`.
 | `JOHN_WEB_RESEARCH` | Yes | Yes | Backend/Node |
 | `JWT_SECRET` | Yes | Yes | Backend/Node |
 | `LAPTOP_CONNECTOR_API` | Yes | Yes | Backend/Node |
-| `LAPTOP_CONNECTOR_MAX_RETRIES` | Yes | Yes | Backend/Node |
 | `LAPTOP_CONNECTOR_MAX_TEXT` | Yes | Yes | Backend/Node |
 | `LAPTOP_CONNECTOR_MODEL` | Yes | Yes | Backend/Node |
-| `LAPTOP_CONNECTOR_TIMEOUT_MS` | Yes | Yes | Backend/Node |
 | `LAPTOP_CONNECTOR_TOKEN` | Yes | Yes | Backend/Node |
 | `LARRY_ENABLED` | Yes | Yes | Backend/Node |
 | `LARRY_RUN_ON_SCHEDULE` | Yes | Yes | Backend/Node |
@@ -5726,14 +5724,6 @@ requirements remain in `docs/ENVIRONMENT.md`.
   - `tools/laptop-connector/capture.js:L145` (process.env)
   - `tools/laptop-connector/scan.js:L101` (process.env)
 
-### `LAPTOP_CONNECTOR_MAX_RETRIES`
-
-- **Templates**:
-  - `.env.example:569` = ``
-  - `backend/.env.example:540` = ``
-- **Code references**:
-  - `backend/services/laptopConnector/laptopAnalyzer.js:L35` (process.env)
-
 ### `LAPTOP_CONNECTOR_MAX_TEXT`
 
 - **Templates**:
@@ -5749,14 +5739,6 @@ requirements remain in `docs/ENVIRONMENT.md`.
   - `backend/.env.example:542` = ``
 - **Code references**:
   - `backend/services/laptopConnector/laptopAnalyzer.js:L40` (process.env)
-
-### `LAPTOP_CONNECTOR_TIMEOUT_MS`
-
-- **Templates**:
-  - `.env.example:572` = ``
-  - `backend/.env.example:543` = ``
-- **Code references**:
-  - `backend/services/laptopConnector/laptopAnalyzer.js:L34` (process.env)
 
 ### `LAPTOP_CONNECTOR_TOKEN`
 
