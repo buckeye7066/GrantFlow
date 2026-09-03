@@ -151,9 +151,17 @@ async function loadEntitlementAuthority(db, profileId, now) {
 }
 
 export function buildEntitlementDecisionInput(authority, key) {
-  const paymentAccessStatus = authority?.requiresPayment && !authority?.paymentAccessStatus
-    ? 'not_active'
-    : authority?.paymentAccessStatus
+  // An active promotion/free period removes the payment prerequisite for its
+  // duration. New profiles commonly still carry pending_agreement or
+  // pending_payment in profile_pricing; passing that stale workflow state into
+  // decideBillingEntitlement() would reject before the promotion grant is
+  // evaluated. Profile suspension/blocked status remains a separate, earlier
+  // fail-closed check in the decision function.
+  const paymentAccessStatus = authority?.promotionActive === true && authority?.requiresPayment === false
+    ? null
+    : authority?.requiresPayment && !authority?.paymentAccessStatus
+      ? 'not_active'
+      : authority?.paymentAccessStatus
   return {
     paymentAccessStatus,
     input: {
