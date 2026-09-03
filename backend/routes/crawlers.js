@@ -2160,21 +2160,38 @@ router.post('/seed-all-real', async (req, res) => {
     routeLogger.info('[seed-all-real] Starting comprehensive real funding seed...')
     
     const { seedAllRealFunding, getOpportunityCountsByState } = await import('../services/crawlerOsCompatibility.js')
-    
-    const result = await seedAllRealFunding(req.db)
-    const counts = getOpportunityCountsByState(req.db)
-    
-    // Count minimum available per ZIP (national programs available everywhere)
-    const minPerZip = counts.nationwide
-    
+    const profileId = String(req.body?.profile_id || '').trim()
+    if (!profileId) {
+      return res.status(400).json({
+        success: false,
+        error: 'profile_id is required',
+        message: 'Crawler OS cannot seed direct funding without a profile to evaluate source activation and all four funding truths.',
+      })
+    }
+
+    const result = await seedAllRealFunding(req.db, { profileId })
+    if (!result?.success) {
+      return res.status(422).json({ success: false, ...result })
+    }
+    const counts = await getOpportunityCountsByState(req.db)
+
+    // This is catalog inventory, not a claim that every row is funding for
+    // every ZIP. Profile-specific recommendations still require four-truth
+    // proof through Crawler OS.
+    const minPerZip = Number(counts.national ?? counts.nationwide ?? 0)
+
     res.json({
       success: true,
-      message: `Seeded ${result.total} REAL funding opportunities`,
-      national_programs: result.national.inserted + result.national.updated,
-      state_programs: result.states.inserted + result.states.updated,
-      total_opportunities: result.total,
+      engine: result.engine,
+      profile_id: profileId,
+      message: `Crawler OS evaluated ${result.evaluated} profile-scoped matches and inserted ${result.inserted} catalog opportunities.`,
+      inserted: result.inserted,
+      evaluated: result.evaluated,
+      rejected: result.rejected,
+      sources: result.sources,
+      total_opportunities: result.inserted,
       minimum_per_zip: minPerZip,
-      note: 'All opportunities have verified, clickable URLs to real funding sources'
+      counts_by_state: counts,
     })
   } catch (error) {
     routeLogger.error('[seed-all-real] Error:', error)
@@ -2437,32 +2454,35 @@ router.post('/real-crawl', async (req, res) => {
   }
   
   try {
-    const { state = null, all_states = false } = req.body || {}
-    
-    // Dynamic import of the real crawler
-    const { crawlRealOpportunities, crawlAllStates } = await import('../services/crawlerOsCompatibility.js')
-    
-    routeLogger.info(`[real-crawl] Starting real opportunity crawl${state ? ` for ${state}` : all_states ? ' for all states' : ' (national)'}...`)
-    
-    let result
-    if (all_states) {
-      result = await crawlAllStates(req.db, (progress) => {
-        routeLogger.info(`[real-crawl] Progress: ${JSON.stringify(progress)}`)
-      })
-    } else {
-      result = await crawlRealOpportunities(req.db, state, {
-        onProgress: (progress) => {
-          routeLogger.info(`[real-crawl] Progress: ${JSON.stringify(progress)}`)
-        }
+    const { state = null, all_states = false, profile_id } = req.body || {}
+    const profileId = String(profile_id || '').trim()
+    if (!profileId) {
+      return res.status(400).json({
+        success: false,
+        error: 'profile_id is required',
+        message: 'Crawler OS requires a profile so crawler activation, need fit, and eligibility can be evaluated.',
       })
     }
-    
-    routeLogger.info(`[real-crawl] Complete: ${result.inserted || result.total_inserted} inserted`)
-    
-    res.json({
-      success: true,
-      ...result
-    })
+
+    // Dynamic import of the Crawler OS compatibility seam.
+    const { crawlRealOpportunities, crawlAllStates } = await import('../services/crawlerOsCompatibility.js')
+
+    routeLogger.info(`[real-crawl] Starting profile-scoped crawl for ${profileId}${state ? ` in ${state}` : all_states ? ' across planned local lanes' : ''}...`)
+
+    const onProgress = (progress) => {
+      routeLogger.info(`[real-crawl] Progress: ${JSON.stringify(progress)}`)
+    }
+    const options = { profileId, state, onProgress }
+    const result = all_states
+      ? await crawlAllStates(req.db, options)
+      : await crawlRealOpportunities(req.db, options)
+
+    if (!result?.success) {
+      return res.status(422).json({ success: false, ...result })
+    }
+    routeLogger.info(`[real-crawl] Complete: ${result.inserted || 0} inserted`)
+
+    res.json({ success: true, ...result })
   } catch (error) {
     routeLogger.error('[real-crawl] Error:', error)
     res.status(500).json(formatError(error))
