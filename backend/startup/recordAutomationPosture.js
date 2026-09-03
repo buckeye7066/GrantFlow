@@ -23,10 +23,7 @@
  */
 
 import { BOOT_ID } from '../config/bootId.js'
-import {
-  isAutoSubmitGloballyEnabled,
-  isBrowserAutomationEnabled,
-} from '../services/hamiltonApplicationAgent.js'
+import { isBrowserAutomationEnabled } from '../services/hamiltonApplicationAgent.js'
 
 export const AUTOMATION_POSTURE_KV_KEY = 'automation_posture'
 
@@ -38,17 +35,20 @@ function changesOf(result) {
 }
 
 /**
- * Resolve the posture WITHOUT re-implementing any gate.
- *
- * `isAutoSubmitGloballyEnabled` is the same function hamiltonApplicationAgent
- * consults before it will submit anything, so this record cannot drift from the
- * behavior it describes. Re-deriving it from process.env here would create a
- * second source of truth that reads green while the real gate says otherwise.
+ * Resolve the posture without claiming that a retired process-wide feature
+ * flag controls submission. The canonical orchestrator authorizes each
+ * irreversible action from the profile owner's stored consent and re-reads it
+ * immediately before the final click.
  */
 export function buildAutomationPosture(env = process.env) {
   return {
-    // The gate that matters: the audit aborts unless this is false.
-    allow_auto_submit: isAutoSubmitGloballyEnabled(),
+    // There is intentionally no process-wide auto-submit veto. Audits that
+    // require a non-mutating target must use a profile with no full-automation
+    // authorization; old auditors looking for allow_auto_submit:false now fail
+    // closed because this obsolete field is absent.
+    submission_authority: 'profile_authorization',
+    profile_authorization_required: true,
+    external_submission_possible: true,
     browser_automation: isBrowserAutomationEnabled(),
     run_on_schedule: String(env.HAMILTON_RUN_ON_SCHEDULE || 'false').toLowerCase() === 'true',
     // Unset means the approval gate is ON (tailoredNarrative.js), so absence is
@@ -80,9 +80,7 @@ export async function recordAutomationPosture(db, { logger = console } = {}) {
         .prepare('INSERT INTO system_kv (key, value, updated_at) VALUES (?, ?, ?)')
         .run(AUTOMATION_POSTURE_KV_KEY, value, now)
     }
-    if (posture.allow_auto_submit) {
-      logger?.warn?.('[automation-posture] HAMILTON_ALLOW_AUTOSUBMIT is ARMED in this process')
-    }
+    logger?.info?.('[automation-posture] external submission requires current profile authorization')
     return posture
   } catch (err) {
     logger?.warn?.('[automation-posture] could not record posture (non-fatal):', err?.message || err)
