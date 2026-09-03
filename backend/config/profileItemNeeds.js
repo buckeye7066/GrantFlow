@@ -133,6 +133,44 @@ export const SUPPORT_NEED_ITEMS = Object.freeze({
   'medical assistance': { item: 'Medical expense assistance', needText: 'medical expense assistance program', category: 'medical' },
 })
 
+/**
+ * `financial_information.assistance_needs[]` → a concrete search need.
+ * These are owner-declared need categories, not guesses. They belong in the
+ * predetermined search list even when the owner has not also repeated them in
+ * item_needs.
+ */
+export const ASSISTANCE_NEED_ITEMS = Object.freeze({
+  housing: { item: 'Housing assistance', needText: 'housing assistance grant', category: 'housing' },
+  rent: { item: 'Rent assistance', needText: 'rent assistance program', category: 'housing' },
+  utilities: { item: 'Utility bill assistance', needText: 'utility bill assistance', category: 'utilities' },
+  food: { item: 'Food and nutrition assistance', needText: 'food assistance program', category: 'food' },
+  transportation: { item: 'Transportation assistance', needText: 'transportation assistance grant', category: 'transportation' },
+  medical: { item: 'Medical expense assistance', needText: 'medical expense assistance program', category: 'medical' },
+  healthcare: { item: 'Healthcare expense assistance', needText: 'healthcare financial assistance program', category: 'medical' },
+  disability: { item: 'Disability support and adaptive equipment', needText: 'disability assistance adaptive equipment grant', category: 'adaptive_equipment' },
+  education: { item: 'Education and tuition assistance', needText: 'education tuition assistance grant', category: 'education' },
+  employment: { item: 'Employment and workforce training', needText: 'workforce training assistance grant', category: 'employment' },
+  childcare: { item: 'Childcare assistance', needText: 'childcare assistance program', category: 'childcare' },
+  legal: { item: 'Legal aid', needText: 'legal aid assistance program', category: 'legal' },
+  emergency: { item: 'Emergency financial assistance', needText: 'emergency financial assistance grant', category: 'emergency' },
+})
+
+/**
+ * Concrete equipment mentioned in medical_history.mobility_needs. This field is
+ * free-form, so only a positive equipment phrase emits a need; general symptom
+ * prose does not become an invented item.
+ */
+export const MOBILITY_NEED_ITEMS = Object.freeze({
+  wheelchair: { item: 'Wheelchair', needText: 'wheelchair DME assistance', category: 'medical_equipment' },
+  walker: { item: 'Walker', needText: 'walker DME assistance', category: 'medical_equipment' },
+  scooter: { item: 'Mobility scooter', needText: 'mobility scooter assistance program', category: 'medical_equipment' },
+  'hospital bed': { item: 'Hospital bed', needText: 'hospital bed DME assistance', category: 'medical_equipment' },
+  'shower chair': { item: 'Shower chair', needText: 'shower chair DME assistance', category: 'medical_equipment' },
+  'wheelchair van': { item: 'Wheelchair-accessible van', needText: 'wheelchair accessible van assistance', category: 'mobility' },
+  'accessible vehicle': { item: 'Accessible vehicle', needText: 'accessible vehicle grant disability', category: 'mobility' },
+  'oxygen concentrator': { item: 'Oxygen concentrator', needText: 'oxygen concentrator DME assistance', category: 'medical_equipment' },
+})
+
 /** `health_medical.disability_type[]` → item. Canonical tokens only. */
 export const DISABILITY_TYPE_ITEMS = Object.freeze({
   mobility: { item: 'Mobility aid (walker, wheelchair, or scooter)', needText: 'mobility equipment assistance', category: 'mobility' },
@@ -264,6 +302,24 @@ export const ITEM_NEED_RULES = Object.freeze([
         .map((v) => ({ item: v, needText: v, category: 'declared' })),
       unmapped: [],
     }),
+  }),
+  Object.freeze({
+    id: 'financial_information.assistance_needs',
+    section: 'financial_information',
+    reads: ['assistance_needs'],
+    source: 'declared',
+    vocabulary: 'ASSISTANCE_NEED_ITEMS',
+    read: (s) => list(obj(s.financial_information).assistance_needs),
+    emit: (values) => mapThroughVocabulary(values, ASSISTANCE_NEED_ITEMS),
+  }),
+  Object.freeze({
+    id: 'medical_history.mobility_needs',
+    section: 'medical_history',
+    reads: ['mobility_needs'],
+    source: 'derived',
+    vocabulary: 'MOBILITY_NEED_ITEMS',
+    read: (s) => list(obj(s.medical_history).mobility_needs),
+    emit: (values) => mapThroughVocabulary(values, MOBILITY_NEED_ITEMS, { reportUnmapped: false }),
   }),
   Object.freeze({
     id: 'medical_history.dme_needed',
@@ -498,6 +554,8 @@ export function deriveProfileItemNeeds(profile = {}, sections = {}) {
 export default {
   ITEM_NEED_RULES,
   SUPPORT_NEED_ITEMS,
+  ASSISTANCE_NEED_ITEMS,
+  MOBILITY_NEED_ITEMS,
   DISABILITY_TYPE_ITEMS,
   HEALTH_FLAG_ITEMS,
   CREDENTIAL_ROLE_ITEMS,
