@@ -24,7 +24,7 @@ import { parse } from './parsers.js';
 import { enforceReality } from './realityGate.js';
 import { normalize } from './normalizer.js';
 import { computeMatchDecision, isResearchLead } from './matchEngine.js';
-import { isVerifiedDirectFundingRecommendation } from '../config/fundingTruthPolicy.js';
+import { isVerifiedDirectFundingRecommendation } from './fundingTruthPolicy.js';
 import { buildEvolutionSignals } from './profileEvolution.js';
 import { CRAWLER_OUTCOME, MATCH_DECISION, OPPORTUNITY_KIND, REASON, canonicalOpportunityKey } from './contract.js';
 import {
