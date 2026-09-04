@@ -11,6 +11,9 @@ function parseArrayField(value) {
   return trimmed.split(',').map(s => s.trim()).filter(Boolean)
 }
 import { writeAuditEvent } from './auditEventsService.js'
+import { createLogger } from '../utils/logger.js'
+
+const log = createLogger('vnext.scoring')
 
 function pickAmountExpected(opp) {
   const min = Number(opp?.amount_min ?? 0)
@@ -143,14 +146,23 @@ export async function scoreApplication(db, { applicationId, actor = null, hourly
     )
     .run(jsonForDb(db, breakdown), expected_value, risk_score, String(applicationId))
 
-  await writeAuditEvent(db, {
-    actor,
-    entity_type: 'vnext_application',
-    entity_id: String(applicationId),
-    action: 'scoring.recomputed',
-    before,
-    after: breakdown,
-  })
+  try {
+    await writeAuditEvent(db, {
+      actor,
+      entity_type: 'vnext_application',
+      entity_id: String(applicationId),
+      action: 'scoring.recomputed',
+      before,
+      after: breakdown,
+    })
+  } catch (error) {
+    // Auditing is best-effort and must never roll back a claimed transition.
+    log.warn('scoring.audit_failed', {
+      applicationId: String(applicationId),
+      action: 'scoring.recomputed',
+      error: error?.message || String(error),
+    })
+  }
 
   return { ok: true, expected_value, risk_score, breakdown }
 }
