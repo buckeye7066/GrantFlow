@@ -659,6 +659,8 @@ export async function automateSingleSource(db, {
 } = {}) {
   if (!profile && !profileId) throw new Error('profile or profileId required')
   const resolvedProfileId = profileId || profile.id
+  const opportunityId = source?.opportunity_id || source?.opportunityId || null
+  const requestedGrantId = source?.grant_id || source?.grantId || null
 
   // Cross-tenant gate BEFORE any profile hydration, task creation, or PII
   // packet generation. loadProfileBundle below is a bare `WHERE id = ?` with
@@ -685,10 +687,25 @@ export async function automateSingleSource(db, {
       capabilityKey: CAPABILITY_KEYS.PIPELINE_AUTOMATION,
     })
     if (!entitlement.allowed) {
+      // The adapter has already selected a durable task by this point. Merely
+      // throwing leaves its updated_at unchanged, so an unentitled profile's
+      // old task is selected on every tick and can starve the bounded queue.
+      // Close only idle work; submission-uncertain and terminal tasks remain
+      // protected by closeExistingTasksForRefusedSource.
+      const closedTasks = entitlement.unavailable
+        ? []
+        : await closeExistingTasksForRefusedSource(db, {
+          profileId: resolvedProfileId,
+          opportunityId,
+          grantId: requestedGrantId,
+          reason: 'pipeline_automation_not_entitled',
+          message: 'Hamilton closed this task because pipeline automation is not enabled for this profile.',
+        })
       const err = new Error(`Hamilton automation is locked: ${entitlement.reason || 'not_entitled'}`)
       err.status = entitlement.unavailable ? 503 : 403
       err.code = entitlement.unavailable ? 'entitlement_authority_unavailable' : 'pipeline_automation_not_entitled'
       err.entitlement = entitlement
+      err.closed_tasks = closedTasks
       throw err
     }
   }
@@ -704,8 +721,6 @@ export async function automateSingleSource(db, {
       throw err
     }
   }
-  const opportunityId = source?.opportunity_id || source?.opportunityId || null
-  const requestedGrantId = source?.grant_id || source?.grantId || null
   let grantId = requestedGrantId
   if (!opportunityId && !grantId) {
     throw new Error('source must include opportunity_id or grant_id')
