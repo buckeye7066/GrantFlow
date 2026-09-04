@@ -45,6 +45,19 @@ function sameTarget(a, b) {
   return effectiveLinkVerificationTarget(a) === effectiveLinkVerificationTarget(b)
 }
 
+// A successful proof can only be accepted for a CHANGED target when:
+// - it is fresh AND successful (checked by caller), AND
+// - the proof's final_url matches the new effective target, AND
+// - the proof timestamp is strictly newer than any prior proof on the row.
+function successProofMatchesNewTarget(incoming = {}, currentRow = {}, beforeRow = null) {
+  const newTarget = effectiveLinkVerificationTarget(currentRow)
+  const finalUrl = text(incoming.final_url)
+  const verifiedAt = timestampMs(incoming)
+  const beforeVerifiedAt = beforeRow ? timestampMs(beforeRow) : null
+  const newerThanBefore = beforeVerifiedAt === null ? verifiedAt !== null : (verifiedAt !== null && verifiedAt > beforeVerifiedAt)
+  return Boolean(newTarget) && finalUrl === newTarget && newerThanBefore
+}
+
 function proofFields(row = {}) {
   return {
     last_verified_at: row.last_verified_at ?? null,
@@ -93,7 +106,7 @@ export function resolveOpportunityLinkProofState({
   const currentSuccess = hasCurrentSuccessfulLinkProof(currentRow, nowMs)
 
   if (targetChanged) {
-    if (incomingCurrentSuccess) {
+    if (incomingCurrentSuccess && successProofMatchesNewTarget(incoming, currentRow, beforeRow)) {
       return { action: 'none', reason: 'changed_target_with_fresh_success', updates: null }
     }
 
