@@ -1,9 +1,9 @@
 /**
  * County-Level Funding Crawler
- * 
+ *
  * Crawls real local funding sources for each US county.
  * Designed to run in background via Anya.
- * 
+ *
  * For each county, searches for:
  * - Community foundations
  * - United Way chapters
@@ -12,12 +12,10 @@
  * - Emergency assistance programs
  */
 
-import fs from 'fs';
-import { dirname, join } from 'path';
-import { fileURLToPath } from 'url';
 import { upsertFundingOpportunity } from './opportunityInserter.js';
-import { createLogger } from '../utils/logger.js'
-const log = createLogger('countyFundingCrawler')
+import { createLogger } from '../utils/logger.js';
+
+const log = createLogger('countyFundingCrawler');
 
 // This crawler historically synthesized one templated "program" per county×org
 // (e.g. "United Way of Franklin County") whose application_url was a NATIONAL
@@ -28,56 +26,95 @@ const log = createLogger('countyFundingCrawler')
 //      application_url=null, "find your local …" titles) — never fake
 //      county-specific direct opportunities.
 export function isCountyCrawlerEnabled() {
-  return String(process.env.COUNTY_FUNDING_CRAWLER_ENABLED || 'false').toLowerCase() === 'true'
+  return String(process.env.COUNTY_FUNDING_CRAWLER_ENABLED || 'false').toLowerCase() === 'true';
 }
 
-// NOTE: In some hosted environments, the complete county dataset file may not be present
-// (e.g. older deploy artifacts / missing repo data folder). We fall back to the bundled JSON.
 let COMPLETE_US_COUNTIES = [];
-let COUNTY_STATS = { totalCounties: 0, totalStates: 0, source: 'unknown' };
+let COUNTY_STATS = { totalCounties: 0, totalStates: 0, source: 'unloaded' };
+let countyLoadPromise = null;
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = dirname(__filename);
-const repoRootDir = join(__dirname, '..', '..');
-const fallbackCountiesPath = join(repoRootDir, 'county_batch1.json');
+const EXPECTED_STATE_AND_DC_COUNT = 51;
+const MIN_EXPECTED_COUNTY_EQUIVALENTS = 3140;
 
-try {
-  // Prefer the complete dataset if available.
-  // Use dynamic import so a missing file doesn't crash the whole service.
-  const mod = await import('../data/completeCounties.js');
-  COMPLETE_US_COUNTIES = mod.COMPLETE_US_COUNTIES || [];
-  COUNTY_STATS = mod.COUNTY_STATS || COUNTY_STATS;
-} catch (error) {
-  try {
-    const raw = fs.readFileSync(fallbackCountiesPath, 'utf8');
-    const parsed = JSON.parse(raw);
-    // county_batch1.json format: { [state]: { [countyName]: [zip,...] } } or similar
-    const counties = [];
-    const states = Object.keys(parsed || {});
-    for (const state of states) {
-      const byCounty = parsed[state] || {};
-      for (const countyName of Object.keys(byCounty)) {
-        counties.push({ state, county: countyName });
-      }
-    }
-    COMPLETE_US_COUNTIES = counties;
-    COUNTY_STATS = {
-      totalCounties: counties.length,
-      totalStates: states.length,
-      source: 'county_batch1.json fallback',
-    };
-    console.warn('[CountyCrawler] Falling back to county_batch1.json (completeCounties.js missing)', {
-      totalCounties: COUNTY_STATS.totalCounties,
-      totalStates: COUNTY_STATS.totalStates,
-    });
-  } catch (fallbackError) {
-    console.error('[CountyCrawler] Failed to load counties dataset', {
-      error: String(error?.message || error),
-      fallbackError: String(fallbackError?.message || fallbackError),
-    });
-    COMPLETE_US_COUNTIES = [];
-    COUNTY_STATS = { totalCounties: 0, totalStates: 0, source: 'none' };
+function cleanCountyName(value) {
+  return String(value || '').trim();
+}
+
+export function countyDisplayLabel(value) {
+  const county = cleanCountyName(value);
+  if (!county) return '';
+  return /\b(county|parish|borough|census area|municipality|city and borough|district|city)$/i.test(county)
+    ? county
+    : `${county} County`;
+}
+
+export function countyAuthorityIsComplete(counties) {
+  if (!Array.isArray(counties) || counties.length < MIN_EXPECTED_COUNTY_EQUIVALENTS) return false;
+  const states = new Set(
+    counties
+      .map((row) => String(row?.state || '').trim().toUpperCase())
+      .filter((state) => /^[A-Z]{2}$/.test(state)),
+  );
+  return states.size === EXPECTED_STATE_AND_DC_COUNT;
+}
+
+function installCountyRows(counties, source) {
+  if (!countyAuthorityIsComplete(counties)) {
+    const count = Array.isArray(counties) ? counties.length : 0;
+    const states = new Set(
+      (Array.isArray(counties) ? counties : [])
+        .map((row) => String(row?.state || '').trim().toUpperCase())
+        .filter((state) => /^[A-Z]{2}$/.test(state)),
+    ).size;
+    throw new Error(
+      `County authority incomplete: ${count} county equivalents across ${states} state/DC codes`,
+    );
   }
+
+  COMPLETE_US_COUNTIES = counties.map((row) => ({
+    ...row,
+    state: String(row.state).trim().toUpperCase(),
+    county: cleanCountyName(row.county),
+  }));
+  COUNTY_STATS = {
+    totalCounties: COMPLETE_US_COUNTIES.length,
+    totalStates: new Set(COMPLETE_US_COUNTIES.map((row) => row.state)).size,
+    source,
+  };
+  return COMPLETE_US_COUNTIES;
+}
+
+/**
+ * Load the county authority lazily. Disabled crawler imports do not touch the
+ * network or optional data files. When enabled, use the Census-backed county
+ * authority in backend/data/completeCounties.js. If the official authority is
+ * unavailable or incomplete, fail closed instead of silently omitting real
+ * county equivalents from a nationwide crawl.
+ */
+export async function loadCounties() {
+  if (COMPLETE_US_COUNTIES.length > 0) return COMPLETE_US_COUNTIES;
+  if (countyLoadPromise) return countyLoadPromise;
+
+  countyLoadPromise = (async () => {
+    const mod = await import('../data/completeCounties.js');
+    const counties = Array.isArray(mod.COMPLETE_US_COUNTIES) ? mod.COMPLETE_US_COUNTIES : [];
+    const source = mod.COUNTY_DATA_SOURCE?.authority
+      ? `${mod.COUNTY_DATA_SOURCE.authority} ${mod.COUNTY_DATA_SOURCE.vintage || ''}`.trim()
+      : 'U.S. Census Bureau county authority';
+    return installCountyRows(counties, source);
+  })().catch((error) => {
+    countyLoadPromise = null;
+    COMPLETE_US_COUNTIES = [];
+    COUNTY_STATS = { totalCounties: 0, totalStates: 0, source: 'unavailable' };
+    log.error(`[CountyCrawler] County authority unavailable: ${error?.message || error}`);
+    throw error;
+  });
+
+  const counties = await countyLoadPromise;
+  log.info(
+    `[CountyCrawler] Using ${COUNTY_STATS.totalCounties} county equivalents from ${COUNTY_STATS.totalStates} states/DC (${COUNTY_STATS.source})`,
+  );
+  return counties;
 }
 
 // Google Custom Search API (if available) or fallback to known patterns
@@ -155,28 +192,20 @@ const ORG_PATTERNS = {
   },
 };
 
-/**
- * US Counties with their states - loaded from data file or built dynamically
- */
-// Use complete census-based county data (imported at compile time)
-const CRAWLER_VERSION = '3.0'; // Using complete census data
-
-async function loadCounties() {
-  log.info(`[CountyCrawler] Using ${COUNTY_STATS.totalCounties} counties from ${COUNTY_STATS.totalStates} states (${COUNTY_STATS.source})`);
-  return COMPLETE_US_COUNTIES;
-}
+const CRAWLER_VERSION = '3.2';
 
 /**
  * Create opportunity entry for a county-level organization
  */
 function createCountyOpportunity(county, state, orgType, orgConfig) {
-  const id = `${orgType}-${state.toLowerCase()}-${county.toLowerCase().replace(/\s+/g, '-')}`;
+  const countyLabel = countyDisplayLabel(county);
+  const id = `${orgType}-${state.toLowerCase()}-${cleanCountyName(county).toLowerCase().replace(/\s+/g, '-')}`;
   // HONEST DIRECTORY shape: this is a finder/locator for a local resource near
   // the county, NOT a specific county program. application_url is null so the
   // policy + relevanceFilter treat it as a directory (never a direct
   // opportunity); the real national locator stays as source_url evidence.
   const resourceLabel = orgConfig.resourceLabel || 'local assistance';
-  const title = `Find your local ${resourceLabel} — ${county} County, ${state}`;
+  const title = `Find your local ${resourceLabel} — ${countyLabel}, ${state}`;
 
   return {
     id,
@@ -185,14 +214,14 @@ function createCountyOpportunity(county, state, orgType, orgConfig) {
     source: 'county_crawler',
     source_id: id,
     source_url: orgConfig.fallback,
-    application_url: null,            // directory: no direct application URL
+    application_url: null,
     url: orgConfig.fallback,
-    description: `Directory: ${orgConfig.description} Use this national locator to find the chapter/office serving ${county} County, ${state}.`,
+    description: `Directory: ${orgConfig.description} Use this national locator to find the chapter/office serving ${countyLabel}, ${state}.`,
     is_national: false,
-    state: state,
-    county: county,
+    state,
+    county: cleanCountyName(county),
     categories: [orgConfig.category, 'local', 'community', 'directory'],
-    keywords: [county.toLowerCase(), state.toLowerCase(), orgConfig.category, 'local', 'directory', 'find local'],
+    keywords: [cleanCountyName(county).toLowerCase(), state.toLowerCase(), orgConfig.category, 'local', 'directory', 'find local'],
     opportunity_type: 'directory',
     opportunity_kind: 'DIRECTORY',
     record_type: 'directory_resource',
@@ -210,8 +239,8 @@ async function upsertOpportunity(db, opp) {
       ...opp,
       record_origin: 'live_crawl',
       evidence_url: opp.source_url ?? opp.application_url ?? null,
-    })
-    return result
+    });
+    return result;
   } catch (error) {
     console.error(`[CountyCrawler] DB error for ${opp?.id || opp?.title}: ${error.message}`);
     return { error: error.message };
@@ -223,26 +252,27 @@ async function upsertOpportunity(db, opp) {
  */
 export async function crawlStateCounties(db, state, options = {}) {
   if (!isCountyCrawlerEnabled() && options.force !== true) {
-    log.info('[CountyCrawler] disabled (set COUNTY_FUNDING_CRAWLER_ENABLED=true to emit honest directory resources)')
+    log.info('[CountyCrawler] disabled (set COUNTY_FUNDING_CRAWLER_ENABLED=true to emit honest directory resources)');
     return { inserted: 0, updated: 0, errors: 0, disabled: true };
   }
   const counties = await loadCounties();
-  const stateCounties = counties.filter(c => c.state === state);
-  
+  const stateCode = String(state || '').trim().toUpperCase();
+  const stateCounties = counties.filter(c => c.state === stateCode);
+
   if (stateCounties.length === 0) {
-    log.info(`[CountyCrawler] No counties found for state: ${state}`);
-    return { inserted: 0, updated: 0, errors: 0 };
+    log.info(`[CountyCrawler] No counties found for state: ${stateCode}`);
+    return { inserted: 0, updated: 0, errors: 0, counties: 0 };
   }
-  
-  log.info(`[CountyCrawler] Processing ${stateCounties.length} counties in ${state}...`);
-  
+
+  log.info(`[CountyCrawler] Processing ${stateCounties.length} counties in ${stateCode}...`);
+
   let inserted = 0, updated = 0, errors = 0;
-  
+
   for (const county of stateCounties) {
     for (const [orgType, orgConfig] of Object.entries(ORG_PATTERNS)) {
-      const opp = createCountyOpportunity(county, state, orgType, orgConfig);
+      const opp = createCountyOpportunity(county.county, stateCode, orgType, orgConfig);
       const result = await upsertOpportunity(db, opp);
-      
+
       if (result.inserted) inserted++;
       else if (result.updated) updated++;
       else if (result.error) errors++;
@@ -251,8 +281,8 @@ export async function crawlStateCounties(db, state, options = {}) {
       }
     }
   }
-  
-  log.info(`[CountyCrawler] ${state}: ${inserted} inserted, ${updated} updated, ${errors} errors`);
+
+  log.info(`[CountyCrawler] ${stateCode}: ${inserted} inserted, ${updated} updated, ${errors} errors`);
   return { inserted, updated, errors, counties: stateCounties.length };
 }
 
@@ -261,30 +291,31 @@ export async function crawlStateCounties(db, state, options = {}) {
  */
 export async function crawlAllCounties(db, options = {}) {
   if (!isCountyCrawlerEnabled() && options.force !== true) {
-    log.info('[CountyCrawler] disabled (set COUNTY_FUNDING_CRAWLER_ENABLED=true to emit honest directory resources)')
+    log.info('[CountyCrawler] disabled (set COUNTY_FUNDING_CRAWLER_ENABLED=true to emit honest directory resources)');
     return { states: 0, counties: 0, inserted: 0, updated: 0, errors: 0, disabled: true };
   }
   const { batchSize = 5, delayMs = 100 } = options;
+  void batchSize;
   const counties = await loadCounties();
   const states = [...new Set(counties.map(c => c.state))];
-  
+
   log.info(`[CountyCrawler] Starting crawl of ${states.length} states...`);
-  
+
   let totalInserted = 0, totalUpdated = 0, totalErrors = 0, totalCounties = 0;
-  
+
   for (const state of states) {
     const result = await crawlStateCounties(db, state, options);
     totalInserted += result.inserted;
     totalUpdated += result.updated;
     totalErrors += result.errors;
     totalCounties += result.counties || 0;
-    
+
     // Small delay between states
     await new Promise(r => setTimeout(r, delayMs));
   }
-  
+
   log.info(`[CountyCrawler] Complete: ${totalCounties} counties, ${totalInserted} inserted, ${totalUpdated} updated`);
-  
+
   return {
     states: states.length,
     counties: totalCounties,
@@ -300,23 +331,25 @@ export async function crawlAllCounties(db, options = {}) {
 export async function getCrawlerStatus(db) {
   const totalRow = await db
     .prepare('SELECT COUNT(*) as count FROM funding_opportunities WHERE source = ?')
-    .get('county_crawler')
-  const total = Number(totalRow?.count || 0)
+    .get('county_crawler');
+  const total = Number(totalRow?.count || 0);
 
   const byState = await db
     .prepare(`
-      SELECT state, COUNT(*) as count 
-      FROM funding_opportunities 
-      WHERE source = 'county_crawler' 
+      SELECT state, COUNT(*) as count
+      FROM funding_opportunities
+      WHERE source = 'county_crawler'
       GROUP BY state
     `)
-    .all()
-  
+    .all();
+
   return {
     total_county_opportunities: total,
     by_state: byState,
     org_types: Object.keys(ORG_PATTERNS).length,
     estimated_per_county: Object.keys(ORG_PATTERNS).length,
+    crawler_version: CRAWLER_VERSION,
+    dataset: { ...COUNTY_STATS },
   };
 }
 
