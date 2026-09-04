@@ -112,23 +112,39 @@ describe('nextStepGuidance', () => {
     })
     expect(stage1.steps.find((s) => s.id === 'save_to_pipeline')).toBeTruthy()
 
-    // Stage 2: pipeline → discovered/saved → should transition to SCHEMA_READY
+    // Stage 2: each transition CTA advances exactly one state.
     const stage2 = buildNextStepsForMatch({
       profile: MIN_PROFILE,
       opportunity: { id: 'o', apply_url: 'https://grants.gov/foa' },
       score: 72,
       application: { state: 'DISCOVERED' },
     })
-    expect(stage2.steps.find((s) => s.id === 'start_application')).toBeTruthy()
+    expect(stage2.steps.find((s) => s.id === 'start_application')?.meta?.target).toBe('DEDUPED')
 
-    // Stage 3: schema_ready → resolve missing
+    const deduped = buildNextStepsForMatch({
+      profile: MIN_PROFILE,
+      opportunity: { id: 'o', apply_url: 'https://grants.gov/foa' },
+      score: 72,
+      application: { state: 'DEDUPED' },
+    })
+    expect(deduped.steps.find((s) => s.id === 'qualify_application')?.meta?.target).toBe('QUALIFIED')
+
+    const qualified = buildNextStepsForMatch({
+      profile: MIN_PROFILE,
+      opportunity: { id: 'o', apply_url: 'https://grants.gov/foa' },
+      score: 72,
+      application: { state: 'QUALIFIED' },
+    })
+    expect(qualified.steps.find((s) => s.id === 'build_application_schema')?.meta?.target).toBe('SCHEMA_READY')
+
+    // Stage 3: schema_ready must map requirements before resolving them.
     const stage3 = buildNextStepsForMatch({
       profile: MIN_PROFILE,
       opportunity: { id: 'o', apply_url: 'https://grants.gov/foa' },
       score: 72,
       application: { state: 'SCHEMA_READY' },
     })
-    expect(stage3.steps.find((s) => s.id === 'resolve_missing')).toBeTruthy()
+    expect(stage3.steps.find((s) => s.id === 'map_requirements')?.meta?.target).toBe('MAPPED')
 
     // Stage 4: drafting → upload docs
     const stage4 = buildNextStepsForMatch({

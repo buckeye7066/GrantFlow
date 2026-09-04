@@ -18,6 +18,13 @@ describe('GET funding-sources is SELECT-only presentation', () => {
     expect(source).toContain('read_only: true')
   })
 
+  it('keeps profile-scoped vNext guidance through the final response reshape', () => {
+    const source = fs.readFileSync(routePath, 'utf8')
+    expect(source).toContain('next_steps: Array.isArray(row.next_steps) ? row.next_steps : []')
+    expect(source).toContain('vnext_application_id: row.vnext_application_id ?? null')
+    expect(source).toContain('vnext_application_state: row.vnext_application_state ?? null')
+  })
+
   it('reports persisted scoring-policy truth instead of stamping every row current', () => {
     expect(persistedScoringPolicyReceipt([
       { scoring_policy_version: 'need_first_v2' },

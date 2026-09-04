@@ -12,6 +12,7 @@ import { resolveGeoCoverage, buildGeoCoverageClause } from '../services/geo/geoC
 import { assessOpportunityTrust } from '../services/opportunityTrust.js'
 import { assembleFundingResults } from '../services/zeroResultLadder.js'
 import { canonicalizeOpportunityList, isFiniteNumberLike } from '../services/matching/resultEnricher.js'
+import { loadVnextGuidanceByOpportunity } from '../services/matching/vnextApplicationGuidance.js'
 import { SURFACED_MATCHER_VERSIONS_SQL, qualifiesForDisplay } from '../config/matchSurfacing.js'
 
 import { createLogger } from '../utils/logger.js'
@@ -136,11 +137,13 @@ async function loadProfileOsResults(req, profileId, {
     )
     .all(profileId)
 
+  const vnextGuidance = await loadVnextGuidanceByOpportunity(req.db, profileId, osRows.map((row) => row.id))
   let mapped = osRows.map((o) => {
     const kind = String(o.opportunity_kind ?? '').toUpperCase()
     const isDirectory = kind === 'DIRECTORY' || kind === 'PAST_AWARD_INTEL'
     return {
       ...o,
+      ...vnextGuidance.get(String(o.id)),
       match_score: Number(o.os_match_score ?? 0),
       match_confidence: isFiniteNumberLike(o.os_match_confidence) ? Number(o.os_match_confidence) : null,
       match_explain_json: o.os_match_explain_json,
@@ -535,6 +538,7 @@ router.post('/comprehensiveMatch', async (req, res) => {
       }
 
       const osMin = Number.isFinite(Number(req.body?.min_score)) ? Number(req.body.min_score) : DEFAULT_MIN_SCORE
+      const vnextGuidance = await loadVnextGuidanceByOpportunity(req.db, matchProfileId, osRows.map((row) => row.id))
       let mapped = osRows.map((o) => {
         let reasons = []
         try { reasons = JSON.parse(o.os_match_reasons || '[]') } catch { reasons = [] }
@@ -542,6 +546,7 @@ router.post('/comprehensiveMatch', async (req, res) => {
         const isDirectory = kind === 'DIRECTORY' || kind === 'PAST_AWARD_INTEL'
         return {
           ...o,
+          ...vnextGuidance.get(String(o.id)),
           match_score: Number(o.os_match_score ?? 0),
           match_confidence: isFiniteNumberLike(o.os_match_confidence) ? Number(o.os_match_confidence) : null,
           match_explain_json: o.os_match_explain_json,

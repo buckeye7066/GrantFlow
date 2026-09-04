@@ -1,4 +1,5 @@
 import { SURFACED_MATCHER_VERSIONS_SQL } from '../../config/matchSurfacing.js'
+import { loadVnextGuidanceByOpportunity } from './vnextApplicationGuidance.js'
 
 /**
  * Canonical live-table query contract for the owner-facing funding list.
@@ -145,8 +146,10 @@ export function isMissingPipelineDismissalsTable(error) {
 export async function readFundingSourceRows(db, profileId) {
   try {
     const rows = await db.prepare(FUNDING_SOURCES_BY_PROFILE_SQL).all(String(profileId))
+    const normalizedRows = Array.isArray(rows) ? rows : []
+    const applications = await loadVnextGuidanceByOpportunity(db, profileId, normalizedRows.map((row) => row.id))
     return {
-      rows: Array.isArray(rows) ? rows : [],
+      rows: normalizedRows.map((row) => ({ ...row, ...applications.get(String(row.id)) })),
       dismissal_filter: 'enforced',
     }
   } catch (error) {
@@ -154,8 +157,10 @@ export async function readFundingSourceRows(db, profileId) {
     const rows = await db
       .prepare(FUNDING_SOURCES_BY_PROFILE_WITHOUT_DISMISSALS_SQL)
       .all(String(profileId))
+    const normalizedRows = Array.isArray(rows) ? rows : []
+    const applications = await loadVnextGuidanceByOpportunity(db, profileId, normalizedRows.map((row) => row.id))
     return {
-      rows: Array.isArray(rows) ? rows : [],
+      rows: normalizedRows.map((row) => ({ ...row, ...applications.get(String(row.id)) })),
       dismissal_filter: 'table_absent',
     }
   }

@@ -7,6 +7,7 @@ import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Loader2 } from 'lucide-react'
 import { apiFetch } from '@/api/apiClient'
 import { env } from '@/config/env.js'
+import { normalizeVNextApplicationState } from './vnextApplicationState.js'
 
 function getQueryParam(name) {
   try {
@@ -71,7 +72,7 @@ export default function VNextApplication() {
   })
 
   const app = appQuery.data
-  const currentState = String(app?.state || 'DISCOVERED')
+  const currentState = normalizeVNextApplicationState(app?.state)
 
   const nextState = useMemo(() => {
     const idx = STATE_ORDER.indexOf(currentState)

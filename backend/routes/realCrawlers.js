@@ -31,6 +31,7 @@ import {
   canonicalizeOpportunityList,
   isDirectoryRecord,
 } from '../services/matching/resultEnricher.js'
+import { loadVnextGuidanceByOpportunity } from '../services/matching/vnextApplicationGuidance.js'
 import {
   detectProfessionalDevelopmentIntent,
   applyProfessionalDevelopmentQueryPolicy,
@@ -284,14 +285,18 @@ export async function attachStoredMatchAuthority(db, profileId, results = []) {
        AND LOWER(COALESCE(m.match_decision, '')) IN ('accept', 'review')
   `).all(String(profileId), ...opportunityIds)
 
+  const vnextGuidance = await loadVnextGuidanceByOpportunity(db, profileId, opportunityIds)
   const byOpportunityId = new Map((rows || []).map((row) => [String(row.opportunity_id), row]))
   return results.map((result) => {
-    const stored = byOpportunityId.get(String(result?.id ?? ''))
-    if (!stored) return result
+    const opportunityId = String(result?.id ?? '')
+    const application = vnextGuidance.get(opportunityId)
+    const stored = byOpportunityId.get(opportunityId)
+    if (!stored) return application ? { ...result, ...application } : result
     const storedExplain = safeJsonParse(stored.match_explain_json, {})
     const rawConfidence = stored.match_confidence
     return {
       ...result,
+      ...application,
       matchScore: Number(stored.match_score),
       matchDecision: stored.match_decision,
       matchExplanation: stored.match_explanation,
@@ -364,7 +369,7 @@ const CRAWLER_TYPES = CRAWLER_REQUEST_TYPES
  * Map a new-system result to the response shape the frontend expects.
  * Frontend reads: title, match_score, url, application_url, description, sponsor, etc.
  */
-function mapResultToFrontendShape(result) {
+export function mapResultToFrontendShape(result) {
   const isScholarship = result.id?.startsWith('sch-');
   const isSchoolCard = result.id?.startsWith('school-');
   const isDirectory = Boolean(
@@ -433,6 +438,9 @@ function mapResultToFrontendShape(result) {
     is_active: result.is_active ?? null,
     is_loan: result.is_loan ?? null,
     requires_match: result.requires_match ?? null,
+    vnext_application_id: result.vnext_application_id ?? null,
+    vnext_application_state: result.vnext_application_state ?? null,
+    vnext_application_stage: result.vnext_application_stage ?? null,
     school_name: isSchoolCard ? result.schoolName : null,
     eligibility_bullets: result.eligibility
       ? Object.entries(result.eligibility).map(([k, v]) => `${k.replace(/([A-Z])/g, ' $1').trim()}: ${v}`)
