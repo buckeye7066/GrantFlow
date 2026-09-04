@@ -115,6 +115,21 @@ beforeEach(() => {
   })
 })
 
+describe('POST /api/item-needs/:profileId/search', () => {
+  it('fans a pasted free-text list out into distinct item searches', async () => {
+    await request(app)
+      .post('/api/item-needs/lab-1/search')
+      .send({ items: '15 passenger bus\n- shower chair; laptops' })
+      .expect(200)
+
+    expect(searchItemNeedsMock).toHaveBeenCalledWith(db, expect.objectContaining({
+      profileId: 'lab-1',
+      items: ['15 passenger bus', 'shower chair', 'laptops'],
+    }))
+    expect(tierMock).toHaveBeenCalled()
+  })
+})
+
 describe('GET /api/item-needs/:profileId/needs-plan', () => {
   it('returns the research-lab plan with suppression evidence the owner can act on', async () => {
     const res = await request(app).get('/api/item-needs/lab-1/needs-plan').expect(200)

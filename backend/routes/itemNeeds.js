@@ -28,7 +28,7 @@ import { standardRateLimiter, mutationRateLimiter } from '../middleware/rateLimi
 import { ensureProfileAccess } from '../utils/accessControl.js'
 import { requireTierCapability, TIER_CAPABILITIES } from '../utils/tierGating.js'
 import { loadProfileContext } from '../services/profileHelpers.js'
-import { deriveProfileItemNeeds } from '../config/profileItemNeeds.js'
+import { deriveProfileItemNeeds, parseDeclaredItemList } from '../config/profileItemNeeds.js'
 import { resolvePlanClasses, resolveCoverageConditionClasses, annotateItemsWithCoverage } from '../config/planCoverage.js'
 import { searchItemNeeds, ITEM_SEARCH_MAX_ITEMS } from '../services/itemNeedSearch.js'
 import { searchGreenHomeNoCostPrograms } from '../services/greenHomeNoCostSearch.js'
@@ -402,7 +402,7 @@ router.post('/:profileId/search', ensureAuth, mutationRateLimiter, async (req, r
     let items = []
     let subject = 'requested'
     if (explicit !== null && explicit !== undefined && String(explicit).length > 0) {
-      items = (Array.isArray(explicit) ? explicit : [explicit]).map((v) => String(v ?? '').trim()).filter(Boolean)
+      items = parseDeclaredItemList(explicit)
     } else {
       const derived = deriveProfileItemNeeds(ctx.profile, ctx.sections ?? {})
       items = derived.needs.map((n) => n.need_text || n.item)

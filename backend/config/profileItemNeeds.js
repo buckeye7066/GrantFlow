@@ -76,10 +76,37 @@ function obj(v) {
   return typeof v === 'object' ? v : {}
 }
 
+export function parseDeclaredItemList(v) {
+  const values = Array.isArray(v) ? v : [v]
+  // Profile imports and older clients may still persist a textarea value as
+  // one string even though the canonical field format is `string_array`.
+  // The editor explicitly promises "commas or new lines", so consuming only
+  // commas turned a pasted list into one impossible mega-item search. Split at
+  // the declared delimiters here, at the single profile-to-item choke point,
+  // and remove common visual bullet prefixes without rewriting the item text.
+  const seen = new Set()
+  const parsed = []
+  for (const value of values) {
+    if (typeof value !== 'string' || !value.trim()) continue
+    const entries = value.split(/[,;\r\n]+/)
+      // Strip ONLY visual list markers at the start: a bullet like "- " or "* ",
+      // or a numbered marker like "1. " / "1) " — require whitespace after the
+      // marker so decimals ("2.5 ton truck") and leading hyphens in names
+      // ("-20C freezer") are preserved.
+      .map((entry) => entry.replace(/^\s*(?:[-*\u2022]\s+|\d+[.)]\s+)/, '').trim())
+      .filter(Boolean)
+    for (const entry of entries) {
+      const key = normalizeItemTerm(entry)
+      if (!key || seen.has(key)) continue
+      seen.add(key)
+      parsed.push(entry)
+    }
+  }
+  return parsed
+}
+
 function list(v) {
-  if (Array.isArray(v)) return v
-  if (typeof v === 'string' && v.trim()) return v.split(',')
-  return []
+  return parseDeclaredItemList(v)
 }
 
 /** Lowercase, punctuation → space, collapsed whitespace. */
@@ -239,6 +266,8 @@ export const ITEM_TAG_VOCABULARY = Object.freeze({
   'office equipment': { item: 'Office equipment and furniture', needText: 'office furniture donation nonprofit', category: 'furniture' },
   'commercial kitchen': { item: 'Commercial kitchen equipment', needText: 'commercial kitchen equipment grant', category: 'equipment' },
   'passenger van': { item: 'Passenger van', needText: 'passenger van donation nonprofit', category: 'vehicle' },
+  '15 passenger bus': { item: '15-passenger bus', needText: '15 passenger bus grant nonprofit', category: 'vehicle' },
+  'passenger bus': { item: 'Passenger bus', needText: 'passenger bus donation nonprofit', category: 'vehicle' },
   'food truck': { item: 'Food truck', needText: 'food truck startup funding', category: 'food_truck' },
   'assistive technology': { item: 'Assistive technology', needText: 'assistive technology funding', category: 'adaptive_equipment' },
   'protective equipment': { item: 'Personal protective equipment', needText: 'personal protective equipment donation', category: 'equipment' },

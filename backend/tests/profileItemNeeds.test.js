@@ -31,6 +31,7 @@ import {
   ITEM_TAG_VOCABULARY,
   MAX_ITEM_NEEDS,
   deriveProfileItemNeeds,
+  parseDeclaredItemList,
   ruleAppliesToProfile,
 } from '../config/profileItemNeeds.js'
 import fs from 'node:fs'
@@ -206,6 +207,23 @@ describe('profileItemNeeds — the registry', () => {
 })
 
 describe('profileItemNeeds — provenance', () => {
+  it('deduplicates pasted item lists without splitting legitimate and-phrases', () => {
+    expect(parseDeclaredItemList('laptop; Laptop\nwasher and dryer')).toEqual([
+      'laptop',
+      'washer and dryer',
+    ])
+  })
+
+  it('derives the owner example of a 15-passenger bus from structured tags', () => {
+    const out = deriveProfileItemNeeds(
+      { primary_type: 'nonprofit' },
+      { programs_services: { focus_areas: ['Transportation - 15 passenger bus'] } },
+    )
+    expect(out.needs).toEqual(expect.arrayContaining([
+      expect.objectContaining({ item: '15-passenger bus', category: 'vehicle' }),
+    ]))
+  })
+
   it('every derived need carries the registry field id it came from', () => {
     const out = deriveProfileItemNeeds(DEMO_HEALTH_EDUCATION.profile, DEMO_HEALTH_EDUCATION.sections)
     expect(out.needs.length).toBeGreaterThan(0)
@@ -479,5 +497,26 @@ describe('the free-text item field', () => {
       financial_information: { item_needs: ['15 passenger van for reservation trips'] },
     })
     expect(out.needs.map((n) => n.item)).toContain('15 passenger van for reservation trips')
+  })
+
+  it('parses legacy textarea lists by comma, newline, semicolon, and bullet without merging needs', () => {
+    // The profile editor promises comma/newline entry, but imported and legacy
+    // rows can hold the textarea as one string instead of a normalized array.
+    // Each item must become its own verbatim search subject; otherwise a bus +
+    // DME request is searched as one phrase and neither need can be found.
+    const out = deriveProfileItemNeeds({ primary_type: 'disabled_adult' }, {
+      financial_information: {
+        item_needs: '15 passenger bus for nonprofit trips\n\u2022 DME for a disabled individual; shower chair, 1) wheelchair ramp',
+      },
+    })
+
+    expect(out.needs.map((need) => need.item)).toEqual([
+      '15 passenger bus for nonprofit trips',
+      'DME for a disabled individual',
+      'shower chair',
+      'wheelchair ramp',
+    ])
+    expect(out.needs.every((need) => need.source === 'declared')).toBe(true)
+    expect(out.needs.every((need) => need.need_text === need.item)).toBe(true)
   })
 })
