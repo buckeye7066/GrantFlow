@@ -1140,7 +1140,11 @@ export default function SmartMatcher() {
                           return step.section_key ? (
                             <Link
                               key={idx}
-                              to={createPageUrl("ProfileDetail", { id: selectedProfileId, section: step.section_key })}
+                              to={createPageUrl("ProfileDetail", {
+                                id: selectedProfileId,
+                                section: step.section_key,
+                                ...(step.field ? { field: step.field } : {}),
+                              })}
                               className="group flex items-start gap-3 p-3 rounded-lg border border-slate-200 bg-amber-50/30 hover:border-amber-300 hover:bg-amber-50 transition-colors"
                             >
                               {inner}

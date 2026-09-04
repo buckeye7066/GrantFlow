@@ -1,88 +1,47 @@
 /**
- * "What You Need for Success" cards must be clickable — each step returned by
- * the matching-gaps route must carry a `section_key` that the frontend can use
- * to deep-link into the relevant profile section.
- *
- * Both assertions FAIL if the `section_key` push is removed from
- * `buildSuccessSteps` or if `CATEGORY_TO_SECTION` is deleted.
+ * Success-step deep links are opt-in per step. Broad categories mix profile
+ * fields with external actions, so category-level routing is unsafe.
  */
 
 import { describe, it, expect } from 'vitest'
 import { readFileSync } from 'node:fs'
 
 const SRC = readFileSync(new URL('../routes/matching.js', import.meta.url), 'utf8')
+const UI = readFileSync(new URL('../../src/pages/SmartMatcher.jsx', import.meta.url), 'utf8')
 
-describe('success step section_key wiring', () => {
-  it('CATEGORY_TO_SECTION map is defined in matching.js', () => {
-    expect(SRC).toContain('const CATEGORY_TO_SECTION')
+describe('success step deep-link targets', () => {
+  it('does not infer profile sections from categories', () => {
+    expect(SRC).not.toContain('CATEGORY_TO_SECTION')
+    expect(SRC).toContain('section_key: step.section_key ?? null')
+    expect(SRC).toContain('field: step.field ?? null')
   })
 
-  it('every step pushed in buildSuccessSteps carries section_key', () => {
-    // The push statement must include section_key
-    expect(SRC).toContain('section_key: CATEGORY_TO_SECTION[step.category]')
+  it('targets an exact editor field when the profile can record the action', () => {
+    expect(SRC).toMatch(/Obtain an EIN[^\n]+section_key: 'organization_details', field: 'ein'/)
+    expect(SRC).toMatch(/Register on SAM\.gov'[^\n]+section_key: 'organization_details', field: 'sam_gov_registered'/)
+    expect(SRC).toMatch(/sustainability plan'[^\n]+section_key: 'narrative', field: 'sustainability_plan'/)
   })
 
-  it('section_key for legal category is organization_details', () => {
-    // Extract the CATEGORY_TO_SECTION object literal from the source
-    const match = SRC.match(/const CATEGORY_TO_SECTION\s*=\s*\{([^}]+)\}/)
-    expect(match).not.toBeNull()
-    const body = match[1]
-    expect(body).toMatch(/legal\s*:\s*'organization_details'/)
-  })
-
-  it('section_key for financial category is financial_information', () => {
-    const match = SRC.match(/const CATEGORY_TO_SECTION\s*=\s*\{([^}]+)\}/)
-    expect(match).not.toBeNull()
-    const body = match[1]
-    expect(body).toMatch(/financial\s*:\s*'financial_information'/)
-  })
-
-  it('section_key for planning category is narrative', () => {
-    const match = SRC.match(/const CATEGORY_TO_SECTION\s*=\s*\{([^}]+)\}/)
-    expect(match).not.toBeNull()
-    const body = match[1]
-    expect(body).toMatch(/planning\s*:\s*'narrative'/)
-  })
-
-  it('section_key for equipment category is organization_details', () => {
-    const match = SRC.match(/const CATEGORY_TO_SECTION\s*=\s*\{([^}]+)\}/)
-    expect(match).not.toBeNull()
-    const body = match[1]
-    expect(body).toMatch(/equipment\s*:\s*'organization_details'/)
-  })
-
-  it('section_key for benefits category is financial_information', () => {
-    const match = SRC.match(/const CATEGORY_TO_SECTION\s*=\s*\{([^}]+)\}/)
-    expect(match).not.toBeNull()
-    const body = match[1]
-    expect(body).toMatch(/benefits\s*:\s*'financial_information'/)
+  it('leaves external legal and planning actions without unrelated editors', () => {
+    expect(SRC).toMatch(/Obtain employment authorization document \(EAD\)'[^\n]+category: 'legal', why:/)
+    expect(SRC).toMatch(/Contact 211 for local emergency assistance programs'[^\n]+category: 'planning', why:/)
+    expect(SRC).not.toMatch(/Obtain employment authorization document \(EAD\)'[^\n]+section_key:/)
+    expect(SRC).not.toMatch(/Contact 211 for local emergency assistance programs'[^\n]+section_key:/)
   })
 })
 
-describe('success step UI wiring (SmartMatcher.jsx)', () => {
-  const UI = readFileSync(
-    new URL('../../src/pages/SmartMatcher.jsx', import.meta.url),
-    'utf8',
-  )
-
-  it('section_key for documentation category is null (external docs, no profile section)', () => {
-    const match = SRC.match(/const CATEGORY_TO_SECTION\s*=\s*\{([^}]+)\}/)
-    expect(match).not.toBeNull()
-    const body = match[1]
-    expect(body).toMatch(/documentation\s*:\s*null/)
-  })
-
-  it('renders a Link when step.section_key is present', () => {
+describe('success step UI wiring', () => {
+  it('renders links only for steps with an explicit section target', () => {
     expect(UI).toContain('step.section_key ?')
   })
 
-  it('deep-links to ProfileDetail with section param', () => {
-    expect(UI).toContain('createPageUrl("ProfileDetail", { id: selectedProfileId, section: step.section_key })')
+  it('passes the exact optional field to ProfileDetail', () => {
+    expect(UI).toContain('section: step.section_key')
+    expect(UI).toContain('...(step.field ? { field: step.field } : {})')
   })
 
-  it('renders a plain div when step.section_key is absent', () => {
-    // Both branches must exist — clickable and non-clickable
-    expect(UI).toMatch(/step\.section_key \?/)
+  it('keeps untargeted external actions non-clickable', () => {
     expect(UI).toContain('group-hover:text-amber-500')
+    expect(UI).toMatch(/step\.section_key \?/)
   })
 })

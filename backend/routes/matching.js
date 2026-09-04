@@ -983,7 +983,9 @@ router.get('/profile/:profileId/matching-gaps', async (req, res) => {
 // Each archetype has:
 //   keywords   — trigger when any appear in allText (goals + story + tags)
 //   types      — trigger when applicantType includes any of these
-//   steps      — array of { label, category, why, skip? }
+//   steps      — array of { label, category, why, section_key?, field?, skip? }
+//                section_key/field are deliberately assigned per step only
+//                when that editor can record completion of the named action.
 //                skip(allText, sections) is an optional guard to suppress
 //                the step when the profile already has it covered
 // ---------------------------------------------------------------------------
@@ -994,8 +996,8 @@ const SUCCESS_ARCHETYPES = [
   { keywords: ['business', 'startup', 'entrepreneur', 'self-employ', 'sole proprietor', 'llc'],
     types: ['business', 'entrepreneur', 'small_business'],
     steps: [
-      { label: 'Obtain an EIN (Employer Identification Number)', category: 'legal', why: 'Required for most business grants, bank accounts, and tax filings', skip: (t, s) => t.includes('ein') || s.organization_details?.ein },
-      { label: 'Get a business license / vendor permit', category: 'legal', why: 'Required before operating in most jurisdictions', skip: (t) => t.includes('license') || t.includes('permit') },
+      { label: 'Obtain an EIN (Employer Identification Number)', category: 'legal', section_key: 'organization_details', field: 'ein', why: 'Required for most business grants, bank accounts, and tax filings', skip: (t, s) => t.includes('ein') || s.organization_details?.ein },
+      { label: 'Get a business license / vendor permit', category: 'legal', section_key: 'organization_details', field: 'licenses_held', why: 'Required before operating in most jurisdictions', skip: (t) => t.includes('license') || t.includes('permit') },
       { label: 'Write a business plan', category: 'planning', why: 'Most business grants require a formal plan with financial projections', skip: (t) => t.includes('business plan') },
       { label: 'Open a dedicated business bank account', category: 'financial', why: 'Grant funds must be deposited into a separate account for audit compliance' },
     ],
@@ -1005,9 +1007,9 @@ const SUCCESS_ARCHETYPES = [
   { keywords: ['food truck', 'mobile food', 'street food'],
     steps: [
       { label: 'Obtain a food handler\'s / health department permit', category: 'legal', why: 'Required before serving food to the public' },
-      { label: 'Secure a food truck or commercial vehicle', category: 'equipment', why: 'Your primary asset — many grants cover vehicle acquisition' },
-      { label: 'Get a mobile vendor\'s license', category: 'legal', why: 'Required in most cities for mobile food operations' },
-      { label: 'Obtain commercial liability insurance', category: 'insurance', why: 'Required by commissary kitchens and event venues', skip: (t) => t.includes('insurance') },
+      { label: 'Secure a food truck or commercial vehicle', category: 'equipment', section_key: 'organization_details', field: 'equipment_owned', why: 'Your primary asset — many grants cover vehicle acquisition' },
+      { label: 'Get a mobile vendor\'s license', category: 'legal', section_key: 'organization_details', field: 'licenses_held', why: 'Required in most cities for mobile food operations' },
+      { label: 'Obtain commercial liability insurance', category: 'insurance', section_key: 'organization_details', field: 'insurance_held', why: 'Required by commissary kitchens and event venues', skip: (t) => t.includes('insurance') },
       { label: 'Find a licensed commissary kitchen', category: 'operations', why: 'Most health departments require prep in a certified facility, not at home' },
     ],
   },
@@ -1027,11 +1029,11 @@ const SUCCESS_ARCHETYPES = [
   { keywords: ['nonprofit', '501c3', '501(c)(3)', 'charitable', 'tax-exempt'],
     types: ['nonprofit', 'organization'],
     steps: [
-      { label: 'File for 501(c)(3) tax-exempt status', category: 'legal', why: 'Most foundation and government grants require 501(c)(3) determination', skip: (t, s) => s.organization_details?.ein || s.organization_details?.is_501c3_public_charity },
-      { label: 'Register on SAM.gov', category: 'compliance', why: 'Required for all federal grant applications', skip: (t, s) => s.organization_details?.sam_gov_registered },
-      { label: 'Create a Grants.gov account', category: 'compliance', why: 'Federal grant applications are submitted through Grants.gov', skip: (t, s) => s.organization_details?.grants_gov_account },
+      { label: 'File for 501(c)(3) tax-exempt status', category: 'legal', section_key: 'organization_details', field: 'is_501c3_public_charity', why: 'Most foundation and government grants require 501(c)(3) determination', skip: (t, s) => s.organization_details?.ein || s.organization_details?.is_501c3_public_charity },
+      { label: 'Register on SAM.gov', category: 'compliance', section_key: 'organization_details', field: 'sam_gov_registered', why: 'Required for all federal grant applications', skip: (t, s) => s.organization_details?.sam_gov_registered },
+      { label: 'Create a Grants.gov account', category: 'compliance', section_key: 'organization_details', field: 'grants_gov_account', why: 'Federal grant applications are submitted through Grants.gov', skip: (t, s) => s.organization_details?.grants_gov_account },
       { label: 'Establish a board of directors', category: 'governance', why: 'Most funders require a functioning board with meeting minutes' },
-      { label: 'Develop a fundraising / sustainability plan', category: 'planning', why: 'Funders want to see how you\'ll sustain operations beyond the grant period' },
+      { label: 'Develop a fundraising / sustainability plan', category: 'planning', section_key: 'narrative', field: 'sustainability_plan', why: 'Funders want to see how you\'ll sustain operations beyond the grant period' },
     ],
   },
 
@@ -1589,25 +1591,6 @@ const SUCCESS_ARCHETYPES = [
  * Data-driven: iterates the SUCCESS_ARCHETYPES array, tests keyword/type triggers,
  * and collects matching steps with optional skip guards.
  */
-// Maps a success-step category to the profile section it relates to (for deep-linking).
-// null means no direct profile-section target (external task or documents area).
-const CATEGORY_TO_SECTION = {
-  legal:        'organization_details',
-  compliance:   'organization_details',
-  governance:   'organization_details',
-  insurance:    'organization_details',
-  operations:   'organization_details',
-  safety:       'organization_details',
-  financial:    'financial_information',
-  financial_aid:'financial_information',
-  planning:     'narrative',
-  equipment:    'organization_details',
-  benefits:     'financial_information',
-  education:    'basic_information',
-  // documentation steps involve external docs/uploads — no profile section
-  documentation: null,
-}
-
 function buildSuccessSteps(profile, sections, applicantType) {
   const narrative = sections.narrative ?? {}
   const orgDetails = sections.organization_details ?? {}
@@ -1641,7 +1624,16 @@ function buildSuccessSteps(profile, sections, applicantType) {
           if (step.skip(allText, sections)) continue
         } catch { /* guard threw — include the step */ }
       }
-      steps.push({ label: step.label, category: step.category, why: step.why, section_key: CATEGORY_TO_SECTION[step.category] ?? null })
+      steps.push({
+        label: step.label,
+        category: step.category,
+        why: step.why,
+        // Never infer an editor from a broad category. Most success steps are
+        // external actions; only a step with a verified profile destination
+        // opts into a deep link.
+        section_key: step.section_key ?? null,
+        field: step.field ?? null,
+      })
     }
   }
 
