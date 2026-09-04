@@ -4,7 +4,7 @@ import { join, dirname } from 'path'
 import { fileURLToPath } from 'url'
 import { upsertFundingOpportunity } from '../services/opportunityInserter.js'
 import { seedRealOpportunities } from './seedRealOpportunities.js'
-import { trustedOriginClause, trustedSourceClause } from './recordOrigins.js'
+import { UNTRUSTED_ORIGINS, trustedSourceClause } from './recordOrigins.js'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = dirname(__filename)
@@ -54,6 +54,16 @@ async function countRealNational(db) {
   const isPg = db?.dialect === 'postgres'
   const activeVal = isPg ? 'TRUE' : '1'
   const hasOrigin = await hasColumn(db, 'funding_opportunities', 'record_origin')
+  // Build a minimal, bootstrap-safe origin clause for the ensure path:
+  // count national rows regardless of link-proof freshness or quarantine.
+  // This deliberately diverges from trustedOriginClause(), which enforces
+  // lifecycle visibility and current successful link proof for general reads.
+  const originClause = hasOrigin
+    ? (() => {
+        const quoted = UNTRUSTED_ORIGINS.map((o) => `'${String(o).replace(/'/g, "''")}'`).join(',')
+        return `(record_origin IS NULL OR record_origin NOT IN (${quoted}))`
+      })()
+    : null
   const sql = hasOrigin
     ? `
         SELECT COUNT(*) AS count
@@ -62,7 +72,7 @@ async function countRealNational(db) {
           AND is_national = ${activeVal}
           AND source_url IS NOT NULL
           AND source_url != ''
-          AND ${trustedOriginClause()}
+          AND ${originClause}
           AND ${trustedSourceClause()}
       `
     : `
