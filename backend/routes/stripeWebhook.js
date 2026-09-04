@@ -6,6 +6,7 @@ import { recordPaymentAccessEvent } from '../services/pricing/profilePricingInit
 import { PAYMENT_ACCESS_EVENT, QUOTE_STATUS } from '../services/pricing/pricingTypes.js'
 import { updateQuoteStatus, tableExists } from '../services/pricing/quoteBuilder.js'
 import { markInvoicePaid } from '../services/billing/invoiceService.js'
+import { applyStripeSubscription } from '../services/billing/subscriptionSync.js'
 
 import { createLogger } from '../utils/logger.js'
 const routeLogger = createLogger('route:stripeWebhook')
@@ -220,6 +221,50 @@ router.post('/', async (req, res) => {
             }
           }
         }
+      }
+    } else if (
+      event.type === 'customer.subscription.created' ||
+      event.type === 'customer.subscription.updated' ||
+      event.type === 'customer.subscription.deleted'
+    ) {
+      // Subscription lifecycle -> billing_accounts.tier_id.
+      //
+      // This branch is what makes a paid plan actually unlock a capability.
+      // Until it existed, tierGating.requireTierCapability enforced tiers that
+      // nothing but an admin route could ever grant, so a paying customer
+      // stayed on the free tier forever. subscriptionSync is the sole authority
+      // for the mapping; it fails closed on an unmapped price rather than
+      // guessing a tier.
+      const subscription = event.data?.object
+      const result = await applyStripeSubscription(req.db, subscription, {
+        source: `stripe_webhook:${event.type}`,
+      })
+      if (!result.ok) {
+        // Do not 500 back to Stripe for a resolution problem we cannot fix by
+        // retrying (an unknown profile will still be unknown next time), but do
+        // make it loud. Stripe would otherwise retry this event for days.
+        routeLogger.error('subscription event could not be applied', {
+          eventId: event?.id,
+          eventType: event?.type,
+          reason: result.reason,
+          subscriptionId: subscription?.id ?? null,
+        })
+      }
+    } else if (event.type === 'invoice.payment_failed') {
+      // Surface the dunning state without revoking capability on the first
+      // failed charge. Stripe retries for days; the subscription.updated event
+      // that follows a terminal failure is what actually revokes the tier.
+      const invoice = event.data?.object
+      const subscriptionId = invoice?.subscription ? String(invoice.subscription) : null
+      if (subscriptionId) {
+        await req.db
+          .prepare(
+            `UPDATE billing_accounts
+               SET subscription_status = 'past_due', updated_at = CURRENT_TIMESTAMP
+             WHERE stripe_subscription_id = ?`,
+          )
+          .run(subscriptionId)
+        routeLogger.warn('invoice payment failed; marked past_due', { subscriptionId, eventId: event?.id })
       }
     }
   } catch (error) {
