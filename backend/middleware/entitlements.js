@@ -25,12 +25,25 @@ function identifierFromPath(req, segment) {
   try { return decodeURIComponent(match[1]) } catch { return null }
 }
 
+function identifierFromPattern(req, pattern) {
+  const path = String(req?.originalUrl || `${req?.baseUrl || ''}${req?.path || ''}`).split('?')[0]
+  const match = pattern.exec(path)
+  if (!match?.[1]) return null
+  try { return decodeURIComponent(match[1]) } catch { return null }
+}
+
+async function recordProfileId(db, table, id) {
+  if (!id) return null
+  const row = await db.prepare(`SELECT profile_id FROM ${table} WHERE id = ? LIMIT 1`).get(String(id))
+  return row?.profile_id ? String(row.profile_id) : null
+}
+
 /**
  * Resolve indirect Hamilton identities before an entitlement decision. A task
  * id or grant id is not a profile id; treating generic `params.id` as one made
  * route-wide enforcement impossible and could evaluate the wrong account.
  */
-export async function resolveEntitlementProfileId(req) {
+export async function resolveEntitlementProfileId(req, { getCloudLoginMetaFn = null } = {}) {
   if (!req?.db) return null
 
   const explicitCandidate = req?.params?.profileId
@@ -66,6 +79,32 @@ export async function resolveEntitlementProfileId(req) {
       'SELECT profile_id FROM grants WHERE id = ? LIMIT 1',
     ).get(String(grantId))
     if (row?.profile_id) indirectProfileIds.push(String(row.profile_id))
+  }
+
+  // These Hamilton routes expose profile-owned records through a generic
+  // `:id`. Resolve the record owner before billing rather than borrowing the
+  // caller-controlled active-profile header and checking ownership later.
+  const ownedRecords = [
+    ['hamilton_authorizations', identifierFromPattern(req, /\/authorizations\/([^/]+)\/revoke(?:\/|$)/i)],
+    ['hamilton_session_capture_requests', identifierFromPattern(req, /\/sessions\/capture-requests\/([^/]+)\/(?:launched|cancel)(?:\/|$)/i)],
+    ['hamilton_saved_sessions', identifierFromPattern(req, /\/sessions\/([^/]+)\/(?:revoke|expire)(?:\/|$)/i)],
+    ['hamilton_portal_credentials', identifierFromPattern(req, /\/(?:admin\/)?credentials\/([^/]+)(?:\/reveal-once|\/move|\/copy|\/|$)/i)],
+    ['hamilton_attestation_authorizations', identifierFromPattern(req, /\/attestations\/([^/]+)\/revoke(?:\/|$)/i)],
+  ]
+  for (const [table, id] of ownedRecords) {
+    const owner = await recordProfileId(req.db, table, id)
+    if (owner) indirectProfileIds.push(owner)
+  }
+
+  const liveSessionId = identifierFromPattern(
+    req,
+    /\/sessions\/cloud-login\/([^/]+)\/(?:stream|input|complete|cancel)(?:\/|$)/i,
+  )
+  if (liveSessionId) {
+    const lookup = getCloudLoginMetaFn
+      ?? (await import('../services/hamilton/hamiltonCloudLogin.js')).getCloudLoginMeta
+    const owner = lookup(liveSessionId)?.profileId
+    if (owner) indirectProfileIds.push(String(owner))
   }
 
   const uniqueIndirect = [...new Set(indirectProfileIds)]

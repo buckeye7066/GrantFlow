@@ -19,6 +19,7 @@ function startServer(extraEnv = {}) {
       SQLITE_DB_PATH: dbPath,
       DB_AUTO_MIGRATE: 'true',
       AUTH_JWT_SECRET: 'test-secret',
+      HAMILTON_SMS_INGEST_TOKEN: 'test-hamilton-inbox-secret',
       ...extraEnv,
     },
     stdio: ['ignore', 'pipe', 'pipe'],
@@ -120,9 +121,26 @@ test('tier enforcement is backend-authoritative (pipeline automation, item fundi
     const { ensureBillingSchema } = await import('../../backend/services/billingAccounts.js')
     await ensureBillingSchema(db)
     // The integration fixture owns its schema explicitly. Production receives
-    // the same table through migration 1002; keeping the fixture local makes
+    // these tables through migrations; keeping the fixture local makes
     // the entitlement behavior test independent of migration-runner timing.
     db.exec(`
+      CREATE TABLE IF NOT EXISTS profile_pricing (
+        id TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL,
+        profile_id TEXT NOT NULL UNIQUE,
+        access_status TEXT NOT NULL DEFAULT 'pending_payment'
+      );
+
+      CREATE TABLE IF NOT EXISTS hamilton_inbound_sms (
+        id TEXT PRIMARY KEY,
+        channel TEXT NOT NULL DEFAULT 'sms',
+        sender TEXT,
+        subject TEXT,
+        body TEXT NOT NULL,
+        received_at TEXT NOT NULL,
+        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+      );
+
       CREATE TABLE IF NOT EXISTS billing_addon_entitlements (
         id TEXT PRIMARY KEY,
         profile_id TEXT NOT NULL,
@@ -194,6 +212,18 @@ test('tier enforcement is backend-authoritative (pipeline automation, item fundi
     `)
 
     db.close()
+
+    // Shared-secret inbox traffic has no GrantFlow session and must reach the
+    // router's own authentication under both the Hamilton and Yana aliases.
+    for (const alias of ['hamilton', 'yana']) {
+      const inbox = await fetchJson(`http://127.0.0.1:${port}/api/${alias}/automation/inbox`, {
+        method: 'POST',
+        headers: { 'x-hamilton-sms-token': 'test-hamilton-inbox-secret' },
+        body: JSON.stringify({ body: `Verification code for ${alias}: 123456` }),
+      })
+      assert.equal(inbox.status, 202)
+      assert.equal(inbox.json?.ok, true)
+    }
 
     const adminToken = await loginEmailOtp({ port, email: adminEmail, profileId: null })
     const userToken = await loginEmailOtp({ port, email: userEmail, profileId })
@@ -308,4 +338,3 @@ test('tier enforcement is backend-authoritative (pipeline automation, item fundi
     await srv.stop()
   }
 })
-

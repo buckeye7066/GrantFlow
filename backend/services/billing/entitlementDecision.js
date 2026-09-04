@@ -25,12 +25,14 @@ export function decideBillingEntitlement({
   if (BLOCKED_PROFILE_STATUSES.has(normalizedProfileStatus)) {
     return { allowed: false, source: null, reason: `profile_${normalizedProfileStatus}` }
   }
+  // Free Week unlocks premium capabilities despite an unpaid pricing row.
+  // Profile suspension remains non-bypassable because it is checked above.
+  if (promotionActive) {
+    return { allowed: true, source: 'promotion', reason: null }
+  }
   const normalizedPayment = asLower(paymentAccessStatus)
   if (normalizedPayment && !PAID_ACCESS_STATUSES.has(normalizedPayment)) {
     return { allowed: false, source: null, reason: `payment_${normalizedPayment}`, payment_required: true }
-  }
-  if (promotionActive) {
-    return { allowed: true, source: 'promotion', reason: null }
   }
   if (tierAllows === true) {
     return { allowed: true, source: 'tier', reason: null }

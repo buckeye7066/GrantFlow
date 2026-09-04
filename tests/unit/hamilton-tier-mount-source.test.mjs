@@ -8,13 +8,17 @@ test('every Hamilton API family is mounted behind the canonical pipeline entitle
   assert.match(serverSource, /const requirePipelineAutomation = enforceTierCapability\(TIER_CAPABILITIES\.PIPELINE_AUTOMATION\)/)
   for (const mount of [
     '/api/application-tasks',
-    '/api/hamilton/automation',
     '/api/hamilton/portal-sync',
     '/api/hamilton/tailored',
   ]) {
     const escaped = mount.replace(/\//g, '\\/')
     assert.match(serverSource, new RegExp(`app\\.use\\('${escaped}', requirePipelineAutomation,`))
   }
+  for (const mount of ['/api/hamilton/automation', '/api/yana/automation']) {
+    const escaped = mount.replace(/\//g, '\\/')
+    assert.match(serverSource, new RegExp(`app\\.use\\('${escaped}', requireHamiltonPipelineAutomation,`))
+  }
+  assert.match(serverSource, /path === '\/sms-inbox' \|\| path === '\/inbox' \|\| path === '\/inbox-status'/)
 })
 
 test('tier enforcement resolves task and grant identities instead of treating them as profile ids', () => {

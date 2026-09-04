@@ -38,6 +38,24 @@ test('payment and suspension block a tier or add-on fail closed', () => {
   assert.equal(suspended.reason, 'profile_suspended')
 })
 
+test('Free Week overrides payment state but never a suspended profile', () => {
+  const promoted = decideBillingEntitlement({
+    capabilityKey,
+    paymentAccessStatus: 'pending_payment',
+    promotionActive: true,
+  })
+  assert.deepEqual(promoted, { allowed: true, source: 'promotion', reason: null })
+
+  const suspended = decideBillingEntitlement({
+    capabilityKey,
+    profileStatus: 'suspended',
+    paymentAccessStatus: 'pending_payment',
+    promotionActive: true,
+  })
+  assert.equal(suspended.allowed, false)
+  assert.equal(suspended.reason, 'profile_suspended')
+})
+
 test('only DB-backed admin bypass and authority failure stays locked', () => {
   assert.equal(decideBillingEntitlement({ isAdmin: true, capabilityKey }).allowed, true)
   const unavailable = decideBillingEntitlement({ capabilityKey, authorityAvailable: false })
