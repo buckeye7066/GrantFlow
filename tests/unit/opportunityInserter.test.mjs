@@ -63,6 +63,7 @@ function createDb() {
       is_loan INTEGER DEFAULT 0,
       is_active INTEGER DEFAULT 1,
       is_hidden INTEGER DEFAULT 0,
+      status TEXT DEFAULT 'active',
       last_crawled DATETIME,
       contact_info TEXT DEFAULT NULL,
       funding_domain TEXT,
@@ -221,6 +222,76 @@ test('opportunityInserter: same-target recrawl preserves proof; unverified targe
       is_hidden: 1,
     },
     'a changed target cannot inherit proof from the previous URL',
+  )
+})
+
+test('opportunityInserter: an expired same-target proof is quarantined for retry', async () => {
+  const db = createDb()
+  const expiredAt = new Date(Date.now() - 45 * 24 * 60 * 60 * 1000).toISOString()
+  await upsertFundingOpportunity(db, {
+    title: 'Expired Proof Opp', sponsor: 'Agency', source: 'unit_test', source_id: 'expired-proof-1',
+    application_url: 'https://www.grants.gov/apply', record_origin: 'live_crawl',
+  })
+  db.prepare(`UPDATE funding_opportunities
+                 SET link_status = 'ok', last_verified_at = ?, verification_method = 'head',
+                     verification_error = NULL, is_hidden = 0
+               WHERE source_id = 'expired-proof-1'`).run(expiredAt)
+
+  await upsertFundingOpportunity(db, {
+    title: 'Expired Proof Opp', sponsor: 'Agency', source: 'unit_test', source_id: 'expired-proof-1',
+    application_url: 'https://www.grants.gov/apply', record_origin: 'live_crawl', description: 'metadata refresh',
+  })
+
+  assert.deepEqual(
+    db.prepare(`SELECT link_status, last_verified_at, verification_error, is_hidden
+                  FROM funding_opportunities WHERE source_id = 'expired-proof-1'`).get(),
+    { link_status: 'unverified', last_verified_at: expiredAt,
+      verification_error: 'stale_verification_proof_requires_recheck', is_hidden: 1 },
+  )
+})
+
+test('opportunityInserter: fresh proof restores a hard-quarantined row', async () => {
+  const db = createDb()
+  await upsertFundingOpportunity(db, {
+    title: 'Recovered Opp', sponsor: 'Agency', source: 'unit_test', source_id: 'recovered-1',
+    application_url: 'https://www.grants.gov/apply', record_origin: 'live_crawl',
+  })
+  db.prepare(`UPDATE funding_opportunities
+                 SET link_status = 'broken', is_hidden = 1, is_active = 0, status = 'paused'
+               WHERE source_id = 'recovered-1'`).run()
+
+  await upsertFundingOpportunity(db, {
+    title: 'Recovered Opp', sponsor: 'Agency', source: 'unit_test', source_id: 'recovered-1',
+    application_url: 'https://www.grants.gov/apply', record_origin: 'live_crawl',
+    link_status: 'ok', last_verified_at: new Date().toISOString(), verification_method: 'head',
+  })
+
+  assert.deepEqual(
+    db.prepare(`SELECT link_status, is_hidden, is_active, status
+                  FROM funding_opportunities WHERE source_id = 'recovered-1'`).get(),
+    { link_status: 'ok', is_hidden: 0, is_active: 1, status: 'active' },
+  )
+})
+
+test('opportunityInserter: evidence-only target changes cannot inherit proof', async () => {
+  const db = createDb()
+  const verifiedAt = new Date().toISOString()
+  await upsertFundingOpportunity(db, {
+    title: 'Evidence-only Opp', sponsor: 'Agency', source: 'unit_test', source_id: 'evidence-only-1',
+    evidence_url: 'https://www.grants.gov/original', record_origin: 'live_crawl',
+    link_status: 'ok', last_verified_at: verifiedAt, verification_method: 'head',
+  })
+
+  await upsertFundingOpportunity(db, {
+    title: 'Evidence-only Opp', sponsor: 'Agency', source: 'unit_test', source_id: 'evidence-only-1',
+    evidence_url: 'https://www.grants.gov/replacement', record_origin: 'live_crawl',
+  })
+
+  assert.deepEqual(
+    db.prepare(`SELECT evidence_url, link_status, last_verified_at, final_url, is_hidden
+                  FROM funding_opportunities WHERE source_id = 'evidence-only-1'`).get(),
+    { evidence_url: 'https://www.grants.gov/replacement', link_status: 'unverified',
+      last_verified_at: null, final_url: null, is_hidden: 1 },
   )
 })
 

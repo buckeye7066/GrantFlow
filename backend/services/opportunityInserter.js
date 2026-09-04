@@ -832,12 +832,14 @@ export async function upsertFundingOpportunity(db, opportunity, opts = {}) {
     // here: metadata-only recrawls preserve proof, while a changed effective
     // target cannot inherit the previous URL's verdict.
     const effectiveTarget = (row) =>
-      String(row?.application_url || row?.source_url || '').trim()
+      String(row?.application_url || row?.source_url || row?.evidence_url || '').trim()
     const targetChanged = effectiveTarget({
       application_url: record.application_url,
       source_url: record.source_url ?? existing.source_url,
+      evidence_url: record.evidence_url ?? existing.evidence_url,
     }) !== effectiveTarget(existing)
     const incomingHasCurrentProof = hasCurrentSuccessfulLinkProof(record)
+    const existingHasCurrentProof = hasCurrentSuccessfulLinkProof(existing)
     const effectivePointerRow = isPointerOpportunityRow({
       ...existing,
       ...opportunity,
@@ -854,7 +856,7 @@ export async function upsertFundingOpportunity(db, opportunity, opts = {}) {
       record.final_url = null
       record.http_status = null
       record.is_hidden = toDbBoolean(db, !effectivePointerRow)
-    } else if (!incomingHasCurrentProof) {
+    } else if (!incomingHasCurrentProof && existingHasCurrentProof) {
       record.last_verified_at = existing.last_verified_at
       record.link_status = existing.link_status
       record.link_status_code = existing.link_status_code
@@ -864,6 +866,20 @@ export async function upsertFundingOpportunity(db, opportunity, opts = {}) {
       record.final_url = existing.final_url
       record.http_status = existing.http_status
       record.is_hidden = existing.is_hidden
+    } else if (!incomingHasCurrentProof) {
+      // Historical success is useful audit evidence, but it is not permission
+      // to keep surfacing a direct row after the freshness window expires.
+      // Make the row retryable by the recurring verifier and fail closed until
+      // that verifier obtains fresh proof.
+      record.last_verified_at = existing.last_verified_at
+      record.link_status = 'unverified'
+      record.link_status_code = existing.link_status_code
+      record.verification_method = existing.verification_method
+      record.verified_by = existing.verified_by
+      record.verification_error = 'stale_verification_proof_requires_recheck'
+      record.final_url = existing.final_url
+      record.http_status = existing.http_status
+      record.is_hidden = toDbBoolean(db, !effectivePointerRow)
     } else {
       const priorStatus = String(existing.link_status || 'unverified').trim().toLowerCase()
       const priorError = String(existing.verification_error || '')
@@ -874,6 +890,10 @@ export async function upsertFundingOpportunity(db, opportunity, opts = {}) {
         db,
         effectivePointerRow ? Boolean(existing.is_hidden) : Boolean(existing.is_hidden) && !retryableQuarantine,
       )
+      if (!effectivePointerRow && retryableQuarantine) {
+        record.is_active = toDbBoolean(db, true)
+        record.status = existing.status === 'paused' ? 'active' : existing.status
+      }
     }
 
     // For live_crawl: allow clearing nullable fields when source no longer has them (avoids stale data).
@@ -963,6 +983,8 @@ export async function upsertFundingOpportunity(db, opportunity, opts = {}) {
         decision_review_days = COALESCE(?, decision_review_days),
         reporting_requirements = COALESCE(?, reporting_requirements),
         is_hidden = ?,
+        is_active = COALESCE(?, is_active),
+        status = COALESCE(?, status),
         updated_at = CURRENT_TIMESTAMP,
         last_crawled = CURRENT_TIMESTAMP
       WHERE id = ?
@@ -1016,6 +1038,8 @@ export async function upsertFundingOpportunity(db, opportunity, opts = {}) {
         decision_review_days = COALESCE(?, decision_review_days),
         reporting_requirements = COALESCE(?, reporting_requirements),
         is_hidden = ?,
+        is_active = COALESCE(?, is_active),
+        status = COALESCE(?, status),
         updated_at = CURRENT_TIMESTAMP,
         last_crawled = CURRENT_TIMESTAMP
       WHERE id = ?
@@ -1069,6 +1093,8 @@ export async function upsertFundingOpportunity(db, opportunity, opts = {}) {
       record.decision_review_days,
       record.reporting_requirements,
       record.is_hidden,
+      record.is_active ?? null,
+      record.status ?? null,
       existing.id,
     )
 
@@ -1260,9 +1286,14 @@ export async function upsertFundingOpportunity(db, opportunity, opts = {}) {
     AND excluded.last_verified_at IS NOT NULL
     AND excluded.last_verified_at >= @verification_fresh_cutoff
   )`
+  const existingHasCurrentProofSql = `(
+    LOWER(TRIM(COALESCE(funding_opportunities.link_status, ''))) IN ('ok', 'redirect', 'verified')
+    AND funding_opportunities.last_verified_at IS NOT NULL
+    AND funding_opportunities.last_verified_at >= @verification_fresh_cutoff
+  )`
   const effectiveTargetChangedSql = `(
-    COALESCE(NULLIF(TRIM(excluded.application_url), ''), NULLIF(TRIM(excluded.source_url), ''), '') <>
-    COALESCE(NULLIF(TRIM(funding_opportunities.application_url), ''), NULLIF(TRIM(funding_opportunities.source_url), ''), '')
+    COALESCE(NULLIF(TRIM(excluded.application_url), ''), NULLIF(TRIM(excluded.source_url), ''), NULLIF(TRIM(excluded.evidence_url), ''), '') <>
+    COALESCE(NULLIF(TRIM(funding_opportunities.application_url), ''), NULLIF(TRIM(funding_opportunities.source_url), ''), NULLIF(TRIM(funding_opportunities.evidence_url), ''), '')
   )`
 
   const insert = db.prepare(`
@@ -1453,6 +1484,7 @@ export async function upsertFundingOpportunity(db, opportunity, opts = {}) {
       link_status = CASE
         WHEN ${incomingHasCurrentProofSql} THEN excluded.link_status
         WHEN ${effectiveTargetChangedSql} THEN 'unverified'
+        WHEN NOT (${existingHasCurrentProofSql}) THEN 'unverified'
         ELSE funding_opportunities.link_status
       END,
       link_status_code = CASE
@@ -1473,6 +1505,7 @@ export async function upsertFundingOpportunity(db, opportunity, opts = {}) {
       verification_error = CASE
         WHEN ${incomingHasCurrentProofSql} THEN excluded.verification_error
         WHEN ${effectiveTargetChangedSql} THEN 'url_changed_requires_reverification'
+        WHEN NOT (${existingHasCurrentProofSql}) THEN 'stale_verification_proof_requires_recheck'
         ELSE funding_opportunities.verification_error
       END,
       discovered_at = COALESCE(funding_opportunities.discovered_at, excluded.discovered_at),
@@ -1510,6 +1543,22 @@ export async function upsertFundingOpportunity(db, opportunity, opts = {}) {
             OR funding_opportunities.last_verified_at < @verification_fresh_cutoff
           ) THEN TRUE
         ELSE funding_opportunities.is_hidden
+      END,
+      is_active = CASE
+        WHEN ${incomingHasCurrentProofSql} AND NOT (${pointerOpportunityRowSql('excluded')}) AND (
+          LOWER(TRIM(COALESCE(funding_opportunities.link_status, 'unverified'))) IN ('broken', 'unverified', 'suspicious', 'skipped')
+          OR COALESCE(funding_opportunities.verification_error, '') LIKE 'stale_reverification_required:%'
+          OR COALESCE(funding_opportunities.verification_error, '') LIKE 'retry_scheduled_after_bounded_recheck:%'
+        ) THEN TRUE
+        ELSE funding_opportunities.is_active
+      END,
+      status = CASE
+        WHEN ${incomingHasCurrentProofSql} AND NOT (${pointerOpportunityRowSql('excluded')}) AND funding_opportunities.status = 'paused' AND (
+          LOWER(TRIM(COALESCE(funding_opportunities.link_status, 'unverified'))) IN ('broken', 'unverified', 'suspicious', 'skipped')
+          OR COALESCE(funding_opportunities.verification_error, '') LIKE 'stale_reverification_required:%'
+          OR COALESCE(funding_opportunities.verification_error, '') LIKE 'retry_scheduled_after_bounded_recheck:%'
+        ) THEN 'active'
+        ELSE funding_opportunities.status
       END,
       updated_at = CURRENT_TIMESTAMP,
       last_crawled = CURRENT_TIMESTAMP
