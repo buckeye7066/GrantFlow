@@ -149,6 +149,10 @@ const DOCUMENTED_RUNTIME_DEFAULTS = Object.freeze({
   CLAMAV_REQUIRED: 'false',
   CLAMAV_TIMEOUT_MS: '10000',
   ERROR_REPORT_LLM_ANALYSIS_ENABLED: 'false',
+  // Hamilton's unattended poller defaults ON (hamiltonScheduler.js,
+  // shouldRunOnSchedule). Documented here so the generated examples state the
+  // real default rather than an empty value that reads as "off".
+  HAMILTON_RUN_ON_SCHEDULE: 'true',
   NOFO_FETCH_MAX_BYTES: '20971520',
   NOFO_FETCH_TIMEOUT_MS: '20000',
   NOFO_PARSE_CHUNK_CHARS: '14000',
