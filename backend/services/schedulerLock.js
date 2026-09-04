@@ -33,11 +33,10 @@ export async function runWithSchedulerLock(db, {
   ttlMs = DEFAULT_TTL_MS,
   logger = console,
   acquiredBy = 'scheduler',
-  // Scheduler work is single-flight for its entire callback lifetime, not just
-  // for the first TTL window. Heartbeat therefore defaults ON. A dead replica
-  // stops renewing and still self-recovers after ttlMs; callers may explicitly
-  // opt out only when a fixed, non-renewing lease is intentional.
-  heartbeat = true,
+  // Heartbeat remains opt-in because some callers intentionally use a fixed,
+  // non-renewing lease. The process-local fence below still prevents overlap
+  // for the entire callback lifetime within this process.
+  heartbeat = false,
 } = {}, fn) {
   if (typeof fn !== 'function') throw new Error('runWithSchedulerLock: fn required')
   if (!lockName) return await fn()
