@@ -34,3 +34,30 @@ test('county crawler honest enabled flag toggles', async () => {
   assert.equal(mod.isCountyCrawlerEnabled(), true)
   delete process.env.COUNTY_FUNDING_CRAWLER_ENABLED
 })
+
+test('county-equivalent display labels preserve independent cities', async () => {
+  const mod = await import('../../backend/services/countyFundingCrawler.js')
+  assert.equal(mod.countyDisplayLabel('Richmond city'), 'Richmond city')
+  assert.equal(mod.countyDisplayLabel('Baltimore City'), 'Baltimore City')
+  assert.equal(mod.countyDisplayLabel('Carson City'), 'Carson City')
+  assert.equal(mod.countyDisplayLabel('Orleans Parish'), 'Orleans Parish')
+  assert.equal(mod.countyDisplayLabel('Autauga'), 'Autauga County')
+})
+
+test('county authority rejects ZIP-derived partial nationwide lists', async () => {
+  const mod = await import('../../backend/services/countyFundingCrawler.js')
+  const partial = Array.from({ length: 3112 }, (_, i) => ({
+    state: `S${i % 51}`,
+    county: `County ${i}`,
+  }))
+  assert.equal(mod.countyAuthorityIsComplete(partial), false)
+
+  const completeShape = []
+  const stateCodes = [
+    'AL','AK','AZ','AR','CA','CO','CT','DE','DC','FL','GA','HI','ID','IL','IN','IA','KS','KY','LA','ME','MD','MA','MI','MN','MS','MO','MT','NE','NV','NH','NJ','NM','NY','NC','ND','OH','OK','OR','PA','RI','SC','SD','TN','TX','UT','VT','VA','WA','WV','WI','WY',
+  ]
+  for (let i = 0; i < 3140; i += 1) {
+    completeShape.push({ state: stateCodes[i % stateCodes.length], county: `County ${i}` })
+  }
+  assert.equal(mod.countyAuthorityIsComplete(completeShape), true)
+})
