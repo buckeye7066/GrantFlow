@@ -1,9 +1,8 @@
 /**
  * Hamilton cloud interactive login (Option B).
  *
- * The live-login machinery remains testable against GrantFlow's reserved
- * synthetic fixture. Controlled beta never launches it against a real portal;
- * users sign in and submit in their own browser.
+ * The live-login machinery supports GrantFlow's reserved synthetic fixture and
+ * DNS-validated public HTTPS portals. Captured sessions are reused by autopilot.
  *
  * PROVIDERS (HAMILTON_CLOUD_LOGIN_PROVIDER):
  *
@@ -48,6 +47,7 @@ import {
   installControlledBetaBrowserEgressGuard,
   isControlledBetaSyntheticBrowserUrl,
   isPublicHttpsPortalUrl,
+  assertPublicHttpsPortalUrl,
 } from './controlledBetaBrowserPolicy.js'
 import https from 'node:https'
 import { createLogger } from '../../utils/logger.js'
@@ -282,6 +282,10 @@ export async function startCloudLogin({ userId, profileId, portalHost, loginUrl,
       requires_human_handoff: true,
     }
   }
+  if (!isSynthetic) {
+    const safety = await assertPublicHttpsPortalUrl(target)
+    if (!safety.ok) return { ok: false, reason: 'unsafe_portal_url', detail: safety.reason, requires_human_handoff: true }
+  }
 
   let chromium = null
   if (!launchBrowser) {
@@ -390,8 +394,15 @@ async function navigateOrFail(page, target) {
     navError = err
   }
   const landedUrl = (() => { try { return page.url() } catch { return null } })()
-  if (landedUrl && landedUrl !== 'about:blank' && !isControlledBetaSyntheticBrowserUrl(landedUrl)) {
-    return { ok: false, reason: 'controlled_beta_redirect_blocked', detail: `Blocked off-fixture redirect (${landedUrl})` }
+  const syntheticTarget = isControlledBetaSyntheticBrowserUrl(target)
+  if (landedUrl && landedUrl !== 'about:blank') {
+    if (syntheticTarget && !isControlledBetaSyntheticBrowserUrl(landedUrl)) {
+      return { ok: false, reason: 'controlled_beta_redirect_blocked', detail: `Blocked off-fixture redirect (${landedUrl})` }
+    }
+    if (!syntheticTarget) {
+      const safety = await assertPublicHttpsPortalUrl(landedUrl)
+      if (!safety.ok) return { ok: false, reason: 'unsafe_portal_redirect', detail: safety.reason }
+    }
   }
   if (navError || !landedUrl || landedUrl === 'about:blank') {
     return { ok: false, reason: 'navigation_failed', detail: navError?.message || `stayed_on_blank_page (target: ${target})` }

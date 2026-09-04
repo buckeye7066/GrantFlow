@@ -1762,6 +1762,16 @@ async function runAutopilotPathway(db, {
           narrativeAnswers,
           signal: controller.signal,
           beforeSubmit,
+          // Re-evaluate the legal registry for the live main-document host.
+          // CDN assets remain governed only by the SSRF egress guard; redirects
+          // and SSO landing documents may proceed unless explicitly prohibited.
+          validatePortalUrl: async (liveUrl) => {
+            const liveHost = hostOfUrl(liveUrl)
+            const livePolicy = await getPolicyFor(db, liveHost).catch(() => null)
+            return livePolicy?.automation_allowed === false
+              ? { allow: false, reason: `automation_disallowed:${liveHost}` }
+              : { allow: true }
+          },
         })
       }
     } finally {

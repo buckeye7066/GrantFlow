@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import dns from 'node:dns'
 
 import {
   CONTROLLED_BETA_SYNTHETIC_BROWSER_HOST,
@@ -147,7 +148,21 @@ describe('synthetic fixture egress guard (installControlledBetaBrowserEgressGuar
 })
 
 describe('real-portal egress guard (installPortalBrowserEgressGuard)', () => {
+  it('aborts a public-looking hostname when DNS resolves it to private space', async () => {
+    vi.spyOn(dns.promises, 'lookup').mockResolvedValue([{ address: '127.0.0.1', family: 4 }])
+    let handler = null
+    await installPortalBrowserEgressGuard({ route: async (_pattern, callback) => { handler = callback } })
+    const route = {
+      request: () => ({ url: () => 'https://attacker.example/internal' }),
+      continue: vi.fn(), abort: vi.fn(),
+    }
+    await handler(route)
+    expect(route.continue).not.toHaveBeenCalled()
+    expect(route.abort).toHaveBeenCalledWith('blockedbyclient')
+  })
+
   it('continues public HTTPS/HTTP requests and aborts private/loopback/metadata IPs', async () => {
+    vi.spyOn(dns.promises, 'lookup').mockResolvedValue([{ address: '93.184.216.34', family: 4 }])
     let handler = null
     const context = {
       route: vi.fn(async (_pattern, callback) => { handler = callback }),
@@ -168,7 +183,7 @@ describe('real-portal egress guard (installPortalBrowserEgressGuard)', () => {
     for (const allowedUrl of [
       'https://example.org/asset.js',
       'https://scholarships.com/',
-      'http://cdn.example.com/asset.js', // CDN assets over HTTP
+      'http://example.org/asset.js', // CDN assets over HTTP
       'about:blank',
       'data:text/html,x',
     ]) {
@@ -216,6 +231,27 @@ describe('launchPortalBrowser — real portals allowed, unsafe URLs rejected', (
 })
 
 describe('browser entry points accept public HTTPS portals, block private IPs', () => {
+  it('cloud login accepts a DNS-safe real portal and its real post-navigation URL', async () => {
+    vi.spyOn(dns.promises, 'lookup').mockResolvedValue([{ address: '93.184.216.34', family: 4 }])
+    const page = {
+      goto: vi.fn(async () => {}), url: () => 'https://example.org/login',
+      viewportSize: () => ({ width: 1280, height: 900 }),
+    }
+    const context = {
+      route: vi.fn(async () => {}), newPage: vi.fn(async () => page),
+      storageState: vi.fn(async () => ({ cookies: [], origins: [] })),
+    }
+    page.context = () => context
+    const browser = { newContext: vi.fn(async () => context), close: vi.fn(async () => {}) }
+    const result = await startCloudLogin({
+      userId: 'u1', profileId: 'p1', portalHost: 'example.org',
+      loginUrl: 'https://example.org/login',
+      launchBrowser: vi.fn(async () => ({ browser, engine: 'test' })),
+    })
+    expect(result).toMatchObject({ ok: true, portalHost: 'example.org' })
+    cancelCloudLogin(result.liveSessionId)
+  })
+
   it.each([
     ['127.0.0.1', 'https://127.0.0.1/login'],
     ['10.0.0.1', 'https://10.0.0.1/login'],

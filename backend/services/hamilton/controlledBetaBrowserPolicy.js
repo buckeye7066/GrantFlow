@@ -19,7 +19,7 @@
  *    allowing legitimate CDN subresources, redirects, and auth SSO hops.
  */
 
-import { SSRF_BLOCKED_HOSTS, isPrivateIp } from '../../config/urlRules.js'
+import { SSRF_BLOCKED_HOSTS, assertSsrfSafeUrl, isPrivateIp } from '../../config/urlRules.js'
 
 export const CONTROLLED_BETA_SYNTHETIC_BROWSER_ORIGIN =
   'https://hamilton-submit-fixture.invalid'
@@ -117,6 +117,18 @@ export function isPublicHttpsPortalUrl(url) {
 }
 
 /**
+ * Network-aware admission check for a real portal.  The synchronous predicate
+ * above is deliberately only a URL-shape check; every browser boundary must
+ * use this function before allowing network egress so a public-looking name
+ * which resolves to loopback/private/link-local space is refused.
+ */
+export async function assertPublicHttpsPortalUrl(url) {
+  if (!isPublicHttpsPortalUrl(url)) return { ok: false, reason: 'unsafe_portal_url' }
+  const verdict = await assertSsrfSafeUrl(String(url))
+  return verdict.ok ? { ok: true } : verdict
+}
+
+/**
  * Synchronous per-request allow/deny for a Playwright real-portal context.
  * Blocks requests to private / loopback / metadata destinations while allowing
  * all public HTTP(S) traffic (CDN assets, auth provider SSO hops, etc.).
@@ -174,7 +186,12 @@ export async function installPortalBrowserEgressGuard(context) {
   await context.route('**/*', async (route) => {
     let requestUrl = ''
     try { requestUrl = route.request().url() } catch { /* fail closed below */ }
-    if (isPortalBrowserRequestAllowed(requestUrl)) {
+    // Resolve every HTTP(S) request, including redirects.  Checking only the
+    // hostname string permits attacker.example -> 127.0.0.1 and DNS rebinding.
+    const networkVerdict = isPortalBrowserRequestAllowed(requestUrl)
+      ? (/^https?:/i.test(requestUrl) ? await assertSsrfSafeUrl(requestUrl) : { ok: true })
+      : { ok: false }
+    if (networkVerdict.ok) {
       await route.continue()
       return
     }

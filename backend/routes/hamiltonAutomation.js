@@ -105,11 +105,6 @@ import {
   cloudLoginStatus,
 } from '../services/hamilton/hamiltonCloudLogin.js'
 import {
-  CONTROLLED_BETA_SYNTHETIC_BROWSER_HOST,
-  controlledBetaBrowserRefusal,
-  isControlledBetaSyntheticBrowserUrl,
-} from '../services/hamilton/controlledBetaBrowserPolicy.js'
-import {
   saveCredential,
   saveGeneratedCredential,
   listCredentialsForProfile,
@@ -1292,9 +1287,8 @@ router.post('/sessions/capture-requests/:id/cancel', async (req, res) => {
 })
 
 // ── Cloud interactive login (Option B) ──────────────────────────────────────
-// Controlled beta: the interactive browser remains available only for the
-// reserved synthetic fixture. Real portals always use a visible manual/external
-// handoff and never reach Playwright from this route.
+// Interactive watched login is the single capture path for both the reserved
+// fixture and real public HTTPS portals. startCloudLogin owns URL/DNS safety.
 
 router.get('/sessions/cloud-login/status', async (req, res) => {
   const user = requireAuthenticatedUser(req, res)
@@ -1311,14 +1305,14 @@ router.post('/sessions/cloud-login/start', async (req, res) => {
   }
   const portalHost = req.body?.portal_host || req.body?.portalHost
   const loginUrl = req.body?.login_url || req.body?.loginUrl || (portalHost ? `https://${portalHost}/` : null)
+  let loginHost = ''
+  try { loginHost = new URL(loginUrl).hostname.toLowerCase().replace(/^www\./, '') } catch { /* service refuses */ }
   const normalizedPortalHost = String(portalHost || '').trim().toLowerCase().replace(/^www\./, '')
-  if (!isControlledBetaSyntheticBrowserUrl(loginUrl)
-      || normalizedPortalHost !== CONTROLLED_BETA_SYNTHETIC_BROWSER_HOST) {
-    const refusal = controlledBetaBrowserRefusal()
+  if (!loginHost || !normalizedPortalHost || loginHost !== normalizedPortalHost) {
     return res.status(409).json({
       error: 'cloud_login_start_failed',
-      reason: refusal.code,
-      detail: refusal.message,
+      reason: 'portal_host_mismatch',
+      detail: 'portal_host must match the HTTPS login URL host.',
       requires_human_handoff: true,
     })
   }

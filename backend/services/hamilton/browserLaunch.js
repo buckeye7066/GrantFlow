@@ -1,6 +1,7 @@
 import {
   isControlledBetaSyntheticBrowserUrl,
   isPublicHttpsPortalUrl,
+  assertPublicHttpsPortalUrl,
   controlledBetaBrowserContextOptions,
   installControlledBetaBrowserEgressGuard,
   installPortalBrowserEgressGuard,
@@ -64,6 +65,10 @@ export async function launchPortalBrowser(chromium, { headless = true, extraArgs
     const err = new Error('unsafe_portal_url')
     err.code = 'unsafe_portal_url'
     throw err
+  }
+  if (isRealPortal) {
+    const safety = await assertPublicHttpsPortalUrl(targetUrl)
+    if (!safety.ok) throw new Error(`unsafe_portal_url:${safety.reason || 'dns_rejected'}`)
   }
   const args = [...CHROMIUM_CONTAINER_ARGS, '--disable-blink-features=AutomationControlled', ...extraArgs]
   try {

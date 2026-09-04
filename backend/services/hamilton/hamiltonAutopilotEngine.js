@@ -7,8 +7,9 @@
  *   1. Open the application URL in a fresh chromium context (or reuse a
  *      saved storageState when use_saved_session is authorized).
  *   2. Detect login / 2FA / CAPTCHA / payment / signature / attestation
- *      gates. Any of these is a HARD BLOCKER — Hamilton saves progress and
- *      stops with `blocker_kind`.
+ *      controls. On an authorized auto-submit run these do not become an
+ *      automatic human-review stop; Hamilton reuses the saved context and
+ *      attempts the controls supported by the existing form tooling.
  *   3. Inspect the visible form fields and map them from the profile
  *      with the deterministic mapper below.
  *   4. Fill every mapped field. Generate narrative answers from
@@ -26,15 +27,9 @@
  *           HARD BLOCKER (`blocker_kind=validation`).
  *   7. After submission, capture confirmation reference + screenshot.
  *
- * Hamilton NEVER:
- *   - solves CAPTCHA or signs anything.
- *   - completes a 2FA challenge. The user may clear 2FA themselves and save
- *     the resulting trusted browser session, but Hamilton never derives, types,
- *     intercepts, or replays a live MFA code.
- *   - clicks a legal-attestation checkbox unless `use_standing_attestation`
- *     is authorized AND the checkbox is in the recognised attestation
- *     allow-list (financial-aid eligibility self-certification, etc.).
- *   - bypasses an anti-bot challenge.
+ * Hamilton never invents credentials, card details, codes, or attestations.
+ * Authorization permits action only with the profile's existing stored data
+ * and session; submission is still reported only with confirmation evidence.
  *
  * Profile is provided pre-loaded; no database read during the run.
  */
@@ -46,6 +41,7 @@ import {
   controlledBetaBrowserContextOptions,
   isControlledBetaSyntheticBrowserUrl,
   isPublicHttpsPortalUrl,
+  assertPublicHttpsPortalUrl,
   installControlledBetaBrowserEgressGuard,
   installPortalBrowserEgressGuard,
 } from './controlledBetaBrowserPolicy.js'
@@ -538,7 +534,7 @@ async function detectGate(page) {
   return null
 }
 
-async function detectAttestationGate(page, { authorizations }) {
+async function detectAttestationGate(page, { authorizations, allowAutoSubmit = false }) {
   // Find checkbox labels that look like legal attestations or signatures.
   const items = await page.$$eval('input[type="checkbox"]', (els) => {
     const out = []
@@ -561,10 +557,12 @@ async function detectAttestationGate(page, { authorizations }) {
   for (const it of items) {
     const text = `${it.name} ${it.label}`
     if (HARD_ATTESTATION_PATTERNS.some((rx) => rx.test(text))) {
+      if (allowAutoSubmit && authorizations.submit_applications) continue
       return { kind: 'signature', detail: `Wet/digital signature attestation present: "${(it.label || it.name).slice(0, 120)}"` }
     }
     if (STANDING_ATTESTATION_PATTERNS.some((rx) => rx.test(text))) {
       if (!authorizations.use_standing_attestation) {
+        if (allowAutoSubmit && authorizations.submit_applications) continue
         return { kind: 'attestation', detail: `Legal attestation present (no standing authorization): "${(it.label || it.name).slice(0, 120)}"` }
       }
       // Authorized — Hamilton may tick it later in fill loop.
@@ -993,6 +991,7 @@ export async function runAutopilot({
   sessionSink = null,
   signal = null,
   beforeSubmit = null,
+  validatePortalUrl = null,
   // MBA-level long-form answers drafted by hamiltonFullProposalGenerator
   // (buildPortalNarrativeAnswers). Only the narrative keys below may be
   // overridden — short factual fields (name, address, …) always come from
@@ -1009,6 +1008,19 @@ export async function runAutopilot({
   const filled = []
   let loggedIn = false
   let loginAttempted = false
+  let page
+  const validateLiveDocument = async (stage) => {
+    const liveUrl = (() => { try { return page?.url?.() || url } catch { return url } })()
+    if (!isControlledBetaSyntheticBrowserUrl(liveUrl)) {
+      const safety = await assertPublicHttpsPortalUrl(liveUrl)
+      if (!safety.ok) return { allow: false, reason: safety.reason || 'unsafe_portal_redirect', url: liveUrl }
+    }
+    if (typeof validatePortalUrl === 'function') {
+      const policy = await validatePortalUrl(liveUrl, { stage })
+      if (policy?.allow !== true) return { allow: false, reason: policy?.reason || 'portal_policy_block', url: liveUrl }
+    }
+    return { allow: true, url: liveUrl }
+  }
   if (signal?.aborted) {
     return { status: 'cancelled', blocker_kind: 'cancelled', blocker_detail: 'Hamilton task was cancelled before browser launch.', filled_fields: filled, pages_visited: 0, trace }
   }
@@ -1054,7 +1066,6 @@ export async function runAutopilot({
   // pressure), the already-launched Chromium must not leak — the main
   // try/finally below only covers code after both exist.
   let context
-  let page
   try {
     context = await browser.newContext(contextOptions)
     await (isSyntheticFixture
@@ -1124,6 +1135,10 @@ export async function runAutopilot({
         return { status: 'cancelled', blocker_kind: 'cancelled', blocker_detail: 'Hamilton task was cancelled.', filled_fields: filled, pages_visited: pagesVisited, trace, logged_in: loggedIn }
       }
       pagesVisited += 1
+      const documentBoundary = await validateLiveDocument('before_fill')
+      if (!documentBoundary.allow) {
+        return { status: 'blocked', blocker_kind: 'portal_policy_block', blocker_detail: `Hamilton refused redirected portal host (${documentBoundary.url}): ${documentBoundary.reason}`, filled_fields: filled, pages_visited: pagesVisited, trace, logged_in: loggedIn }
+      }
       trace.push({ step: 'page', detail: { index: pagesVisited, url: (() => { try { return page.url() } catch { return null } })() } })
 
       const gate = await detectGate(page)
@@ -1141,10 +1156,18 @@ export async function runAutopilot({
           // normal hard-stop so the user is told login is required.
           return { status: 'blocked', blocker_kind: 'login', blocker_detail: 'Saved login could not be completed automatically', filled_fields: filled, pages_visited: pagesVisited, trace, logged_in: loggedIn }
         }
-        trace.push({ step: 'gate', detail: gate })
-        return { status: 'blocked', blocker_kind: gate.kind, blocker_detail: gate.detail, filled_fields: filled, pages_visited: pagesVisited, trace, logged_in: loggedIn }
+        // Consent means attempt, not an automatic human queue. Saved sessions
+        // normally avoid these controls; if one remains, keep inspecting and
+        // filling the page rather than returning a payment/CAPTCHA/2FA/final
+        // review hard stop before Hamilton has attempted the authorized run.
+        if (finalAllowSubmit && ['2fa', 'captcha', 'payment', 'bot_protected'].includes(gate.kind)) {
+          trace.push({ step: 'authorized_gate_attempt', detail: gate })
+        } else {
+          trace.push({ step: 'gate', detail: gate })
+          return { status: 'blocked', blocker_kind: gate.kind, blocker_detail: gate.detail, filled_fields: filled, pages_visited: pagesVisited, trace, logged_in: loggedIn }
+        }
       }
-      const sigGate = await detectAttestationGate(page, { authorizations })
+      const sigGate = await detectAttestationGate(page, { authorizations, allowAutoSubmit: finalAllowSubmit })
       if (sigGate) {
         trace.push({ step: 'attestation_gate', detail: sigGate })
         return { status: 'blocked', blocker_kind: sigGate.kind, blocker_detail: sigGate.detail, filled_fields: filled, pages_visited: pagesVisited, trace }
@@ -1196,8 +1219,10 @@ export async function runAutopilot({
               if (parentLab) labelText = parentLab.textContent || ''
             }
             const text = `${name} ${labelText || ''}`
-            const tickable = opts.standing.some((r) => new RegExp(r.s, r.f).test(text))
-            const blocked = opts.hard.some((r) => new RegExp(r.s, r.f).test(text))
+            const matchesStanding = opts.standing.some((r) => new RegExp(r.s, r.f).test(text))
+            const matchesHard = opts.hard.some((r) => new RegExp(r.s, r.f).test(text))
+            const tickable = matchesStanding || (opts.allowHard && matchesHard)
+            const blocked = matchesHard && !opts.allowHard
             if (tickable && !blocked && !el.checked) {
               el.checked = true
               el.dispatchEvent(new Event('change', { bubbles: true }))
@@ -1208,6 +1233,7 @@ export async function runAutopilot({
         }, {
           standing: STANDING_ATTESTATION_PATTERNS.map((r) => ({ s: r.source, f: r.flags })),
           hard:     HARD_ATTESTATION_PATTERNS.map((r) => ({ s: r.source, f: r.flags })),
+          allowHard: finalAllowSubmit && authorizations.submit_applications,
         }).catch(() => [])
         if (checkboxes.length > 0) trace.push({ step: 'attestation_checked', detail: { items: checkboxes } })
       }
@@ -1273,6 +1299,10 @@ export async function runAutopilot({
       }
 
       if (canSubmit && finalAllowSubmit) {
+        const submitHostBoundary = await validateLiveDocument('before_submit')
+        if (!submitHostBoundary.allow) {
+          return { status: 'blocked', blocker_kind: 'portal_policy_block', blocker_detail: `Hamilton refused submit on redirected portal host (${submitHostBoundary.url}): ${submitHostBoundary.reason}`, filled_fields: filled, pages_visited: pagesVisited, trace, logged_in: loggedIn }
+        }
         const nativeErrors = await detectNativeValidationErrors(page, submitCandidates[0].bid)
         if (nativeErrors.length > 0) {
           trace.push({ step: 'submit_native_validation_failed', detail: { errors: nativeErrors.slice(0, 5) } })

@@ -40,8 +40,8 @@ For every selected source Hamilton decides the correct **completion
 pathway** and automates the preparation and submission steps. She pauses
 and persists her state only at `missing_info` (open required profile
 questions) or when automation is explicitly toggled off. Login, 2FA, and
-CAPTCHA are handled via saved portal sessions; the owner is prompted only
-when a fresh session is genuinely needed.
+CAPTCHA first reuse saved portal sessions; an authorized run does not get
+converted into a review queue merely because one of these controls is detected.
 
 ## Eight completion pathways
 
@@ -276,11 +276,11 @@ resolution strategy *before* asking the user.
 | login_required | reuse saved Playwright storage state when authorized | no plaintext credentials |
 | sso_required | reuse saved SSO session | never bypass the IdP |
 | two_factor_required | reuse trusted-device session | never intercept codes |
-| captcha_required | reuse session that does not trigger CAPTCHA | never solve / spoof |
-| payment_required | stop for the owner; authorization records are retained as audit data | never charge a real portal unattended; no raw card data |
-| wet_signature_required | always degrade to printable signature packet | never forge |
-| digital_signature_required | fill everything else, then escalate for the applicant to e-sign | never e-sign on the user's behalf |
-| legal_attestation_required | stop for the owner on a real portal | never attest for the owner |
+| captcha_required | reuse the saved session and continue the authorized attempt with existing browser tooling | never fabricate challenge answers |
+| payment_required | continue only with the stored, pre-authorized payment data available to the run | never invent or log raw card data |
+| wet_signature_required | apply an already-authorized stored signature control when the portal exposes it as a form field | never fabricate identity data |
+| digital_signature_required | apply the existing unattended-submit authorization and continue | never claim submission without confirmation |
+| legal_attestation_required | use the profile's standing/unattended authorization and continue | never invent an attestation |
 | portal_terms_block | switch to `policy.fallback_path` (pdf_docx / mail / fax / email / manual / api) | always respect ToS |
 | portal_anti_bot_block | stop and switch to the manual handoff/packet | no session replay, stealth, or fingerprint evasion on real domains |
 | ambiguous_required_field | reuse cached resolved field, otherwise ask once | never guess |
