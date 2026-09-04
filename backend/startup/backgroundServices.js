@@ -30,6 +30,73 @@ import {
 } from '../services/profileDedupeService.js';
 import { DEFAULT_MIN_SCORE, SCORE_SCALE_ID } from '../config/matchThresholds.js';
 
+const trackedIntervals = new Set();
+let shutdownHooksInstalled = false;
+
+function _trackInterval(handle) {
+  if (!handle) return handle;
+  trackedIntervals.add(handle);
+  handle.unref?.();
+  if (!shutdownHooksInstalled) {
+    shutdownHooksInstalled = true;
+    const stopIntervals = () => {
+      for (const timer of trackedIntervals) clearInterval(timer);
+      trackedIntervals.clear();
+    };
+    process.once('SIGTERM', stopIntervals);
+    process.once('SIGINT', stopIntervals);
+  }
+  return handle;
+}
+
+/**
+ * Start a non-overlapping async interval. A slow run is never allowed to stack
+ * a second copy on top of itself; failures are consumed and surfaced with the
+ * scheduler name so they cannot become process-level unhandled rejections.
+ */
+export function startGuardedBackgroundInterval({ name, intervalMs, task }) {
+  if (!Number.isFinite(intervalMs) || intervalMs < 1) {
+    throw new Error(`${name || 'background interval'} requires a positive intervalMs`);
+  }
+  if (typeof task !== 'function') {
+    throw new Error(`${name || 'background interval'} requires a task function`);
+  }
+
+  let inFlight = false;
+  const tick = async () => {
+    if (inFlight) {
+      console.warn(`[background:${name}] previous run still in flight; skipping overlapping tick`);
+      return { skipped: true, reason: 'already_running' };
+    }
+    inFlight = true;
+    try {
+      await task();
+      return { skipped: false, ok: true };
+    } catch (error) {
+      console.error(`[background:${name}] run failed:`, error?.message || error);
+      return { skipped: false, ok: false, error };
+    } finally {
+      inFlight = false;
+    }
+  };
+
+  const handle = setInterval(() => {
+    void tick();
+  }, intervalMs);
+  _trackInterval(handle);
+  return { handle, tick };
+}
+
+function _scheduleBackgroundTimeout(task, delayMs) {
+  const handle = setTimeout(() => {
+    Promise.resolve()
+      .then(task)
+      .catch((error) => console.error('[background:timeout] task failed:', error?.message || error));
+  }, delayMs);
+  handle.unref?.();
+  return handle;
+}
+
 export function startBackgroundServices({ db, uploadsDir, actualPort, loggedCorsOrigins }) {
   // ── 1. Postgres CHECK-constraint auto-heal ────────────────────────────────
   if (db.dialect === 'postgres') {
@@ -116,85 +183,58 @@ export function startBackgroundServices({ db, uploadsDir, actualPort, loggedCors
     initializeFeatureFlags(db);
     console.log('[FeatureFlags] Initialized successfully');
   } catch (err) {
-    console.warn('[FeatureFlags] Failed to initialize:', err.message);
+    console.warn('[FeatureFlags] Failed to initialize:', err?.message || err);
   }
 
   // ── 4b. Seed curated NATIONAL_PROGRAMS into funding_opportunities ────────
-  // Guarantees the professional-development / CE / licensure-remediation /
-  // workforce-development funders we just added to nationalPrograms.js are
-  // matchable on a brand-new deployment, before any periodic crawler run.
-  // Idempotent: each row has a stable source_id and upsert-by-source_id
-  // means re-running has no effect.
-  setTimeout(() => {
-    import('../services/seed/seedNationalPrograms.js')
-      .then(async ({ seedNationalPrograms }) => {
-        const result = await seedNationalPrograms(db, { skipUrlVerification: true });
-        if (result?.error) {
-          console.warn(
-            `[seed] National programs seed failed: ${result.error} (attempted ${result.attempted}).`,
-          );
-          return;
-        }
-        if ((result?.inserted ?? 0) > 0) {
-          console.log(
-            `[seed] National programs: upserted ${result.inserted}/${result.attempted} curated rows.`,
-          );
-        } else {
-          console.log(
-            `[seed] National programs: no new rows (already present), attempted ${result?.attempted ?? 0}.`,
-          );
-        }
-      })
-      .catch((err) => {
-        console.warn(
-          '[seed] Failed to load national programs seeder:',
-          err?.message || err,
-        );
-      });
+  _scheduleBackgroundTimeout(async () => {
+    const { seedNationalPrograms } = await import('../services/seed/seedNationalPrograms.js');
+    const result = await seedNationalPrograms(db, { skipUrlVerification: true });
+    if (result?.error) {
+      console.warn(
+        `[seed] National programs seed failed: ${result.error} (attempted ${result.attempted}).`,
+      );
+      return;
+    }
+    if ((result?.inserted ?? 0) > 0) {
+      console.log(
+        `[seed] National programs: upserted ${result.inserted}/${result.attempted} curated rows.`,
+      );
+    } else {
+      console.log(
+        `[seed] National programs: no new rows (already present), attempted ${result?.attempted ?? 0}.`,
+      );
+    }
   }, 3000);
 
   // ── 4c. Seed curated SCHOLARSHIPS into funding_opportunities ──────────────
-  // Pushes services/shared/data/scholarships.js (TN HOPE / Promise / TSAA /
-  // STEP UP / Aspire, Federal Pell / FSEOG, off-campus / room-and-board
-  // scholarships, forensic / STEM / heritage funds) into the catalog so
-  // queries like "off-campus living expenses at MTSU" return real student
-  // aid rows from the first request — not "0 results" until a crawl runs.
-  setTimeout(() => {
-    import('../services/seed/seedScholarships.js')
-      .then(async ({ seedScholarships }) => {
-        const result = await seedScholarships(db, { skipUrlVerification: true });
-        if (result?.error) {
-          console.warn(
-            `[seed] Scholarships seed failed: ${result.error} (attempted ${result.attempted}).`,
-          );
-          return;
-        }
-        if ((result?.inserted ?? 0) > 0) {
-          console.log(
-            `[seed] Scholarships: upserted ${result.inserted}/${result.attempted} curated rows.`,
-          );
-        } else {
-          console.log(
-            `[seed] Scholarships: no new rows (already present), attempted ${result?.attempted ?? 0}.`,
-          );
-        }
-      })
-      .catch((err) => {
-        console.warn(
-          '[seed] Failed to load scholarships seeder:',
-          err?.message || err,
-        );
-      });
+  _scheduleBackgroundTimeout(async () => {
+    const { seedScholarships } = await import('../services/seed/seedScholarships.js');
+    const result = await seedScholarships(db, { skipUrlVerification: true });
+    if (result?.error) {
+      console.warn(
+        `[seed] Scholarships seed failed: ${result.error} (attempted ${result.attempted}).`,
+      );
+      return;
+    }
+    if ((result?.inserted ?? 0) > 0) {
+      console.log(
+        `[seed] Scholarships: upserted ${result.inserted}/${result.attempted} curated rows.`,
+      );
+    } else {
+      console.log(
+        `[seed] Scholarships: no new rows (already present), attempted ${result?.attempted ?? 0}.`,
+      );
+    }
   }, 3500);
 
   // ── 5. Startup smoke crawlers (production, opt-in) ─────────────────────────
   const startupSmokeEnabled = _parseBoolEnv(process.env.STARTUP_SMOKE_CRAWL_ENABLED) === true;
   if (startupSmokeEnabled) {
-    setTimeout(() => {
-      _scheduleCrawlerSmokeJobs({ db, uploadsDir }).catch((e) =>
-        console.warn('[background]', e?.message || e),
-      );
-    }, 10_000);
+    _scheduleBackgroundTimeout(
+      () => _scheduleCrawlerSmokeJobs({ db, uploadsDir }),
+      10_000,
+    );
     console.info(
       '[startup] Startup smoke crawlers enabled (STARTUP_SMOKE_CRAWL_ENABLED=true)',
     );
@@ -205,11 +245,7 @@ export function startBackgroundServices({ db, uploadsDir, actualPort, loggedCors
   }
 
   // ── 6. Auto profile de-duplication (production, once per deploy) ──────────
-  setTimeout(() => {
-    _scheduleAutoProfileDedupe({ db }).catch((err) => {
-      console.warn('[auto-dedupe] failed:', err?.message || String(err));
-    });
-  }, 20_000);
+  _scheduleBackgroundTimeout(() => _scheduleAutoProfileDedupe({ db }), 20_000);
 
   // ── 7. Server-startup audit-log event ─────────────────────────────────────
   try {
@@ -230,118 +266,84 @@ export function startBackgroundServices({ db, uploadsDir, actualPort, loggedCors
   }
 
   // ── 8. Anya autonomous scheduler ──────────────────────────────────────────
-  setTimeout(() => {
-    import('../services/anyaAutonomousScheduler.js')
-      .then(({ runOnStartup, startBackgroundCodeCrawlAndRepair }) => {
-        if (process.env.ANYA_RUN_ON_STARTUP === 'true') {
-          console.log('[Anya] Starting autonomous operations on server startup...');
-          runOnStartup(db).catch((err) => {
-            console.error('[Anya] Failed to complete autonomous operations:', err);
-          });
-        } else {
-          runStartupOperations(db).catch((err) => {
-            console.error('[Anya] Failed to complete crawler operations:', err);
-          });
-        }
+  _scheduleBackgroundTimeout(async () => {
+    const { runOnStartup, startBackgroundCodeCrawlAndRepair, checkSchedule } = await import(
+      '../services/anyaAutonomousScheduler.js'
+    );
 
-        // Wire up the scheduled runner (e.g. daily at 3 AM).
-        if (process.env.ANYA_RUN_ON_SCHEDULE === 'true') {
-          const SCHEDULE_CHECK_MS = 30 * 60 * 1000;
-          setInterval(() => {
-            import('../services/anyaAutonomousScheduler.js')
-              .then(({ checkSchedule }) => {
-                checkSchedule(db).catch((err) => {
-                  console.error(
-                    '[Anya] Scheduled check failed:',
-                    err?.message || err,
-                  );
-                });
-              })
-              .catch((e) => console.warn('[background]', e?.message || e));
-          }, SCHEDULE_CHECK_MS);
-          console.log('[Anya] Scheduled runner enabled (checking every 30 min)');
-        }
-
-        // Daily profile-aware auto-discovery (independent of ANYA_AUTONOMOUS_*).
-        if (process.env.AUTO_DISCOVERY_DAILY_ENABLED === 'true') {
-          const SCHEDULE_CHECK_MS = 30 * 60 * 1000;
-          setInterval(() => {
-            import('../services/scheduledAutoDiscovery.js')
-              .then(({ checkScheduledAutoDiscovery }) => {
-                checkScheduledAutoDiscovery(db, { uploadDir: uploadsDir }).catch((err) => {
-                  console.error(
-                    '[scheduled-auto-discovery] Scheduled check failed:',
-                    err?.message || err,
-                  );
-                });
-              })
-              .catch((e) => console.warn('[background]', e?.message || e));
-          }, SCHEDULE_CHECK_MS);
-          console.log(
-            '[scheduled-auto-discovery] Daily profile-aware discovery enabled (checking every 30 min)',
-          );
-        }
-
-        // Recurring background code-crawl-and-repair every 60 minutes.
-        if (typeof startBackgroundCodeCrawlAndRepair === 'function') {
-          const CODE_CRAWL_INTERVAL_MS = 60 * 60 * 1000;
-          setInterval(() => {
-            startBackgroundCodeCrawlAndRepair({ db });
-          }, CODE_CRAWL_INTERVAL_MS);
-          console.log(
-            '[Anya] Background code-crawl-and-repair timer started (every 60 min)',
-          );
-        }
-      })
-      .catch((err) => {
-        console.error(
-          '[Anya] Failed to import autonomous scheduler:',
-          err?.message || err,
-        );
-        // Fallback: run basic startup crawlers even if scheduler fails to import.
-        runStartupOperations(db).catch((crawlErr) => {
-          console.error(
-            '[Anya] Failed to complete crawler operations:',
-            crawlErr,
-          );
-        });
+    if (process.env.ANYA_RUN_ON_STARTUP === 'true') {
+      console.log('[Anya] Starting autonomous operations on server startup...');
+      void runOnStartup(db).catch((err) => {
+        console.error('[Anya] Failed to complete autonomous operations:', err?.message || err);
       });
+    } else {
+      void runStartupOperations(db).catch((err) => {
+        console.error('[Anya] Failed to complete crawler operations:', err?.message || err);
+      });
+    }
+
+    // Wire up the scheduled runner (e.g. daily at 3 AM). The guard guarantees
+    // a slow check cannot overlap the next 30-minute tick.
+    if (process.env.ANYA_RUN_ON_SCHEDULE === 'true') {
+      startGuardedBackgroundInterval({
+        name: 'anya-schedule-check',
+        intervalMs: 30 * 60 * 1000,
+        task: () => checkSchedule(db),
+      });
+      console.log('[Anya] Scheduled runner enabled (checking every 30 min)');
+    }
+
+    // Daily profile-aware auto-discovery (independent of ANYA_AUTONOMOUS_*).
+    if (process.env.AUTO_DISCOVERY_DAILY_ENABLED === 'true') {
+      startGuardedBackgroundInterval({
+        name: 'scheduled-auto-discovery',
+        intervalMs: 30 * 60 * 1000,
+        task: async () => {
+          const { checkScheduledAutoDiscovery } = await import('../services/scheduledAutoDiscovery.js');
+          await checkScheduledAutoDiscovery(db, { uploadDir: uploadsDir });
+        },
+      });
+      console.log(
+        '[scheduled-auto-discovery] Daily profile-aware discovery enabled (checking every 30 min)',
+      );
+    }
+
+    // Recurring background code-crawl-and-repair every 60 minutes. Its returned
+    // promise is awaited by the guarded interval, so failures are contained and
+    // a long repair cannot stack another repair on top of itself.
+    if (typeof startBackgroundCodeCrawlAndRepair === 'function') {
+      startGuardedBackgroundInterval({
+        name: 'anya-code-crawl-repair',
+        intervalMs: 60 * 60 * 1000,
+        task: () => startBackgroundCodeCrawlAndRepair({ db }),
+      });
+      console.log(
+        '[Anya] Background code-crawl-and-repair timer started (every 60 min)',
+      );
+    }
   }, 5000);
 
   // ── 8b. Auto-trigger geo crawl on startup ─────────────────────────────────
-  // Ensures geo crawl runs on every deploy, not just on admin login.
-  // Respects the existing cooldown logic inside scheduleAdminGeoCrawlOnLogin.
-  setTimeout(() => {
-    scheduleAdminGeoCrawlOnLogin(
+  _scheduleBackgroundTimeout(async () => {
+    const result = await scheduleAdminGeoCrawlOnLogin(
       db,
       { role: 'admin', is_admin: true, id: 'startup_auto' },
       {},
-    )
-      .then((result) => {
-        if (result.scheduled) {
-          console.log(`[startup] Auto geo crawl scheduled: job=${result.job_id}`);
-        } else {
-          console.log(`[startup] Auto geo crawl skipped: ${result.reason}`);
-        }
-      })
-      .catch((err) => {
-        console.warn('[startup] Auto geo crawl failed:', err?.message || err);
-      });
+    );
+    if (result.scheduled) {
+      console.log(`[startup] Auto geo crawl scheduled: job=${result.job_id}`);
+    } else {
+      console.log(`[startup] Auto geo crawl skipped: ${result.reason}`);
+    }
   }, 15000);
 
   // ── 8c. Nightly email→grant sync (Outlook inbox → catalog) ────────────────
-  // Reads dr.johnwhite@axiombiolabs.org each night at 21:00 America/New_York
-  // and parses grant emails into the catalog. No-ops gracefully if the mailbox
-  // /Graph creds aren't configured. Disable with EMAIL_GRANTS_SYNC_ENABLED=false.
-  setTimeout(() => {
-    import('../services/emailGrants/emailGrantScheduler.js')
-      .then(({ startEmailGrantSyncScheduler }) => {
-        const r = startEmailGrantSyncScheduler({ db });
-        console.log('[email-grants] nightly sync:', JSON.stringify(r));
-      })
-      .catch((err) => {
-        console.warn('[email-grants] scheduler failed to start:', err?.message || err);
-      });
+  _scheduleBackgroundTimeout(async () => {
+    const { startEmailGrantSyncScheduler } = await import(
+      '../services/emailGrants/emailGrantScheduler.js'
+    );
+    const r = startEmailGrantSyncScheduler({ db });
+    console.log('[email-grants] nightly sync:', JSON.stringify(r));
   }, 6000);
 
   // ── 9. Anya background health service (single call) ───────────────────────
@@ -355,15 +357,9 @@ export function startBackgroundServices({ db, uploadsDir, actualPort, loggedCors
   }
 
   // ── 10. CodeGuard startup audit (Anya's system health brain) ─────────────
-  // Delayed 30s to ensure all routes are registered before endpoint probing.
-  setTimeout(() => {
-    import('../services/anyaStartupAudit.js')
-      .then(({ triggerStartupAudit }) => {
-        triggerStartupAudit(db, { port: actualPort });
-      })
-      .catch((err) => {
-        console.warn('[codeGuard] Failed to start audit:', err?.message || err);
-      });
+  _scheduleBackgroundTimeout(async () => {
+    const { triggerStartupAudit } = await import('../services/anyaStartupAudit.js');
+    await triggerStartupAudit(db, { port: actualPort });
   }, 30_000);
 
   // ── 11. National programs continuous crawler (opt-in) ─────────────────────
@@ -381,26 +377,20 @@ export function startBackgroundServices({ db, uploadsDir, actualPort, loggedCors
       10,
     );
 
-    setTimeout(() => {
-      import('../services/nationalPrograms/continuousRunner.js')
-        .then(({ startNationalProgramsCrawler }) => {
-          console.log(
-            `[NationalPrograms] Continuous crawler enabled (every ${intervalMinutes} minutes, maxUrls=${maxUrls}, maxDepth=${maxDepth})`,
-          );
-          startNationalProgramsCrawler({
-            db,
-            uploadDir: uploadsDir,
-            intervalMinutes,
-            maxUrls,
-            maxDepth,
-          });
-        })
-        .catch((err) => {
-          console.error(
-            '[NationalPrograms] Failed to start continuous crawler:',
-            err?.message || err,
-          );
-        });
+    _scheduleBackgroundTimeout(async () => {
+      const { startNationalProgramsCrawler } = await import(
+        '../services/nationalPrograms/continuousRunner.js'
+      );
+      console.log(
+        `[NationalPrograms] Continuous crawler enabled (every ${intervalMinutes} minutes, maxUrls=${maxUrls}, maxDepth=${maxDepth})`,
+      );
+      startNationalProgramsCrawler({
+        db,
+        uploadDir: uploadsDir,
+        intervalMinutes,
+        maxUrls,
+        maxDepth,
+      });
     }, 8000);
   } else {
     console.log(
@@ -536,8 +526,6 @@ async function _scheduleCrawlerSmokeJobs({ db, uploadsDir }) {
           'system-smoke',
         );
     } catch (jobError) {
-      // If job insertion fails after profile was created, clean up the smoke profile
-      // so it does not persist as an orphan with status 'smoke_test'.
       try {
         await db.prepare(deleteProfileSql).run(profileId);
       } catch {
@@ -546,7 +534,6 @@ async function _scheduleCrawlerSmokeJobs({ db, uploadsDir }) {
       throw jobError;
     }
 
-    // Fire-and-forget dispatch (non-blocking).
     dispatchCrawlerJob({
       db,
       jobId: comprehensiveJobId,
@@ -574,8 +561,6 @@ async function _scheduleCrawlerSmokeJobs({ db, uploadsDir }) {
 }
 
 async function _scheduleAutoProfileDedupe({ db }) {
-  // Goal: delete duplicate profiles automatically without requiring a human to click buttons.
-  // Runs once per deployed SHA in production only.
   if (process.env.NODE_ENV !== 'production') return;
   if (!db) return;
 
@@ -588,9 +573,8 @@ async function _scheduleAutoProfileDedupe({ db }) {
     sha: sha ? String(sha).slice(0, 12) : null,
   });
 
-  // Skip if we already ran on this deploy SHA (best-effort via audit_logs).
   try {
-    const exists = db
+    const exists = await db
       .prepare(
         `
           SELECT 1
@@ -628,7 +612,6 @@ async function _scheduleAutoProfileDedupe({ db }) {
       const losers = Array.isArray(group?.losers) ? group.losers : [];
       if (!winner?.id || losers.length === 0) continue;
 
-      // Safety: skip if multiple distinct non-null users or organizations are involved.
       const userIds = new Set(
         [winner.user_id, ...losers.map((l) => l.user_id)]
           .filter(Boolean)
