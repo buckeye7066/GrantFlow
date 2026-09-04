@@ -67,6 +67,7 @@ function makeDb() {
       categories TEXT DEFAULT '[]',
       state TEXT,
       is_active INTEGER DEFAULT 1,
+      is_hidden INTEGER DEFAULT 0,
       profile_id TEXT,
       updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP
@@ -189,6 +190,10 @@ describe('POST /api/ai/ecf-service-search — filters pipeline members', () => {
       `INSERT INTO funding_opportunities (id, title, funder, source, record_origin, categories, state, is_active, profile_id)
        VALUES ('ecf-1', 'UNCF Scholarships', 'UNCF', 'ecf_choices', 'live_crawl', '["ecf"]', NULL, 1, NULL)`,
     ).run()
+    db.prepare(
+      `INSERT INTO funding_opportunities (id, title, funder, source, record_origin, categories, state, is_active, is_hidden, profile_id)
+       VALUES ('ecf-hidden', 'Hidden ECF Service', 'Hidden', 'ecf_choices', 'live_crawl', '["ecf"]', NULL, 1, 1, NULL)`,
+    ).run()
     // The user already secured it (section-only award, not in grants table).
     seedUniversityApplications(db, 'p1', [
       {
@@ -206,6 +211,7 @@ describe('POST /api/ai/ecf-service-search — filters pipeline members', () => {
       .send({ profile_id: 'p1', profile: { id: 'p1', state: 'TN' } })
     expect(res.status).toBe(200)
     expect(res.body.services.map((s) => s.title)).not.toContain('UNCF Scholarships')
+    expect(res.body.services.map((s) => s.title)).not.toContain('Hidden ECF Service')
   })
 
   it('keeps it when include_pipeline=true (escape hatch)', async () => {
@@ -215,6 +221,7 @@ describe('POST /api/ai/ecf-service-search — filters pipeline members', () => {
       .send({ profile_id: 'p1', profile: { id: 'p1', state: 'TN' }, include_pipeline: true })
     expect(res.status).toBe(200)
     expect(res.body.services.map((s) => s.title)).toContain('UNCF Scholarships')
+    expect(res.body.services.map((s) => s.title)).not.toContain('Hidden ECF Service')
   })
 })
 
