@@ -59,6 +59,8 @@ import {
   emitMissingInfoAlert,
 } from './hamiltonNotifications.js'
 import { canonicalStage } from '../../../shared/pipelineStages.js'
+import { CAPABILITY_KEYS } from '../../../shared/tierCatalog.js'
+import { resolveProfileEntitlement } from '../billing/entitlementService.js'
 import {
   hamiltonProcessingBlockReason,
   isHamiltonProtectedPipelineStage,
@@ -672,6 +674,23 @@ export async function automateSingleSource(db, {
     err.status = 403
     err.code = 'profile_access_denied'
     throw err
+  }
+
+  // Request middleware cannot protect scheduler/adapter calls. Re-evaluate the
+  // canonical billing decision at the execution choke point before an internal
+  // worker hydrates PII, creates work, fills a portal, or submits anything.
+  if (internalCaller === HAMILTON_INTERNAL_CALLER) {
+    const entitlement = await resolveProfileEntitlement(db, {
+      profileId: resolvedProfileId,
+      capabilityKey: CAPABILITY_KEYS.PIPELINE_AUTOMATION,
+    })
+    if (!entitlement.allowed) {
+      const err = new Error(`Hamilton automation is locked: ${entitlement.reason || 'not_entitled'}`)
+      err.status = entitlement.unavailable ? 503 : 403
+      err.code = entitlement.unavailable ? 'entitlement_authority_unavailable' : 'pipeline_automation_not_entitled'
+      err.entitlement = entitlement
+      throw err
+    }
   }
 
   // If only the id was given, hydrate the profile bundle now so the

@@ -2,6 +2,12 @@ import { requireTierCapability } from '../utils/tierGating.js'
 import { TIER_CAPABILITIES } from '../utils/tierGating.js'
 import { ADMIN_PROFILE_SENTINEL } from '../config/userProfileMappings.js'
 
+const HAMILTON_SHARED_SECRET_PATHS = new Set(['/sms-inbox', '/inbox', '/inbox-status'])
+
+export function isHamiltonSharedSecretRoute(req) {
+  return HAMILTON_SHARED_SECRET_PATHS.has(String(req?.path || '').replace(/\/$/, ''))
+}
+
 export function resolveProfileId(req) {
   const fromParams = req?.params?.profileId ?? req?.params?.profile_id ?? null
   const fromBody = req?.body?.profile_id ?? req?.body?.profileId ?? null
@@ -25,6 +31,38 @@ function identifierFromPath(req, segment) {
   try { return decodeURIComponent(match[1]) } catch { return null }
 }
 
+const INDIRECT_HAMILTON_RESOURCES = Object.freeze([
+  { pattern: /\/sessions\/capture-requests\/([^/]+)/i, table: 'hamilton_session_capture_requests' },
+  { pattern: /\/sessions\/([^/]+)\/(?:revoke|expire)(?:\/|$)/i, table: 'hamilton_saved_sessions' },
+  { pattern: /\/credentials\/([^/]+)(?:\/reveal-once)?(?:\/|$)/i, table: 'hamilton_portal_credentials' },
+  { pattern: /\/authorizations\/([^/]+)\/revoke(?:\/|$)/i, table: 'hamilton_authorizations' },
+  { pattern: /\/attestations\/([^/]+)\/revoke(?:\/|$)/i, table: 'hamilton_attestation_authorizations' },
+])
+
+async function resolveHamiltonResourceProfileId(req) {
+  const path = String(req?.originalUrl || `${req?.baseUrl || ''}${req?.path || ''}`).split('?')[0]
+  const liveMatch = /\/sessions\/cloud-login\/([^/]+)\/(?:stream|input|complete|cancel)(?:\/|$)/i.exec(path)
+  if (liveMatch?.[1]) {
+    const { getCloudLoginMeta } = await import('../services/hamilton/hamiltonCloudLogin.js')
+    let id
+    try { id = decodeURIComponent(liveMatch[1]) } catch { id = liveMatch[1] }
+    const profileId = getCloudLoginMeta(id)?.profileId
+    return profileId ? String(profileId) : null
+  }
+
+  for (const resource of INDIRECT_HAMILTON_RESOURCES) {
+    const match = resource.pattern.exec(path)
+    if (!match?.[1]) continue
+    let id
+    try { id = decodeURIComponent(match[1]) } catch { id = match[1] }
+    const row = await req.db.prepare(
+      `SELECT profile_id FROM ${resource.table} WHERE id = ? LIMIT 1`,
+    ).get(String(id))
+    return row?.profile_id ? String(row.profile_id) : null
+  }
+  return null
+}
+
 /**
  * Resolve indirect Hamilton identities before an entitlement decision. A task
  * id or grant id is not a profile id; treating generic `params.id` as one made
@@ -42,6 +80,9 @@ export async function resolveEntitlementProfileId(req) {
     ?? null
   const explicitProfileId = explicitCandidate ? String(explicitCandidate).trim() : null
   const indirectProfileIds = []
+
+  const resourceProfileId = await resolveHamiltonResourceProfileId(req)
+  if (resourceProfileId) indirectProfileIds.push(resourceProfileId)
 
   const taskId = req?.params?.taskId
     ?? req?.params?.task_id

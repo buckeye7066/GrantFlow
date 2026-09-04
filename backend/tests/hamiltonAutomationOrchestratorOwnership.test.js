@@ -50,6 +50,7 @@ const {
 } = await import('../services/hamilton/hamiltonAutomationOrchestrator.js')
 const { _resetSchemaCache } = await import('../services/hamilton/applicationTaskStore.js')
 const { _resetAuthSchemaCache } = await import('../services/hamilton/hamiltonAuthorizationStore.js')
+const { ensureBillingSchema } = await import('../services/billingAccounts.js')
 
 const PROFILE = 'profile-ownership-gate'
 const OWNER_USER_ID = 'owner-user-1'
@@ -60,7 +61,8 @@ function makeDb() {
   const sqlite = new Database(':memory:')
   sqlite.exec(`
     CREATE TABLE profiles (
-      id TEXT PRIMARY KEY, user_id TEXT, created_by TEXT, display_name TEXT, primary_type TEXT
+      id TEXT PRIMARY KEY, user_id TEXT, created_by TEXT, display_name TEXT, primary_type TEXT,
+      status TEXT DEFAULT 'active'
     );
     CREATE TABLE profile_sections (profile_id TEXT, section_key TEXT, data TEXT);
     CREATE TABLE funding_opportunities (
@@ -78,6 +80,7 @@ function makeDb() {
       match_explanation TEXT, matcher_version TEXT, updated_at DATETIME, computed_at DATETIME
     );
     CREATE TABLE users (id TEXT PRIMARY KEY, is_admin INTEGER DEFAULT 0);
+    CREATE TABLE profile_pricing (profile_id TEXT PRIMARY KEY, access_status TEXT);
   `)
   const db = wrapSqlite(sqlite)
   _resetSchemaCache()
@@ -86,6 +89,7 @@ function makeDb() {
 }
 
 async function seedFixture(db) {
+  await ensureBillingSchema(db)
   await db.prepare('INSERT INTO profiles (id, user_id, display_name, primary_type) VALUES (?, ?, ?, ?)')
     .run(PROFILE, OWNER_USER_ID, 'Someone Else Entirely', 'college_student')
   await db.prepare('INSERT INTO profile_sections (profile_id, section_key, data) VALUES (?, ?, ?)')
@@ -110,6 +114,10 @@ async function seedFixture(db) {
     .run(PROFILE, 'opp-1')
   await db.prepare('INSERT INTO users (id, is_admin) VALUES (?, ?)').run(ADMIN_USER_ID, 1)
   await db.prepare('INSERT INTO users (id, is_admin) VALUES (?, ?)').run(STRANGER_USER_ID, 0)
+  await db.prepare(`INSERT INTO billing_addon_entitlements
+    (id, profile_id, capability_key, status, source)
+    VALUES (?, ?, 'enable_pipeline_automation', 'active', 'admin')`)
+    .run('ownership-test-automation', PROFILE)
 }
 
 async function taskCount(db) {
@@ -188,5 +196,19 @@ describe('automateSingleSource — cross-tenant ownership gate', () => {
     })
     expect(r.skipped).not.toBe(true)
     expect(r.task?.id).toBeTruthy()
+  })
+
+  it('REFUSES scheduler work when the profile loses pipeline automation', async () => {
+    await db.prepare("UPDATE billing_addon_entitlements SET status = 'revoked' WHERE profile_id = ?")
+      .run(PROFILE)
+    await expect(automateSingleSource(db, {
+      profileId: PROFILE,
+      internalCaller: HAMILTON_INTERNAL_CALLER,
+      source: { grant_id: 'g-1' },
+    })).rejects.toMatchObject({
+      status: 403,
+      code: 'pipeline_automation_not_entitled',
+    })
+    expect(await taskCount(db)).toBe(0)
   })
 })
