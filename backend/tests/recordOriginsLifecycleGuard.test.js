@@ -3,6 +3,9 @@ import Database from 'better-sqlite3'
 
 import { trustedOriginClause } from '../utils/recordOrigins.js'
 
+const TRUSTED_ORIGIN_SQL = `(COALESCE(is_active, TRUE) = TRUE AND COALESCE(is_hidden, FALSE) = FALSE) AND (record_origin IS NULL OR record_origin NOT IN ('synthetic','manual'))`
+const TRUSTED_ORIGIN_ALIAS_SQL = `(COALESCE(fo.is_active, TRUE) = TRUE AND COALESCE(fo.is_hidden, FALSE) = FALSE) AND (fo.record_origin IS NULL OR fo.record_origin NOT IN ('synthetic','manual'))`
+
 describe('trustedOriginClause lifecycle guard', () => {
   it('filters hidden, inactive, and untrusted rows through the shared read contract', () => {
     const db = new Database(':memory:')
@@ -24,10 +27,12 @@ describe('trustedOriginClause lifecycle guard', () => {
     insert.run('manual', 'manual', 1, 0)
     insert.run('legacy-visible', null, null, null)
 
+    expect(trustedOriginClause()).toBe(`(${TRUSTED_ORIGIN_SQL})`)
     const ids = db.prepare(`
       SELECT id
         FROM funding_opportunities
-       WHERE ${trustedOriginClause()}
+       WHERE (COALESCE(is_active, TRUE) = TRUE AND COALESCE(is_hidden, FALSE) = FALSE)
+         AND (record_origin IS NULL OR record_origin NOT IN ('synthetic','manual'))
        ORDER BY id
     `).all().map((row) => row.id)
 
@@ -49,10 +54,12 @@ describe('trustedOriginClause lifecycle guard', () => {
         ('quarantined', 'funding_api', 1, 1);
     `)
 
+    expect(trustedOriginClause('fo')).toBe(`(${TRUSTED_ORIGIN_ALIAS_SQL})`)
     const ids = db.prepare(`
       SELECT fo.id
         FROM funding_opportunities fo
-       WHERE ${trustedOriginClause('fo')}
+       WHERE (COALESCE(fo.is_active, TRUE) = TRUE AND COALESCE(fo.is_hidden, FALSE) = FALSE)
+         AND (fo.record_origin IS NULL OR fo.record_origin NOT IN ('synthetic','manual'))
        ORDER BY fo.id
     `).all().map((row) => row.id)
 
