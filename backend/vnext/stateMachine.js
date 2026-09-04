@@ -100,7 +100,9 @@ async function transitionInTransaction(db, applicationId, target, actor) {
     }
   }
 
-  const current = asState(app.state || app.stage)
+  const rawState = app.state ?? null
+  const rawStage = app.stage ?? null
+  const current = asState(rawState || rawStage)
   const currentIdx = VNEXT_STATE_ORDER.indexOf(current)
   const targetIdx = VNEXT_STATE_ORDER.indexOf(target)
   const blockers = []
@@ -227,10 +229,11 @@ async function transitionInTransaction(db, applicationId, target, actor) {
   }
   const after = { state: target, stage: target, boundary_type, boundary_url }
 
-  // Claim the transition BEFORE applying target-state side effects. This is a
-  // compare-and-swap on the logical current state. If another worker wins the
-  // race, throwing here rolls this transaction back, including schema or
-  // missingness writes performed during guard evaluation.
+  // Claim the transition BEFORE applying target-state side effects. Compare the
+  // exact state/stage snapshot we read, not the normalized logical state. That
+  // preserves legacy lowercase rows while still detecting any concurrent write
+  // to either lifecycle column. If another worker wins the race, throwing here
+  // rolls this transaction back, including guard-side effects.
   const nowExpr = sqlNowLiteral(db)
   const claim = await db
     .prepare(
@@ -242,10 +245,21 @@ async function transitionInTransaction(db, applicationId, target, actor) {
             boundary_url = COALESCE(?, boundary_url),
             updated_at = ${nowExpr}
         WHERE id = ?
-          AND COALESCE(state, stage, 'DISCOVERED') = ?
+          AND ((state = ?) OR (state IS NULL AND ? IS NULL))
+          AND ((stage = ?) OR (stage IS NULL AND ? IS NULL))
       `,
     )
-    .run(String(target), String(target), boundary_type, boundary_url, String(applicationId), String(current))
+    .run(
+      String(target),
+      String(target),
+      boundary_type,
+      boundary_url,
+      String(applicationId),
+      rawState,
+      rawState,
+      rawStage,
+      rawStage,
+    )
 
   if (changedCount(claim) !== 1) {
     throw new ConcurrentTransitionError(applicationId, current, target)
