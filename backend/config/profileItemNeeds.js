@@ -87,7 +87,11 @@ function list(v) {
   if (typeof v === 'string' && v.trim()) {
     return v
       .split(/[,;\r\n]+/)
-      .map((entry) => entry.replace(/^\s*(?:[-*\u2022]|\d+[.)])\s*/, '').trim())
+      // Strip ONLY visual list markers at the start: a bullet like "- " or "* ",
+      // or a numbered marker like "1. " / "1) " — require whitespace after the
+      // marker so decimals ("2.5 ton truck") and leading hyphens in names
+      // ("-20C freezer") are preserved.
+      .map((entry) => entry.replace(/^\s*(?:[-*\u2022]\s+|\d+[.)]\s+)/, '').trim()))
       .filter(Boolean)
   }
   return []
