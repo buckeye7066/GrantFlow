@@ -47,6 +47,7 @@ function createDb() {
       verification_error TEXT,
       -- Reality gate phase 1.2: kind + source trust tier (migration 068).
       opportunity_kind TEXT,
+      result_kind TEXT,
       source_trust_tier TEXT,
       -- RC-8: persisted reality verdict (migration 077).
       reality_status TEXT,

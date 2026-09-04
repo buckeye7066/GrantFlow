@@ -827,6 +827,55 @@ export async function upsertFundingOpportunity(db, opportunity, opts = {}) {
       })(),
     }
 
+    // The ordinary sequential recrawl reaches this branch before the INSERT
+    // ... ON CONFLICT writer below. Apply the identical proof-transfer rule
+    // here: metadata-only recrawls preserve proof, while a changed effective
+    // target cannot inherit the previous URL's verdict.
+    const effectiveTarget = (row) =>
+      String(row?.application_url || row?.source_url || '').trim()
+    const targetChanged = effectiveTarget({
+      application_url: record.application_url,
+      source_url: record.source_url ?? existing.source_url,
+    }) !== effectiveTarget(existing)
+    const incomingHasCurrentProof = hasCurrentSuccessfulLinkProof(record)
+    const effectivePointerRow = isPointerOpportunityRow({
+      ...existing,
+      ...opportunity,
+      ...record,
+    })
+
+    if (!incomingHasCurrentProof && targetChanged) {
+      record.last_verified_at = null
+      record.link_status = 'unverified'
+      record.link_status_code = null
+      record.verification_method = null
+      record.verified_by = null
+      record.verification_error = 'url_changed_requires_reverification'
+      record.final_url = null
+      record.http_status = null
+      record.is_hidden = toDbBoolean(db, !effectivePointerRow)
+    } else if (!incomingHasCurrentProof) {
+      record.last_verified_at = existing.last_verified_at
+      record.link_status = existing.link_status
+      record.link_status_code = existing.link_status_code
+      record.verification_method = existing.verification_method
+      record.verified_by = existing.verified_by
+      record.verification_error = existing.verification_error
+      record.final_url = existing.final_url
+      record.http_status = existing.http_status
+      record.is_hidden = existing.is_hidden
+    } else {
+      const priorStatus = String(existing.link_status || 'unverified').trim().toLowerCase()
+      const priorError = String(existing.verification_error || '')
+      const retryableQuarantine = ['broken', 'unverified', 'suspicious', 'skipped'].includes(priorStatus) ||
+        priorError.startsWith('stale_reverification_required:') ||
+        priorError.startsWith('retry_scheduled_after_bounded_recheck:')
+      record.is_hidden = toDbBoolean(
+        db,
+        effectivePointerRow ? Boolean(existing.is_hidden) : Boolean(existing.is_hidden) && !retryableQuarantine,
+      )
+    }
+
     // For live_crawl: allow clearing nullable fields when source no longer has them (avoids stale data).
     const fromLiveCrawl = recordOrigin === 'live_crawl'
 
@@ -891,19 +940,19 @@ export async function upsertFundingOpportunity(db, opportunity, opts = {}) {
         keywords = COALESCE(?, keywords),
         opportunity_type = COALESCE(?, opportunity_type),
         type = COALESCE(?, type),
-        last_verified_at = COALESCE(?, last_verified_at),
-        link_status = COALESCE(?, link_status),
-        link_status_code = COALESCE(?, link_status_code),
-        verification_method = COALESCE(?, verification_method),
-        verified_by = COALESCE(?, verified_by),
-        verification_error = COALESCE(?, verification_error),
+        last_verified_at = ?,
+        link_status = ?,
+        link_status_code = ?,
+        verification_method = ?,
+        verified_by = ?,
+        verification_error = ?,
         discovered_at = COALESCE(discovered_at, ?),
         opportunity_kind = COALESCE(?, opportunity_kind),
         source_trust_tier = COALESCE(?, source_trust_tier),
         reality_status = COALESCE(?, reality_status),
         reality_reasons = COALESCE(?, reality_reasons),
-        final_url = COALESCE(?, final_url),
-        http_status = COALESCE(?, http_status),
+        final_url = ?,
+        http_status = ?,
         profile_id = COALESCE(?, profile_id),
         requires_501c3 = COALESCE(?, requires_501c3),
         requires_match = COALESCE(?, requires_match),
@@ -913,6 +962,7 @@ export async function upsertFundingOpportunity(db, opportunity, opts = {}) {
         expected_decision_date = COALESCE(?, expected_decision_date),
         decision_review_days = COALESCE(?, decision_review_days),
         reporting_requirements = COALESCE(?, reporting_requirements),
+        is_hidden = ?,
         updated_at = CURRENT_TIMESTAMP,
         last_crawled = CURRENT_TIMESTAMP
       WHERE id = ?
@@ -943,19 +993,19 @@ export async function upsertFundingOpportunity(db, opportunity, opts = {}) {
         keywords = COALESCE(?, keywords),
         opportunity_type = COALESCE(?, opportunity_type),
         type = COALESCE(?, type),
-        last_verified_at = COALESCE(?, last_verified_at),
-        link_status = COALESCE(?, link_status),
-        link_status_code = COALESCE(?, link_status_code),
-        verification_method = COALESCE(?, verification_method),
-        verified_by = COALESCE(?, verified_by),
-        verification_error = COALESCE(?, verification_error),
+        last_verified_at = ?,
+        link_status = ?,
+        link_status_code = ?,
+        verification_method = ?,
+        verified_by = ?,
+        verification_error = ?,
         discovered_at = COALESCE(discovered_at, ?),
         opportunity_kind = COALESCE(?, opportunity_kind),
         source_trust_tier = COALESCE(?, source_trust_tier),
         reality_status = COALESCE(?, reality_status),
         reality_reasons = COALESCE(?, reality_reasons),
-        final_url = COALESCE(?, final_url),
-        http_status = COALESCE(?, http_status),
+        final_url = ?,
+        http_status = ?,
         profile_id = COALESCE(?, profile_id),
         requires_501c3 = COALESCE(?, requires_501c3),
         requires_match = COALESCE(?, requires_match),
@@ -965,6 +1015,7 @@ export async function upsertFundingOpportunity(db, opportunity, opts = {}) {
         expected_decision_date = COALESCE(?, expected_decision_date),
         decision_review_days = COALESCE(?, decision_review_days),
         reporting_requirements = COALESCE(?, reporting_requirements),
+        is_hidden = ?,
         updated_at = CURRENT_TIMESTAMP,
         last_crawled = CURRENT_TIMESTAMP
       WHERE id = ?
@@ -1017,6 +1068,7 @@ export async function upsertFundingOpportunity(db, opportunity, opts = {}) {
       record.expected_decision_date,
       record.decision_review_days,
       record.reporting_requirements,
+      record.is_hidden,
       existing.id,
     )
 
