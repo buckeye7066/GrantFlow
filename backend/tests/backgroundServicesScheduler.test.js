@@ -1,12 +1,21 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import { startGuardedBackgroundInterval } from '../startup/backgroundServices.js'
+import { readFileSync } from 'node:fs'
+
+import { startGuardedBackgroundInterval } from '../startup/guardedBackgroundInterval.js'
 
 afterEach(() => {
   vi.restoreAllMocks()
 })
 
 describe('startGuardedBackgroundInterval', () => {
+  it('guards the Anya schedule interval in the live server startup path', () => {
+    const serverSource = readFileSync(new URL('../server.js', import.meta.url), 'utf8')
+
+    expect(serverSource).toMatch(/startGuardedBackgroundInterval\(\{\s*name: 'anya-scheduled-check'/)
+    expect(serverSource).not.toMatch(/setInterval\(\(\) => \{\s*import\('\.\/services\/anyaAutonomousScheduler\.js'\)/)
+  })
+
   it('skips a tick while the previous async run is still in flight', async () => {
     let release
     const gate = new Promise((resolve) => {

@@ -147,6 +147,7 @@ import { sendEmail, isEmailServiceConfigured } from './services/email.js'
 import { runBillingCycle } from './services/billing/invoiceService.js'
 import { validateCriticalImports } from './startup/validateImports.js'
 import { runGracefulShutdown } from './startup/gracefulShutdown.js'
+import { startGuardedBackgroundInterval } from './startup/guardedBackgroundInterval.js'
 
 /**
  * Lazy-loading route helper — caches the imported router after first load.
@@ -3821,17 +3822,21 @@ if (process.env.NODE_ENV !== 'test') {
         // checkSchedule() + runAllAutonomousOperations() re-check runOnSchedule and
         // the toggle-able enabled flag on every tick — a no-op when disabled.
         const SCHEDULE_CHECK_MS = 30 * 60 * 1000
-        setInterval(() => {
-          import('./services/anyaAutonomousScheduler.js')
-            .then(({ checkSchedule }) => {
-              runWithSchedulerLock(db, { lockName: 'anya:scheduled-check', ttlMs: 45 * 60 * 1000, logger: console },
-                () => checkSchedule(db)).catch(err => console.error('[Anya] Scheduled check failed:', err?.message || err))
-            })
-            .catch((err) => {
-              /* intentionally non-fatal: scheduler import failure must not crash the interval */
-              serverLogger.debug('anya.scheduler_import_failed', { error: err?.message || String(err) })
-            })
-        }, SCHEDULE_CHECK_MS)
+        // The process-local guard prevents a second tick even if this run
+        // outlives the lock TTL; the database lock still excludes other
+        // application instances.
+        startGuardedBackgroundInterval({
+          name: 'anya-scheduled-check',
+          intervalMs: SCHEDULE_CHECK_MS,
+          task: async () => {
+            const { checkSchedule } = await import('./services/anyaAutonomousScheduler.js')
+            await runWithSchedulerLock(
+              db,
+              { lockName: 'anya:scheduled-check', ttlMs: 45 * 60 * 1000, logger: console },
+              () => checkSchedule(db),
+            )
+          },
+        })
         console.log('[Anya] Scheduled runner wired (every 30 min; respects the autonomous toggle)')
       } catch (err) {
         console.error('[Anya] autonomous boot seed failed:', err?.message || err)
