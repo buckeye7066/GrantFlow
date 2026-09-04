@@ -323,14 +323,64 @@ export async function grantBillingAddon(db, {
       return { created: true, entitlement: { ...entitlement, metadata: decodeMetadata(entitlement?.metadata) } }
     })
   } catch (error) {
+    // Only handle idempotency on a UNIQUE violation keyed by source_reference.
+    // Otherwise, surface the original error.
     if (!sourceReference) throw error
+    const code = String(error?.code || '')
+    const message = String(error?.message || '')
+    const isUniqueViolation =
+      code === '23505' ||
+      code === 'SQLITE_CONSTRAINT_UNIQUE' ||
+      (code === 'SQLITE_CONSTRAINT' && /unique/i.test(message))
+    if (!isUniqueViolation) throw error
     const existing = await db.prepare(`
       SELECT * FROM billing_addon_entitlements
        WHERE profile_id = ? AND capability_key = ? AND source = ? AND source_reference = ?
        LIMIT 1
     `).get(String(profileId), key, normalizedSource, String(sourceReference))
     if (!existing) throw error
-    return { created: false, entitlement: { ...existing, metadata: decodeMetadata(existing.metadata) } }
+    // If the existing row is not active (revoked/expired), reactivate it in-place.
+    if (existing.status !== 'active') {
+      const start = asIso(startsAt, { now }) || now.toISOString()
+      const expiry = asIso(expiresAt, { future: true, now })
+      const updated = await withBillingTransaction(db, async (tx) => {
+        await tx.prepare(`
+          UPDATE billing_addon_entitlements
+             SET status = 'active',
+                 revoked_at = NULL,
+                 revoked_by = NULL,
+                 starts_at = ?,
+                 expires_at = ?,
+                 granted_by = ?,
+                 reason = ?,
+                 metadata = ?,
+                 updated_at = ?
+           WHERE id = ? AND profile_id = ?
+        `).run(
+          start,
+          expiry,
+          grantedBy ? String(grantedBy) : null,
+          reason ? String(reason).slice(0, 500) : null,
+          encodeMetadata(tx, metadata),
+          now.toISOString(),
+          String(existing.id),
+          String(profileId),
+        )
+        await insertEntitlementEvent(tx, {
+          profileId,
+          entitlementId: existing.id,
+          eventType: 'granted',
+          capabilityKey: key,
+          actor: grantedBy,
+          details: { source: normalizedSource, source_reference: sourceReference, starts_at: start, expires_at: expiry, reason },
+        })
+        const row = await tx.prepare('SELECT * FROM billing_addon_entitlements WHERE id = ?').get(String(existing.id))
+        return row
+      })
+      return { created: false, entitlement: { ...updated, metadata: decodeMetadata(updated?.metadata) } }
+    }
+    // Existing active row — idempotent success.
+    return { created: false, entitlement: { ...existing, metadata: decodeMetadata(existing?.metadata) } }
   }
 }
 

@@ -41,12 +41,16 @@ export async function requireTierCapability(req, res, profileId, capabilityKey) 
   }
 
   const paymentRequired = decision.payment_required === true
-  const suspended = String(decision.reason || '').startsWith('profile_')
+  const reason = String(decision.reason || '')
+  const suspended = reason.startsWith('profile_') && reason !== 'profile_not_found'
   const unavailable = decision.unavailable === true
-  res.status(unavailable ? 503 : paymentRequired ? 402 : suspended ? 423 : 403).json({
+  const notFound = reason === 'profile_not_found'
+  res.status(unavailable ? 503 : notFound ? 404 : paymentRequired ? 402 : suspended ? 423 : 403).json({
     error: unavailable
       ? 'entitlement_authority_unavailable'
-      : paymentRequired
+      : notFound
+        ? 'profile_not_found'
+        : paymentRequired
         ? 'payment_required'
         : suspended
           ? 'profile_access_paused'
@@ -56,7 +60,9 @@ export async function requireTierCapability(req, res, profileId, capabilityKey) 
     tier_id: decision.tier_id || null,
     message: unavailable
       ? 'GrantFlow could not verify billing entitlements. The feature remains locked until verification succeeds.'
-      : paymentRequired
+      : notFound
+        ? 'The requested profile does not exist or is no longer available.'
+        : paymentRequired
         ? 'Payment or an approved waiver is required before this feature can run.'
         : suspended
           ? 'This profile is paused. Resolve the account hold before using paid features.'
