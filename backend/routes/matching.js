@@ -22,6 +22,7 @@ import {
 import { deriveMatchReasonCodes } from '../services/matching/reasons.js'
 import { filterOutPipelineMembers, annotatePipelineMembers, dedupeOpportunityList } from '../services/pipelineExclusion.js'
 import { canonicalizeOpportunityList, isFiniteNumberLike } from '../services/matching/resultEnricher.js'
+import { loadVnextGuidanceByOpportunity } from '../services/matching/vnextApplicationGuidance.js'
 import { recordLowCoverageEvent } from '../services/matching/professionalDevelopmentPolicy.js'
 import { assembleFundingResults } from '../services/zeroResultLadder.js'
 import { SURFACED_MATCHER_VERSIONS_SQL, qualifiesForDisplay } from '../config/matchSurfacing.js'
@@ -478,6 +479,7 @@ router.get('/profile/:profileId/opportunities', async (req, res, next) => {
         return active && !hidden
       })
 
+      const vnextGuidance = await loadVnextGuidanceByOpportunity(req.db, profileId, osRows.map((row) => row.id))
       const rawMapped = osRows.map((o) => {
         const kind = String(o.opportunity_kind ?? '').toUpperCase()
         const isDirectory = kind === 'DIRECTORY' || kind === 'PAST_AWARD_INTEL'
@@ -485,6 +487,7 @@ router.get('/profile/:profileId/opportunities', async (req, res, next) => {
         try { reasons = JSON.parse(o.os_match_reasons || '[]') } catch { reasons = [] }
         return {
           ...o,
+          ...vnextGuidance.get(String(o.id)),
           match_score: Number(o.os_match_score ?? 0),
           match_confidence: isFiniteNumberLike(o.os_match_confidence) ? Number(o.os_match_confidence) : null,
           match_explain_json: o.os_match_explain_json,

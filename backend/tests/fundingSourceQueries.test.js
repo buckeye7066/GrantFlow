@@ -97,6 +97,13 @@ function createCanonicalDb({ withDismissals = true, withMatchConfidence = true }
       updated_at TEXT,
       evaluated_at TEXT
     );
+    CREATE TABLE vnext_applications (
+      id TEXT PRIMARY KEY,
+      profile_id TEXT NOT NULL,
+      opportunity_id TEXT NOT NULL,
+      state TEXT NOT NULL,
+      stage TEXT NOT NULL
+    );
     ${withDismissals ? `
       CREATE TABLE pipeline_dismissals (
         id TEXT PRIMARY KEY,
@@ -147,6 +154,9 @@ function createCanonicalDb({ withDismissals = true, withMatchConfidence = true }
        '["resource"]', '{}', 'crawler-os-xmatch', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP),
       ('m-3', 'p-1', 'opp-dismissed', 90, 'accept', ${withMatchConfidence ? 'NULL,' : ''} 'Dismissed',
        '[]', '{}', 'web-llm', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP);
+
+    INSERT INTO vnext_applications (id, profile_id, opportunity_id, state, stage)
+    VALUES ('app-1', 'p-1', 'opp-1', 'DEDUPED', 'DEDUPED');
     ${withDismissals ? `
       INSERT INTO pipeline_dismissals (id, profile_id, opportunity_id, title)
       VALUES ('d-1', 'p-1', 'opp-dismissed', 'Dismissed Grant');
@@ -205,6 +215,9 @@ describe('canonical funding-source query projection', () => {
       match_confidence: 89,
       match_decision: 'accept',
       matcher_version: 'crawler-os',
+      vnext_application_id: 'app-1',
+      vnext_application_state: 'DEDUPED',
+      vnext_application_stage: 'DEDUPED',
     })
 
     // Verification truth reaches the primary user-facing surface: the
