@@ -186,6 +186,40 @@ describe('link backlog safety regression', () => {
     db.close()
   })
 
+  it('repairs non-pointer rows even when their opportunity kind is unknown', async () => {
+    const db = makeDb()
+    insert(db, {
+      id: 'future-kind',
+      opportunity_kind: 'future_direct_spelling',
+      result_kind: null,
+      application_url: 'https://8.8.8.8/future-kind',
+      is_hidden: 1,
+      is_active: 0,
+    })
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue({
+      status: 200,
+      url: 'https://8.8.8.8/future-kind',
+    })
+
+    const result = await repairBrokenDirectBatch(db, {
+      fetchImpl: globalThis.fetch,
+      limit: 1,
+      concurrency: 1,
+      timeoutMs: 3000,
+      findOfficialUrlImpl: async () => ({ url: null, searched: false }),
+    })
+
+    expect(result).toMatchObject({ selected: 1, restored: 1 })
+    expect(db.prepare('SELECT status,link_status,is_hidden,is_active FROM funding_opportunities WHERE id=?')
+      .get('future-kind')).toMatchObject({
+      status: 'active',
+      link_status: 'ok',
+      is_hidden: 0,
+      is_active: 1,
+    })
+    db.close()
+  })
+
   it('does not let a cycle marker skip the next active row or loop a fresh pending row', async () => {
     const db = makeDb()
     insert(db, { id: 'a-retry', application_url: 'https://8.8.8.8/retry' })

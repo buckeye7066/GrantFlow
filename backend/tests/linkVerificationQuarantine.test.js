@@ -338,9 +338,14 @@ describe('startup SQL-only link quarantine', () => {
 
   it('post-probe quarantine hides a direct row downgraded to suspicious', async () => {
     const db = makeDb()
-    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue({
-      status: 200,
-      url: 'https://1.1.1.1/',
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(async (url) => {
+      if (String(url).startsWith('https://8.8.8.8/')) {
+        return new Response(null, {
+          status: 302,
+          headers: { Location: 'https://1.1.1.1/' },
+        })
+      }
+      return new Response(null, { status: 200 })
     })
 
     try {
