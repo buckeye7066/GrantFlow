@@ -202,6 +202,7 @@ export function computeMatchDecision(opportunity, thesis = {}, opts = {}) {
   // Directory locators are exempt because their contract is the information link.
   const hasApplyUrl = Boolean(opportunity?.apply_url ?? opportunity?.application_url);
   const isDirectoryLocator = String(opportunity?.kind ?? '').toUpperCase() === OPPORTUNITY_KIND.DIRECTORY;
+  const isPastAwardIntel = String(opportunity?.kind ?? '').toUpperCase() === OPPORTUNITY_KIND.PAST_AWARD_INTEL;
   if (!hasApplyUrl && !isDirectoryLocator && decision === MATCH_DECISION.ACCEPT) {
     decision = MATCH_DECISION.REVIEW;
     warnings.push('no direct application URL — strong fit held at REVIEW until an apply target is known');
@@ -212,6 +213,11 @@ export function computeMatchDecision(opportunity, thesis = {}, opts = {}) {
     decision = MATCH_DECISION.REVIEW;
     warnings.push('directory locator surfaced as a pointer to look through, not a strong match');
   }
+  // Past-award intel is a research pointer, never direct funding.
+  if (isPastAwardIntel && decision === MATCH_DECISION.ACCEPT) {
+    decision = MATCH_DECISION.REVIEW;
+    warnings.push('past-award intel surfaced as a research pointer, not a strong match');
+  }
   // The need-first overlay's resource routing usually holds a directory at
   // REVIEW before this facade ever sees an ACCEPT — but the demotion WARNING
   // is part of the locator contract ("Recommended ≠ strong match"): an
@@ -221,6 +227,11 @@ export function computeMatchDecision(opportunity, thesis = {}, opts = {}) {
   if (isDirectoryLocator && decision === MATCH_DECISION.REVIEW && isAcceptLevelScore(score) &&
       !warnings.some((w) => /pointer to look through/i.test(String(w ?? '')))) {
     warnings.push('directory locator surfaced as a pointer to look through, not a strong match');
+  }
+  // Mirror the ACCEPT-level pointer warning for past-award intel rows.
+  if (isPastAwardIntel && decision === MATCH_DECISION.REVIEW && isAcceptLevelScore(score) &&
+      !warnings.some((w) => /research pointer/i.test(String(w ?? '')))) {
+    warnings.push('past-award intel surfaced as a research pointer, not a strong match');
   }
 
   return {
