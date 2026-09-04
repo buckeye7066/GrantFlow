@@ -67,6 +67,11 @@ describe('stored canonical decisions are authoritative by default', () => {
         meta: { target: 'QUALIFIED' },
       }),
     ])
+    expect(kept[0].next_steps[0]).toMatchObject({
+      id: 'qualify_application',
+      category: 'application',
+      meta: { target: 'QUALIFIED' },
+    })
   })
 
   it('the unknown-eligibility list is always an array, never undefined', () => {

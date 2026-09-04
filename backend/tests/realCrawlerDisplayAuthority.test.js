@@ -1,5 +1,5 @@
 import { readFileSync } from 'node:fs'
-import { describe, expect, it } from 'vitest'
+import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { VERIFIED_FOUR_TRUTH_PROOF } from './helpers/fourTruthFixture.js'
 import {
   ACCEPT_SCORE,
@@ -12,6 +12,13 @@ import {
   mapResultToFrontendShape,
   selectCanonicalDisplayOpportunities,
 } from '../routes/realCrawlers.js'
+
+const originalShouldersVnext = process.env.SHOULDERS_VNEXT
+beforeAll(() => { process.env.SHOULDERS_VNEXT = 'true' })
+afterAll(() => {
+  if (originalShouldersVnext === undefined) delete process.env.SHOULDERS_VNEXT
+  else process.env.SHOULDERS_VNEXT = originalShouldersVnext
+})
 
 const profileContext = {
   profile: {

@@ -10,26 +10,30 @@ import { getScopedOpportunityForVnextApplication } from '../utils/scopedOpportun
 import { createLogger } from '../utils/logger.js'
 
 const log = createLogger('vnext.stateMachine')
-const TRANSITION_AUDIT = Symbol('transitionAudit')
+const TRANSITION_AUDITS = Symbol('transitionAudits')
 
-function resultWithAudit(result, audit) {
-  Object.defineProperty(result, TRANSITION_AUDIT, { value: audit })
+function resultWithAudits(result, audits) {
+  const normalized = (Array.isArray(audits) ? audits : [audits]).filter(Boolean)
+  if (normalized.length > 0) {
+    Object.defineProperty(result, TRANSITION_AUDITS, { value: normalized })
+  }
   return result
 }
 
-async function writeTransitionAudit(db, result) {
-  const audit = result?.[TRANSITION_AUDIT]
-  if (!audit) return
-  try {
-    await writeAuditEvent(db, audit)
-  } catch (error) {
-    // Auditing is deliberately best effort and runs only after the state
-    // transaction has committed, so it can neither poison nor undo the claim.
-    log.warn('transition.audit_failed', {
-      applicationId: audit.entity_id,
-      action: audit.action,
-      error: error?.message || String(error),
-    })
+async function writeTransitionAudits(db, result) {
+  const audits = result?.[TRANSITION_AUDITS] || []
+  for (const audit of audits) {
+    try {
+      await writeAuditEvent(db, audit)
+    } catch (error) {
+      // Auditing is deliberately best effort and runs only after the state
+      // transaction has committed, so it can neither poison nor undo the claim.
+      log.warn('transition.audit_failed', {
+        applicationId: audit.entity_id,
+        action: audit.action,
+        error: error?.message || String(error),
+      })
+    }
   }
 }
 
@@ -128,6 +132,7 @@ async function transitionInTransaction(db, applicationId, target, actor) {
   const currentIdx = VNEXT_STATE_ORDER.indexOf(current)
   const targetIdx = VNEXT_STATE_ORDER.indexOf(target)
   const blockers = []
+  const deferredAuditEvents = []
   let missingComputed = null
 
   if (targetIdx < currentIdx) {
@@ -141,7 +146,8 @@ async function transitionInTransaction(db, applicationId, target, actor) {
   // Every state owns side effects and/or proof. Skipping a state would allow a
   // later label to claim work that never happened (for example REVIEW_READY
   // without the DRAFTING tasks). Forward progress is therefore exactly one
-  // state at a time. Same-state requests are idempotent reads.
+  // state at a time. Same-state requests reassert the state's invariants and
+  // idempotent side effects without rewriting the lifecycle columns.
   if (targetIdx > currentIdx + 1) {
     const requiredNextState = VNEXT_STATE_ORDER[currentIdx + 1] || null
     blockers.push({
@@ -153,7 +159,7 @@ async function transitionInTransaction(db, applicationId, target, actor) {
   }
 
   if (blockers.length > 0) {
-    return resultWithAudit(blockersToResult(blockers), {
+    return resultWithAudits(blockersToResult(blockers), {
       actor,
       entity_type: 'vnext_application',
       entity_id: String(applicationId),
@@ -163,9 +169,7 @@ async function transitionInTransaction(db, applicationId, target, actor) {
     })
   }
 
-  if (targetIdx === currentIdx) {
-    return { ok: true, newState: current, application: app, idempotent: true }
-  }
+  const idempotent = targetIdx === currentIdx
 
   // --- Guard evaluation ---
   if (targetIdx >= VNEXT_STATE_ORDER.indexOf(VNEXT_STATES.SCHEMA_READY)) {
@@ -197,7 +201,14 @@ async function transitionInTransaction(db, applicationId, target, actor) {
   }
 
   if (targetIdx >= VNEXT_STATE_ORDER.indexOf(VNEXT_STATES.MAPPED)) {
-    const res = await computeMissingRequirements(db, { applicationId: String(applicationId), actor })
+    const res = await computeMissingRequirements(db, {
+      applicationId: String(applicationId),
+      actor,
+      deferAudit: true,
+    })
+    if (Array.isArray(res?.deferredAuditEvents)) {
+      deferredAuditEvents.push(...res.deferredAuditEvents)
+    }
     missingComputed = res?.ok ? res : null
     if (!res?.ok) {
       blockers.push({
@@ -223,84 +234,105 @@ async function transitionInTransaction(db, applicationId, target, actor) {
   }
 
   if (blockers.length > 0) {
-    return resultWithAudit(blockersToResult(blockers), {
+    return resultWithAudits(blockersToResult(blockers), [...deferredAuditEvents, {
       actor,
       entity_type: 'vnext_application',
       entity_id: String(applicationId),
       action: 'transition.blocked',
       before: { state: current, target },
       after: { blockers },
-    })
+    }])
   }
 
   let boundary_type = app.boundary_type || null
   let boundary_url = app.boundary_url || null
-  if (target === VNEXT_STATES.BOUNDARY_REACHED) {
+  if (!idempotent && target === VNEXT_STATES.BOUNDARY_REACHED) {
     const boundary = boundaryFromOpportunity(opportunity)
     boundary_type = boundary.type
     boundary_url = boundary.url
   }
 
-  const before = {
-    state: current,
-    stage: app.stage || null,
-    boundary_type: app.boundary_type || null,
-    boundary_url: app.boundary_url || null,
-  }
-  const after = { state: target, stage: target, boundary_type, boundary_url }
+  let before = null
+  let after = null
+  if (!idempotent) {
+    before = {
+      state: current,
+      stage: app.stage || null,
+      boundary_type: app.boundary_type || null,
+      boundary_url: app.boundary_url || null,
+    }
+    after = { state: target, stage: target, boundary_type, boundary_url }
 
-  // Claim the transition BEFORE applying target-state side effects. Compare the
-  // exact state/stage snapshot we read, not the normalized logical state. That
-  // preserves legacy lowercase rows while still detecting any concurrent write
-  // to either lifecycle column. If another worker wins the race, throwing here
-  // rolls this transaction back, including guard-side effects.
-  const nowExpr = sqlNowLiteral(db)
-  const claim = await db
-    .prepare(
-      `
-        UPDATE vnext_applications
-        SET state = ?,
-            stage = ?,
-            boundary_type = COALESCE(?, boundary_type),
-            boundary_url = COALESCE(?, boundary_url),
-            updated_at = ${nowExpr}
-        WHERE id = ?
-          AND ((state = ?) OR (state IS NULL AND ? IS NULL))
-          AND ((stage = ?) OR (stage IS NULL AND ? IS NULL))
-      `,
-    )
-    .run(
-      String(target),
-      String(target),
-      boundary_type,
-      boundary_url,
-      String(applicationId),
-      rawState,
-      rawState,
-      rawStage,
-      rawStage,
-    )
+    // Claim the transition BEFORE applying target-state side effects. Compare the
+    // exact state/stage snapshot we read, not the normalized logical state. That
+    // preserves legacy lowercase rows while still detecting any concurrent write
+    // to either lifecycle column. If another worker wins the race, throwing here
+    // rolls this transaction back, including guard-side effects.
+    const nowExpr = sqlNowLiteral(db)
+    const claim = await db
+      .prepare(
+        `
+          UPDATE vnext_applications
+          SET state = ?,
+              stage = ?,
+              boundary_type = COALESCE(?, boundary_type),
+              boundary_url = COALESCE(?, boundary_url),
+              updated_at = ${nowExpr}
+          WHERE id = ?
+            AND ((state = ?) OR (state IS NULL AND ? IS NULL))
+            AND ((stage = ?) OR (stage IS NULL AND ? IS NULL))
+        `,
+      )
+      .run(
+        String(target),
+        String(target),
+        boundary_type,
+        boundary_url,
+        String(applicationId),
+        rawState,
+        rawState,
+        rawStage,
+        rawStage,
+      )
 
-  if (changedCount(claim) !== 1) {
-    throw new ConcurrentTransitionError(applicationId, current, target)
+    if (changedCount(claim) !== 1) {
+      throw new ConcurrentTransitionError(applicationId, current, target)
+    }
   }
 
   if (targetIdx >= VNEXT_STATE_ORDER.indexOf(VNEXT_STATES.QUALIFIED)) {
-    await scoreApplication(db, { applicationId: String(applicationId), actor })
+    const score = await scoreApplication(db, {
+      applicationId: String(applicationId),
+      actor,
+      deferAudit: true,
+    })
+    if (Array.isArray(score?.deferredAuditEvents)) {
+      deferredAuditEvents.push(...score.deferredAuditEvents)
+    }
   }
 
   if (target === VNEXT_STATES.DRAFTING) {
     await ensureDraftingTasks(db, String(applicationId))
   }
 
-  return resultWithAudit({ ok: true, newState: target, application: { ...app, ...after } }, {
-    actor,
-    entity_type: 'vnext_application',
-    entity_id: String(applicationId),
-    action: 'transition.applied',
-    before,
-    after,
-  })
+  if (idempotent) {
+    return resultWithAudits(
+      { ok: true, newState: current, application: app, idempotent: true },
+      deferredAuditEvents,
+    )
+  }
+
+  return resultWithAudits(
+    { ok: true, newState: target, application: { ...app, ...after } },
+    [...deferredAuditEvents, {
+      actor,
+      entity_type: 'vnext_application',
+      entity_id: String(applicationId),
+      action: 'transition.applied',
+      before,
+      after,
+    }],
+  )
 }
 
 export async function attemptTransition(db, applicationId, targetStateRaw, actor = null) {
@@ -314,11 +346,11 @@ export async function attemptTransition(db, applicationId, targetStateRaw, actor
   try {
     if (typeof db?.withTransaction === 'function') {
       const result = await db.withTransaction(run)
-      await writeTransitionAudit(db, result)
+      await writeTransitionAudits(db, result)
       return result
     }
     const result = await run(db)
-    await writeTransitionAudit(db, result)
+    await writeTransitionAudits(db, result)
     return result
   } catch (error) {
     if (error instanceof ConcurrentTransitionError || error?.code === 'CONCURRENT_TRANSITION') {

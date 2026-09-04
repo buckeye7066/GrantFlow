@@ -5,7 +5,7 @@ import {
   requireAuthenticatedUser,
   ensureProfileAccess,
 } from '../utils/accessControl.js'
-import { isFeatureEnabled } from '../services/featureFlagService.js'
+import { isShouldersVnextEnabled } from '../services/featureFlagService.js'
 import { safeJsonParse, jsonForDb, sqlNowLiteral } from '../vnext/vnextUtils.js'
 import { VNEXT_STATES, normalizeVNextState } from '../vnext/constants.js'
 import { attemptTransition } from '../vnext/stateMachine.js'
@@ -21,18 +21,12 @@ const routeLogger = createLogger('route:vnextApplications')
 const router = express.Router()
 
 function vnextEnabled(req) {
-  const env = String(process.env.SHOULDERS_VNEXT || '').trim().toLowerCase() === 'true'
-  if (env) return true
-  try {
-    const ctx = req.ctx || {}
-    return isFeatureEnabled(req.db, 'shoulders.vnext', {
-      userId: ctx.userId ?? null,
-      profileId: ctx.activeProfileId ?? null,
-      isAdmin: Boolean(ctx.isAdmin),
-    })
-  } catch {
-    return false
-  }
+  const ctx = req.ctx || {}
+  return isShouldersVnextEnabled(req.db, {
+    userId: ctx.userId ?? req.user?.userId ?? null,
+    profileId: ctx.activeProfileId ?? null,
+    isAdmin: Boolean(ctx.isAdmin),
+  })
 }
 
 function errorResponse(res, status, code, message, details) {
@@ -324,4 +318,3 @@ router.get('/:id/finish-packet', standardRateLimiter, async (req, res) => {
 })
 
 export default router
-

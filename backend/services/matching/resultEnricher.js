@@ -82,18 +82,16 @@ function computeNextStepsSafely(rawProfile, profileSections, opportunity, decisi
       application,
     })
     if (!Array.isArray(steps)) return []
-    const bounded = steps.slice(0, 4)
-    // Profile/opportunity advice can fill the cap before the workflow CTA,
-    // which would make correctly joined application state invisible. Keep one
-    // application action in the bounded API contract whenever one exists.
-    if (!bounded.some((step) => step?.category === 'application')) {
-      const applicationStep = steps.find((step) => step?.category === 'application')
-      if (applicationStep) {
-        if (bounded.length === 4) bounded[bounded.length - 1] = applicationStep
-        else bounded.push(applicationStep)
-      }
+    // FundingResultCard renders the first recommendation. Once an application
+    // exists, its state-aware workflow handoff is therefore the primary step;
+    // merely retaining it somewhere below the four-step cap leaves it invisible.
+    const applicationStep = application
+      ? steps.find((step) => step?.category === 'application')
+      : null
+    if (applicationStep) {
+      return [applicationStep, ...steps.filter((step) => step !== applicationStep)].slice(0, 4)
     }
-    return bounded
+    return steps.slice(0, 4)
   } catch {
     return []
   }

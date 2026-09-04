@@ -479,7 +479,12 @@ router.get('/profile/:profileId/opportunities', async (req, res, next) => {
         return active && !hidden
       })
 
-      const vnextGuidance = await loadVnextGuidanceByOpportunity(req.db, profileId, osRows.map((row) => row.id))
+      const vnextGuidance = await loadVnextGuidanceByOpportunity(
+        req.db,
+        profileId,
+        osRows.map((row) => row.id),
+        { userId: req.ctx?.userId ?? req.user?.userId ?? null, isAdmin: Boolean(req.ctx?.isAdmin) },
+      )
       const rawMapped = osRows.map((o) => {
         const kind = String(o.opportunity_kind ?? '').toUpperCase()
         const isDirectory = kind === 'DIRECTORY' || kind === 'PAST_AWARD_INTEL'

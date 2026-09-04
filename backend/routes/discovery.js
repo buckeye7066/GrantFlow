@@ -137,7 +137,12 @@ async function loadProfileOsResults(req, profileId, {
     )
     .all(profileId)
 
-  const vnextGuidance = await loadVnextGuidanceByOpportunity(req.db, profileId, osRows.map((row) => row.id))
+  const vnextGuidance = await loadVnextGuidanceByOpportunity(
+    req.db,
+    profileId,
+    osRows.map((row) => row.id),
+    { userId: req.ctx?.userId ?? req.user?.userId ?? null, isAdmin: Boolean(req.ctx?.isAdmin) },
+  )
   let mapped = osRows.map((o) => {
     const kind = String(o.opportunity_kind ?? '').toUpperCase()
     const isDirectory = kind === 'DIRECTORY' || kind === 'PAST_AWARD_INTEL'
@@ -538,7 +543,12 @@ router.post('/comprehensiveMatch', async (req, res) => {
       }
 
       const osMin = Number.isFinite(Number(req.body?.min_score)) ? Number(req.body.min_score) : DEFAULT_MIN_SCORE
-      const vnextGuidance = await loadVnextGuidanceByOpportunity(req.db, matchProfileId, osRows.map((row) => row.id))
+      const vnextGuidance = await loadVnextGuidanceByOpportunity(
+        req.db,
+        matchProfileId,
+        osRows.map((row) => row.id),
+        { userId: req.ctx?.userId ?? req.user?.userId ?? null, isAdmin: Boolean(req.ctx?.isAdmin) },
+      )
       let mapped = osRows.map((o) => {
         let reasons = []
         try { reasons = JSON.parse(o.os_match_reasons || '[]') } catch { reasons = [] }

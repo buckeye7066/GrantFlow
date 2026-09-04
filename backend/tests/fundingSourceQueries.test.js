@@ -1,6 +1,6 @@
 import Database from 'better-sqlite3'
 import { verifiedFourTruthExplain } from './helpers/fourTruthFixture.js'
-import { describe, expect, it } from 'vitest'
+import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import fs from 'node:fs'
 import path from 'node:path'
 import {
@@ -28,6 +28,13 @@ const POSTGRES_FORWARD_MIGRATION = fs.readFileSync(
   path.resolve('backend/db/postgres/migrations/0166_profile_opportunity_match_confidence.sql'),
   'utf8',
 )
+
+const originalShouldersVnext = process.env.SHOULDERS_VNEXT
+beforeAll(() => { process.env.SHOULDERS_VNEXT = 'true' })
+afterAll(() => {
+  if (originalShouldersVnext === undefined) delete process.env.SHOULDERS_VNEXT
+  else process.env.SHOULDERS_VNEXT = originalShouldersVnext
+})
 
 function applySqliteMarkerMigration(db, sql) {
   const statements = sql

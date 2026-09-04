@@ -1,3 +1,5 @@
+import { isShouldersVnextEnabled } from '../featureFlagService.js'
+
 function isMissingVnextApplicationsTable(error) {
   const code = String(error?.code || '')
   const message = String(error?.message || error || '')
@@ -11,11 +13,21 @@ function isMissingVnextApplicationsTable(error) {
 export const VNEXT_GUIDANCE_QUERY_CHUNK_SIZE = 500
 
 /** Batch-load profile-scoped workflow state without turning guidance into N+1 queries. */
-export async function loadVnextGuidanceByOpportunity(db, profileId, opportunityIds = []) {
+export async function loadVnextGuidanceByOpportunity(
+  db,
+  profileId,
+  opportunityIds = [],
+  { userId = null, isAdmin = false } = {},
+) {
   const normalizedProfileId = String(profileId ?? '').trim()
   const sourceIds = Array.isArray(opportunityIds) ? opportunityIds : []
   const ids = [...new Set(sourceIds.map((id) => String(id ?? '').trim()).filter(Boolean))]
   if (!db?.prepare || !normalizedProfileId || ids.length === 0) return new Map()
+  if (!isShouldersVnextEnabled(db, {
+    userId,
+    profileId: normalizedProfileId,
+    isAdmin,
+  })) return new Map()
   const applications = new Map()
   try {
     for (let offset = 0; offset < ids.length; offset += VNEXT_GUIDANCE_QUERY_CHUNK_SIZE) {
@@ -41,4 +53,3 @@ export async function loadVnextGuidanceByOpportunity(db, profileId, opportunityI
     throw error
   }
 }
-

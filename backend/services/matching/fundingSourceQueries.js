@@ -143,11 +143,16 @@ export function isMissingPipelineDismissalsTable(error) {
   )
 }
 
-export async function readFundingSourceRows(db, profileId) {
+export async function readFundingSourceRows(db, profileId, vnextContext = {}) {
   try {
     const rows = await db.prepare(FUNDING_SOURCES_BY_PROFILE_SQL).all(String(profileId))
     const normalizedRows = Array.isArray(rows) ? rows : []
-    const applications = await loadVnextGuidanceByOpportunity(db, profileId, normalizedRows.map((row) => row.id))
+    const applications = await loadVnextGuidanceByOpportunity(
+      db,
+      profileId,
+      normalizedRows.map((row) => row.id),
+      vnextContext,
+    )
     return {
       rows: normalizedRows.map((row) => ({ ...row, ...applications.get(String(row.id)) })),
       dismissal_filter: 'enforced',
@@ -158,7 +163,12 @@ export async function readFundingSourceRows(db, profileId) {
       .prepare(FUNDING_SOURCES_BY_PROFILE_WITHOUT_DISMISSALS_SQL)
       .all(String(profileId))
     const normalizedRows = Array.isArray(rows) ? rows : []
-    const applications = await loadVnextGuidanceByOpportunity(db, profileId, normalizedRows.map((row) => row.id))
+    const applications = await loadVnextGuidanceByOpportunity(
+      db,
+      profileId,
+      normalizedRows.map((row) => row.id),
+      vnextContext,
+    )
     return {
       rows: normalizedRows.map((row) => ({ ...row, ...applications.get(String(row.id)) })),
       dismissal_filter: 'table_absent',

@@ -49,6 +49,13 @@ const routeLogger = createLogger('route:realCrawlers')
 
 const router = express.Router()
 
+function vnextContextForRequest(req) {
+  return {
+    userId: req.ctx?.userId ?? req.user?.userId ?? null,
+    isAdmin: Boolean(req.ctx?.isAdmin),
+  }
+}
+
 async function runProfileCrawlerOs(db, profileId, options = {}) {
   const floor = Number.isFinite(Number(options?.minScore)) ? Number(options.minScore) : undefined
   const maxResults = Number(options?.maxResults) || 200
@@ -261,7 +268,12 @@ function safeJsonParse(val, fallback) {
  * omits. Response paths must not infer ACCEPT/REVIEW from a score or run a
  * second eligibility trial after Crawler OS has stored the canonical verdict.
  */
-export async function attachStoredMatchAuthority(db, profileId, results = []) {
+export async function attachStoredMatchAuthority(
+  db,
+  profileId,
+  results = [],
+  vnextContext = {},
+) {
   if (!db?.prepare || !profileId || !Array.isArray(results) || results.length === 0) return results
 
   const opportunityIds = [...new Set(results.map((result) => result?.id).filter(Boolean).map(String))]
@@ -285,7 +297,12 @@ export async function attachStoredMatchAuthority(db, profileId, results = []) {
        AND LOWER(COALESCE(m.match_decision, '')) IN ('accept', 'review')
   `).all(String(profileId), ...opportunityIds)
 
-  const vnextGuidance = await loadVnextGuidanceByOpportunity(db, profileId, opportunityIds)
+  const vnextGuidance = await loadVnextGuidanceByOpportunity(
+    db,
+    profileId,
+    opportunityIds,
+    vnextContext,
+  )
   const byOpportunityId = new Map((rows || []).map((row) => [String(row.opportunity_id), row]))
   return results.map((result) => {
     const opportunityId = String(result?.id ?? '')
@@ -587,6 +604,7 @@ router.post('/run', ensureAuth, async (req, res) => {
       db,
       String(profile_id),
       compatibilityResults,
+      vnextContextForRequest(req),
     )
     const persistedResults = authoritativeResults.map(mapResultToFrontendShape)
     let profileContext = null
@@ -713,6 +731,7 @@ router.post('/run-multiple', ensureAuth, async (req, res) => {
           db,
           profile_id,
           result.results,
+          vnextContextForRequest(req),
         )
         const mapped = authoritativeResults.map(mapResultToFrontendShape)
         const selection = selectCanonicalDisplayOpportunities(profileContext, mapped, {
@@ -1319,7 +1338,12 @@ router.post('/run-smart', ensureAuth, standardRateLimiter, async (req, res) => {
       // Return whatever the crawler-os has already persisted so the user gets
       // results instead of a 504; the abandoned crawl finishes + persists the rest.
       const partial = await loadCrawlerOsProfileResults(db, profile_id, 200).catch(() => [])
-      const authoritativePartial = await attachStoredMatchAuthority(db, profile_id, partial)
+      const authoritativePartial = await attachStoredMatchAuthority(
+        db,
+        profile_id,
+        partial,
+        vnextContextForRequest(req),
+      )
       const partialMapped = authoritativePartial.map(mapResultToFrontendShape)
       const partialPolicyRows = pdIntent.active
         ? applyProfessionalDevelopmentQueryPolicy(partialMapped, pdIntent)
@@ -1350,6 +1374,7 @@ router.post('/run-smart', ensureAuth, standardRateLimiter, async (req, res) => {
       db,
       profile_id,
       result?.results,
+      vnextContextForRequest(req),
     )
     const mapped = Array.isArray(authoritativeResults)
       ? authoritativeResults.map(mapResultToFrontendShape)

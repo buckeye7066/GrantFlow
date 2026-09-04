@@ -160,7 +160,10 @@ router.get('/profiles/:id/funding-sources', async (req, res) => {
 
     // Every GET is SELECT-only presentation. Match write-back belongs to the
     // versioned background reconciliation/sweep path, never an ordinary read.
-    const loadedRows = await readFundingSourceRows(req.db, profileId)
+    const loadedRows = await readFundingSourceRows(req.db, profileId, {
+      userId: req.ctx?.userId ?? req.user?.userId ?? null,
+      isAdmin: Boolean(req.ctx?.isAdmin),
+    })
     const rows = loadedRows.rows
 
     const mapped = rows.map((row) => {

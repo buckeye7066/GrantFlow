@@ -143,7 +143,10 @@ async function listDocumentStructuredForProfile(db, profileId) {
   }
 }
 
-export async function computeMissingRequirements(db, { applicationId, actor = null } = {}) {
+export async function computeMissingRequirements(
+  db,
+  { applicationId, actor = null, deferAudit = false } = {},
+) {
   // Scoped through vnext_applications so the opportunity must be linked to
   // this application (no cross-profile bleed via tampered ids).
   const scoped = await getScopedOpportunityForVnextApplication(db, applicationId)
@@ -246,17 +249,17 @@ export async function computeMissingRequirements(db, { applicationId, actor = nu
     if (changed > 0) tasksCreated += changed
   }
 
-  await writeAuditEvent(db, {
+  const auditEvents = [{
     actor,
     entity_type: 'vnext_application',
     entity_id: String(applicationId),
     action: 'missingness.recomputed',
     before,
     after: payload,
-  })
+  }]
 
   if (tasksCreated > 0) {
-    await writeAuditEvent(db, {
+    auditEvents.push({
       actor,
       entity_type: 'vnext_application',
       entity_id: String(applicationId),
@@ -270,6 +273,13 @@ export async function computeMissingRequirements(db, { applicationId, actor = nu
     })
   }
 
-  return { ok: true, missing: payload }
-}
+  if (!deferAudit) {
+    for (const auditEvent of auditEvents) await writeAuditEvent(db, auditEvent)
+  }
 
+  return {
+    ok: true,
+    missing: payload,
+    ...(deferAudit ? { deferredAuditEvents: auditEvents } : {}),
+  }
+}

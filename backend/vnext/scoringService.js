@@ -11,9 +11,6 @@ function parseArrayField(value) {
   return trimmed.split(',').map(s => s.trim()).filter(Boolean)
 }
 import { writeAuditEvent } from './auditEventsService.js'
-import { createLogger } from '../utils/logger.js'
-
-const log = createLogger('vnext.scoring')
 
 function pickAmountExpected(opp) {
   const min = Number(opp?.amount_min ?? 0)
@@ -90,7 +87,16 @@ function pWin({ fit, effort_hours, compliance_hours, time_risk, amount_expected 
   return clamp01(raw)
 }
 
-export async function scoreApplication(db, { applicationId, actor = null, hourly_value = 50, nowMs = null } = {}) {
+export async function scoreApplication(
+  db,
+  {
+    applicationId,
+    actor = null,
+    hourly_value = 50,
+    nowMs = null,
+    deferAudit = false,
+  } = {},
+) {
   // Scoped lookup through vnext_applications.opportunity_id so a tampered or
   // stale opportunity id can never be resolved to another profile's data.
   const scoped = await getScopedOpportunityForVnextApplication(db, applicationId)
@@ -146,24 +152,22 @@ export async function scoreApplication(db, { applicationId, actor = null, hourly
     )
     .run(jsonForDb(db, breakdown), expected_value, risk_score, String(applicationId))
 
-  try {
-    await writeAuditEvent(db, {
-      actor,
-      entity_type: 'vnext_application',
-      entity_id: String(applicationId),
-      action: 'scoring.recomputed',
-      before,
-      after: breakdown,
-    })
-  } catch (error) {
-    // Auditing is best-effort and must never roll back a claimed transition.
-    log.warn('scoring.audit_failed', {
-      applicationId: String(applicationId),
-      action: 'scoring.recomputed',
-      error: error?.message || String(error),
-    })
+  const auditEvent = {
+    actor,
+    entity_type: 'vnext_application',
+    entity_id: String(applicationId),
+    action: 'scoring.recomputed',
+    before,
+    after: breakdown,
   }
 
-  return { ok: true, expected_value, risk_score, breakdown }
-}
+  if (!deferAudit) await writeAuditEvent(db, auditEvent)
 
+  return {
+    ok: true,
+    expected_value,
+    risk_score,
+    breakdown,
+    ...(deferAudit ? { deferredAuditEvents: [auditEvent] } : {}),
+  }
+}

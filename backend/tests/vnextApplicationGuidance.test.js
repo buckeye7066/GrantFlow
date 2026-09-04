@@ -1,18 +1,39 @@
 import Database from 'better-sqlite3'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { initializeFeatureFlags } from '../services/featureFlagService.js'
 import {
   loadVnextGuidanceByOpportunity,
   VNEXT_GUIDANCE_QUERY_CHUNK_SIZE,
 } from '../services/matching/vnextApplicationGuidance.js'
 
 let sqlite = null
+const originalShouldersVnext = process.env.SHOULDERS_VNEXT
+
+beforeEach(() => {
+  process.env.SHOULDERS_VNEXT = 'true'
+})
 
 afterEach(() => {
   sqlite?.close()
   sqlite = null
+  if (originalShouldersVnext === undefined) delete process.env.SHOULDERS_VNEXT
+  else process.env.SHOULDERS_VNEXT = originalShouldersVnext
 })
 
 describe('profile-scoped vNext application guidance loading', () => {
+  it('does not query or publish persisted guidance while the vNext gate is disabled', async () => {
+    delete process.env.SHOULDERS_VNEXT
+    const db = { dialect: 'postgres', prepare: vi.fn() }
+    initializeFeatureFlags(db)
+
+    await expect(
+      loadVnextGuidanceByOpportunity(db, 'profile-1', ['opp-1'], {
+        userId: 'user-1',
+      }),
+    ).resolves.toEqual(new Map())
+    expect(db.prepare).not.toHaveBeenCalled()
+  })
+
   it('returns only the requested profile application for a shared opportunity', async () => {
     sqlite = new Database(':memory:')
     sqlite.exec(`
@@ -90,4 +111,3 @@ describe('profile-scoped vNext application guidance loading', () => {
     ).rejects.toThrow('database connection lost')
   })
 })
-

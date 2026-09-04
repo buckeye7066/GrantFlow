@@ -23,6 +23,8 @@ vi.mock('../vnext/schemaService.js', () => ({
 
 import { getScopedOpportunityForVnextApplication } from '../utils/scopedOpportunity.js'
 import { writeAuditEvent } from '../vnext/auditEventsService.js'
+import { computeMissingRequirements } from '../vnext/missingnessService.js'
+import { scoreApplication } from '../vnext/scoringService.js'
 import { attemptTransition } from '../vnext/stateMachine.js'
 import { VNEXT_STATES } from '../vnext/constants.js'
 
@@ -59,6 +61,11 @@ function makeDb({ changes = 1 } = {}) {
 beforeEach(() => {
   vi.clearAllMocks()
   getScopedOpportunityForVnextApplication.mockResolvedValue(scopedFixture())
+  computeMissingRequirements.mockResolvedValue({
+    ok: true,
+    missing: { missing_fields: [], missing_docs: [] },
+  })
+  scoreApplication.mockResolvedValue({ ok: true })
 })
 
 describe('VNext transition integrity', () => {
@@ -155,6 +162,54 @@ describe('VNext transition integrity', () => {
     expect(db.prepare).not.toHaveBeenCalled()
   })
 
+  it('revalidates same-state proof and blocks when resolved requirements become missing again', async () => {
+    getScopedOpportunityForVnextApplication.mockResolvedValue(
+      scopedFixture(VNEXT_STATES.MISSING_RESOLVED),
+    )
+    computeMissingRequirements.mockResolvedValueOnce({
+      ok: true,
+      missing: {
+        missing_fields: [{ key: 'profile.email' }],
+        missing_docs: [],
+      },
+      deferredAuditEvents: [{ action: 'missingness.recomputed' }],
+    })
+    const { db } = makeDb()
+
+    const result = await attemptTransition(
+      db,
+      'app-1',
+      VNEXT_STATES.MISSING_RESOLVED,
+    )
+
+    expect(result.ok).toBe(false)
+    expect(result.blockers).toEqual([
+      expect.objectContaining({ code: 'MISSING_REQUIREMENTS' }),
+    ])
+    expect(computeMissingRequirements).toHaveBeenCalledWith(db, expect.objectContaining({
+      applicationId: 'app-1',
+      deferAudit: true,
+    }))
+    expect(scoreApplication).not.toHaveBeenCalled()
+    expect(db.prepare).not.toHaveBeenCalled()
+  })
+
+  it('reasserts same-state drafting tasks without rewriting lifecycle state', async () => {
+    getScopedOpportunityForVnextApplication.mockResolvedValue(scopedFixture(VNEXT_STATES.DRAFTING))
+    const { db } = makeDb()
+
+    const result = await attemptTransition(db, 'app-1', VNEXT_STATES.DRAFTING)
+
+    expect(result).toMatchObject({
+      ok: true,
+      newState: VNEXT_STATES.DRAFTING,
+      idempotent: true,
+    })
+    const preparedSql = db.prepare.mock.calls.map(([sql]) => sql)
+    expect(preparedSql.filter((sql) => sql.includes('vnext_application_tasks'))).toHaveLength(3)
+    expect(preparedSql.some((sql) => sql.includes('UPDATE vnext_applications'))).toBe(false)
+  })
+
   it('commits an applied transition before attempting best-effort audit logging', async () => {
     const events = []
     const { db } = makeDb()
@@ -174,6 +229,46 @@ describe('VNext transition integrity', () => {
     expect(events).toEqual(['committed', 'audited'])
     expect(writeAuditEvent).toHaveBeenCalledWith(db, expect.objectContaining({ action: 'transition.applied' }))
   })
-})
 
+  it('defers missingness and scoring audits until the state transaction commits', async () => {
+    getScopedOpportunityForVnextApplication.mockResolvedValue(
+      scopedFixture(VNEXT_STATES.SCHEMA_READY),
+    )
+    computeMissingRequirements.mockResolvedValueOnce({
+      ok: true,
+      missing: { missing_fields: [], missing_docs: [] },
+      deferredAuditEvents: [{ action: 'missingness.recomputed', entity_id: 'app-1' }],
+    })
+    scoreApplication.mockResolvedValueOnce({
+      ok: true,
+      deferredAuditEvents: [{ action: 'scoring.recomputed', entity_id: 'app-1' }],
+    })
+    const events = []
+    const { db } = makeDb()
+    db.withTransaction = vi.fn(async (fn) => {
+      const result = await fn(db)
+      events.push('committed')
+      return result
+    })
+    writeAuditEvent.mockImplementation(async (_db, event) => {
+      events.push(`audited:${event.action}`)
+    })
+
+    const result = await attemptTransition(db, 'app-1', VNEXT_STATES.MAPPED)
+
+    expect(result).toMatchObject({ ok: true, newState: VNEXT_STATES.MAPPED })
+    expect(events).toEqual([
+      'committed',
+      'audited:missingness.recomputed',
+      'audited:scoring.recomputed',
+      'audited:transition.applied',
+    ])
+    expect(computeMissingRequirements).toHaveBeenCalledWith(db, expect.objectContaining({
+      deferAudit: true,
+    }))
+    expect(scoreApplication).toHaveBeenCalledWith(db, expect.objectContaining({
+      deferAudit: true,
+    }))
+  })
+})
 
