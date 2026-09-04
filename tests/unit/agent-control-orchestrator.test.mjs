@@ -47,6 +47,15 @@ import { _resetNotificationsSchemaCache } from '../../backend/services/agentCont
 
 const ADMIN_EMAIL = 'admin@grantflow.local'
 const NON_ADMIN = 'someone@example.com'
+const TERMINAL_RUN_STATES = new Set([
+  'completed',
+  'completed_noop',
+  'failed',
+  'cancelled',
+  'stopped',
+  'partial_stop',
+  'stop_failed',
+])
 
 class MockAdapter extends BaseAgentAdapter {
   constructor(name, behaviour = {}) {
@@ -139,6 +148,17 @@ function installMockAdapters(behaviours = {}) {
   }
   for (const [name, adapter] of Object.entries(mocks)) setAdapter(name, adapter)
   return mocks
+}
+
+async function waitForRunTerminal(db, runId, { timeoutMs = 2_000, pollMs = 10 } = {}) {
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline) {
+    const run = await getRun(db, runId)
+    if (run && TERMINAL_RUN_STATES.has(run.status)) return run
+    await new Promise((resolve) => setTimeout(resolve, pollMs))
+  }
+  const current = await getRun(db, runId)
+  throw new Error(`agent-control run ${runId} did not reach a terminal state within ${timeoutMs}ms (status=${current?.status || 'missing'})`)
 }
 
 beforeEach(() => {
@@ -677,7 +697,7 @@ describe('Agent Control Center — executeRun is idempotent on re-entry', () => 
       executeRun({ db, runId: run.id }),
       executeRun({ db, runId: run.id }),
     ])
-    await new Promise((r) => setTimeout(r, 160))
+    await waitForRunTerminal(db, run.id)
     // sam_only deliberately runs preflight, main, and postflight. Re-entry must
     // not add a fourth invocation of any phase.
     assert.equal(mocks.sam.startCallCount, 3)
