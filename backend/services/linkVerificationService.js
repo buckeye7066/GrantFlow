@@ -89,7 +89,7 @@ export function rowLifecycleIsMutable(row = {}) {
 
 function isRetryableLinkQuarantine(row = {}) {
   const status = String(row.link_status || 'unverified').toLowerCase()
-  if (status === 'broken' || status === 'unverified') return true
+  if (status === 'broken' || status === 'unverified' || status === 'suspicious') return true
   return status === 'skipped' && String(row.verification_error || '').startsWith(SCHEDULED_RETRY_MARKER)
 }
 
