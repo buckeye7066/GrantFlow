@@ -277,14 +277,30 @@ export function loadEnv({ mode = process.env.NODE_ENV } = {}) {
   }
 
   const corsOrigins = env.CORS_ORIGIN ? splitCsv(env.CORS_ORIGIN) : []
-  if (isProd && corsOrigins.length === 0) {
-    return {
-      ok: false,
-      issues: [
-        'CORS_ORIGIN is required in deployed runtimes. Configure one or more explicit HTTPS origins (comma-separated).',
-      ],
-      env: null,
-      warnings: [],
+  // In CI smoke/probe-style production boots, allow a safe loopback-only default so /healthz can pass
+  // without requiring explicit operator CORS configuration. This applies ONLY when the container
+  // explicitly opts into the mission-gate bypass or smoke mode.
+  const allowLoopbackCorsInProd =
+    isProd &&
+    (
+      String(env.SMOKE_MODE || '').trim().toLowerCase() === 'true' ||
+      String(env.GRANTFLOW_SKIP_MISSION_GATE || '').trim().toLowerCase() === 'true'
+    )
+  let effectiveCorsOrigins = corsOrigins
+  if (isProd && effectiveCorsOrigins.length === 0) {
+    if (allowLoopbackCorsInProd) {
+      const loopbackOrigin = `http://127.0.0.1:${env.PORT || 8080}`
+      effectiveCorsOrigins = [loopbackOrigin]
+      warnings.push(`CORS_ORIGIN not set; using loopback-only origin ${loopbackOrigin} for smoke/probe boot`)
+    } else {
+      return {
+        ok: false,
+        issues: [
+          'CORS_ORIGIN is required in deployed runtimes. Configure one or more explicit HTTPS origins (comma-separated).',
+        ],
+        env: null,
+        warnings: [],
+      }
     }
   }
   if (isProd && containsCorsWildcard(corsOrigins)) {
@@ -313,7 +329,7 @@ export function loadEnv({ mode = process.env.NODE_ENV } = {}) {
       HAMILTON_ADMIN_EMAIL: normalizeMaybeSecret(env.HAMILTON_ADMIN_EMAIL)?.toLowerCase() || null,
       isProd,
       dbProvider: provider,
-      corsOrigins,
+      corsOrigins: effectiveCorsOrigins,
       appBase,
     },
   }
