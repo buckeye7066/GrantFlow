@@ -47,7 +47,15 @@ export function buildAutomationPosture(env = process.env) {
     profile_authorization_required: true,
     external_submission_possible: true,
     browser_automation: isBrowserAutomationEnabled(),
-    run_on_schedule: String(env.HAMILTON_RUN_ON_SCHEDULE || 'false').toLowerCase() === 'true',
+    // Must mirror hamiltonScheduler.shouldRunOnSchedule() exactly. That gate
+    // defaults ON as of 2026-09-04, so the old `|| 'false'` reading would now
+    // report "not scheduled" on an unset environment while the poller was in
+    // fact armed — a posture record that lies is worse than none.
+    run_on_schedule: (() => {
+      const v = String(env.HAMILTON_RUN_ON_SCHEDULE ?? 'true').trim().toLowerCase()
+      if (v === '' || v === 'undefined' || v === 'null') return true
+      return v !== 'false' && v !== '0' && v !== 'off' && v !== 'no'
+    })(),
     // Unset means the approval gate is ON (tailoredNarrative.js), so absence is
     // the SAFE reading here — do not "simplify" this to a plain truthy check.
     tailored_approval_gate: String(env.HAMILTON_TAILORED_APPROVAL_GATE ?? 'true').toLowerCase() !== 'false',

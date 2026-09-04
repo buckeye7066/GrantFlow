@@ -48,13 +48,36 @@ function withEnv(overrides, fn) {
   }
 }
 
-test('gate is OFF by default (neither env set)', () => {
+// DEFAULT INTENTIONALLY INVERTED 2026-09-04. This test previously asserted the
+// gate was OFF when neither env var was set, and that was the whole defect: the
+// variable was unset in both .env.example files and in production, so a profile
+// authorized for autonomous end-to-end submission was never picked up by any
+// timer. Nothing re-invoked Hamilton unattended, which read as "the code blocks
+// him." Arming the poller does not weaken any consent or evidence gate — the
+// per-grant authorization, allow_auto_submit, require_human_review veto,
+// missing_info completeness gate and submission lease all still run per task.
+test('gate is ON by default (neither env set) so authorized autonomous work actually runs', () => {
   withEnv(
     { HAMILTON_RUN_ON_SCHEDULE: undefined, HAMILTON_ENABLE_BROWSER_AUTOMATION: undefined },
     () => {
-      assert.equal(shouldRunOnSchedule(), false)
+      assert.equal(shouldRunOnSchedule(), true)
     },
   )
+})
+
+test('an explicit false disarms the poller, and empty/undefined/null fall back to the default', () => {
+  for (const off of ['false', '0', 'off', 'no', 'FALSE', 'Off']) {
+    withEnv(
+      { HAMILTON_RUN_ON_SCHEDULE: off, HAMILTON_ENABLE_BROWSER_AUTOMATION: 'true' },
+      () => assert.equal(shouldRunOnSchedule(), false, `expected ${off} to disarm`),
+    )
+  }
+  for (const blank of ['', 'undefined', 'null']) {
+    withEnv(
+      { HAMILTON_RUN_ON_SCHEDULE: blank, HAMILTON_ENABLE_BROWSER_AUTOMATION: 'true' },
+      () => assert.equal(shouldRunOnSchedule(), true, `expected "${blank}" to use the ON default`),
+    )
+  }
 })
 
 test('gate requires BOTH HAMILTON_RUN_ON_SCHEDULE and browser automation', () => {
@@ -72,12 +95,31 @@ test('gate requires BOTH HAMILTON_RUN_ON_SCHEDULE and browser automation', () =>
   )
 })
 
-test('startHamiltonScheduler refuses to arm when disabled', () => {
-  const r = withEnv(
-    { HAMILTON_RUN_ON_SCHEDULE: undefined, HAMILTON_ENABLE_BROWSER_AUTOMATION: undefined },
+// Disabling now requires an EXPLICIT false on one of the two gates; an unset
+// environment arms the poller (see the default-ON test above).
+test('startHamiltonScheduler refuses to arm when explicitly disabled', () => {
+  const viaOwnFlag = withEnv(
+    { HAMILTON_RUN_ON_SCHEDULE: 'false', HAMILTON_ENABLE_BROWSER_AUTOMATION: 'true' },
     () => startHamiltonScheduler({ db: makeDb() }),
   )
-  assert.equal(r.started, false)
+  assert.equal(viaOwnFlag.started, false)
+  assert.equal(viaOwnFlag.reason, 'HAMILTON_RUN_ON_SCHEDULE=false')
+  stopHamiltonScheduler()
+
+  const viaBrowserFlag = withEnv(
+    { HAMILTON_RUN_ON_SCHEDULE: 'true', HAMILTON_ENABLE_BROWSER_AUTOMATION: 'false' },
+    () => startHamiltonScheduler({ db: makeDb() }),
+  )
+  assert.equal(viaBrowserFlag.started, false)
+  stopHamiltonScheduler()
+})
+
+test('startHamiltonScheduler arms on an unset environment', () => {
+  const r = withEnv(
+    { HAMILTON_RUN_ON_SCHEDULE: undefined, HAMILTON_ENABLE_BROWSER_AUTOMATION: undefined },
+    () => startHamiltonScheduler({ db: makeDb(), logger: { info() {}, warn() {} } }),
+  )
+  assert.equal(r.started, true)
   stopHamiltonScheduler()
 })
 
@@ -106,14 +148,25 @@ test('resolveBatchSize defaults to 5 and clamps to 1..25', () => {
   withEnv({ HAMILTON_SCHEDULE_BATCH_SIZE: '3' }, () => assert.equal(resolveBatchSize(), 3))
 })
 
-test('tick skips when the gate is off', async () => {
+// An UNSET environment no longer disables the tick (default flipped ON
+// 2026-09-04); disabling now takes an explicit false.
+test('tick skips when the gate is explicitly turned off', async () => {
+  _resetState()
+  const result = await withEnv(
+    { HAMILTON_RUN_ON_SCHEDULE: 'false', HAMILTON_ENABLE_BROWSER_AUTOMATION: 'true' },
+    () => tick({ db: makeDb(), logger: { info() {}, warn() {} } }),
+  )
+  assert.equal(result.skipped, true)
+  assert.equal(result.reason, 'disabled')
+})
+
+test('tick does NOT skip on an unset environment', async () => {
   _resetState()
   const result = await withEnv(
     { HAMILTON_RUN_ON_SCHEDULE: undefined, HAMILTON_ENABLE_BROWSER_AUTOMATION: undefined },
     () => tick({ db: makeDb(), logger: { info() {}, warn() {} } }),
   )
-  assert.equal(result.skipped, true)
-  assert.equal(result.reason, 'disabled')
+  assert.notEqual(result.reason, 'disabled')
 })
 
 test('tick re-picks a DUE waiting_for_window task and skips a not-yet-due one', async () => {

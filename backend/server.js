@@ -3568,8 +3568,12 @@ if (process.env.NODE_ENV !== 'test') {
       }
     })()
 
-    // Hamilton — Application Autopilot scheduler. OFF by default; only arms when
-    // HAMILTON_RUN_ON_SCHEDULE=true AND HAMILTON_ENABLE_BROWSER_AUTOMATION=true.
+    // Hamilton — Application Autopilot scheduler. ON by default (changed
+    // 2026-09-04); disarm with HAMILTON_RUN_ON_SCHEDULE=false or
+    // HAMILTON_ENABLE_BROWSER_AUTOMATION=false. Arming the poller does not
+    // bypass any consent or evidence gate — per-grant authorization,
+    // allow_auto_submit, require_human_review, the missing_info completeness
+    // gate and the submission lease all still apply to every task it picks up.
     // This is the timer that re-picks autonomous portal runs deferred to
     // status='waiting_for_window' once their scheduled window opens: it drives
     // the existing HamiltonAgentAdapter (which SELECTs due waiting_for_window /
