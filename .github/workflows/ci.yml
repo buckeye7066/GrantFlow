@@ -284,6 +284,7 @@ jobs:
             --volume "$RUNNER_TEMP/grantflow-uploads:/data/uploads" \
             --env NODE_ENV=production \
             --env PORT=8080 \
+            --env CORS_ORIGIN=http://127.0.0.1:8080 \
             --env DATABASE_URL="$DATABASE_URL" \
             --env DB_PROVIDER=postgres \
             --env DB_DIALECT=postgres \
