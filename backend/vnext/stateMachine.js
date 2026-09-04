@@ -86,6 +86,12 @@ function changedCount(result) {
   return Number(result?.changes ?? result?.rowCount ?? 0) || 0
 }
 
+function nullSafeEquals(db, column) {
+  return db?.dialect === 'postgres'
+    ? `${column} IS NOT DISTINCT FROM ?`
+    : `${column} IS ?`
+}
+
 async function ensureDraftingTasks(db, applicationId) {
   const tasks = [
     { key: 'draft:narrative', type: VNEXT_TASK_TYPES.WRITE_NARRATIVE, title: 'Write narrative draft' },
@@ -292,8 +298,8 @@ async function transitionInTransaction(db, applicationId, target, actor) {
               boundary_url = COALESCE(?, boundary_url),
               updated_at = ${nowExpr}
           WHERE id = ?
-            AND ((state = ?) OR (state IS NULL AND ? IS NULL))
-            AND ((stage = ?) OR (stage IS NULL AND ? IS NULL))
+            AND ${nullSafeEquals(db, 'state')}
+            AND ${nullSafeEquals(db, 'stage')}
         `,
       )
       .run(
@@ -303,8 +309,6 @@ async function transitionInTransaction(db, applicationId, target, actor) {
         boundary_url,
         String(applicationId),
         rawState,
-        rawState,
-        rawStage,
         rawStage,
       )
 
@@ -356,10 +360,10 @@ async function transitionInTransaction(db, applicationId, target, actor) {
                 boundary_url = ?,
                 updated_at = ${nowExpr}
             WHERE id = ?
-              AND ((state = ?) OR (state IS NULL AND ? IS NULL))
-              AND ((stage = ?) OR (stage IS NULL AND ? IS NULL))
-              AND ((boundary_type = ?) OR (boundary_type IS NULL AND ? IS NULL))
-              AND ((boundary_url = ?) OR (boundary_url IS NULL AND ? IS NULL))
+              AND ${nullSafeEquals(db, 'state')}
+              AND ${nullSafeEquals(db, 'stage')}
+              AND ${nullSafeEquals(db, 'boundary_type')}
+              AND ${nullSafeEquals(db, 'boundary_url')}
           `,
         )
         .run(
@@ -367,12 +371,8 @@ async function transitionInTransaction(db, applicationId, target, actor) {
           boundary_url,
           String(applicationId),
           rawState,
-          rawState,
-          rawStage,
           rawStage,
           app.boundary_type ?? null,
-          app.boundary_type ?? null,
-          app.boundary_url ?? null,
           app.boundary_url ?? null,
         )
 

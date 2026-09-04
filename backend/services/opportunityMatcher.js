@@ -1190,7 +1190,10 @@ function hasCanonicalOpportunityIdentity(left, right) {
     leftSource && rightSource && leftSource === rightSource
   ) return true
 
-  const fingerprintFields = ['fingerprint', 'opportunity_fingerprint']
+  // `fingerprint` is the funder/url/deadline-aware canonical grant fingerprint.
+  // `opportunity_fingerprint` is a scoring-input hash and intentionally cannot
+  // prove identity across funders.
+  const fingerprintFields = ['fingerprint']
   for (const field of fingerprintFields) {
     const leftFingerprint = normalizedIdentity(left?.[field])
     const rightFingerprint = normalizedIdentity(right?.[field])
@@ -1227,12 +1230,21 @@ function selectPreferredDuplicate(existing, candidate) {
   const candidateHasApplication = Boolean(candidate?.vnext_application_id)
   const sameCanonicalOpportunity = hasCanonicalOpportunityIdentity(existing, candidate)
 
+  if (!sameCanonicalOpportunity && existingHasApplication && candidateHasApplication) {
+    return {
+      shouldDedupe: false,
+      candidatePreferred: false,
+      winner: existing,
+    }
+  }
+
   // If the display deduper has only a loose match, keep the application-bearing
   // representative. That preserves the user's workflow without relabeling it as
   // a different opportunity.
   if (!sameCanonicalOpportunity && existingHasApplication !== candidateHasApplication) {
     const candidatePreferred = candidateHasApplication
     return {
+      shouldDedupe: true,
       candidatePreferred,
       winner: candidatePreferred ? candidate : existing,
     }
@@ -1242,13 +1254,10 @@ function selectPreferredDuplicate(existing, candidate) {
   const winner = candidatePreferred ? candidate : existing
   const duplicate = candidatePreferred ? existing : candidate
   return {
+    shouldDedupe: true,
     candidatePreferred,
     winner: preserveVnextGuidance(winner, duplicate),
   }
-}
-
-function preferredDuplicate(existing, candidate) {
-  return selectPreferredDuplicate(existing, candidate).winner
 }
 
 /**
@@ -1283,7 +1292,8 @@ const MULTI_LISTING_DOMAINS = new Set([
 
 /**
  * Deduplicate a list of opportunity objects for display purposes.
- * Does NOT mutate the DB. Keeps the highest-source-trust record when duplicates collide.
+ * Does NOT mutate the DB. Keeps the highest-source-trust canonical record, but
+ * never hides two unproven rows that each carry a persisted application.
  *
  * Strategy:
  * 1. Exact source_id+source match → same physical record
@@ -1298,13 +1308,18 @@ export function deduplicateOpportunities(opportunities) {
 
   // Phase 1: exact key deduplication
   const seen = new Map() // key → best opportunity
-  for (const opp of opportunities) {
+  for (const [index, opp] of opportunities.entries()) {
     const key = buildDedupeKey(opp)
     if (!seen.has(key)) {
       seen.set(key, opp)
     } else {
       const existing = seen.get(key)
-      seen.set(key, preferredDuplicate(existing, opp))
+      const preferred = selectPreferredDuplicate(existing, opp)
+      if (preferred.shouldDedupe) {
+        seen.set(key, preferred.winner)
+      } else {
+        seen.set(`${key}|distinct-application:${index}`, opp)
+      }
     }
   }
 
@@ -1329,6 +1344,7 @@ export function deduplicateOpportunities(opportunities) {
       const sim = titleSimilarity(normI, normJ)
       if (sim >= 0.85) {
         const preferred = selectPreferredDuplicate(oppI, oppJ)
+        if (!preferred.shouldDedupe) continue
         if (preferred.candidatePreferred) {
           candidates[j] = preferred.winner
           dropped.add(i)
@@ -1367,6 +1383,7 @@ export function deduplicateOpportunities(opportunities) {
       const normJ = normalizeTitleForDedupe(oppJ?.title ?? oppJ?.program_name ?? '')
       if (titleSimilarity(normI, normJ) >= 0.6) {
         const preferred = selectPreferredDuplicate(oppI, oppJ)
+        if (!preferred.shouldDedupe) continue
         if (preferred.candidatePreferred) {
           kept[j] = preferred.winner
           domainDropped.add(i)

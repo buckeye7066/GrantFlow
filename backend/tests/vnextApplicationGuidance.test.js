@@ -105,6 +105,7 @@ describe('profile-scoped vNext application guidance loading', () => {
       sponsor: 'Foundation A',
       state: 'TN',
       application_url: 'https://foundation-a.org/apply',
+      opportunity_fingerprint: 'shared-scoring-shape',
       vnext_application_id: 'app-foundation-a',
       vnext_application_state: 'MAPPED',
       vnext_application_stage: 'MAPPED',
@@ -116,6 +117,7 @@ describe('profile-scoped vNext application guidance loading', () => {
       sponsor: 'Foundation B',
       state: 'TN',
       application_url: 'https://foundation-b.gov/apply',
+      opportunity_fingerprint: 'shared-scoring-shape',
       next_steps: [{ id: 'save_to_pipeline', category: 'application' }],
     }
 
@@ -127,6 +129,38 @@ describe('profile-scoped vNext application guidance loading', () => {
         id: 'foundation-a-row',
         vnext_application_id: 'app-foundation-a',
         next_steps: [{ id: 'resolve_missing', category: 'application' }],
+      }),
+    ])
+  })
+
+  it('keeps both application rows when loose display similarity lacks canonical identity', () => {
+    const foundationA = {
+      id: 'foundation-a-row',
+      title: 'Community Support Grant',
+      sponsor: 'Foundation A',
+      state: 'TN',
+      application_url: 'https://foundation-a.org/apply',
+      vnext_application_id: 'app-foundation-a',
+      vnext_application_state: 'QUALIFIED',
+    }
+    const foundationB = {
+      id: 'foundation-b-row',
+      title: 'Community Support Grant',
+      sponsor: 'Foundation B',
+      state: 'TN',
+      application_url: 'https://foundation-b.gov/apply',
+      vnext_application_id: 'app-foundation-b',
+      vnext_application_state: 'MAPPED',
+    }
+
+    expect(deduplicateOpportunities([foundationA, foundationB])).toEqual([
+      expect.objectContaining({
+        id: 'foundation-a-row',
+        vnext_application_id: 'app-foundation-a',
+      }),
+      expect.objectContaining({
+        id: 'foundation-b-row',
+        vnext_application_id: 'app-foundation-b',
       }),
     ])
   })

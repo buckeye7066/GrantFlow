@@ -46,10 +46,10 @@ function scopedFixture(state = VNEXT_STATES.DISCOVERED, stage = state) {
   }
 }
 
-function makeDb({ changes = 1 } = {}) {
+function makeDb({ changes = 1, dialect = 'sqlite' } = {}) {
   const run = vi.fn(async () => ({ changes }))
   const db = {
-    dialect: 'sqlite',
+    dialect,
     prepare: vi.fn(() => ({ run })),
     async withTransaction(fn) {
       return fn(db)
@@ -102,16 +102,15 @@ describe('VNext transition integrity', () => {
     expect(result).toMatchObject({ ok: true, newState: VNEXT_STATES.DEDUPED })
     expect(db.prepare).toHaveBeenCalledTimes(1)
     const sql = db.prepare.mock.calls[0][0]
-    expect(sql).toContain('((state = ?) OR (state IS NULL AND ? IS NULL))')
-    expect(sql).toContain('((stage = ?) OR (stage IS NULL AND ? IS NULL))')
+    expect(sql).toContain('state IS ?')
+    expect(sql).toContain('stage IS ?')
+    expect(sql).not.toContain('? IS NULL')
     expect(run).toHaveBeenCalledWith(
       VNEXT_STATES.DEDUPED,
       VNEXT_STATES.DEDUPED,
       null,
       null,
       'app-1',
-      VNEXT_STATES.DISCOVERED,
-      VNEXT_STATES.DISCOVERED,
       VNEXT_STATES.DISCOVERED,
       VNEXT_STATES.DISCOVERED,
     )
@@ -132,8 +131,27 @@ describe('VNext transition integrity', () => {
       'app-1',
       'discovered',
       'discovered',
-      'discovered',
-      'discovered',
+    )
+  })
+
+  it('uses typed null-safe predicates for PostgreSQL compare-and-swap claims', async () => {
+    const { db, run } = makeDb({ dialect: 'postgres' })
+
+    const result = await attemptTransition(db, 'app-1', VNEXT_STATES.DEDUPED)
+
+    expect(result).toMatchObject({ ok: true, newState: VNEXT_STATES.DEDUPED })
+    const sql = db.prepare.mock.calls[0][0]
+    expect(sql).toContain('state IS NOT DISTINCT FROM ?')
+    expect(sql).toContain('stage IS NOT DISTINCT FROM ?')
+    expect(sql).not.toContain('? IS NULL')
+    expect(run).toHaveBeenCalledWith(
+      VNEXT_STATES.DEDUPED,
+      VNEXT_STATES.DEDUPED,
+      null,
+      null,
+      'app-1',
+      VNEXT_STATES.DISCOVERED,
+      VNEXT_STATES.DISCOVERED,
     )
   })
 
@@ -217,7 +235,7 @@ describe('VNext transition integrity', () => {
     fixture.opportunity.application_mode = 'portal'
     fixture.opportunity.apply_url = 'https://current.example/apply'
     getScopedOpportunityForVnextApplication.mockResolvedValue(fixture)
-    const { db, run } = makeDb()
+    const { db, run } = makeDb({ dialect: 'postgres' })
 
     const result = await attemptTransition(
       db,
@@ -238,17 +256,15 @@ describe('VNext transition integrity', () => {
     const sql = db.prepare.mock.calls[0][0]
     expect(sql).toContain('SET boundary_type = ?')
     expect(sql).not.toContain('SET state = ?')
+    expect(sql.match(/IS NOT DISTINCT FROM \?/g)).toHaveLength(4)
+    expect(sql).not.toContain('? IS NULL')
     expect(run).toHaveBeenCalledWith(
       'portal',
       'https://current.example/apply',
       'app-1',
       VNEXT_STATES.BOUNDARY_REACHED,
       VNEXT_STATES.BOUNDARY_REACHED,
-      VNEXT_STATES.BOUNDARY_REACHED,
-      VNEXT_STATES.BOUNDARY_REACHED,
       'none',
-      'none',
-      'https://old.example/apply',
       'https://old.example/apply',
     )
   })
