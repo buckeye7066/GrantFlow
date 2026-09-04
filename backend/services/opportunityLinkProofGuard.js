@@ -107,7 +107,11 @@ export function resolveOpportunityLinkProofState({
 
   if (targetChanged) {
     if (incomingCurrentSuccess && successProofMatchesNewTarget(incoming, currentRow, beforeRow)) {
-      return { action: 'none', reason: 'changed_target_with_fresh_success', updates: null }
+      return {
+        action: 'update',
+        reason: 'changed_target_with_fresh_success',
+        updates: { ...proofFields(incoming), is_hidden: Boolean(currentRow.is_hidden) },
+      }
     }
 
     if (incomingFreshVerdict) {
@@ -144,7 +148,11 @@ export function resolveOpportunityLinkProofState({
   // every other fresh verdict remains evidence but is quarantined.
   if (incomingFreshVerdict) {
     if (incomingCurrentSuccess) {
-      return { action: 'none', reason: 'fresh_success', updates: null }
+      return {
+        action: 'update',
+        reason: 'fresh_success',
+        updates: { ...proofFields(incoming), is_hidden: Boolean(currentRow.is_hidden) },
+      }
     }
     return {
       action: 'update',
@@ -228,7 +236,24 @@ export async function enforceOpportunityLinkProofAfterWrite(
 
     const u = resolution.updates
     const hidden = db?.dialect === 'postgres' ? Boolean(u.is_hidden) : (u.is_hidden ? 1 : 0)
-    await db.prepare(`
+    // Compare-and-set every persisted field the resolver observed. The
+    // recurring verifier may write newer proof between our SELECT and UPDATE;
+    // an id-only write would erase that newer verdict and re-hide the row.
+    const observedColumns = [
+      'opportunity_kind', 'result_kind', 'opportunity_type', 'type',
+      'application_url', 'source_url',
+      'last_verified_at', 'link_status', 'link_status_code',
+      'verification_method', 'verified_by', 'verification_error',
+      'final_url', 'http_status', 'is_hidden',
+    ]
+    const isPostgres = db?.dialect === 'postgres'
+    const compareSql = observedColumns.map((column) => isPostgres
+      ? `${column} IS NOT DISTINCT FROM ?`
+      : `(${column} = ? OR (${column} IS NULL AND ? IS NULL))`)
+    const compareValues = observedColumns.flatMap((column) => isPostgres
+      ? [currentRow[column] ?? null]
+      : [currentRow[column] ?? null, currentRow[column] ?? null])
+    const write = await db.prepare(`
       UPDATE funding_opportunities
          SET last_verified_at = ?,
              link_status = ?,
@@ -240,6 +265,7 @@ export async function enforceOpportunityLinkProofAfterWrite(
              http_status = ?,
              is_hidden = ?
        WHERE id = ?
+         AND ${compareSql.join('\n         AND ')}
     `).run(
       u.last_verified_at ?? null,
       u.link_status ?? 'unverified',
@@ -251,7 +277,15 @@ export async function enforceOpportunityLinkProofAfterWrite(
       u.http_status ?? null,
       hidden,
       opportunityId,
+      ...compareValues,
     )
+
+    if (Number(write?.changes ?? write?.rowCount ?? 0) === 0) {
+      const row = await db.prepare(
+        'SELECT * FROM funding_opportunities WHERE id = ? LIMIT 1',
+      ).get(opportunityId)
+      return { supported: true, changed: false, reason: 'concurrent_verification_preserved', row }
+    }
 
     const row = await db.prepare(
       'SELECT * FROM funding_opportunities WHERE id = ? LIMIT 1',

@@ -16,6 +16,7 @@ import {
   persistEvidence,
 } from '../provenanceAudit.js';
 import { createLogger } from '../../utils/logger.js'
+import { syncOpportunityContractProjection } from '../opportunityRepository.js'
 
 function isActiveFlag(value) {
   return value === 1 || value === true || value === '1' || value === 'true';
@@ -135,7 +136,7 @@ export async function ingestOpportunities(db, opportunities, sourceName) {
   
   // Check if record exists to determine if it's insert or update
   const checkExists = db.prepare(
-    'SELECT id FROM funding_opportunities WHERE source = ? AND source_id = ?'
+    'SELECT * FROM funding_opportunities WHERE source = ? AND source_id = ?'
   );
   
   // Best-effort rejection logger — mirrors opportunityInserter so every gate
@@ -277,7 +278,7 @@ export async function ingestOpportunities(db, opportunities, sourceName) {
   // header notes better-sqlite3's native wrapper "rejects async callbacks with
   // 'Transaction function cannot return a promise'" while the manual
   // BEGIN/COMMIT path "works for both sync and async callbacks".
-  const ingest = () => runInTransaction(db, async () => {
+  const ingest = () => runInTransaction(db, async (tx) => {
     for (const opp of validated) {
       try {
         // Check if exists before upsert to track insert vs update
@@ -353,6 +354,15 @@ export async function ingestOpportunities(db, opportunities, sourceName) {
           );
           inserted++;
         }
+        // Every active catalog writer must cross the same post-write proof
+        // gate. This government/real-crawler ingest path previously bypassed
+        // the repository hook and briefly exposed default-visible unverified
+        // rows until the periodic quarantine sweep.
+        await syncOpportunityContractProjection(tx, existing?.id ?? opp.id, opp, {
+          beforeRow: existing ?? null,
+          changedBy: `ingestion:${sourceName}`,
+          changeType: existing ? 'updated' : 'created',
+        });
       } catch (error) {
         errors++;
         const errorMsg = `Error ingesting ${opp.source_id}: ${error.message}`;

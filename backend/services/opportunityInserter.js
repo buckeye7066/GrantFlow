@@ -545,7 +545,10 @@ export async function upsertFundingOpportunity(db, opportunity, opts = {}) {
     if (repair) applicationUrl = repair.officialUrl
   }
 
-  const candidateUrl = sourceUrl ?? applicationUrl ?? evidenceUrl ?? null
+  // Probe the same application-first target that the central proof guard will
+  // authorize. A reachable source/information page is not evidence that a
+  // distinct application endpoint works.
+  const candidateUrl = applicationUrl ?? sourceUrl ?? evidenceUrl ?? null
   if (!candidateUrl || !isValidHttpUrl(candidateUrl)) {
     const urlReason = !candidateUrl ? 'missing_application_url' : 'dead_application_url'
     // Persist a reconstructable candidate snapshot in raw_meta: a row rejected

@@ -287,14 +287,15 @@ describe('startup SQL-only link quarantine', () => {
 
       const stats = await quarantineUnverifiedDirectOpportunities(db)
 
-      expect(stats).toMatchObject({ ok: true, quarantined: 8, deactivated: 8, restored: 0 })
+      expect(stats).toMatchObject({ ok: true, quarantined: 9, deactivated: 9, restored: 0 })
       expect(fetchSpy).not.toHaveBeenCalled()
       for (const [id] of lifecycleRows) {
         expect(readRow(db, id)).toMatchObject({ is_hidden: 1, is_active: 0 })
       }
-      for (const id of ['pointer-kind', 'pointer-result', 'pointer-type', 'pointer-action', 'unknown-kind']) {
+      for (const id of ['pointer-kind', 'pointer-result', 'pointer-type', 'pointer-action']) {
         expect(readRow(db, id)).toMatchObject({ is_hidden: 0, is_active: 1 })
       }
+      expect(readRow(db, 'unknown-kind')).toMatchObject({ is_hidden: 1, is_active: 0 })
     } finally {
       fetchSpy.mockRestore()
       db.close()
