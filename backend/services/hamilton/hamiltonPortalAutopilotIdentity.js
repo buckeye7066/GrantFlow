@@ -371,7 +371,6 @@ async function performVerificationRecheck(db, {
  *        adapter's registrationResult inline.
  * @param {object} [args.profile]       pre-loaded profile bundle for the signup
  *        adapter's identity fields (first/last/full name, phone). Optional.
- * @param {boolean} [args.dryRun]       plan only — provision the credential record
  *        but DO NOT launch a browser (preview the autopilot run).
  * @param {Function} [args.launchBrowser] injectable Playwright launcher (tests).
  * @param {object}  [args.outlookProvider] injectable Graph mailbox (tests).
@@ -390,7 +389,7 @@ export async function runAutopilotIdentityForPortal(db, args = {}) {
 
 async function _runAutopilotIdentityForPortal(db, {
   profileId, userId = 'system_admin_token', portalHost, loginUrl = null, registrationResult = null,
-  profile = null, dryRun = false, launchBrowser = null, outlookProvider = null,
+  profile = null, launchBrowser = null, outlookProvider = null,
   createPortalAccountAuthorized = false,
   verifyWaitMs = undefined, verifyPollMs = undefined,
   _host, _resolvedLoginUrl,
@@ -552,7 +551,7 @@ async function _runAutopilotIdentityForPortal(db, {
     // caller already ran the browser). A dry run provisions the credential record
     // but does not launch a browser (preview).
     let registration = registrationResult
-    if (!registration && !dryRun) {
+    if (!registration) {
       try {
         // PHASE 1 of the two-phase identity policy. Under full automation the
         // account is created with the APPLICANT'S name/login/password (from the
@@ -636,16 +635,14 @@ async function _runAutopilotIdentityForPortal(db, {
     // real working account; clear the pending flag so re-runs + the dashboard
     // treat it as has_existing_credentials. A dry run / planned / caller-driven run
     // with no confirmed 'registered' status leaves it pending (not yet real).
-    if (!dryRun && registration && registration.status === 'registered' && result.credential?.id) {
+    if (registration && registration.status === 'registered' && result.credential?.id) {
       await markCredentialRegistered(db, result.credential.id).catch(() => {})
     }
 
     return {
       state: AUTOPILOT_STATE.AUTO_PROVISIONED,
       host,
-      detail: dryRun
-        ? 'Hamilton provisioned a unique login under your master passphrase (dry run — registration not executed).'
-        : 'Hamilton provisioned a unique login under your master passphrase and registered the account.',
+      detail: 'Hamilton provisioned a unique login under your master passphrase and registered the account.',
       credential: result.credential,
       // ONE-TIME plaintext so the caller can show it to the user; never persisted.
       password_one_time_view: result.password_one_time_view,
@@ -666,7 +663,7 @@ async function _runAutopilotIdentityForPortal(db, {
  * the single-portal route so it can be shown once); the aggregate carries only
  * the state per host. Returns { results, summary }.
  */
-export async function runAutopilotIdentityForProfile(db, { profileId, userId = 'system_admin_token', dryRun = false } = {}) {
+export async function runAutopilotIdentityForProfile(db, { profileId, userId = 'system_admin_token' } = {}) {
   if (!db || !profileId) return { results: [], summary: {} }
   const { getProfilePortals } = await import('./profilePortalIndex.js')
   let portals = []
@@ -690,7 +687,7 @@ export async function runAutopilotIdentityForProfile(db, { profileId, userId = '
     const host = p?.portalHost
     if (!host) continue
     const r = await runAutopilotIdentityForPortal(db, {
-      profileId, userId, portalHost: host, loginUrl: p?.loginUrl || null, profile, dryRun,
+      profileId, userId, portalHost: host, loginUrl: p?.loginUrl || null, profile,
     })
     // Strip any one-time plaintext from the aggregate — bulk runs never surface it.
     const { password_one_time_view, ...safe } = r

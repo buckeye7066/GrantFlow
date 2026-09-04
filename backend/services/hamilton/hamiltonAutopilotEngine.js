@@ -454,6 +454,17 @@ async function detectFields(page) {
         ariaLabel: el.getAttribute('aria-label') || '',
         label: (nearbyLabel(el) || '').trim().slice(0, 200),
         required: el.hasAttribute('required') || el.getAttribute('aria-required') === 'true',
+        // The portal's OWN stated character limit. Until this was read, the
+        // answerer truncated every field at a hard-coded 300 / 4000, so a
+        // funder allowing a 10,000-character narrative silently received 4,000
+        // and any non-essay field was chopped at 300. `el.maxLength` is -1 when
+        // the attribute is absent; normalise that to null so "the portal said
+        // nothing" is distinguishable from "the portal said zero".
+        maxLength: (() => {
+          const attr = el.getAttribute('maxlength')
+          const n = attr === null ? Number(el.maxLength) : Number(attr)
+          return Number.isFinite(n) && n > 0 ? n : null
+        })(),
         value: el.value ?? null,
         options: tag === 'select'
           ? Array.from(el.options || []).slice(0, 60).map((o) => String(o.textContent || o.label || o.value || '').trim().slice(0, 80))

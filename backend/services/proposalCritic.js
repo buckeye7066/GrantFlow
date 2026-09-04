@@ -35,10 +35,27 @@ const MAX_FIELD_CHARS = 1_500
 const MAX_FINDINGS = 8
 const PASS_MAX_TOKENS = 800
 
-/** Flag gate — default OFF until proven in prod. */
+/**
+ * Flag gate — DEFAULT ON since 2026-09-04.
+ *
+ * It defaulted OFF ("until proven in prod") and was reachable only through a
+ * manual endpoint on operator-supplied text, so grepping
+ * backend/services/hamilton/ for `proposalCritic` returned nothing: the
+ * autonomous drafting path had NO quality or compliance review at all. The
+ * only automated check on a Hamilton draft was the deterministic fabrication
+ * guard, which scans for unevidenced identity claims — not for whether the
+ * proposal actually answers the funder.
+ *
+ * This is a REVIEW that annotates a draft; it is not a gate. Findings are
+ * recorded on the result and never block a submission — see
+ * hamiltonFullProposalGenerator.generateMbaProposal.
+ *
+ * Set PROPOSAL_CRITIC=false to restore the old opt-in behaviour.
+ */
 export function isProposalCriticEnabled() {
-  const v = String(process.env.PROPOSAL_CRITIC || '').trim().toLowerCase()
-  return v === '1' || v === 'true'
+  const v = String(process.env.PROPOSAL_CRITIC ?? 'true').trim().toLowerCase()
+  if (v === '' || v === 'undefined' || v === 'null') return true
+  return v !== 'false' && v !== '0' && v !== 'off' && v !== 'no'
 }
 
 /** Load profile row + parsed sections for a grant's profile (best-effort). */

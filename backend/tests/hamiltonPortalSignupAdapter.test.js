@@ -314,17 +314,33 @@ describe('registerOnPortal safety rails', () => {
     disableBrowser()
   })
 
-  it('a dry run PLANS without ever launching a browser', async () => {
+  // DRY RUN REMOVED 2026-09-04, by the owner's standing no-dry-runs order.
+  // This test previously asserted that `dryRun: true` returned status 'planned'
+  // without launching a browser. On the portal ACCOUNT REGISTRATION path that
+  // mode provisioned a credential record and reported "registration not
+  // executed" — leaving Hamilton holding a login that was never created, so any
+  // later submission to a portal requiring that account failed for a reason
+  // nothing upstream could see. The flag is removed OUTRIGHT rather than
+  // defaulted off, and naming it now FAILS rather than silently doing something
+  // else — which is what this test pins.
+  it('REFUSES a dryRun option outright instead of silently planning', async () => {
     enableBrowser()
     const db = makeDb()
     const launchBrowser = vi.fn()
-    const res = await registerOnPortal(db, {
+    await expect(registerOnPortal(db, {
       portalHost: 'communityforce.com', signupUrl: 'https://communityforce.com/register',
       identity: { email: 'a@b.com', password: 'pw-pw-pw-pw-pw-1234!aa' },
       dryRun: true, launchBrowser,
-    })
-    expect(res.status).toBe('planned')
+    })).rejects.toThrow(/dryRun has been removed/i)
     expect(launchBrowser).not.toHaveBeenCalled()
+
+    // The snake_case spelling is refused too, so the flag cannot creep back in
+    // under the other convention.
+    await expect(registerOnPortal(db, {
+      portalHost: 'communityforce.com', signupUrl: 'https://communityforce.com/register',
+      identity: { email: 'a@b.com', password: 'pw-pw-pw-pw-pw-1234!aa' },
+      dry_run: true, launchBrowser,
+    })).rejects.toThrow(/dryRun has been removed/i)
     disableBrowser()
   })
 

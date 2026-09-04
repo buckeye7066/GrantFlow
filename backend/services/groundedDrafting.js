@@ -490,6 +490,19 @@ export async function loadLatestRequirementsForApplication(db, applicationId) {
     : null
 
   if (!solicitation?.latest_version_id) return { application, solicitation: null, requirements: [] }
+  const requirements = await loadRequirementsForVersion(db, solicitation.latest_version_id)
+  return { application, solicitation, requirements }
+}
+
+/**
+ * Fetch every active requirement on a solicitation version, with its citations
+ * grouped onto it. Extracted so the application-keyed loader above and the
+ * opportunity-keyed loader below cannot drift apart — the citation shape is
+ * what makes a requirement quotable rather than paraphrased, and two copies of
+ * this query is exactly how one side silently loses that.
+ */
+async function loadRequirementsForVersion(db, versionId) {
+  if (!versionId) return []
   const rows = await db.prepare(
     `SELECT r.*,
             c.id AS citation_id, c.quote_text, c.char_start, c.char_end,
@@ -499,7 +512,7 @@ export async function loadLatestRequirementsForApplication(db, applicationId) {
        LEFT JOIN solicitation_chunks ch ON ch.id = c.chunk_id
       WHERE r.version_id = ? AND r.status = 'active'
       ORDER BY r.requirement_type, r.canonical_key, c.char_start`,
-  ).all(solicitation.latest_version_id)
+  ).all(versionId)
 
   const grouped = new Map()
   for (const row of rows || []) {
@@ -520,7 +533,41 @@ export async function loadLatestRequirementsForApplication(db, applicationId) {
       })
     }
   }
-  return { application, solicitation, requirements: [...grouped.values()] }
+  return [...grouped.values()]
+}
+
+/**
+ * The same stored, citation-backed requirements, addressed the way HAMILTON can
+ * address them.
+ *
+ * WHY THIS EXISTS: the compliance-matrix system was reachable only through
+ * `loadLatestRequirementsForApplication(db, applicationId)`, keyed on a
+ * `grant_applications` row. Hamilton's autonomous path has no such row — it
+ * works from an `application_tasks` row plus an opportunity/grant — so grepping
+ * backend/services/hamilton/ for `solicitation_requirements` returned nothing
+ * and every Hamilton draft was written WITHOUT reference to the funder's own
+ * stated questions, limits, attachments and evaluation criteria. The analysis
+ * engine existed; the drafting agent simply could not reach it.
+ *
+ * Returns [] when the funder's solicitation has never been parsed, so callers
+ * degrade to the loose opportunity text rather than failing.
+ */
+export async function loadLatestRequirementsForOpportunity(db, { profileId, opportunityId } = {}) {
+  if (!db || !profileId || !opportunityId) return { solicitation: null, requirements: [] }
+  const solicitation = await db.prepare(
+    `SELECT s.*, v.id AS latest_version_id, v.version_number
+       FROM opportunity_solicitations s
+       JOIN solicitation_versions v ON v.id = (
+         SELECT v2.id FROM solicitation_versions v2
+          WHERE v2.solicitation_id = s.id
+          ORDER BY v2.version_number DESC LIMIT 1
+       )
+      WHERE s.profile_id = ? AND s.opportunity_id = ?
+      ORDER BY s.updated_at DESC LIMIT 1`,
+  ).get(String(profileId), String(opportunityId))
+  if (!solicitation?.latest_version_id) return { solicitation: null, requirements: [] }
+  const requirements = await loadRequirementsForVersion(db, solicitation.latest_version_id)
+  return { solicitation, requirements }
 }
 
 export async function auditDraftAgainstStoredRequirements(db, {

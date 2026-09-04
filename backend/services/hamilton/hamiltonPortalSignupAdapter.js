@@ -850,7 +850,6 @@ export async function answerVerificationCodeWall(db, page, result, {
  * @param {string} args.signupUrl        resolved signup/registration URL
  * @param {object} args.identity         from buildSignupIdentity (email+password+name)
  * @param {object} [args.profile]
- * @param {boolean} [args.dryRun]        plan only — never launch a browser
  * @param {Function} [args.launchBrowser]  injectable Playwright launcher (tests)
  * @param {object}  [args.outlookProvider] injectable Graph mailbox (tests)
  * @param {boolean} [args.fullAutomation]  profile consent (hasFullAutomation). When
@@ -861,12 +860,36 @@ export async function answerVerificationCodeWall(db, page, result, {
  * @param {object}  [args.verificationCodeOptions] test seams for the bounded poll
  * @returns {Promise<registrationResult>}
  */
-export async function registerOnPortal(db, {
-  portalHost, signupUrl, identity, profile = {},
-  dryRun = false, launchBrowser = null, outlookProvider = null,
-  verifyWaitMs = VERIFY_WAIT_MS, verifyPollMs = VERIFY_POLL_MS,
-  fullAutomation = false, getGraphToken = null, verificationCodeOptions = null,
-} = {}) {
+/**
+ * The dry-run / preview mode is REMOVED, by the owner's standing no-dry-runs
+ * order (2026-08-13, permanent): "I don't want dry runs, I want work." It is
+ * removed OUTRIGHT rather than defaulted off, and an invocation still naming it
+ * FAILS rather than silently doing something else.
+ *
+ * Why it mattered here specifically: this is the portal ACCOUNT REGISTRATION
+ * path. A dry run provisioned a credential record and returned
+ * "registration not executed" — so Hamilton would hold a login that had never
+ * been created, and every downstream submission to a portal requiring an
+ * account would fail for a reason nothing upstream could see.
+ */
+export function assertNoPortalDryRun(options) {
+  if (options && typeof options === 'object' && ('dryRun' in options || 'dry_run' in options)) {
+    const e = new Error(
+      'dryRun has been removed from Hamilton portal registration (owner no-dry-runs order). Every run registers for real — drop the flag.',
+    )
+    e.status = 400
+    throw e
+  }
+}
+
+export async function registerOnPortal(db, options = {}) {
+  assertNoPortalDryRun(options)
+  const {
+    portalHost, signupUrl, identity, profile = {},
+    launchBrowser = null, outlookProvider = null,
+    verifyWaitMs = VERIFY_WAIT_MS, verifyPollMs = VERIFY_POLL_MS,
+    fullAutomation = false, getGraphToken = null, verificationCodeOptions = null,
+  } = options
   const host = registrableDomain(portalHost) || hostOfUrl(portalHost) || String(portalHost || '').toLowerCase()
   const url = signupUrl || (host ? `https://${host}` : null)
 
@@ -900,7 +923,7 @@ export async function registerOnPortal(db, {
   } catch { /* permissive default — continue to the browser gate */ }
 
   if (!reviewedPortalSignupExecutionEnabled()) {
-    void profile; void dryRun; void launchBrowser; void outlookProvider
+    void profile; void launchBrowser; void outlookProvider
     void verifyWaitMs; void verifyPollMs; void identity
     void fullAutomation; void getGraphToken; void verificationCodeOptions
     return blocked('create_portal_account', {
@@ -933,19 +956,6 @@ export async function registerOnPortal(db, {
       blocker_kind: 'missing_identity',
       blocker_detail: 'No identity email/password available to register with.',
       message: 'Hamilton has no identity to register this portal with.',
-    })
-  }
-
-  // DRY-RUN / preview: report what WOULD happen without launching a browser.
-  if (dryRun) {
-    const hostAdapter = resolveHostAdapter(host)
-    return ok('planned', {
-      message: 'Dry run — registration not executed.',
-      plan: {
-        host, signupUrl: url,
-        adapter: hostAdapter ? `host:${hostAdapter.host}` : 'generic',
-        identityEmail: identity.email,
-      },
     })
   }
 
