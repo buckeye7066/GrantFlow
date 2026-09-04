@@ -1,0 +1,25 @@
+name: Export PR 1536 repair source
+
+on:
+  push:
+    branches: [fix/vnext-transition-integrity-current-main-20260904]
+    paths:
+      - .github/workflows/export-chatgpt-pr1536.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  export:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Package exact branch source
+        run: tar --exclude=.git -czf "$RUNNER_TEMP/pr1536-source.tar.gz" .
+      - uses: actions/upload-artifact@v4
+        with:
+          name: grantflow-pr1536-source
+          path: ${{ runner.temp }}/pr1536-source.tar.gz
+          retention-days: 1
+          if-no-files-found: error
