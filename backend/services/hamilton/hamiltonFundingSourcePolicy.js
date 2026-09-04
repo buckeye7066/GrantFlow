@@ -191,6 +191,22 @@ async function computeLiveEngineDecision(db, profileId, subject) {
   }
 }
 
+async function computeLiveWebsitePurposeConflict(db, profileId, subject) {
+  try {
+    const [{ loadProfileContext }, { buildProfileFacets }, { stageOfLifeConflictForSections }] = await Promise.all([
+      import('../profileHelpers.js'),
+      import('../profile/profileTaxonomy.js'),
+      import('../../config/stageOfLifeEligibility.js'),
+    ])
+    const ctx = buildProfileFacets(await loadProfileContext(db, profileId))
+    const rawProfile = ctx?.profile ?? ctx
+    const conflict = stageOfLifeConflictForSections(ctx?.sections ?? {}, subject, rawProfile)
+    return conflict?.classId === 'website_purpose' ? conflict : null
+  } catch {
+    return null
+  }
+}
+
 export async function assessHamiltonFundingSource(db, { profileId, opportunity = null, grant = null } = {}) {
   const policyOpportunity = await loadOpportunityForPolicy(db, profileId, opportunity, grant)
   const subject = policyOpportunity || grant
@@ -256,6 +272,27 @@ export async function assessHamiltonFundingSource(db, { profileId, opportunity =
       trust,
       match,
       message: buildPolicyMessage(reasons),
+    }
+  }
+  if (match && ALLOWED_MATCH_DECISIONS.has(decision) && profileId && opportunityId) {
+    // A stored match is a rolling snapshot, not permanent authorization.  In
+    // particular, rows written before a new eligibility gate (or by the
+    // context-less xmatch lane) may still say ACCEPT/REVIEW even though the
+    // canonical purpose choke point now rejects the pair. Hamilton is the last
+    // boundary before user work / submission, so reconcile an apparently-
+    // allowed row through that live gate rather than trusting stale endorsement.
+    const purposeConflict = await computeLiveWebsitePurposeConflict(db, profileId, subject)
+    if (purposeConflict) {
+      const reasons = ['profile_match_rejected']
+      reasons.push(String(purposeConflict.reason).slice(0, 180))
+      return {
+        ok: false,
+        code: 'funding_source_profile_rejected',
+        reasons,
+        trust,
+        match: { ...match, live_recheck: true, live_decision: 'reject' },
+        message: buildPolicyMessage(reasons),
+      }
     }
   }
   if (!match && profileId && opportunityId && requiresProfileMatch(subject)) {

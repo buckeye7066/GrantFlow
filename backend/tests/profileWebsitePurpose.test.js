@@ -7,6 +7,7 @@
  */
 
 import { describe, expect, it } from 'vitest'
+import Database from 'better-sqlite3'
 
 import {
   classifyOpportunitiesAgainstWebsitePurpose,
@@ -19,6 +20,7 @@ import {
 import { deriveProfileFacts, searchTermsFromFacts } from '../config/profileDerivedFacts.js'
 import { stageOfLifeConflictForSections } from '../config/stageOfLifeEligibility.js'
 import { computeMatchDecision } from '../services/matchEngine.js'
+import { enforceWebsitePurposeMatchScope } from '../startup/enforceInvariants.js'
 
 const AXIOM_SECTIONS = {
   basic_information: {
@@ -208,5 +210,66 @@ describe('matchEngine — website purpose REJECT', () => {
       { profileSections: AXIOM_SECTIONS },
     )
     expect(decision.decision).not.toBe('REJECT')
+  })
+})
+
+describe('website-purpose persisted-state reconciliation', () => {
+  it('removes a context-less stored xmatch and cancels its existing Hamilton task', async () => {
+    const db = new Database(':memory:')
+    db.exec(`
+      CREATE TABLE profiles (
+        id TEXT PRIMARY KEY, website TEXT, status TEXT, deleted_at TEXT,
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP
+      );
+      CREATE TABLE profile_sections (
+        profile_id TEXT, section_key TEXT, data TEXT
+      );
+      CREATE TABLE funding_opportunities (
+        id TEXT PRIMARY KEY, title TEXT, sponsor TEXT, application_url TEXT
+      );
+      CREATE TABLE profile_opportunity_matches (
+        id TEXT PRIMARY KEY, profile_id TEXT, opportunity_id TEXT,
+        match_decision TEXT, matcher_version TEXT
+      );
+      CREATE TABLE application_tasks (
+        id TEXT PRIMARY KEY, profile_id TEXT, opportunity_id TEXT, status TEXT,
+        updated_at TEXT
+      );
+    `)
+    db.prepare('INSERT INTO profiles (id, website, status) VALUES (?, ?, ?)')
+      .run('axiom', 'https://axiombiolabs.org', 'active')
+    db.prepare('INSERT INTO funding_opportunities VALUES (?, ?, ?, ?)')
+      .run('title-x', 'Title X Family Planning Services Grants', 'HHS', 'https://hhs.gov/title-x')
+    db.prepare('INSERT INTO profile_opportunity_matches VALUES (?, ?, ?, ?, ?)')
+      .run('stale-xmatch', 'axiom', 'title-x', 'accept', 'crawler-os-xmatch')
+    db.prepare('INSERT INTO application_tasks VALUES (?, ?, ?, ?, NULL)')
+      .run('working-task', 'axiom', 'title-x', 'running')
+
+    const result = await enforceWebsitePurposeMatchScope(db)
+
+    expect(result).toMatchObject({ ok: true, repaired: 1, tasksCancelled: 1 })
+    expect(db.prepare('SELECT COUNT(*) AS n FROM profile_opportunity_matches').get().n).toBe(0)
+    expect(db.prepare('SELECT status FROM application_tasks WHERE id = ?').get('working-task').status)
+      .toBe('cancelled')
+    expect((await enforceWebsitePurposeMatchScope(db)).repaired).toBe(0)
+  })
+
+  it('keeps an aligned stored match and task', async () => {
+    const db = new Database(':memory:')
+    db.exec(`
+      CREATE TABLE profiles (id TEXT PRIMARY KEY, website TEXT, status TEXT, deleted_at TEXT, created_at TEXT);
+      CREATE TABLE profile_sections (profile_id TEXT, section_key TEXT, data TEXT);
+      CREATE TABLE funding_opportunities (id TEXT PRIMARY KEY, title TEXT, sponsor TEXT);
+      CREATE TABLE profile_opportunity_matches (id TEXT PRIMARY KEY, profile_id TEXT, opportunity_id TEXT);
+      CREATE TABLE application_tasks (id TEXT PRIMARY KEY, profile_id TEXT, opportunity_id TEXT, status TEXT, updated_at TEXT);
+      INSERT INTO profiles VALUES ('axiom', 'https://axiombiolabs.org', 'active', NULL, '2026-01-01');
+      INSERT INTO funding_opportunities VALUES ('sttr', 'NIH Small Business Technology Transfer Grant (Parent STTR)', 'NIH');
+      INSERT INTO profile_opportunity_matches VALUES ('good-match', 'axiom', 'sttr');
+      INSERT INTO application_tasks VALUES ('good-task', 'axiom', 'sttr', 'running', NULL);
+    `)
+
+    const result = await enforceWebsitePurposeMatchScope(db)
+    expect(result).toMatchObject({ repaired: 0, tasksCancelled: 0 })
+    expect(db.prepare('SELECT status FROM application_tasks').get().status).toBe('running')
   })
 })

@@ -73,6 +73,7 @@ import { AMOUNT_ENRICH_ENV_MAX_ATTEMPTS, AMOUNT_ENRICH_ENV_REPROBE_LIMIT } from 
 import { normalizePersistedMatchDecisionIntegrity } from '../services/matching/matchDecisionIntegrity.js'
 import { buildPersistedMatchExplain } from '../services/matching/matchExplainPersistence.js'
 import { hasFarmIdentity } from '../services/eligibility/farmIdentity.js'
+import { cleanupDisallowedHamiltonTraces } from '../services/hamilton/hamiltonFundingSourcePolicy.js'
 
 const log = createLogger('startup:enforceInvariants')
 
@@ -8411,6 +8412,98 @@ export async function enforceStageOfLifeMatchScope(db) {
 }
 
 /**
+ * INVARIANT: a stored match and its Hamilton work must still agree with the
+ * profile website's owner-audited purpose locks.
+ *
+ * Per-call matching stops new rows, while Hamilton's live policy recheck stops
+ * stale rows at execution time. This bounded boot net converges ACCEPT/REVIEW
+ * snapshots (including context-less crawler xmatches) and cancels their
+ * already-created non-terminal tasks. The catalog opportunity remains intact:
+ * it can still be valid for another profile.
+ */
+export async function enforceWebsitePurposeMatchScope(db) {
+  return runInvariant('website_purpose_match_scope', async () => {
+    const matchCols = await listMatchColumns(db)
+    if (!matchCols.has('profile_id') || !matchCols.has('opportunity_id')) {
+      return { scanned: 0, repaired: 0, tasksCancelled: 0, enforced: true, skipped: 'schema' }
+    }
+    let deriveWebsitePurpose, websitePurposeConflict
+    try {
+      ;({ deriveWebsitePurpose, websitePurposeConflict } = await import('../config/profileWebsitePurpose.js'))
+    } catch (err) {
+      log.warn('website_purpose_match_scope: deps unavailable (non-fatal)', { error: String(err?.message || err) })
+      return { scanned: 0, repaired: 0, tasksCancelled: 0, enforced: true, skipped: 'deps' }
+    }
+    const limit = _boundedLimit('MATCH_SCOPE_PURGE_LIMIT', MATCH_SCOPE_PURGE_LIMIT_DEFAULT)
+    const countOnly = _parseBoolEnv(process.env.ENFORCE_WEBSITE_PURPOSE_SCOPE) === false
+    let profileIds
+    try {
+      profileIds = await db
+        .prepare("SELECT id FROM profiles WHERE status IS NULL OR status = 'active' ORDER BY created_at")
+        .all()
+    } catch (err) {
+      log.warn('website_purpose_match_scope: profile query failed (non-fatal)', { error: String(err?.message || err) })
+      return { scanned: 0, repaired: 0, tasksCancelled: 0, enforced: true, skipped: 'query' }
+    }
+    const violating = []
+    let scanned = 0
+    for (const profileRow of profileIds || []) {
+      if (violating.length >= limit) break
+      const ctx = await _loadProfileContextForInvariant(db, profileRow.id)
+      if (!ctx) continue
+      const purpose = deriveWebsitePurpose({ profile: ctx.profile, sections: ctx.sections })
+      // No recognized host-specific purpose means none of this gate's locks can
+      // fire. Avoid walking the fleet's match rows for neutral profiles.
+      if (!purpose?.host || !purpose?.isResearchPurpose) continue
+      let rows
+      try {
+        rows = await db.prepare(`
+          SELECT m.id AS match_id, m.profile_id, m.opportunity_id, o.*
+            FROM profile_opportunity_matches m
+            JOIN funding_opportunities o ON o.id = m.opportunity_id
+           WHERE m.profile_id = ?
+           ORDER BY m.id
+           LIMIT ?
+        `).all(profileRow.id, limit)
+      } catch (err) {
+        log.warn('website_purpose_match_scope: candidate query failed (non-fatal)', {
+          profile: profileRow.id, error: String(err?.message || err),
+        })
+        continue
+      }
+      for (const row of rows || []) {
+        scanned += 1
+        const conflict = websitePurposeConflict({ purpose, opportunity: row })
+        if (conflict) violating.push({ ...row, conflict })
+        if (violating.length >= limit) break
+      }
+    }
+    if (countOnly) {
+      return { scanned, repaired: 0, wouldRepair: violating.length, tasksCancelled: 0, enforced: false }
+    }
+    let repaired = 0
+    let tasksCancelled = 0
+    for (const row of violating) {
+      const res = await db.prepare('DELETE FROM profile_opportunity_matches WHERE id = ?').run(row.match_id)
+      repaired += changesOf(res) || 0
+      const cleanup = await cleanupDisallowedHamiltonTraces(db, {
+        profileId: row.profile_id,
+        opportunityId: row.opportunity_id,
+        reason: `website_purpose:${row.conflict.lock}`,
+      })
+      tasksCancelled += Number(cleanup.cancelled_tasks) || 0
+    }
+    return {
+      scanned,
+      repaired,
+      tasksCancelled,
+      profilesAffected: new Set(violating.map((v) => v.profile_id)).size,
+      enforced: true,
+    }
+  })
+}
+
+/**
  * INVARIANT: A STUDENT'S OWN STATE'S STUDENT AID REACHES THAT STUDENT
  * (2026-08-02 — the other half of the stage-gate work).
  *
@@ -9556,6 +9649,9 @@ export async function runEnforceInvariants(db, { logger = log } = {}) {
   // Linker / recall residue: refresh gate-only stubs that lack
   // scoring_policy_version WITHOUT rebranding matcher_version (item 43).
   steps.push(await enforceStaleMatchExplainRefresh(db))
+  // WEBSITE-PURPOSE scope net: remove stale/context-less matches barred by the
+  // profile's owner-audited website purpose and cancel existing Hamilton work.
+  steps.push(await enforceWebsitePurposeMatchScope(db))
   // ACADEMIC-STAGE scope net: remove surfaced awards the profile's derived stage
   // provably cannot receive (graduate/professional, postdoctoral, adult
   // reentry). Runs immediately AFTER the recall gates so anything they added
@@ -9793,5 +9889,6 @@ export const __testables = {
   enforceJohnDraftPlausibility,
   enforceProfileResultFloor,
   enforceStageOfLifeMatchScope,
+  enforceWebsitePurposeMatchScope,
   enforceStudentAidInStateRecall,
 }
