@@ -12,12 +12,8 @@
  * - Emergency assistance programs
  */
 
-import fs from 'fs';
-import { dirname, join } from 'path';
-import { fileURLToPath } from 'url';
 import { upsertFundingOpportunity } from './opportunityInserter.js';
 import { createLogger } from '../utils/logger.js';
-import { warmCountyCache, countyCachePath } from '../startup/warmCountyCache.js';
 
 const log = createLogger('countyFundingCrawler');
 
@@ -37,49 +33,49 @@ let COMPLETE_US_COUNTIES = [];
 let COUNTY_STATS = { totalCounties: 0, totalStates: 0, source: 'unloaded' };
 let countyLoadPromise = null;
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = dirname(__filename);
-const repoRootDir = join(__dirname, '..', '..');
-const fallbackCountiesPath = join(repoRootDir, 'county_batch1.json');
+const EXPECTED_STATE_AND_DC_COUNT = 51;
+const MIN_EXPECTED_COUNTY_EQUIVALENTS = 3140;
 
 function cleanCountyName(value) {
   return String(value || '').trim();
 }
 
-function countyDisplayLabel(value) {
+export function countyDisplayLabel(value) {
   const county = cleanCountyName(value);
   if (!county) return '';
-  return /\b(county|parish|borough|census area|municipality|city and borough|district)$/i.test(county)
+  return /\b(county|parish|borough|census area|municipality|city and borough|district|city)$/i.test(county)
     ? county
     : `${county} County`;
 }
 
-function countyRowsFromStateMap(parsed) {
-  const counties = [];
-  const states = Object.keys(parsed || {}).filter((state) => /^[A-Z]{2}$/.test(String(state).toUpperCase()));
-
-  for (const rawState of states) {
-    const state = String(rawState).toUpperCase();
-    const stateValue = parsed[rawState];
-    const countyNames = Array.isArray(stateValue)
-      ? stateValue
-      : Object.keys(stateValue && typeof stateValue === 'object' ? stateValue : {});
-
-    const seen = new Set();
-    for (const value of countyNames) {
-      const county = cleanCountyName(value);
-      const key = county.toLowerCase();
-      if (!county || seen.has(key)) continue;
-      seen.add(key);
-      counties.push({ state, county });
-    }
-  }
-
-  return { counties, states: new Set(counties.map((row) => row.state)).size };
+export function countyAuthorityIsComplete(counties) {
+  if (!Array.isArray(counties) || counties.length < MIN_EXPECTED_COUNTY_EQUIVALENTS) return false;
+  const states = new Set(
+    counties
+      .map((row) => String(row?.state || '').trim().toUpperCase())
+      .filter((state) => /^[A-Z]{2}$/.test(state)),
+  );
+  return states.size === EXPECTED_STATE_AND_DC_COUNT;
 }
 
 function installCountyRows(counties, source) {
-  COMPLETE_US_COUNTIES = Array.isArray(counties) ? counties : [];
+  if (!countyAuthorityIsComplete(counties)) {
+    const count = Array.isArray(counties) ? counties.length : 0;
+    const states = new Set(
+      (Array.isArray(counties) ? counties : [])
+        .map((row) => String(row?.state || '').trim().toUpperCase())
+        .filter((state) => /^[A-Z]{2}$/.test(state)),
+    ).size;
+    throw new Error(
+      `County authority incomplete: ${count} county equivalents across ${states} state/DC codes`,
+    );
+  }
+
+  COMPLETE_US_COUNTIES = counties.map((row) => ({
+    ...row,
+    state: String(row.state).trim().toUpperCase(),
+    county: cleanCountyName(row.county),
+  }));
   COUNTY_STATS = {
     totalCounties: COMPLETE_US_COUNTIES.length,
     totalStates: new Set(COMPLETE_US_COUNTIES.map((row) => row.state)).size,
@@ -88,72 +84,35 @@ function installCountyRows(counties, source) {
   return COMPLETE_US_COUNTIES;
 }
 
-async function loadLegacyCountyDataset() {
-  try {
-    const mod = await import('../data/completeCounties.js');
-    const counties = Array.isArray(mod.COMPLETE_US_COUNTIES) ? mod.COMPLETE_US_COUNTIES : [];
-    if (counties.length > 0) return installCountyRows(counties, 'completeCounties.js');
-  } catch {
-    // Legacy generated file is optional. Fall through to the next real source.
-  }
-
-  try {
-    const raw = fs.readFileSync(fallbackCountiesPath, 'utf8');
-    const parsed = JSON.parse(raw);
-    const { counties } = countyRowsFromStateMap(parsed);
-    if (counties.length > 0) return installCountyRows(counties, 'county_batch1.json');
-  } catch {
-    // Legacy root fallback is optional. The canonical generated cache below is
-    // the durable on-demand fallback for clean checkouts and Railway boots.
-  }
-
-  return null;
-}
-
 /**
- * Load the county authority lazily. Disabled crawler imports do not probe
- * optional files or emit false startup errors. When the crawler is enabled on a
- * clean checkout, reuse GrantFlow's existing offline ZIP-backed county cache
- * generator instead of requiring an untracked data file.
+ * Load the county authority lazily. Disabled crawler imports do not touch the
+ * network or optional data files. When enabled, use the Census-backed county
+ * authority in backend/data/completeCounties.js. If the official authority is
+ * unavailable or incomplete, fail closed instead of silently omitting real
+ * county equivalents from a nationwide crawl.
  */
 export async function loadCounties() {
   if (COMPLETE_US_COUNTIES.length > 0) return COMPLETE_US_COUNTIES;
   if (countyLoadPromise) return countyLoadPromise;
 
   countyLoadPromise = (async () => {
-    const legacy = await loadLegacyCountyDataset();
-    if (legacy?.length) return legacy;
-
-    const warmResult = await warmCountyCache();
-    const cachePath = warmResult?.path || countyCachePath();
-
-    try {
-      const parsed = JSON.parse(fs.readFileSync(cachePath, 'utf8'));
-      const { counties } = countyRowsFromStateMap(parsed);
-      if (counties.length > 0) {
-        return installCountyRows(counties, 'zipcodes-backed counties_by_state cache');
-      }
-    } catch (error) {
-      const warmReason = warmResult?.error || warmResult?.skipped || 'unknown';
-      throw new Error(
-        `County dataset unavailable after cache warm (${warmReason}): ${error?.message || error}`,
-      );
-    }
-
-    throw new Error(
-      `County dataset unavailable after cache warm (${warmResult?.error || warmResult?.skipped || 'empty cache'})`,
-    );
+    const mod = await import('../data/completeCounties.js');
+    const counties = Array.isArray(mod.COMPLETE_US_COUNTIES) ? mod.COMPLETE_US_COUNTIES : [];
+    const source = mod.COUNTY_DATA_SOURCE?.authority
+      ? `${mod.COUNTY_DATA_SOURCE.authority} ${mod.COUNTY_DATA_SOURCE.vintage || ''}`.trim()
+      : 'U.S. Census Bureau county authority';
+    return installCountyRows(counties, source);
   })().catch((error) => {
     countyLoadPromise = null;
     COMPLETE_US_COUNTIES = [];
     COUNTY_STATS = { totalCounties: 0, totalStates: 0, source: 'unavailable' };
-    log.error(`[CountyCrawler] County dataset unavailable: ${error?.message || error}`);
+    log.error(`[CountyCrawler] County authority unavailable: ${error?.message || error}`);
     throw error;
   });
 
   const counties = await countyLoadPromise;
   log.info(
-    `[CountyCrawler] Using ${COUNTY_STATS.totalCounties} counties from ${COUNTY_STATS.totalStates} states (${COUNTY_STATS.source})`,
+    `[CountyCrawler] Using ${COUNTY_STATS.totalCounties} county equivalents from ${COUNTY_STATS.totalStates} states/DC (${COUNTY_STATS.source})`,
   );
   return counties;
 }
@@ -233,7 +192,7 @@ const ORG_PATTERNS = {
   },
 };
 
-const CRAWLER_VERSION = '3.1';
+const CRAWLER_VERSION = '3.2';
 
 /**
  * Create opportunity entry for a county-level organization
