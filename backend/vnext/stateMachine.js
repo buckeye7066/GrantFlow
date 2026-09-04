@@ -10,6 +10,28 @@ import { getScopedOpportunityForVnextApplication } from '../utils/scopedOpportun
 import { createLogger } from '../utils/logger.js'
 
 const log = createLogger('vnext.stateMachine')
+const TRANSITION_AUDIT = Symbol('transitionAudit')
+
+function resultWithAudit(result, audit) {
+  Object.defineProperty(result, TRANSITION_AUDIT, { value: audit })
+  return result
+}
+
+async function writeTransitionAudit(db, result) {
+  const audit = result?.[TRANSITION_AUDIT]
+  if (!audit) return
+  try {
+    await writeAuditEvent(db, audit)
+  } catch (error) {
+    // Auditing is deliberately best effort and runs only after the state
+    // transaction has committed, so it can neither poison nor undo the claim.
+    log.warn('transition.audit_failed', {
+      applicationId: audit.entity_id,
+      action: audit.action,
+      error: error?.message || String(error),
+    })
+  }
+}
 
 class ConcurrentTransitionError extends Error {
   constructor(applicationId, expectedState, targetState) {
@@ -131,7 +153,7 @@ async function transitionInTransaction(db, applicationId, target, actor) {
   }
 
   if (blockers.length > 0) {
-    await writeAuditEvent(db, {
+    return resultWithAudit(blockersToResult(blockers), {
       actor,
       entity_type: 'vnext_application',
       entity_id: String(applicationId),
@@ -139,7 +161,6 @@ async function transitionInTransaction(db, applicationId, target, actor) {
       before: { state: current, target },
       after: { blockers },
     })
-    return blockersToResult(blockers)
   }
 
   if (targetIdx === currentIdx) {
@@ -202,7 +223,7 @@ async function transitionInTransaction(db, applicationId, target, actor) {
   }
 
   if (blockers.length > 0) {
-    await writeAuditEvent(db, {
+    return resultWithAudit(blockersToResult(blockers), {
       actor,
       entity_type: 'vnext_application',
       entity_id: String(applicationId),
@@ -210,7 +231,6 @@ async function transitionInTransaction(db, applicationId, target, actor) {
       before: { state: current, target },
       after: { blockers },
     })
-    return blockersToResult(blockers)
   }
 
   let boundary_type = app.boundary_type || null
@@ -273,7 +293,7 @@ async function transitionInTransaction(db, applicationId, target, actor) {
     await ensureDraftingTasks(db, String(applicationId))
   }
 
-  await writeAuditEvent(db, {
+  return resultWithAudit({ ok: true, newState: target, application: { ...app, ...after } }, {
     actor,
     entity_type: 'vnext_application',
     entity_id: String(applicationId),
@@ -281,8 +301,6 @@ async function transitionInTransaction(db, applicationId, target, actor) {
     before,
     after,
   })
-
-  return { ok: true, newState: target, application: { ...app, ...after } }
 }
 
 export async function attemptTransition(db, applicationId, targetStateRaw, actor = null) {
@@ -295,9 +313,13 @@ export async function attemptTransition(db, applicationId, targetStateRaw, actor
 
   try {
     if (typeof db?.withTransaction === 'function') {
-      return await db.withTransaction(run)
+      const result = await db.withTransaction(run)
+      await writeTransitionAudit(db, result)
+      return result
     }
-    return await run(db)
+    const result = await run(db)
+    await writeTransitionAudit(db, result)
+    return result
   } catch (error) {
     if (error instanceof ConcurrentTransitionError || error?.code === 'CONCURRENT_TRANSITION') {
       log.warn('transition.concurrent_change', {
