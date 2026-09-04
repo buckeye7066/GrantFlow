@@ -78,7 +78,18 @@ function obj(v) {
 
 function list(v) {
   if (Array.isArray(v)) return v
-  if (typeof v === 'string' && v.trim()) return v.split(',')
+  // Profile imports and older clients may still persist a textarea value as
+  // one string even though the canonical field format is `string_array`.
+  // The editor explicitly promises "commas or new lines", so consuming only
+  // commas turned a pasted list into one impossible mega-item search. Split at
+  // the declared delimiters here, at the single profile-to-item choke point,
+  // and remove common visual bullet prefixes without rewriting the item text.
+  if (typeof v === 'string' && v.trim()) {
+    return v
+      .split(/[,;\r\n]+/)
+      .map((entry) => entry.replace(/^\s*(?:[-*\u2022]|\d+[.)])\s*/, '').trim())
+      .filter(Boolean)
+  }
   return []
 }
 
