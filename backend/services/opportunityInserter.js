@@ -856,6 +856,11 @@ export async function upsertFundingOpportunity(db, opportunity, opts = {}) {
       record.final_url = null
       record.http_status = null
       record.is_hidden = toDbBoolean(db, !effectivePointerRow)
+      // Reactivate previously deactivated broken rows so the verifier can re-probe them.
+      if (!effectivePointerRow && String(existing.link_status || '').trim().toLowerCase() === 'broken') {
+        record.is_active = toDbBoolean(db, true)
+        record.status = existing.status === 'paused' ? 'active' : existing.status
+      }
     } else if (!incomingHasCurrentProof && existingHasCurrentProof) {
       record.last_verified_at = existing.last_verified_at
       record.link_status = existing.link_status
@@ -880,6 +885,11 @@ export async function upsertFundingOpportunity(db, opportunity, opts = {}) {
       record.final_url = existing.final_url
       record.http_status = existing.http_status
       record.is_hidden = toDbBoolean(db, !effectivePointerRow)
+      // Reactivate previously deactivated broken rows so the verifier can re-probe them.
+      if (!effectivePointerRow && String(existing.link_status || '').trim().toLowerCase() === 'broken') {
+        record.is_active = toDbBoolean(db, true)
+        record.status = existing.status === 'paused' ? 'active' : existing.status
+      }
     } else {
       const priorStatus = String(existing.link_status || 'unverified').trim().toLowerCase()
       const priorError = String(existing.verification_error || '')
@@ -1550,6 +1560,14 @@ export async function upsertFundingOpportunity(db, opportunity, opts = {}) {
           OR COALESCE(funding_opportunities.verification_error, '') LIKE 'stale_reverification_required:%'
           OR COALESCE(funding_opportunities.verification_error, '') LIKE 'retry_scheduled_after_bounded_recheck:%'
         ) THEN TRUE
+        WHEN NOT (${incomingHasCurrentProofSql})
+          AND NOT (${pointerOpportunityRowSql('excluded')})
+          AND (
+            ${effectiveTargetChangedSql}
+            OR NOT (${existingHasCurrentProofSql})
+          )
+          AND LOWER(TRIM(COALESCE(funding_opportunities.link_status, 'unverified'))) = 'broken'
+        THEN TRUE
         ELSE funding_opportunities.is_active
       END,
       status = CASE
