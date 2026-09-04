@@ -31,6 +31,7 @@ import {
   ITEM_TAG_VOCABULARY,
   MAX_ITEM_NEEDS,
   deriveProfileItemNeeds,
+  parseDeclaredItemList,
   ruleAppliesToProfile,
 } from '../config/profileItemNeeds.js'
 import fs from 'node:fs'
@@ -206,6 +207,23 @@ describe('profileItemNeeds — the registry', () => {
 })
 
 describe('profileItemNeeds — provenance', () => {
+  it('deduplicates pasted item lists without splitting legitimate and-phrases', () => {
+    expect(parseDeclaredItemList('laptop; Laptop\nwasher and dryer')).toEqual([
+      'laptop',
+      'washer and dryer',
+    ])
+  })
+
+  it('derives the owner example of a 15-passenger bus from structured tags', () => {
+    const out = deriveProfileItemNeeds(
+      { primary_type: 'nonprofit' },
+      { programs_services: { focus_areas: ['Transportation - 15 passenger bus'] } },
+    )
+    expect(out.needs).toEqual(expect.arrayContaining([
+      expect.objectContaining({ item: '15-passenger bus', category: 'vehicle' }),
+    ]))
+  })
+
   it('every derived need carries the registry field id it came from', () => {
     const out = deriveProfileItemNeeds(DEMO_HEALTH_EDUCATION.profile, DEMO_HEALTH_EDUCATION.sections)
     expect(out.needs.length).toBeGreaterThan(0)
