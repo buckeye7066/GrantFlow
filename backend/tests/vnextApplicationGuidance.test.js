@@ -133,6 +133,42 @@ describe('profile-scoped vNext application guidance loading', () => {
     ])
   })
 
+  it('does not transfer guidance across different funders that share one portal URL', () => {
+    const applicationBearing = {
+      id: 'foundation-a-row',
+      title: 'Community Support Grant',
+      sponsor: 'Foundation A',
+      state: 'TN',
+      application_url: 'https://shared-portal.org/apply',
+      record_origin: 'curated_program',
+      vnext_application_id: 'app-foundation-a',
+      vnext_application_state: 'MAPPED',
+      vnext_application_stage: 'MAPPED',
+      next_steps: [{ id: 'resolve_missing', category: 'application' }],
+    }
+    const higherTrustDifferentFunder = {
+      id: 'foundation-b-row',
+      title: 'Community Support Grant',
+      sponsor: 'Foundation B',
+      state: 'TN',
+      application_url: 'https://shared-portal.org/apply',
+      record_origin: 'verified_real',
+      next_steps: [{ id: 'save_to_pipeline', category: 'application' }],
+    }
+
+    expect(deduplicateOpportunities([
+      applicationBearing,
+      higherTrustDifferentFunder,
+    ])).toEqual([
+      expect.objectContaining({
+        id: 'foundation-a-row',
+        sponsor: 'Foundation A',
+        vnext_application_id: 'app-foundation-a',
+        next_steps: [{ id: 'resolve_missing', category: 'application' }],
+      }),
+    ])
+  })
+
   it('keeps both application rows when loose display similarity lacks canonical identity', () => {
     const foundationA = {
       id: 'foundation-a-row',

@@ -177,7 +177,25 @@ describe('VNext transition integrity', () => {
       newState: VNEXT_STATES.DEDUPED,
       idempotent: true,
     })
-    expect(db.prepare).not.toHaveBeenCalled()
+    expect(db.prepare).toHaveBeenCalledTimes(1)
+    const sql = db.prepare.mock.calls[0][0]
+    expect(sql).toContain('SET updated_at = updated_at')
+    expect(sql).toContain('state IS ?')
+    expect(sql).toContain('stage IS ?')
+  })
+
+  it('blocks a same-state retry when the lifecycle snapshot changes during reconciliation', async () => {
+    getScopedOpportunityForVnextApplication.mockResolvedValue(
+      scopedFixture(VNEXT_STATES.DEDUPED),
+    )
+    const { db } = makeDb({ changes: 0 })
+
+    const result = await attemptTransition(db, 'app-1', VNEXT_STATES.DEDUPED)
+
+    expect(result.ok).toBe(false)
+    expect(result.blockers).toEqual([
+      expect.objectContaining({ code: 'CONCURRENT_TRANSITION' }),
+    ])
   })
 
   it('revalidates same-state proof and blocks when resolved requirements become missing again', async () => {
@@ -225,7 +243,10 @@ describe('VNext transition integrity', () => {
     })
     const preparedSql = db.prepare.mock.calls.map(([sql]) => sql)
     expect(preparedSql.filter((sql) => sql.includes('vnext_application_tasks'))).toHaveLength(3)
-    expect(preparedSql.some((sql) => sql.includes('UPDATE vnext_applications'))).toBe(false)
+    const lifecycleClaims = preparedSql.filter((sql) => sql.includes('UPDATE vnext_applications'))
+    expect(lifecycleClaims).toHaveLength(1)
+    expect(lifecycleClaims[0]).toContain('SET updated_at = updated_at')
+    expect(lifecycleClaims[0]).not.toContain('SET state = ?')
   })
 
   it('repairs boundary metadata on a same-state retry without rewriting lifecycle state', async () => {

@@ -379,6 +379,25 @@ async function transitionInTransaction(db, applicationId, target, actor) {
       if (changedCount(repair) !== 1) {
         throw new ConcurrentTransitionError(applicationId, current, target)
       }
+    } else {
+      // Bind same-state invariant/task side effects to the exact lifecycle
+      // snapshot that authorized them. A concurrent transition makes this
+      // no-op CAS match zero rows and rolls the transaction back.
+      const claim = await db
+        .prepare(
+          `
+            UPDATE vnext_applications
+            SET updated_at = updated_at
+            WHERE id = ?
+              AND ${nullSafeEquals(db, 'state')}
+              AND ${nullSafeEquals(db, 'stage')}
+          `,
+        )
+        .run(String(applicationId), rawState, rawStage)
+
+      if (changedCount(claim) !== 1) {
+        throw new ConcurrentTransitionError(applicationId, current, target)
+      }
     }
 
     return resultWithAudits(

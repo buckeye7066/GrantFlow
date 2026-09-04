@@ -34,6 +34,7 @@ import {
   chooseGrantUrl,
   GRANT_FINGERPRINT_VERSION,
   likelySameGrantOpportunity,
+  opportunityFunder,
 } from '../utils/grantFingerprint.js'
 import { isDismissed as isPipelineDismissed } from './pipelineDismissals.js'
 import { classifyFundingResult, RESULT_BUCKETS } from '../config/fundingResultFilters.js'
@@ -1199,6 +1200,14 @@ function hasCanonicalOpportunityIdentity(left, right) {
     const rightFingerprint = normalizedIdentity(right?.[field])
     if (leftFingerprint && rightFingerprint && leftFingerprint === rightFingerprint) return true
   }
+
+  // A shared application portal is not a durable opportunity identity. Many
+  // funders intentionally use the same hosted intake form or directory URL.
+  // Before the fuzzy identity fallback can transfer profile-scoped guidance,
+  // the named funders must not contradict one another.
+  const leftFunder = normalizedIdentity(opportunityFunder(left))
+  const rightFunder = normalizedIdentity(opportunityFunder(right))
+  if (leftFunder && rightFunder && leftFunder !== rightFunder) return false
 
   try {
     return likelySameGrantOpportunity(left, right)
