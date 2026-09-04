@@ -95,6 +95,7 @@ export async function scoreApplication(
     hourly_value = 50,
     nowMs = null,
     deferAudit = false,
+    enrichWebsitePurpose = true,
   } = {},
 ) {
   // Scoped lookup through vnext_applications.opportunity_id so a tampered or
@@ -115,11 +116,11 @@ export async function scoreApplication(
     }
   }
 
-  // Scoring can run inside the transition transaction. Consume persisted
-  // profile evidence without performing a website fetch while row/write locks
-  // are held.
+  // Standalone recomputation keeps the normal website-purpose enrichment.
+  // Transactional callers explicitly disable it so row/write locks are never
+  // held across a website fetch.
   const profileCtx = await loadProfileContext(db, String(app.profile_id), {
-    enrichWebsitePurpose: false,
+    enrichWebsitePurpose,
   })
   const missing = safeJsonParse(app.missing_requirements, null)
 

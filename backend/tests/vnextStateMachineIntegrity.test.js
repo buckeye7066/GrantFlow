@@ -210,6 +210,49 @@ describe('VNext transition integrity', () => {
     expect(preparedSql.some((sql) => sql.includes('UPDATE vnext_applications'))).toBe(false)
   })
 
+  it('repairs boundary metadata on a same-state retry without rewriting lifecycle state', async () => {
+    const fixture = scopedFixture(VNEXT_STATES.BOUNDARY_REACHED)
+    fixture.application.boundary_type = 'none'
+    fixture.application.boundary_url = 'https://old.example/apply'
+    fixture.opportunity.application_mode = 'portal'
+    fixture.opportunity.apply_url = 'https://current.example/apply'
+    getScopedOpportunityForVnextApplication.mockResolvedValue(fixture)
+    const { db, run } = makeDb()
+
+    const result = await attemptTransition(
+      db,
+      'app-1',
+      VNEXT_STATES.BOUNDARY_REACHED,
+    )
+
+    expect(result).toMatchObject({
+      ok: true,
+      newState: VNEXT_STATES.BOUNDARY_REACHED,
+      idempotent: true,
+      application: {
+        state: VNEXT_STATES.BOUNDARY_REACHED,
+        boundary_type: 'portal',
+        boundary_url: 'https://current.example/apply',
+      },
+    })
+    const sql = db.prepare.mock.calls[0][0]
+    expect(sql).toContain('SET boundary_type = ?')
+    expect(sql).not.toContain('SET state = ?')
+    expect(run).toHaveBeenCalledWith(
+      'portal',
+      'https://current.example/apply',
+      'app-1',
+      VNEXT_STATES.BOUNDARY_REACHED,
+      VNEXT_STATES.BOUNDARY_REACHED,
+      VNEXT_STATES.BOUNDARY_REACHED,
+      VNEXT_STATES.BOUNDARY_REACHED,
+      'none',
+      'none',
+      'https://old.example/apply',
+      'https://old.example/apply',
+    )
+  })
+
   it('commits an applied transition before attempting best-effort audit logging', async () => {
     const events = []
     const { db } = makeDb()
@@ -265,9 +308,11 @@ describe('VNext transition integrity', () => {
     ])
     expect(computeMissingRequirements).toHaveBeenCalledWith(db, expect.objectContaining({
       deferAudit: true,
+      enrichWebsitePurpose: false,
     }))
     expect(scoreApplication).toHaveBeenCalledWith(db, expect.objectContaining({
       deferAudit: true,
+      enrichWebsitePurpose: false,
     }))
   })
 

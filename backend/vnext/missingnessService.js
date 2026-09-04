@@ -145,7 +145,12 @@ async function listDocumentStructuredForProfile(db, profileId) {
 
 export async function computeMissingRequirements(
   db,
-  { applicationId, actor = null, deferAudit = false } = {},
+  {
+    applicationId,
+    actor = null,
+    deferAudit = false,
+    enrichWebsitePurpose = true,
+  } = {},
 ) {
   // Scoped through vnext_applications so the opportunity must be linked to
   // this application (no cross-profile bleed via tampered ids).
@@ -177,11 +182,12 @@ export async function computeMissingRequirements(
     return { ok: false, error: { code: 'SCHEMA_MISSING', message: 'Schema missing for opportunity' } }
   }
 
-  // Transition callers may hold a write transaction. Profile website refresh
-  // performs bounded network I/O and must never extend that lock window; the
-  // already-persisted website-purpose section remains part of this context.
+  // Standalone recomputation keeps the normal website-purpose enrichment.
+  // Transactional callers explicitly disable it so bounded network I/O never
+  // extends a state-transition lock window; persisted website evidence remains
+  // available in either mode.
   const profileContext = await loadProfileContext(db, String(app.profile_id), {
-    enrichWebsitePurpose: false,
+    enrichWebsitePurpose,
   })
   const documentStructured = await listDocumentStructuredForProfile(db, String(app.profile_id))
 

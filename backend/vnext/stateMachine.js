@@ -217,6 +217,7 @@ async function transitionInTransaction(db, applicationId, target, actor) {
       applicationId: String(applicationId),
       actor,
       deferAudit: true,
+      enrichWebsitePurpose: false,
     })
     if (Array.isArray(res?.deferredAuditEvents)) {
       deferredAuditEvents.push(...res.deferredAuditEvents)
@@ -258,7 +259,7 @@ async function transitionInTransaction(db, applicationId, target, actor) {
 
   let boundary_type = app.boundary_type || null
   let boundary_url = app.boundary_url || null
-  if (!idempotent && target === VNEXT_STATES.BOUNDARY_REACHED) {
+  if (target === VNEXT_STATES.BOUNDARY_REACHED) {
     const boundary = boundaryFromOpportunity(opportunity)
     boundary_type = boundary.type
     boundary_url = boundary.url
@@ -317,6 +318,7 @@ async function transitionInTransaction(db, applicationId, target, actor) {
       applicationId: String(applicationId),
       actor,
       deferAudit: true,
+      enrichWebsitePurpose: false,
     })
     if (Array.isArray(score?.deferredAuditEvents)) {
       deferredAuditEvents.push(...score.deferredAuditEvents)
@@ -338,8 +340,56 @@ async function transitionInTransaction(db, applicationId, target, actor) {
   }
 
   if (idempotent) {
+    const currentBoundaryType = app.boundary_type || null
+    const currentBoundaryUrl = app.boundary_url || null
+    const boundaryNeedsRepair =
+      target === VNEXT_STATES.BOUNDARY_REACHED &&
+      (boundary_type !== currentBoundaryType || boundary_url !== currentBoundaryUrl)
+
+    if (boundaryNeedsRepair) {
+      const nowExpr = sqlNowLiteral(db)
+      const repair = await db
+        .prepare(
+          `
+            UPDATE vnext_applications
+            SET boundary_type = ?,
+                boundary_url = ?,
+                updated_at = ${nowExpr}
+            WHERE id = ?
+              AND ((state = ?) OR (state IS NULL AND ? IS NULL))
+              AND ((stage = ?) OR (stage IS NULL AND ? IS NULL))
+              AND ((boundary_type = ?) OR (boundary_type IS NULL AND ? IS NULL))
+              AND ((boundary_url = ?) OR (boundary_url IS NULL AND ? IS NULL))
+          `,
+        )
+        .run(
+          boundary_type,
+          boundary_url,
+          String(applicationId),
+          rawState,
+          rawState,
+          rawStage,
+          rawStage,
+          app.boundary_type ?? null,
+          app.boundary_type ?? null,
+          app.boundary_url ?? null,
+          app.boundary_url ?? null,
+        )
+
+      if (changedCount(repair) !== 1) {
+        throw new ConcurrentTransitionError(applicationId, current, target)
+      }
+    }
+
     return resultWithAudits(
-      { ok: true, newState: current, application: app, idempotent: true },
+      {
+        ok: true,
+        newState: current,
+        application: boundaryNeedsRepair
+          ? { ...app, boundary_type, boundary_url }
+          : app,
+        idempotent: true,
+      },
       deferredAuditEvents,
     )
   }

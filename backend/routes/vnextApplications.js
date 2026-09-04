@@ -20,11 +20,11 @@ const routeLogger = createLogger('route:vnextApplications')
 
 const router = express.Router()
 
-function vnextEnabled(req) {
+function vnextEnabled(req, profileId) {
   const ctx = req.ctx || {}
   return isShouldersVnextEnabled(req.db, {
     userId: ctx.userId ?? req.user?.userId ?? null,
-    profileId: ctx.activeProfileId ?? null,
+    profileId: profileId ?? null,
     isAdmin: Boolean(ctx.isAdmin),
   })
 }
@@ -33,8 +33,8 @@ function errorResponse(res, status, code, message, details) {
   return res.status(status).json({ error: { code, message, details: details ?? undefined } })
 }
 
-function requireVNext(req, res) {
-  if (!vnextEnabled(req)) {
+function requireVNext(req, res, profileId) {
+  if (!vnextEnabled(req, profileId)) {
     errorResponse(res, 404, 'FEATURE_DISABLED', 'vNext Shoulders backbone is disabled', {
       flag: 'shoulders.vnext',
       env: 'SHOULDERS_VNEXT',
@@ -65,7 +65,6 @@ function normalizeAppRow(db, row) {
 router.get('/', standardRateLimiter, async (req, res) => {
   const user = requireAuthenticatedUser(req, res)
   if (!user) return
-  if (!requireVNext(req, res)) return
 
   const headerProfileId = typeof req.headers['x-profile-id'] === 'string' ? req.headers['x-profile-id'] : null
   const profileId = (typeof req.query.profile_id === 'string' ? req.query.profile_id : null) || headerProfileId
@@ -75,6 +74,7 @@ router.get('/', standardRateLimiter, async (req, res) => {
 
   const ok = await ensureProfileAccess(req, res, String(profileId))
   if (!ok) return
+  if (!requireVNext(req, res, String(profileId))) return
 
   const limit = Math.min(Math.max(Number.parseInt(String(req.query.limit || '200'), 10) || 200, 1), 500)
 
@@ -96,7 +96,6 @@ router.get('/', standardRateLimiter, async (req, res) => {
 router.post('/', mutationRateLimiter, async (req, res) => {
   const user = requireAuthenticatedUser(req, res)
   if (!user) return
-  if (!requireVNext(req, res)) return
 
   const parsed = CreateSchema.safeParse(req.body ?? {})
   if (!parsed.success) {
@@ -108,6 +107,7 @@ router.post('/', mutationRateLimiter, async (req, res) => {
 
   const ok = await ensureProfileAccess(req, res, profileId)
   if (!ok) return
+  if (!requireVNext(req, res, profileId)) return
 
   const opp = await req.db.prepare('SELECT * FROM funding_opportunities WHERE id = ?').get(opportunityId)
   if (!opp) return errorResponse(res, 404, 'OPPORTUNITY_NOT_FOUND', 'Opportunity not found')
@@ -162,7 +162,6 @@ router.post('/', mutationRateLimiter, async (req, res) => {
 router.get('/:id', standardRateLimiter, async (req, res) => {
   const user = requireAuthenticatedUser(req, res)
   if (!user) return
-  if (!requireVNext(req, res)) return
 
   const id = String(req.params.id)
   const row = await req.db.prepare('SELECT * FROM vnext_applications WHERE id = ?').get(id)
@@ -170,6 +169,7 @@ router.get('/:id', standardRateLimiter, async (req, res) => {
 
   const ok = await ensureProfileAccess(req, res, String(row.profile_id))
   if (!ok) return
+  if (!requireVNext(req, res, String(row.profile_id))) return
 
   return res.json(normalizeAppRow(req.db, row))
 })
@@ -177,7 +177,6 @@ router.get('/:id', standardRateLimiter, async (req, res) => {
 router.post('/:id/transition', mutationRateLimiter, async (req, res) => {
   const user = requireAuthenticatedUser(req, res)
   if (!user) return
-  if (!requireVNext(req, res)) return
 
   const parsed = TransitionSchema.safeParse(req.body ?? {})
   if (!parsed.success) {
@@ -190,6 +189,7 @@ router.post('/:id/transition', mutationRateLimiter, async (req, res) => {
 
   const ok = await ensureProfileAccess(req, res, String(row.profile_id))
   if (!ok) return
+  if (!requireVNext(req, res, String(row.profile_id))) return
 
   const targetState = normalizeVNextState(parsed.data.targetState)
   if (!targetState) {
@@ -229,7 +229,6 @@ router.post('/:id/transition', mutationRateLimiter, async (req, res) => {
 router.get('/:id/finish-packet', standardRateLimiter, async (req, res) => {
   const user = requireAuthenticatedUser(req, res)
   if (!user) return
-  if (!requireVNext(req, res)) return
 
   const id = String(req.params.id)
   const row = await req.db.prepare('SELECT * FROM vnext_applications WHERE id = ?').get(id)
@@ -237,6 +236,7 @@ router.get('/:id/finish-packet', standardRateLimiter, async (req, res) => {
 
   const ok = await ensureProfileAccess(req, res, String(row.profile_id))
   if (!ok) return
+  if (!requireVNext(req, res, String(row.profile_id))) return
 
   // Ensure missingness + scoring are present (idempotent, deterministic)
   const actor = { type: req.ctx?.isAdmin === true ? 'system' : 'user', id: req.ctx?.userId ?? user?.userId ?? null }

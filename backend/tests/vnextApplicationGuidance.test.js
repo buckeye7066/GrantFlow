@@ -70,6 +70,7 @@ describe('profile-scoped vNext application guidance loading', () => {
       title: 'Community Health Grant',
       state: 'TN',
       application_url: 'https://example.org/apply',
+      fingerprint: 'canonical-grant-1',
       vnext_application_id: 'app-1',
       vnext_application_state: 'DEDUPED',
       vnext_application_stage: 'DEDUPED',
@@ -80,6 +81,7 @@ describe('profile-scoped vNext application guidance loading', () => {
       title: 'Community Health Grant',
       state: 'TN',
       application_url: 'https://agency.gov/apply',
+      fingerprint: 'canonical-grant-1',
       next_steps: [{ id: 'save_to_pipeline', category: 'application' }],
     }
 
@@ -92,6 +94,39 @@ describe('profile-scoped vNext application guidance loading', () => {
         vnext_application_id: 'app-1',
         vnext_application_state: 'DEDUPED',
         next_steps: [{ id: 'qualify_application', category: 'application' }],
+      }),
+    ])
+  })
+
+  it('does not move application guidance onto a similarly titled different-funder row', () => {
+    const applicationBearing = {
+      id: 'foundation-a-row',
+      title: 'Community Support Grant',
+      sponsor: 'Foundation A',
+      state: 'TN',
+      application_url: 'https://foundation-a.org/apply',
+      vnext_application_id: 'app-foundation-a',
+      vnext_application_state: 'MAPPED',
+      vnext_application_stage: 'MAPPED',
+      next_steps: [{ id: 'resolve_missing', category: 'application' }],
+    }
+    const superficiallySimilar = {
+      id: 'foundation-b-row',
+      title: 'Community Support Grant',
+      sponsor: 'Foundation B',
+      state: 'TN',
+      application_url: 'https://foundation-b.gov/apply',
+      next_steps: [{ id: 'save_to_pipeline', category: 'application' }],
+    }
+
+    expect(deduplicateOpportunities([
+      applicationBearing,
+      superficiallySimilar,
+    ])).toEqual([
+      expect.objectContaining({
+        id: 'foundation-a-row',
+        vnext_application_id: 'app-foundation-a',
+        next_steps: [{ id: 'resolve_missing', category: 'application' }],
       }),
     ])
   })

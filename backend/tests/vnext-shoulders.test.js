@@ -2,6 +2,7 @@ import request from "supertest"
 import { describe, it, expect, beforeAll, beforeEach } from "vitest"
 import { getAppAndDb, resetDb, TEST_ADMIN_AUTH_HEADER } from "./testServer.js"
 import { scoreApplication } from "../vnext/scoringService.js"
+import { initializeFeatureFlags } from "../services/featureFlagService.js"
 
 describe("vNext Shoulders backbone", () => {
   let app
@@ -82,6 +83,64 @@ describe("vNext Shoulders backbone", () => {
       expect(response.body?.ok).toBe(true)
     }
   }
+
+  it("uses the requested authorized profile for every vNext feature gate", async () => {
+    const previousFlag = process.env.SHOULDERS_VNEXT
+    try {
+      delete process.env.SHOULDERS_VNEXT
+      initializeFeatureFlags(db)
+      db.prepare("DELETE FROM feature_flag_overrides WHERE flag_key = ?").run("shoulders.vnext")
+      db.prepare(
+        `
+          INSERT INTO feature_flag_overrides (
+            id, flag_key, user_id, profile_id, enabled, expires_at
+          ) VALUES (?, ?, NULL, ?, 1, NULL)
+        `,
+      ).run("vnext-target-profile-override", "shoulders.vnext", "profile-vnext-target")
+
+      const { profileId, applicationId } = await seedProfileAndOpportunity({
+        profileId: "profile-vnext-target",
+        opportunityId: "opp-vnext-target",
+        withProfileFields: true,
+      })
+
+      const listed = await request(app)
+        .get("/api/vnext/applications")
+        .query({ profile_id: profileId })
+        .set(TEST_ADMIN_AUTH_HEADER)
+      expect(listed.status).toBe(200)
+      expect(listed.body).toEqual(expect.arrayContaining([
+        expect.objectContaining({ id: applicationId, profile_id: profileId }),
+      ]))
+
+      const fetched = await request(app)
+        .get(`/api/vnext/applications/${applicationId}`)
+        .set(TEST_ADMIN_AUTH_HEADER)
+      expect(fetched.status).toBe(200)
+
+      const transitioned = await request(app)
+        .post(`/api/vnext/applications/${applicationId}/transition`)
+        .set(TEST_ADMIN_AUTH_HEADER)
+        .send({ targetState: "DEDUPED" })
+      expect(transitioned.status).toBe(200)
+
+      const packet = await request(app)
+        .get(`/api/vnext/applications/${applicationId}/finish-packet`)
+        .set(TEST_ADMIN_AUTH_HEADER)
+      expect(packet.status).toBe(409)
+      expect(packet.body?.error?.code).not.toBe("FEATURE_DISABLED")
+    } finally {
+      if (previousFlag === undefined) delete process.env.SHOULDERS_VNEXT
+      else process.env.SHOULDERS_VNEXT = previousFlag
+      try {
+        db.prepare("DELETE FROM feature_flag_overrides WHERE id = ?")
+          .run("vnext-target-profile-override")
+      } catch {
+        // Initialization failure is reported by the test body; always restore
+        // the environment for the remaining integration cases.
+      }
+    }
+  })
 
   it("guard: cannot skip required states before SCHEMA_READY", async () => {
     const { applicationId } = await seedProfileAndOpportunity({ withProfileFields: true })
