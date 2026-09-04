@@ -6,7 +6,7 @@ import { isAdminEmail, ADMIN_EMAILS } from '../../backend/config/constants.js'
 
 function runIsolated(source, overrides = {}) {
   const env = { ...process.env, ...overrides }
-  for (const key of ['ADMIN_EMAIL', 'ADMIN_EMAILS', 'AGENT_CONTROL_ADMIN_EMAIL', 'HAMILTON_ADMIN_EMAIL', 'RAILWAY_ENVIRONMENT_ID', 'RAILWAY_DEPLOYMENT_ID']) {
+  for (const key of ['ADMIN_EMAIL', 'ADMIN_EMAILS', 'AGENT_CONTROL_ADMIN_EMAIL', 'HAMILTON_ADMIN_EMAIL', 'RAILWAY_ENVIRONMENT_ID', 'RAILWAY_DEPLOYMENT_ID', 'CORS_ORIGIN']) {
     if (overrides[key] === undefined) delete env[key]
   }
   const result = spawnSync(process.execPath, ['--input-type=module', '--eval', source], {
@@ -55,6 +55,7 @@ test('production environment validation requires a configured admin email', () =
     NODE_ENV: 'production',
     AUTH_JWT_SECRET: 'a'.repeat(64),
     PORT: '8080',
+    CORS_ORIGIN: 'https://grantflow.axiombiolabs.org',
   }
   const missing = runIsolated(
     `const { loadEnv } = await import('./backend/config/env.js'); const r = loadEnv({ mode: 'production' }); console.log(JSON.stringify({ ok: r.ok, issues: r.issues }))`,
@@ -68,6 +69,38 @@ test('production environment validation requires a configured admin email', () =
     { ...common, ADMIN_EMAIL: 'ops@axiombiolabs.org' },
   )
   assert.deepEqual(configured, { ok: true, admin: 'ops@axiombiolabs.org' })
+})
+
+test('production environment validation requires explicit non-wildcard CORS origins', () => {
+  const common = {
+    NODE_ENV: 'production',
+    AUTH_JWT_SECRET: 'a'.repeat(64),
+    PORT: '8080',
+    ADMIN_EMAIL: 'ops@axiombiolabs.org',
+  }
+
+  const missing = runIsolated(
+    `const { loadEnv } = await import('./backend/config/env.js'); const r = loadEnv({ mode: 'production' }); console.log(JSON.stringify({ ok: r.ok, issues: r.issues }))`,
+    common,
+  )
+  assert.equal(missing.ok, false)
+  assert.match(missing.issues.join(' '), /CORS_ORIGIN is required/)
+
+  const wildcard = runIsolated(
+    `const { loadEnv } = await import('./backend/config/env.js'); const r = loadEnv({ mode: 'production' }); console.log(JSON.stringify({ ok: r.ok, issues: r.issues }))`,
+    { ...common, CORS_ORIGIN: '*' },
+  )
+  assert.equal(wildcard.ok, false)
+  assert.match(wildcard.issues.join(' '), /must not include "\*"/)
+
+  const explicit = runIsolated(
+    `const { loadEnv } = await import('./backend/config/env.js'); const r = loadEnv({ mode: 'production' }); console.log(JSON.stringify({ ok: r.ok, origins: r.env?.corsOrigins }))`,
+    { ...common, CORS_ORIGIN: 'https://grantflow.axiombiolabs.org, https://admin.axiombiolabs.org' },
+  )
+  assert.deepEqual(explicit, {
+    ok: true,
+    origins: ['https://grantflow.axiombiolabs.org', 'https://admin.axiombiolabs.org'],
+  })
 })
 
 test('mixed-case padded production mode cannot bypass deployed validation', () => {
@@ -89,6 +122,7 @@ test('deployed privileged email settings reject source-safe fixture domains', ()
     AUTH_JWT_SECRET: 'a'.repeat(64),
     PORT: '8080',
     ADMIN_EMAIL: 'ops@axiombiolabs.org',
+    CORS_ORIGIN: 'https://grantflow.axiombiolabs.org',
   }
   for (const [name, value] of [
     ['ADMIN_EMAIL', 'admin@grantflow.local'],
