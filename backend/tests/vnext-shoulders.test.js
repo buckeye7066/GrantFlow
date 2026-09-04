@@ -71,8 +71,21 @@ describe("vNext Shoulders backbone", () => {
     return { profileId, opportunityId, applicationId: created.body.id }
   }
 
-  it("guard: cannot transition to MAPPED if schema missing (must go through SCHEMA_READY)", async () => {
+  async function transitionThrough(applicationId, states) {
+    for (const targetState of states) {
+      const response = await request(app)
+        .post(`/api/vnext/applications/${applicationId}/transition`)
+        .set(TEST_ADMIN_AUTH_HEADER)
+        .send({ targetState })
+      expect(response.status).toBe(200)
+      expect(response.body?.ok).toBe(true)
+    }
+  }
+
+  it("guard: cannot skip SCHEMA_READY before MAPPED, then infers and persists the schema", async () => {
     const { applicationId } = await seedProfileAndOpportunity({ withProfileFields: true })
+
+    await transitionThrough(applicationId, ["DEDUPED", "QUALIFIED"])
 
     const r = await request(app)
       .post(`/api/vnext/applications/${applicationId}/transition`)
@@ -81,17 +94,17 @@ describe("vNext Shoulders backbone", () => {
 
     expect(r.status).toBe(409)
     expect(Array.isArray(r.body?.blockers)).toBe(true)
-    expect(r.body.blockers.some((b) => b.code === "SCHEMA_MISSING")).toBe(true)
+    expect(r.body.blockers.some((b) => b.code === "FORWARD_TRANSITION_SKIP_FORBIDDEN")).toBe(true)
+
+    await transitionThrough(applicationId, ["SCHEMA_READY"])
+    const row = db.prepare("SELECT schema_id FROM funding_opportunities WHERE id = ?").get("opp-vnext-1")
+    expect(String(row?.schema_id || "")).toBeTruthy()
   })
 
   it("guard: cannot transition to MISSING_RESOLVED when required fields are missing", async () => {
     const { applicationId } = await seedProfileAndOpportunity({ withProfileFields: false })
 
-    const s1 = await request(app)
-      .post(`/api/vnext/applications/${applicationId}/transition`)
-      .set(TEST_ADMIN_AUTH_HEADER)
-      .send({ targetState: "SCHEMA_READY" })
-    expect(s1.status).toBe(200)
+    await transitionThrough(applicationId, ["DEDUPED", "QUALIFIED", "SCHEMA_READY"])
 
     const s2 = await request(app)
       .post(`/api/vnext/applications/${applicationId}/transition`)
@@ -111,11 +124,7 @@ describe("vNext Shoulders backbone", () => {
   it("missingness: with schema + profile facts, required fields map and missing list is empty", async () => {
     const { applicationId, opportunityId } = await seedProfileAndOpportunity({ withProfileFields: true })
 
-    const s1 = await request(app)
-      .post(`/api/vnext/applications/${applicationId}/transition`)
-      .set(TEST_ADMIN_AUTH_HEADER)
-      .send({ targetState: "SCHEMA_READY" })
-    expect(s1.status).toBe(200)
+    await transitionThrough(applicationId, ["DEDUPED", "QUALIFIED", "SCHEMA_READY"])
 
     const s2 = await request(app)
       .post(`/api/vnext/applications/${applicationId}/transition`)
@@ -140,9 +149,7 @@ describe("vNext Shoulders backbone", () => {
     const { applicationId, opportunityId } = await seedProfileAndOpportunity({ withProfileFields: true })
 
     // Move through schema + missing resolved so scoring has stable context.
-    await request(app).post(`/api/vnext/applications/${applicationId}/transition`).set(TEST_ADMIN_AUTH_HEADER).send({ targetState: "SCHEMA_READY" })
-    await request(app).post(`/api/vnext/applications/${applicationId}/transition`).set(TEST_ADMIN_AUTH_HEADER).send({ targetState: "MAPPED" })
-    await request(app).post(`/api/vnext/applications/${applicationId}/transition`).set(TEST_ADMIN_AUTH_HEADER).send({ targetState: "MISSING_RESOLVED" })
+    await transitionThrough(applicationId, ["DEDUPED", "QUALIFIED", "SCHEMA_READY", "MAPPED", "MISSING_RESOLVED"])
 
     // Set deterministic deadline far enough out to keep time_risk stable in this test.
     db.prepare("UPDATE funding_opportunities SET deadline_at = ? WHERE id = ?").run("2030-01-01T00:00:00Z", opportunityId)
@@ -164,6 +171,8 @@ describe("vNext Shoulders backbone", () => {
 
     // Deterministic progression through the state machine.
     const states = [
+      "DEDUPED",
+      "QUALIFIED",
       "SCHEMA_READY",
       "MAPPED",
       "MISSING_RESOLVED",
@@ -195,4 +204,3 @@ describe("vNext Shoulders backbone", () => {
     expect(packet.body.remaining_tasks.length).toBeGreaterThanOrEqual(1)
   })
 })
-

@@ -154,4 +154,24 @@ describe('VNext transition integrity', () => {
     })
     expect(db.prepare).not.toHaveBeenCalled()
   })
+
+  it('commits an applied transition before attempting best-effort audit logging', async () => {
+    const events = []
+    const { db } = makeDb()
+    db.withTransaction = vi.fn(async (fn) => {
+      const result = await fn(db)
+      events.push('committed')
+      return result
+    })
+    writeAuditEvent.mockImplementationOnce(async () => {
+      events.push('audited')
+      throw new Error('audit table unavailable')
+    })
+
+    const result = await attemptTransition(db, 'app-1', VNEXT_STATES.DEDUPED)
+
+    expect(result).toMatchObject({ ok: true, newState: VNEXT_STATES.DEDUPED })
+    expect(events).toEqual(['committed', 'audited'])
+    expect(writeAuditEvent).toHaveBeenCalledWith(db, expect.objectContaining({ action: 'transition.applied' }))
+  })
 })
