@@ -53,11 +53,48 @@ function makeMemoryDb() {
       user_id TEXT,
       organization_id TEXT,
       display_name TEXT,
-      primary_type TEXT
+      primary_type TEXT,
+      status TEXT DEFAULT 'active'
     );
     CREATE TABLE IF NOT EXISTS users (
       id TEXT PRIMARY KEY,
-      role TEXT
+      role TEXT,
+      is_admin BOOLEAN DEFAULT 0
+    );
+    CREATE TABLE IF NOT EXISTS billing_tiers (
+      id TEXT PRIMARY KEY, name TEXT NOT NULL, description TEXT,
+      base_monthly_cents INTEGER, hourly_rate_cents INTEGER,
+      enable_pipeline_automation BOOLEAN DEFAULT 0,
+      enable_item_funding BOOLEAN DEFAULT 0,
+      enable_document_ai BOOLEAN DEFAULT 0,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE TABLE IF NOT EXISTS billing_accounts (
+      id TEXT PRIMARY KEY, profile_id TEXT NOT NULL UNIQUE, tier_id TEXT NOT NULL,
+      assigned_by TEXT, assigned_reason TEXT, discount_type TEXT,
+      discount_percent REAL DEFAULT 0, is_pro_bono BOOLEAN DEFAULT 0,
+      pro_bono_reason TEXT, custom_monthly_cents INTEGER,
+      custom_hourly_cents INTEGER, metadata TEXT,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE TABLE IF NOT EXISTS billing_account_events (
+      id TEXT PRIMARY KEY, account_id TEXT NOT NULL, changed_by TEXT,
+      previous_tier_id TEXT, new_tier_id TEXT,
+      previous_discount_type TEXT, new_discount_type TEXT,
+      previous_discount_percent REAL, new_discount_percent REAL,
+      previous_pro_bono BOOLEAN, new_pro_bono BOOLEAN, notes TEXT,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE TABLE IF NOT EXISTS billing_addon_entitlements (
+      id TEXT PRIMARY KEY, profile_id TEXT NOT NULL, capability_key TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'active', source TEXT NOT NULL DEFAULT 'admin',
+      starts_at DATETIME, expires_at DATETIME, metadata TEXT
+    );
+    CREATE TABLE IF NOT EXISTS profile_pricing (
+      id TEXT PRIMARY KEY, profile_id TEXT NOT NULL UNIQUE,
+      access_status TEXT NOT NULL
     );
     CREATE TABLE IF NOT EXISTS profile_sections (
       id TEXT PRIMARY KEY,
@@ -124,6 +161,16 @@ function makeMemoryDb() {
     );
     INSERT INTO profiles (id, user_id, display_name, primary_type) VALUES ('p-A', 'u-A', 'Profile A', 'college_student');
     INSERT INTO profiles (id, user_id, display_name, primary_type) VALUES ('p-B', 'u-B', 'Profile B', 'college_student');
+    -- Most orchestrator behavior tests are billing-agnostic and use an admin
+    -- actor. The dedicated entitlement test below demotes u-A to exercise the
+    -- fail-closed engine gate.
+    INSERT INTO users (id, role, is_admin) VALUES ('u-A', 'admin', 1), ('u-B', 'admin', 1);
+    INSERT INTO billing_tiers (id, name, enable_pipeline_automation)
+      VALUES ('test-automation', 'Test automation', 1), ('test-free', 'Test free', 0);
+    INSERT INTO billing_accounts (id, profile_id, tier_id)
+      VALUES ('ba-A', 'p-A', 'test-automation'), ('ba-B', 'p-B', 'test-automation');
+    INSERT INTO profile_pricing (id, profile_id, access_status)
+      VALUES ('pp-A', 'p-A', 'active_paid'), ('pp-B', 'p-B', 'active_paid');
     INSERT INTO profile_sections (id, profile_id, section_key, data)
       VALUES ('ps-A-bi', 'p-A', 'basic_information',
               '{"first_name":"Anya","last_name":"K","email":"anya@example.com","address1":"100 Main St","city":"Murfreesboro","state":"TN","zip":"37130"}');
@@ -369,6 +416,26 @@ describe('hamiltonApplicationPacketGenerator — content + DOCX', () => {
 })
 
 describe('hamiltonAutomationOrchestrator — multi-source dispatch', () => {
+  it('refuses a direct engine caller when pipeline automation is not entitled', async () => {
+    resetCaches()
+    const db = makeMemoryDb()
+    db.raw.prepare("UPDATE users SET is_admin = 0, role = 'user' WHERE id = 'u-A'").run()
+    db.raw.prepare("UPDATE billing_accounts SET tier_id = 'test-free' WHERE profile_id = 'p-A'").run()
+    db.raw.prepare(`INSERT INTO funding_opportunities (id, title, description, mailing_address, application_mode, funder_name, application_url, eligibility_text)
+                    VALUES ('opp-unentitled', 'MTSU Education Award', 'A direct education scholarship.', '1 Main St', 'mail', 'County Foundation', 'https://www.mtsu.edu/financial-aid/unentitled', 'Eligible Tennessee college students may apply.')`).run()
+
+    await assert.rejects(
+      automateSingleSource(db, {
+        profileId: 'p-A',
+        userId: 'u-A',
+        source: { opportunity_id: 'opp-unentitled', current_stage: 'discovered' },
+      }),
+      (error) => ['pipeline_automation_entitlement_required', 'entitlement_authority_unavailable'].includes(error?.code)
+        && [403, 503].includes(error?.status),
+    )
+    assert.equal((await listApplicationTasks(db, { profileId: 'p-A' })).length, 0)
+  })
+
   it('automates a mail source: creates a task, generates DOCX, sets ready_to_print_mail, with mailing instructions', async () => {
     resetCaches()
     const db = makeMemoryDb()

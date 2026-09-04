@@ -51,6 +51,18 @@ import { TIER_CAPABILITIES } from './utils/tierGating.js';
 import { maintenanceGuard } from './services/maintenance/maintenanceMode.js';
 const maintenanceGuardMw = maintenanceGuard();
 const requirePipelineAutomation = enforceTierCapability(TIER_CAPABILITIES.PIPELINE_AUTOMATION);
+// Losing a paid capability must never trap already-granted authority or active
+// work. These routes still perform their own authentication and profile/task
+// ownership checks; only the billing check is skipped for the safety action.
+const requireApplicationTaskPipelineAutomation = (req, res, next) => {
+  const path = String(req.path || '').replace(/\/+$/, '') || '/';
+  const revokesAutoSubmit = req.method === 'POST'
+    && /^\/[^/]+\/approve-submit$/.test(path)
+    && req.body?.enable === false;
+  const cancelsTask = req.method === 'POST' && /^\/[^/]+\/cancel$/.test(path);
+  if (revokesAutoSubmit || cancelsTask) return next();
+  return requirePipelineAutomation(req, res, next);
+};
 // Tasker and the email forwarder authenticate these inbox endpoints with their
 // dedicated shared secret inside the router; they intentionally have no
 // GrantFlow browser session. Keep this exception at the shared mount boundary
@@ -58,6 +70,9 @@ const requirePipelineAutomation = enforceTierCapability(TIER_CAPABILITIES.PIPELI
 const requireHamiltonPipelineAutomation = (req, res, next) => {
   const path = String(req.path || '').replace(/\/+$/, '') || '/';
   if (path === '/sms-inbox' || path === '/inbox' || path === '/inbox-status') return next();
+  if (req.method === 'POST' && (/^\/authorizations\/[^/]+\/revoke$/.test(path) || /^\/tasks\/[^/]+\/cancel$/.test(path))) {
+    return next();
+  }
   return requirePipelineAutomation(req, res, next);
 };
 import authRouter from './routes/auth.js';
@@ -2521,7 +2536,7 @@ app.use('/api', lazyRouter('./routes/announcements.js'));
 // aggregate COA / FAFSA / aid / matched funding / Hamilton status). Same
 // /:profileId path convention as studentPortals.
 app.use('/api', lazyRouter('./routes/committedCollege.js'));
-app.use('/api/application-tasks', requirePipelineAutomation, lazyRouter('./routes/applicationTasks.js'));
+app.use('/api/application-tasks', requireApplicationTaskPipelineAutomation, lazyRouter('./routes/applicationTasks.js'));
 // Hamilton Automation Agent — Application Autopilot / Funding Completion.
 // Note: existing Yana = Client Discovery / Lead Funnel and is unchanged.
 app.use('/api/hamilton/automation', requireHamiltonPipelineAutomation, lazyRouter('./routes/hamiltonAutomation.js'));

@@ -127,6 +127,8 @@ import {
   isPublicHttpsPortalUrl,
 } from './controlledBetaBrowserPolicy.js'
 import { getUserIdsWithProfileAccess } from '../../utils/accessControl.js'
+import { resolveProfileEntitlement } from '../billing/entitlementService.js'
+import { CAPABILITY_KEYS } from '../../../shared/tierCatalog.js'
 
 const PERSONA_VERSION = 'hamilton-mba-2026'
 
@@ -588,6 +590,30 @@ async function isUserAuthorizedForProfile(db, userId, profileId, { internalCalle
   }
 }
 
+async function assertPipelineAutomationEntitlement(db, profileId, userId) {
+  let isAdmin = false
+  if (userId) {
+    try {
+      const row = await db.prepare('SELECT is_admin FROM users WHERE id = ?').get(String(userId))
+      isAdmin = row?.is_admin === true || row?.is_admin === 1
+    } catch { /* fail closed through the profile entitlement below */ }
+  }
+  const decision = await resolveProfileEntitlement(db, {
+    profileId,
+    capabilityKey: CAPABILITY_KEYS.PIPELINE_AUTOMATION,
+    isAdmin,
+  })
+  if (decision.allowed === true) return decision
+
+  const error = new Error(decision.unavailable
+    ? 'Pipeline automation entitlement could not be verified.'
+    : 'Pipeline automation is not enabled for this profile.')
+  error.code = decision.unavailable ? 'entitlement_authority_unavailable' : 'pipeline_automation_entitlement_required'
+  error.status = decision.unavailable ? 503 : decision.payment_required === true ? 402 : 403
+  error.entitlement = decision
+  throw error
+}
+
 /**
  * Idle statuses a pre-task-creation SKIP is allowed to close. This is exactly
  * the scheduler-pickable set (hamiltonAgentAdapter.js) plus nothing else:
@@ -673,6 +699,12 @@ export async function automateSingleSource(db, {
     err.code = 'profile_access_denied'
     throw err
   }
+
+  // Engine choke point: every caller (HTTP routes, committed-college handoff,
+  // and the scheduled Hamilton adapter) must prove current paid access before
+  // creating, resuming, or mutating automation work. Mount middleware remains
+  // an early response optimization, never the entitlement authority.
+  await assertPipelineAutomationEntitlement(db, resolvedProfileId, userId)
 
   // If only the id was given, hydrate the profile bundle now so the
   // document/portal pathways can grab basic_information / essays /
