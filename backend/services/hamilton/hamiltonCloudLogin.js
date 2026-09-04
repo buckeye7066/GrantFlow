@@ -302,12 +302,13 @@ export async function startCloudLogin({ userId, profileId, portalHost, loginUrl,
     if (provider === 'cdp' && chromium) {
       // Hosted interactive Chrome (Browserless / Browserbase).
       browser = await chromium.connectOverCDP(cdpEndpoint())
-      const context = browser.contexts()[0]
-        || (await browser.newContext(controlledBetaBrowserContextOptions()))
+      // Always create a fresh context with service workers blocked; the default
+      // context from the provider cannot be retrofitted with this setting.
+      const context = await browser.newContext(controlledBetaBrowserContextOptions())
       await (isSynthetic
         ? installControlledBetaBrowserEgressGuard(context)
         : installPortalBrowserEgressGuard(context))
-      const page = context.pages()[0] || (await context.newPage())
+      const page = await context.newPage()
       const nav = await navigateOrFail(page, target)
       if (!nav.ok) {
         await closeQuietly({ browser })

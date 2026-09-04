@@ -1305,17 +1305,9 @@ router.post('/sessions/cloud-login/start', async (req, res) => {
   }
   const portalHost = req.body?.portal_host || req.body?.portalHost
   const loginUrl = req.body?.login_url || req.body?.loginUrl || (portalHost ? `https://${portalHost}/` : null)
-  let loginHost = ''
-  try { loginHost = new URL(loginUrl).hostname.toLowerCase().replace(/^www\./, '') } catch { /* service refuses */ }
-  const normalizedPortalHost = String(portalHost || '').trim().toLowerCase().replace(/^www\./, '')
-  if (!loginHost || !normalizedPortalHost || loginHost !== normalizedPortalHost) {
-    return res.status(409).json({
-      error: 'cloud_login_start_failed',
-      reason: 'portal_host_mismatch',
-      detail: 'portal_host must match the HTTPS login URL host.',
-      requires_human_handoff: true,
-    })
-  }
+  // Do not require exact host equality between portal_host and login URL.
+  // Many portals use SSO or dedicated login subdomains (e.g. login.mtsu.edu or
+  // an external IdP host). Safety is enforced later by DNS/public-HTTPS checks.
 
   // ADAPT: if this portal has already taught us it blocks our datacenter browser
   // (a stable anti-bot / IP-reputation wall the engine upgrade can't beat), do

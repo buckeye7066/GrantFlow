@@ -1052,7 +1052,26 @@ export async function runAutopilot({
     return { status: 'failed', blocker_kind: 'no_browser', blocker_detail: 'Playwright chromium binary not installed', filled_fields: filled, pages_visited: 0, trace }
   }
 
-  const { browser } = await launchPortalBrowser(chromium, { headless, targetUrl: url })
+  let browser
+  try {
+    const launched = await launchPortalBrowser(chromium, { headless, targetUrl: url })
+    browser = launched.browser
+  } catch (err) {
+    const msg = String(err?.message || '')
+    if (err?.code === 'unsafe_portal_url' || msg.startsWith('unsafe_portal_url')) {
+      const reason = msg.includes(':') ? msg.split(':').slice(1).join(':') : 'dns_rejected'
+      return {
+        status: 'blocked',
+        blocker_kind: 'unsafe_portal_url',
+        blocker_detail: reason || 'dns_rejected',
+        requires_human_handoff: true,
+        filled_fields: filled,
+        pages_visited: 0,
+        trace,
+      }
+    }
+    throw err
+  }
   // Only an in-memory storageState OBJECT from the profile-owned encrypted
   // session store is accepted. Request-supplied filesystem paths are never
   // passed to Playwright.
