@@ -41,7 +41,7 @@ describe('runPortalSync — controlled-beta real-portal boundary', () => {
     expect(r.ok).toBe(false)
     expect(r.requires_human_handoff).toBe(true)
     expect(r.connectorId).toBeNull()
-    expect(r.error).toBe('controlled_beta_manual_handoff')
+    expect(r.error).toBe('portal_policy_disallowed')
     expect(r.read).toBeUndefined()
 
     // No automation run is created for a browser operation we refused.
@@ -75,7 +75,7 @@ describe('runPortalSync — controlled-beta real-portal boundary', () => {
 
     expect(r.ok).toBe(false)
     expect(r.requires_human_handoff).toBe(true)
-    expect(r.error).toBe('controlled_beta_manual_handoff')
+    expect(r.error).toBe('portal_policy_disallowed')
     expect(r.connectorId).toBeNull()
     expect(r.read).toBeUndefined()
   })

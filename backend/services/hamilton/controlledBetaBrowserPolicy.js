@@ -109,7 +109,7 @@ export function isPublicHttpsPortalUrl(url) {
     // Only call isPrivateIp for IP literals (dotted-quad IPv4 or IPv6 with colons).
     // isPrivateIp returns true for non-IP strings (fail-closed), so applying it
     // to a real hostname would incorrectly block every public portal domain.
-    if (_isIpLiteral(host) && isPrivateIp(host)) return false
+    if (_isIpLiteral(host) && isPrivateIp(_normalizedIpForPrivateCheck(host))) return false
     return true
   } catch {
     return false
@@ -163,11 +163,24 @@ function _isIpLiteral(host) {
   return false
 }
 
+// WHATWG URL canonicalization renders dotted IPv4-mapped IPv6 addresses as
+// hexadecimal (for example ::ffff:127.0.0.1 -> ::ffff:7f00:1).  The shared
+// isPrivateIp helper understands the dotted spelling, so translate the mapped
+// 32 bits back to a dotted quad before applying it.
+function _normalizedIpForPrivateCheck(host) {
+  const h = String(host || '').toLowerCase().replace(/^\[|\]$/g, '')
+  const mapped = h.match(/^::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/i)
+  if (!mapped) return h
+  const high = Number.parseInt(mapped[1], 16)
+  const low = Number.parseInt(mapped[2], 16)
+  return `${high >>> 8}.${high & 0xff}.${low >>> 8}.${low & 0xff}`
+}
+
 function _isPortalHostBlocked(hostname) {
   const h = String(hostname || '').toLowerCase().replace(/^\[|\]$/g, '')
   if (!h) return true
   if (SSRF_BLOCKED_HOSTS.has(h)) return true
-  if (_isIpLiteral(h) && isPrivateIp(h)) return true
+  if (_isIpLiteral(h) && isPrivateIp(_normalizedIpForPrivateCheck(h))) return true
   return false
 }
 
@@ -180,9 +193,15 @@ function _isPortalHostBlocked(hostname) {
  * @param {import('playwright').BrowserContext} context
  */
 export async function installPortalBrowserEgressGuard(context) {
-  if (!context || typeof context.route !== 'function') {
+  if (!context || typeof context.route !== 'function' || typeof context.routeWebSocket !== 'function') {
     throw new Error('portal_browser_guard_unavailable')
   }
+  // Playwright WebSockets bypass context.route(). Hamilton has no portal
+  // workflow that requires them, so block them all rather than opening a
+  // second protocol-shaped SSRF boundary (including DNS rebinding races).
+  await context.routeWebSocket('**/*', async (webSocketRoute) => {
+    await webSocketRoute.close()
+  })
   await context.route('**/*', async (route) => {
     let requestUrl = ''
     try { requestUrl = route.request().url() } catch { /* fail closed below */ }

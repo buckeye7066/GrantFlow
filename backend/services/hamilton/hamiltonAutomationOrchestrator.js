@@ -1465,7 +1465,7 @@ async function runAutopilotPathway(db, {
   // authorization decision that acquired the irreversible-action lease. The
   // engine result must not be able to overwrite or omit this boundary proof.
   let irreversibleSubmissionDecision = null
-  const beforeSubmit = async () => {
+  const beforeSubmit = async ({ url: liveSubmitUrl = null } = {}) => {
     const liveTask = await reload(db, task.id)
     if (!liveTask || liveTask.status === 'cancelled') {
       return { allow: false, cancelled: true, reason: 'task_cancelled' }
@@ -1500,6 +1500,22 @@ async function runAutopilotPathway(db, {
     // Re-check executable coverage at the click boundary as well as launch.
     if (!reviewedPortalSubmissionExecutionAvailable(url)) {
       return { allow: false, reason: 'unsafe_portal_url', decision: fresh }
+    }
+    // Portal policy is authority, not merely launch advice. Re-read it for the
+    // live document host immediately before the irreversible click and fail
+    // closed on registry/read failure.
+    const liveSubmitHost = hostOfUrl(liveSubmitUrl || url) || hostOfUrl(url)
+    let liveSubmitPolicy
+    try {
+      liveSubmitPolicy = await getPolicyFor(db, liveSubmitHost)
+    } catch {
+      return { allow: false, reason: 'portal_policy_unavailable', decision: fresh }
+    }
+    if (!liveSubmitPolicy || liveSubmitPolicy.automation_allowed !== true) {
+      return { allow: false, reason: `automation_disallowed:${liveSubmitHost}`, decision: fresh }
+    }
+    if (liveSubmitPolicy.agent_submission_allowed !== true) {
+      return { allow: false, reason: `agent_submission_disallowed:${liveSubmitHost}`, decision: fresh }
     }
     if (grant?.id) {
       let freshGate
