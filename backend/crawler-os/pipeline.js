@@ -125,7 +125,6 @@ export async function runDiscovery(deps, opts = {}) {
           canonicalOpp.evidence?.content_hash &&
           canonicalOpp.evidence?.fetched_at
         ),
-        enforceFourTruths: true,
       });
       // Crawler-doctor provenance: registry adapters have no query string, but
       // the SOURCE that produced the match is knowable (web lane sets both
@@ -145,7 +144,11 @@ export async function runDiscovery(deps, opts = {}) {
       }
       const recommendationKey = `${mp.profile_id}:${canonicalOpp.id}`;
       const truthProof = decision.match_explain?.four_truth_proof ?? null;
-      if (isRecommendable(canonicalOpp, decision.decision) && truthProof?.all_passed === true &&
+      // REVIEW-level pointers remain visible locator recommendations. Direct
+      // funding can enter this list only after all four truths pass.
+      const recommendationTruthPassed = isResearchLead(canonicalOpp, decision.decision) ||
+        truthProof?.all_passed === true;
+      if (isRecommendable(canonicalOpp, decision.decision) && recommendationTruthPassed &&
           mp.profile_id === thesis.profile_id && !recommendationKeys.has(recommendationKey)) {
         recommendationKeys.add(recommendationKey);
         // topical_evidence: legacy weighted-evidence subscale, retained so Amy's

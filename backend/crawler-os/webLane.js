@@ -606,6 +606,10 @@ export async function runWebDiscoveryLane(deps, opts = {}) {
           profileRow: mp._profileContext?.profile ?? null,
           profileSections: mp._profileContext?.sections ?? null,
           signals: mp._profileContext?.signals ?? null,
+          // This candidate has passed enforceReality immediately above. Thread
+          // that fact into the matcher; the matcher itself still fail-closes
+          // every direct ACCEPT when any of the four truths lacks proof.
+          realityPassed: true,
         });
         // Provenance for the crawler doctor: the exact query that surfaced the
         // page this opportunity was extracted from.
@@ -635,6 +639,7 @@ export async function runWebDiscoveryLane(deps, opts = {}) {
             decision: decision.decision,
             match_decision: decision.decision,
             match_explanation: decision.match_explain?.why ?? null,
+            four_truth_proof: decision.match_explain?.four_truth_proof ?? null,
             source: 'web_search',
             topical_evidence: decision.match_explain?.score_breakdown?.topical_evidence ?? null,
           });

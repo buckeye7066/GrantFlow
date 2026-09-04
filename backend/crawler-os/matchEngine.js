@@ -81,12 +81,14 @@ const OPPORTUNITY_APPLICANT_TYPE_TO_ALLOWED = Object.freeze({
 });
 
 /**
- * Does this pair belong in the direct-funding recommendation list?
- * A pointer/directory is never a funding recommendation; it is returned through
- * the separate research_leads collection at REVIEW.
+ * Does this pair belong in the existing user-visible recommendation list?
+ * Direct funding requires ACCEPT; pointer locators remain visible at REVIEW and
+ * are also classified in the additive research_leads collection.
  */
 export function isRecommendable(opportunity, decision) {
-  return !isPointerOpportunity(opportunity) && decision === MATCH_DECISION.ACCEPT;
+  return isPointerOpportunity(opportunity)
+    ? decision === MATCH_DECISION.REVIEW
+    : decision === MATCH_DECISION.ACCEPT;
 }
 
 export function isResearchLead(opportunity, decision) {
@@ -100,6 +102,12 @@ function isPointerOpportunity(opportunity) {
 
 function positiveEligibility(value) {
   return ['yes', 'eligible', 'qualified', 'true'].includes(String(value ?? '').trim().toLowerCase());
+}
+
+function hasPositiveApplicantTypeEvidence(opportunity, canonical) {
+  const statedApplicantTypes = stripWildcard(uniqueStrings(opportunity?.applicant_types));
+  return statedApplicantTypes.length > 0 &&
+    canonical?.match_explain?.matchedSignals?.includes?.('applicant_type') === true;
 }
 
 function hasPositiveRealityEvidence(opportunity, realityPassed) {
@@ -152,8 +160,13 @@ export function buildFourTruthProof(opportunity, thesis, canonical, {
       profile_needs_defaulted: thesis?.needs_defaulted === true,
     },
     profile_qualifies: {
-      passed: positiveEligibility(eligibility),
+      // The canonical engine's `eligible` output is decision-derived for an
+      // ACCEPT, so it cannot by itself prove that the funder says this profile
+      // may apply. Require a stated opportunity-side applicant type and the
+      // canonical engine's positive match against it.
+      passed: positiveEligibility(eligibility) && hasPositiveApplicantTypeEvidence(opportunity, canonical),
       eligibility,
+      applicant_type_evidence: stripWildcard(uniqueStrings(opportunity?.applicant_types)),
       missing_eligibility_fields: canonical?.missingEligibilityFields ?? [],
     },
   };
@@ -186,7 +199,7 @@ export function computeMatchDecision(opportunity, thesis = {}, opts = {}) {
     realityPassed: opts.realityPassed === true,
   });
 
-  if (opts.enforceFourTruths === true && fourTruthProof.direct_funding &&
+  if (fourTruthProof.direct_funding &&
       decision === MATCH_DECISION.ACCEPT && !fourTruthProof.all_passed) {
     decision = MATCH_DECISION.REVIEW;
     const failedTruths = [
