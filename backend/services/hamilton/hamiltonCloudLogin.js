@@ -50,6 +50,7 @@ import {
 import https from 'node:https'
 import { createLogger } from '../../utils/logger.js'
 import { findValidSession, getSessionStorageState } from './hamiltonCredentialSessionService.js'
+import { getPolicyFor } from './hamiltonPortalPolicyRegistry.js'
 
 const log = createLogger('service:hamiltonCloudLogin')
 
@@ -280,6 +281,10 @@ export async function startCloudLogin({ userId, profileId, portalHost, loginUrl,
       requires_human_handoff: false,
     }
   }
+  const portalPolicy = await getPolicyFor(db, normalizedPortalHost).catch(() => null)
+  if (portalPolicy?.automation_allowed === false) {
+    return { ok: false, reason: 'portal_automation_forbidden', requires_human_handoff: true }
+  }
 
   let chromium = null
   if (!launchBrowser) {
@@ -328,7 +333,7 @@ export async function startCloudLogin({ userId, profileId, portalHost, loginUrl,
     const seed = await loadSeedSession(db, { profileId, portalHost })
     const launched = launchBrowser
       ? await launchBrowser({ storageState: seed?.storageState || null })
-      : await launchPortalBrowser(chromium, { targetUrl: target })
+      : await launchPortalBrowser(chromium, { targetUrl: target, portalPolicy })
     browser = launched.browser ?? launched
     log.info('cloud login browser launched', {
       engine: launched.engine || 'injected', portalHost, seeded: Boolean(seed),

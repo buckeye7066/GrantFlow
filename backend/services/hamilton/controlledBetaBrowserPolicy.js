@@ -11,6 +11,7 @@
  */
 
 import { isPrivateIp } from '../../config/urlRules.js'
+import dns from 'node:dns/promises'
 
 export const CONTROLLED_BETA_SYNTHETIC_BROWSER_ORIGIN =
   'https://hamilton-submit-fixture.invalid'
@@ -62,6 +63,32 @@ export function isPublicHttpsUrl(value) {
   }
 }
 
+/** Resolve every A/AAAA answer before browser egress.  The optional resolver is
+ * deliberately injectable so the SSRF/rebinding floor has a deterministic
+ * guard test.  A second answer for a host must be a subset of the first pinned
+ * answer; otherwise the request is refused as DNS rebinding. */
+export async function resolvePublicHttpsUrl(value, { lookup = dns.lookup, pinnedAddresses = null } = {}) {
+  if (isControlledBetaSyntheticBrowserUrl(value)) return true
+  if (!isPublicHttpsUrl(value)) return false
+  const host = new URL(String(value)).hostname.toLowerCase()
+  const isIpLiteral = /^[0-9.]+$/.test(host) || host.includes(':')
+  if (isIpLiteral) return !isPrivateIp(host)
+  let answers
+  try {
+    answers = await lookup(host, { all: true, verbatim: true })
+  } catch {
+    return false
+  }
+  const addresses = [...new Set((answers || []).map((answer) => String(answer?.address || '')))].filter(Boolean)
+  if (addresses.length === 0 || addresses.some((address) => isPrivateIp(address))) return false
+  if (pinnedAddresses) {
+    const prior = pinnedAddresses.get(host)
+    if (prior && addresses.some((address) => !prior.has(address))) return false
+    if (!prior) pinnedAddresses.set(host, new Set(addresses))
+  }
+  return true
+}
+
 /** Non-network document URLs and any public HTTPS URL are allowed. */
 export function isControlledBetaBrowserRequestAllowed(value) {
   const raw = String(value || '')
@@ -92,10 +119,12 @@ export async function installControlledBetaBrowserEgressGuard(context) {
   if (!context || typeof context.route !== 'function') {
     throw new Error('controlled_beta_browser_guard_unavailable')
   }
+  const pinnedAddresses = new Map()
   await context.route('**/*', async (route) => {
     let requestUrl = ''
     try { requestUrl = route.request().url() } catch { /* fail closed below */ }
-    if (isControlledBetaBrowserRequestAllowed(requestUrl)) {
+    const nonNetworkUrl = requestUrl === 'about:blank' || requestUrl.startsWith('data:') || requestUrl.startsWith('blob:')
+    if (nonNetworkUrl || await resolvePublicHttpsUrl(requestUrl, { pinnedAddresses })) {
       await route.continue()
       return
     }

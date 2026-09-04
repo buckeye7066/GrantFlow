@@ -1,4 +1,4 @@
-import { isPublicHttpsUrl, isControlledBetaSyntheticBrowserUrl } from './controlledBetaBrowserPolicy.js'
+import { resolvePublicHttpsUrl } from './controlledBetaBrowserPolicy.js'
 import { createLogger } from '../../utils/logger.js'
 
 const log = createLogger('service:browserLaunch')
@@ -51,8 +51,13 @@ export const REALISTIC_PORTAL_UA =
  * previously-working deployment worse. Returns { browser, engine } so callers
  * can log which engine actually served the session.
  */
-export async function launchPortalBrowser(chromium, { headless = true, extraArgs = [], targetUrl = null } = {}) {
-  if (targetUrl !== null && !isPublicHttpsUrl(targetUrl) && !isControlledBetaSyntheticBrowserUrl(targetUrl)) {
+export async function launchPortalBrowser(chromium, { headless = true, extraArgs = [], targetUrl = null, portalPolicy = null } = {}) {
+  if (portalPolicy?.automation_allowed === false) {
+    const err = new Error('portal_automation_forbidden')
+    err.code = 'portal_automation_forbidden'
+    throw err
+  }
+  if (targetUrl !== null && !await resolvePublicHttpsUrl(targetUrl)) {
     const err = new Error('ssrf_blocked')
     err.code = 'ssrf_blocked'
     throw err

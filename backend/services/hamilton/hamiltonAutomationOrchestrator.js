@@ -137,9 +137,10 @@ export function browserAutomationHostAllowlist() {
  * HTTPS URL (not private/loopback/metadata — SSRF floor). The reserved
  * synthetic fixture origin is always permitted for test suites.
  */
-export function browserAutomationPermittedForUrl(url, { extraAllowedHosts = [] } = {}) {
+export function browserAutomationPermittedForUrl(url, { extraAllowedHosts = [], portalPolicy = null } = {}) {
   void extraAllowedHosts
   if (!isBrowserAutomationEnabled()) return false
+  if (portalPolicy?.automation_allowed === false) return false
   return isPublicHttpsUrl(url) || isControlledBetaSyntheticBrowserUrl(url)
 }
 
@@ -147,8 +148,9 @@ export function browserAutomationPermittedForUrl(url, { extraAllowedHosts = [] }
  * Hamilton may attempt portal submission on any public HTTPS URL.
  * Private/loopback/metadata addresses remain blocked (SSRF floor).
  */
-export function reviewedPortalSubmissionExecutionAvailable(url) {
-  return isPublicHttpsUrl(url) || isControlledBetaSyntheticBrowserUrl(url)
+export function reviewedPortalSubmissionExecutionAvailable(url, portalPolicy = null) {
+  return (isPublicHttpsUrl(url) || isControlledBetaSyntheticBrowserUrl(url))
+    && portalPolicy?.agent_submission_allowed !== false
 }
 
 /**
@@ -1369,7 +1371,7 @@ async function runAutopilotPathway(db, {
   if (submissionDecision.allow_auto_submit && !isAutoSubmitGloballyEnabled()) {
     submissionDecision = { ...submissionDecision, allow_auto_submit: false, reason: 'global_auto_submit_disabled' }
   }
-  if (allowAutoSubmit && !reviewedPortalSubmissionExecutionAvailable(url)) {
+  if (allowAutoSubmit && !reviewedPortalSubmissionExecutionAvailable(url, portalPolicy)) {
     allowAutoSubmit = false
     submissionDecision = {
       ...submissionDecision,
@@ -1471,8 +1473,9 @@ async function runAutopilotPathway(db, {
       return { allow: false, reason: 'profile_auto_submit_disabled', decision: fresh }
     }
     // Re-check SSRF safety at the click boundary as well as launch.
-    if (!reviewedPortalSubmissionExecutionAvailable(url)) {
-      return { allow: false, reason: 'ssrf_blocked', decision: fresh }
+    const freshPortalPolicy = await getPolicyFor(db, portalHostForPolicy).catch(() => null)
+    if (!reviewedPortalSubmissionExecutionAvailable(url, freshPortalPolicy)) {
+      return { allow: false, reason: freshPortalPolicy?.agent_submission_allowed === false ? 'agent_submission_forbidden' : 'ssrf_blocked', decision: fresh }
     }
     if (grant?.id) {
       let freshGate
@@ -1735,6 +1738,10 @@ async function runAutopilotPathway(db, {
           narrativeAnswers,
           signal: controller.signal,
           beforeSubmit,
+          portalPolicy,
+          trustedTopLevelOrigins: Array.isArray(portalPolicy?.metadata?.trusted_sso_origins)
+            ? portalPolicy.metadata.trusted_sso_origins
+            : [],
         })
       }
     } finally {

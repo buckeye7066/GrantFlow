@@ -51,6 +51,7 @@ import { collectAcceptedFundingSources } from './acceptedFundingSources.js'
 import { deriveNamePartsIntoBasicInfo } from '../../../../shared/nameParsing.js'
 import { createLogger } from '../../../utils/logger.js'
 import { PORTAL_STATUS } from '../portalCompletionStore.js'
+import { getPolicyFor } from '../hamiltonPortalPolicyRegistry.js'
 import { listConnectors, getConnectorForHost, resolveConnector } from './registry.js'
 import {
   ensurePortalSyncSchema,
@@ -653,7 +654,8 @@ async function runPortalSyncInner(db, { profileId, host, dir, actorUserId, fligh
   const url = `https://${host}/`
   let extraAllowedHosts = []
   try { extraAllowedHosts = [...await listCredentialedDomains(db, profileId)] } catch { extraAllowedHosts = [] }
-  if (!browserAutomationPermittedForUrl(url, { extraAllowedHosts })) {
+  const portalPolicy = await getPolicyFor(db, host).catch(() => null)
+  if (!browserAutomationPermittedForUrl(url, { extraAllowedHosts, portalPolicy })) {
     const reason = !isBrowserAutomationEnabled()
       ? 'HAMILTON_ENABLE_BROWSER_AUTOMATION is not true'
       : 'controlled beta permits only the reserved synthetic fixture origin'
@@ -705,7 +707,7 @@ async function runPortalSyncInner(db, { profileId, host, dir, actorUserId, fligh
     // Hardened shared launcher: container-safe args (this call site had drifted
     // to a bare launch — the /dev/shm OOM class) + the full-Chromium engine +
     // the capture-time UA so WAF-bound sessions replay (see browserLaunch.js).
-    ;({ browser } = await launchPortalBrowser(chromium, { targetUrl: url }))
+    ;({ browser } = await launchPortalBrowser(chromium, { targetUrl: url, portalPolicy }))
     const context = await browser.newContext(controlledBetaBrowserContextOptions({
       userAgent: REALISTIC_PORTAL_UA,
       ...(storageState && typeof storageState === 'object' ? { storageState } : {}),

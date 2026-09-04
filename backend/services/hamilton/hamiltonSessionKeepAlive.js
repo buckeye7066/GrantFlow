@@ -61,6 +61,7 @@ import {
   OBSERVATION_ALIVE,
   OBSERVATION_DEAD,
 } from './portalSessionLifetime.js'
+import { getPolicyFor } from './hamiltonPortalPolicyRegistry.js'
 
 const log = createLogger('service:hamilton-session-keepalive')
 
@@ -106,7 +107,8 @@ export function isSessionDueForKeepAlive(row, nowMs, intervalMs) {
   return nowMs - t >= intervalMs
 }
 
-async function openProbeContext(launchBrowser, storageState, target) {
+async function openProbeContext(launchBrowser, storageState, target, portalPolicy) {
+  if (portalPolicy?.automation_allowed === false) return null
   if (typeof launchBrowser === 'function') {
     const launched = await launchBrowser({ storageState })
     if (!launched) return null
@@ -119,7 +121,7 @@ async function openProbeContext(launchBrowser, storageState, target) {
   let chromium
   try { ({ chromium } = await import('playwright')) } catch { return null }
   if (!chromium?.executablePath?.()) return null
-  const { browser } = await launchPortalBrowser(chromium, { targetUrl: target })
+  const { browser } = await launchPortalBrowser(chromium, { targetUrl: target, portalPolicy })
   const context = await browser.newContext(controlledBetaBrowserContextOptions({ storageState, userAgent: REALISTIC_PORTAL_UA }))
   await installControlledBetaBrowserEgressGuard(context)
   return { browser, context }
@@ -171,7 +173,9 @@ async function probeAndRefreshSession(db, row, { launchBrowser, probeTimeoutMs }
 
   let handle = null
   try {
-    handle = await openProbeContext(launchBrowser, storageState, target)
+    const portalPolicy = await getPolicyFor(db, row.portal_host).catch(() => null)
+    if (portalPolicy?.automation_allowed === false) return { outcome: 'skipped', detail: 'portal policy forbids browser automation' }
+    handle = await openProbeContext(launchBrowser, storageState, target, portalPolicy)
     if (!handle) return { outcome: 'skipped', detail: 'browser unavailable' }
     const { context } = handle
     const page = await context.newPage()

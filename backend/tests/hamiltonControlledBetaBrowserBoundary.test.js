@@ -14,9 +14,10 @@ import {
   installControlledBetaBrowserEgressGuard,
   isControlledBetaBrowserRequestAllowed,
   isControlledBetaSyntheticBrowserUrl,
+  resolvePublicHttpsUrl,
 } from '../services/hamilton/controlledBetaBrowserPolicy.js'
 import { launchPortalBrowser } from '../services/hamilton/browserLaunch.js'
-import { browserAutomationPermittedForUrl } from '../services/hamilton/hamiltonAutomationOrchestrator.js'
+import { browserAutomationPermittedForUrl, reviewedPortalSubmissionExecutionAvailable } from '../services/hamilton/hamiltonAutomationOrchestrator.js'
 import { runAutopilot } from '../services/hamilton/hamiltonAutopilotEngine.js'
 import { startCloudLogin, cancelCloudLogin } from '../services/hamilton/hamiltonCloudLogin.js'
 import { runPortalSync } from '../services/hamilton/portalSync/index.js'
@@ -67,9 +68,34 @@ describe('controlled-beta target predicate (unchanged)', () => {
     expect(browserAutomationPermittedForUrl('http://169.254.169.254/latest/meta-data/')).toBe(false)
     expect(browserAutomationPermittedForUrl('http://192.168.1.10/')).toBe(false)
   })
+
+  it('enforces host policy at launch and irreversible submission boundaries', async () => {
+    const forbidden = { automation_allowed: false, agent_submission_allowed: false }
+    expect(browserAutomationPermittedForUrl('https://studentaid.gov/', { portalPolicy: forbidden })).toBe(false)
+    expect(reviewedPortalSubmissionExecutionAvailable('https://portal.example/apply', forbidden)).toBe(false)
+    const chromium = { launch: vi.fn() }
+    await expect(launchPortalBrowser(chromium, {
+      targetUrl: CONTROLLED_BETA_SYNTHETIC_BROWSER_ORIGIN,
+      portalPolicy: forbidden,
+    })).rejects.toMatchObject({ code: 'portal_automation_forbidden' })
+    expect(chromium.launch).not.toHaveBeenCalled()
+  })
 })
 
 describe('redirect and subresource egress guard', () => {
+  it('refuses DNS aliases to private addresses and DNS rebinding', async () => {
+    const pinnedAddresses = new Map()
+    await expect(resolvePublicHttpsUrl('https://alias.example/apply', {
+      lookup: async () => [{ address: '10.0.0.7', family: 4 }],
+    })).resolves.toBe(false)
+    await expect(resolvePublicHttpsUrl('https://portal.example/apply', {
+      lookup: async () => [{ address: '8.8.8.8', family: 4 }], pinnedAddresses,
+    })).resolves.toBe(true)
+    await expect(resolvePublicHttpsUrl('https://portal.example/next', {
+      lookup: async () => [{ address: '1.1.1.1', family: 4 }], pinnedAddresses,
+    })).resolves.toBe(false)
+  })
+
   it('continues fixture requests and public HTTPS; aborts loopback, private, and metadata targets', async () => {
     let handler = null
     const context = {
@@ -225,4 +251,3 @@ describe('synthetic fixture remains testable', () => {
     await cancelCloudLogin(result.liveSessionId)
   })
 })
-

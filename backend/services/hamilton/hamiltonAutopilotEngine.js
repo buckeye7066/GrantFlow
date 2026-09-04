@@ -997,6 +997,8 @@ export async function runAutopilot({
   // overridden — short factual fields (name, address, …) always come from
   // the profile verbatim. Falls back to the profile's raw essays when absent.
   narrativeAnswers = null,
+  portalPolicy = null,
+  trustedTopLevelOrigins = [],
 } = {}) {
   if (!url) throw new Error('url required')
   if (!profile) throw new Error('profile required')
@@ -1035,7 +1037,7 @@ export async function runAutopilot({
     return { status: 'failed', blocker_kind: 'no_browser', blocker_detail: 'Playwright chromium binary not installed', filled_fields: filled, pages_visited: 0, trace }
   }
 
-  const { browser } = await launchPortalBrowser(chromium, { headless, targetUrl: url })
+  const { browser } = await launchPortalBrowser(chromium, { headless, targetUrl: url, portalPolicy })
   // Only an in-memory storageState OBJECT from the profile-owned encrypted
   // session store is accepted. Request-supplied filesystem paths are never
   // passed to Playwright.
@@ -1112,11 +1114,22 @@ export async function runAutopilot({
     trace.push({ step: 'navigate', detail: { url } })
     await page.goto(url, { waitUntil: 'domcontentloaded', timeout: NAV_TIMEOUT_MS })
 
+    const approvedOrigins = new Set([new URL(url).origin, ...trustedTopLevelOrigins.map((value) => new URL(value).origin)])
+    const liveOriginAllowed = () => {
+      try { return approvedOrigins.has(new URL(page.url()).origin) } catch { return false }
+    }
+
     while (pagesVisited < MAX_PAGES) {
       if (signal?.aborted) {
         return { status: 'cancelled', blocker_kind: 'cancelled', blocker_detail: 'Hamilton task was cancelled.', filled_fields: filled, pages_visited: pagesVisited, trace, logged_in: loggedIn }
       }
       pagesVisited += 1
+      // Redirects and script navigation can leave the verified portal after the
+      // network guard has established that a host is public.  Public is not the
+      // same as trusted: refuse before any PII fill, upload, or submit action.
+      if (!liveOriginAllowed()) {
+        return { status: 'blocked', blocker_kind: 'untrusted_portal_origin', blocker_detail: 'The portal navigated to an untrusted origin before applicant data was disclosed.', filled_fields: filled, pages_visited: pagesVisited, trace }
+      }
       trace.push({ step: 'page', detail: { index: pagesVisited, url: (() => { try { return page.url() } catch { return null } })() } })
 
       const gate = await detectGate(page)

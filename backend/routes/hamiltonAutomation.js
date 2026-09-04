@@ -105,9 +105,9 @@ import {
   cloudLoginStatus,
 } from '../services/hamilton/hamiltonCloudLogin.js'
 import {
-  CONTROLLED_BETA_SYNTHETIC_BROWSER_HOST,
   controlledBetaBrowserRefusal,
   isControlledBetaSyntheticBrowserUrl,
+  isPublicHttpsUrl,
 } from '../services/hamilton/controlledBetaBrowserPolicy.js'
 import {
   saveCredential,
@@ -1312,8 +1312,12 @@ router.post('/sessions/cloud-login/start', async (req, res) => {
   const portalHost = req.body?.portal_host || req.body?.portalHost
   const loginUrl = req.body?.login_url || req.body?.loginUrl || (portalHost ? `https://${portalHost}/` : null)
   const normalizedPortalHost = String(portalHost || '').trim().toLowerCase().replace(/^www\./, '')
-  if (!isControlledBetaSyntheticBrowserUrl(loginUrl)
-      || normalizedPortalHost !== CONTROLLED_BETA_SYNTHETIC_BROWSER_HOST) {
+  let parsedLoginHost = ''
+  try { parsedLoginHost = new URL(loginUrl).hostname.toLowerCase().replace(/^www\./, '') } catch { /* refused below */ }
+  const loginPolicy = await getPolicyFor(req.db, normalizedPortalHost).catch(() => null)
+  if ((!isPublicHttpsUrl(loginUrl) && !isControlledBetaSyntheticBrowserUrl(loginUrl))
+      || parsedLoginHost !== normalizedPortalHost
+      || loginPolicy?.automation_allowed === false) {
     const refusal = controlledBetaBrowserRefusal()
     return res.status(409).json({
       error: 'cloud_login_start_failed',
