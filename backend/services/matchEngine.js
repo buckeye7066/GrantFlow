@@ -3825,7 +3825,7 @@ export function makeDecision(score, profile, opportunity, normalizedProfile = nu
   // published, a stage the profile's derived stage provably cannot occupy;
   // silence is never a denial and an unknown stage is neutral. It never asserts
   // an award IS winnable — `stageOfLifeConflict` returns a conflict or null.
-  const stageConflict = stageOfLifeConflictForSections(fullSections(sections, prof), opp)
+  const stageConflict = stageOfLifeConflictForSections(fullSections(sections, prof), opp, prof)
   if (stageConflict) {
     reasons.push(stageConflict.reason)
     return {

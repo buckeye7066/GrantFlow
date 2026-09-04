@@ -202,11 +202,11 @@ export function stageOfLifeConflict(stage, opportunity = {}) {
  * Stage gate + website-purpose gate (Axiom BioLabs / research orgs).
  * matchEngine already calls this; website URL mismatches REJECT here.
  */
-export function stageOfLifeConflictForSections(sections, opportunity = {}) {
+export function stageOfLifeConflictForSections(sections, opportunity = {}, profile = null) {
   const derived = deriveStageOfLife(sections ?? {})
   const stage = stageOfLifeConflict(derived?.value ?? null, opportunity)
   if (stage) return stage
-  const purpose = deriveWebsitePurpose({ sections: sections ?? {} })
+  const purpose = deriveWebsitePurpose({ profile, sections: sections ?? {} })
   const site = websitePurposeConflict({ purpose, opportunity })
   if (!site) return null
   return {

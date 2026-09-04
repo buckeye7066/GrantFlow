@@ -30,7 +30,6 @@ const TEXT_FIELDS = Object.freeze([
   ['organization_details', 'website_excerpt'],
   ['organization_details', 'website_about'],
   ['organization_details', 'about'],
-  ['organization_details', 'mission'],
   ['programs_services', 'description'],
   ['narrative', 'organization_overview'],
 ])
@@ -97,7 +96,13 @@ export function resolveProfileWebsiteUrl({ profile = null, sections = {}, organi
   return null
 }
 
-/** Collect stored website / about / mission prose for purpose mining. */
+/**
+ * Collect text that is explicitly available for purpose mining.
+ *
+ * `organization_details.mission` is deliberately absent: profileSchema marks
+ * that field drafting-only (`scored: false`), so it may not influence either
+ * discovery terms or a hard matching decision.
+ */
 export function collectWebsitePurposeText({ sections = {}, organization = null, extraText = '' } = {}) {
   const parts = []
   const s = sections || {}
@@ -105,7 +110,6 @@ export function collectWebsitePurposeText({ sections = {}, organization = null, 
     const v = asStr(obj(s[sectionKey])[field])
     if (v) parts.push(v)
   }
-  if (organization?.mission) parts.push(asStr(organization.mission))
   if (organization?.website_excerpt) parts.push(asStr(organization.website_excerpt))
   if (extraText) parts.push(asStr(extraText))
   return parts.filter(Boolean).join('\n')
@@ -203,6 +207,15 @@ export const UNRELATED_PURPOSE_LOCKS = Object.freeze([
   { key: 'usda_nutrition_education', rx: /\bfdpir nutrition education\b/i },
 ])
 
+// These locks came from the owner-reviewed Axiom queue. They are intentionally
+// host-scoped rather than inferred from the broad word "research": an eDNA lab
+// can plausibly pursue coral or fisheries work, and an agricultural-biotech
+// company can plausibly pursue specialty-crop work. Add another host only with
+// the same owner-verified, host-specific audit.
+const HOST_SCOPED_UNRELATED_LOCKS = Object.freeze({
+  'axiombiolabs.org': Object.freeze(new Set(UNRELATED_PURPOSE_LOCKS.map(({ key }) => key))),
+})
+
 export const RESEARCH_ALIGNED_LOCK_RX = Object.freeze([
   /\bsbir\b/i,
   /\bsttr\b/i,
@@ -298,6 +311,8 @@ export function websitePurposeConflict({ purpose = null, opportunity = null } = 
   if (opportunityHasResearchAlignedIdentity(opportunity)) return null
   const lock = detectUnrelatedPurposeLock(opportunity)
   if (!lock) return null
+  const host = String(purpose.host || '').toLowerCase().replace(/^www\./, '').replace(/\.$/, '')
+  if (!HOST_SCOPED_UNRELATED_LOCKS[host]?.has(lock)) return null
   return {
     lock,
     reason:

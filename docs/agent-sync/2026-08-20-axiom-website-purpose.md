@@ -17,8 +17,12 @@ institutional NOFOs.
 ## Fix
 - `backend/config/profileWebsitePurpose.js`
 - `profileDerivedFacts` website topical seeds (not recall-safe)
-- `stageOfLifeConflictForSections` also applies `websitePurposeConflict`
-  (matchEngine already calls this choke point)
+- `stageOfLifeConflictForSections` also applies `websitePurposeConflict`, and
+  `matchEngine` passes both the full sections and profile row into that choke
+  point so either supported website location reaches it.
+- Hard denials are scoped to the owner-audited Axiom host. Broad research prose
+  cannot impose Axiom's locks on an eDNA or agricultural-biotech organization,
+  and drafting-only `organization_details.mission` is not mined.
 - Tests: `backend/tests/profileWebsitePurpose.test.js`
 - PR: https://github.com/buckeye7066/GrantFlow/pull/1288
 

@@ -71,7 +71,7 @@ describe('profileWebsitePurpose — resolve + derive', () => {
     expect(url).toMatch(/axiombiolabs\.org/i)
   })
 
-  it('derives research purpose terms from the known host + mission text', () => {
+  it('derives research purpose terms from the known host without mining mission prose', () => {
     const purpose = deriveWebsitePurpose({ sections: AXIOM_SECTIONS })
     expect(purpose.isResearchPurpose).toBe(true)
     expect(purpose.terms).toEqual(expect.arrayContaining([
@@ -79,6 +79,40 @@ describe('profileWebsitePurpose — resolve + derive', () => {
       'immune tolerance',
       'biomedical research',
     ]))
+  })
+
+  it('keeps drafting-only mission prose out of discovery and hard matching', () => {
+    const sections = {
+      organization_details: {
+        mission: 'Biomedical life sciences and environmental DNA testing',
+      },
+    }
+    const purpose = deriveWebsitePurpose({ sections })
+    expect(purpose.terms).toEqual([])
+    expect(purpose.isResearchPurpose).toBe(false)
+    expect(searchTermsFromFacts(deriveProfileFacts({}, sections))).toEqual([])
+    expect(websitePurposeConflict({
+      purpose,
+      opportunity: { title: 'FY26 Coral Reef Conservation Grants' },
+    })).toBeNull()
+  })
+
+  it('does not apply Axiom locks to an unrelated research website', () => {
+    const purpose = deriveWebsitePurpose({
+      sections: {
+        basic_information: { website: 'https://edna-example.org' },
+        organization_details: { website_excerpt: 'Environmental DNA testing laboratory' },
+      },
+    })
+    expect(purpose.terms).toContain('environmental dna testing')
+    expect(websitePurposeConflict({
+      purpose,
+      opportunity: { title: 'FY26 Coral Reef Conservation Grants' },
+    })).toBeNull()
+    expect(websitePurposeConflict({
+      purpose,
+      opportunity: { title: 'Great Lakes Fish and Wildlife Restoration Act' },
+    })).toBeNull()
   })
 
   it('feeds website purpose into deriveProfileFacts topical terms', () => {
@@ -130,42 +164,49 @@ describe('profileWebsitePurpose — Axiom Hamilton queue audit', () => {
 })
 
 describe('matchEngine — website purpose REJECT', () => {
-  it('REJECTs Title X for an Axiom-shaped profile with website URL', async () => {
-    const decision = await computeMatchDecision({
-      profile: {
+  it('REJECTs Title X through the engine when the website is on the profile row', async () => {
+    const decision = await computeMatchDecision(
+      {
         id: 'axiom-1',
         primary_type: 'small_business',
         display_name: 'Axiom BioLabs',
+        website: 'https://axiombiolabs.org',
       },
-      sections: AXIOM_SECTIONS,
-      opportunity: {
+      {
         id: 'opp-title-x',
         title: 'Title X Family Planning Services Grants',
         sponsor: 'HHS',
         opportunity_kind: 'PROGRAM',
         is_national: true,
+        application_url: 'https://www.hhs.gov/grants/title-x-example',
       },
-    })
+      {
+        profileSections: {
+          organization_details: { mission: AXIOM_SECTIONS.organization_details.mission },
+        },
+      },
+    )
     expect(decision.decision).toBe('REJECT')
     expect(String(decision.explanation || decision.reasons?.join(' ') || '')).toMatch(/website purpose mismatch/i)
   })
 
   it('does NOT refuse an STTR for the same profile', async () => {
-    const decision = await computeMatchDecision({
-      profile: {
+    const decision = await computeMatchDecision(
+      {
         id: 'axiom-1',
         primary_type: 'small_business',
         display_name: 'Axiom BioLabs',
       },
-      sections: AXIOM_SECTIONS,
-      opportunity: {
+      {
         id: 'opp-sttr',
         title: 'NIH Small Business Technology Transfer Grant (Parent STTR [R41/R42] Clinical Trial Optional)',
         sponsor: 'NIH',
         opportunity_kind: 'PROGRAM',
         is_national: true,
+        application_url: 'https://www.nih.gov/grants/sttr-example',
       },
-    })
+      { profileSections: AXIOM_SECTIONS },
+    )
     expect(decision.decision).not.toBe('REJECT')
   })
 })
