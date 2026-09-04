@@ -211,4 +211,35 @@ describe('automateSingleSource — cross-tenant ownership gate', () => {
     })
     expect(await taskCount(db)).toBe(0)
   })
+
+  it('CLOSES previously queued scheduler work after entitlement revocation so the queue rotates', async () => {
+    const created = await automateSingleSource(db, {
+      profileId: PROFILE,
+      internalCaller: HAMILTON_INTERNAL_CALLER,
+      source: { grant_id: 'g-1' },
+    })
+    expect(created.task?.id).toBeTruthy()
+
+    // Restore a scheduler-pickable state independent of how the mocked portal
+    // pathway completed, then revoke the profile's entitlement.
+    await db.prepare("UPDATE application_tasks SET status = 'queued' WHERE id = ?")
+      .run(created.task.id)
+    await db.prepare("UPDATE billing_addon_entitlements SET status = 'revoked' WHERE profile_id = ?")
+      .run(PROFILE)
+
+    await expect(automateSingleSource(db, {
+      profileId: PROFILE,
+      internalCaller: HAMILTON_INTERNAL_CALLER,
+      source: { grant_id: 'g-1' },
+    })).rejects.toMatchObject({
+      status: 403,
+      code: 'pipeline_automation_not_entitled',
+      closed_tasks: [created.task.id],
+    })
+
+    const task = await db.prepare('SELECT status, last_agent_message FROM application_tasks WHERE id = ?')
+      .get(created.task.id)
+    expect(task.status).toBe('cancelled')
+    expect(task.last_agent_message).toMatch(/pipeline automation is not enabled/i)
+  })
 })
