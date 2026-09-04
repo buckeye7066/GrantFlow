@@ -8458,7 +8458,11 @@ export async function enforceWebsitePurposeMatchScope(db) {
       let rows
       try {
         rows = await db.prepare(`
-          SELECT m.id AS match_id, m.profile_id, m.opportunity_id, o.*
+          SELECT
+            m.id AS match_id,
+            m.profile_id AS match_profile_id,
+            m.opportunity_id AS match_opportunity_id,
+            o.*
             FROM profile_opportunity_matches m
             JOIN funding_opportunities o ON o.id = m.opportunity_id
            WHERE m.profile_id = ?
@@ -8484,20 +8488,22 @@ export async function enforceWebsitePurposeMatchScope(db) {
     let repaired = 0
     let tasksCancelled = 0
     for (const row of violating) {
-      const res = await db.prepare('DELETE FROM profile_opportunity_matches WHERE id = ?').run(row.match_id)
-      repaired += changesOf(res) || 0
+      // Cancel Hamilton work BEFORE removing the stored match snapshot so
+      // live-policy rechecks still see the ACCEPT/REVIEW row during cleanup.
       const cleanup = await cleanupDisallowedHamiltonTraces(db, {
-        profileId: row.profile_id,
-        opportunityId: row.opportunity_id,
+        profileId: row.match_profile_id,
+        opportunityId: row.match_opportunity_id,
         reason: `website_purpose:${row.conflict.lock}`,
       })
       tasksCancelled += Number(cleanup.cancelled_tasks) || 0
+      const res = await db.prepare('DELETE FROM profile_opportunity_matches WHERE id = ?').run(row.match_id)
+      repaired += changesOf(res) || 0
     }
     return {
       scanned,
       repaired,
       tasksCancelled,
-      profilesAffected: new Set(violating.map((v) => v.profile_id)).size,
+      profilesAffected: new Set(violating.map((v) => v.match_profile_id)).size,
       enforced: true,
     }
   })
