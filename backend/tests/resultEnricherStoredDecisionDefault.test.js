@@ -53,6 +53,22 @@ describe('stored canonical decisions are authoritative by default', () => {
     }
   })
 
+  it('uses the joined profile-scoped vNext state for sequential guidance', () => {
+    const { kept } = canonicalizeOpportunityList(profile, [storedOpportunity({
+      vnext_application_id: 'app-1',
+      vnext_application_state: 'DEDUPED',
+      vnext_application_stage: 'DEDUPED',
+    })])
+
+    const applicationSteps = kept[0].next_steps.filter((step) => step.category === 'application')
+    expect(applicationSteps).toEqual([
+      expect.objectContaining({
+        id: 'qualify_application',
+        meta: { target: 'QUALIFIED' },
+      }),
+    ])
+  })
+
   it('the unknown-eligibility list is always an array, never undefined', () => {
     const { kept } = canonicalizeOpportunityList(profile, [storedOpportunity()], {
       preserveDirectories: true,
