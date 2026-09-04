@@ -22,6 +22,11 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
+
+// Billing enforcement is covered separately; this suite exercises downstream Hamilton behavior.
+vi.mock('../services/billing/entitlementService.js', () => ({
+  resolveProfileEntitlement: vi.fn(async () => ({ allowed: true, source: 'tier' })),
+}))
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'

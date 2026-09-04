@@ -25,12 +25,15 @@ export function decideBillingEntitlement({
   if (BLOCKED_PROFILE_STATUSES.has(normalizedProfileStatus)) {
     return { allowed: false, source: null, reason: `profile_${normalizedProfileStatus}` }
   }
+  // The global promotion is a temporary grant of every capability. New
+  // profiles normally remain in a pending pricing/agreement/payment state
+  // while that promotion is active, so payment state must not shadow it.
+  if (promotionActive) {
+    return { allowed: true, source: 'promotion', reason: null }
+  }
   const normalizedPayment = asLower(paymentAccessStatus)
   if (normalizedPayment && !PAID_ACCESS_STATUSES.has(normalizedPayment)) {
     return { allowed: false, source: null, reason: `payment_${normalizedPayment}`, payment_required: true }
-  }
-  if (promotionActive) {
-    return { allowed: true, source: 'promotion', reason: null }
   }
   if (tierAllows === true) {
     return { allowed: true, source: 'tier', reason: null }

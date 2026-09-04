@@ -138,6 +138,23 @@ export function enforceTierCapability(capabilityKey, { profileIdResolver } = {})
   }
 }
 
+/**
+ * Tasker cannot carry a GrantFlow login session. These two POST callbacks use
+ * HAMILTON_SMS_INGEST_TOKEN inside the Hamilton router instead, and therefore
+ * must reach that purpose-built authentication boundary before user billing.
+ */
+export function isHamiltonSecretInboxRequest(req) {
+  if (String(req?.method || '').toUpperCase() !== 'POST') return false
+  const path = String(req?.originalUrl || `${req?.baseUrl || ''}${req?.path || ''}`)
+    .split('?')[0]
+    .replace(/\/+$/, '')
+  return /^\/api\/(?:hamilton|yana)\/automation\/(?:sms-inbox|inbox)$/.test(path)
+}
+
+export function bypassEntitlementWhen(predicate, middleware) {
+  return (req, res, next) => predicate(req) ? next() : middleware(req, res, next)
+}
+
 export function getCrawlerJobCapability(type, { enableAi } = {}) {
   const t = typeof type === 'string' ? type.toLowerCase() : ''
   if (!t) return null

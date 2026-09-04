@@ -12,6 +12,12 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import Database from 'better-sqlite3'
 
+const billingMocks = vi.hoisted(() => ({
+  resolveProfileEntitlement: vi.fn(async () => ({ allowed: true, source: 'tier' })),
+}))
+
+vi.mock('../services/billing/entitlementService.js', () => billingMocks)
+
 process.env.RUNTIME_SECRETS_KEY = process.env.RUNTIME_SECRETS_KEY || 'c'.repeat(64)
 
 // Keep the post-gate pathways tame, mirroring hamiltonTaskCreationGate.test.js
@@ -124,8 +130,24 @@ async function taskCount(db) {
 describe('automateSingleSource — cross-tenant ownership gate', () => {
   let db
   beforeEach(async () => {
+    billingMocks.resolveProfileEntitlement.mockReset()
+    billingMocks.resolveProfileEntitlement.mockResolvedValue({ allowed: true, source: 'tier' })
     db = makeDb()
     await seedFixture(db)
+  })
+
+  it('REFUSES at the shared engine boundary before creating a task when billing is locked', async () => {
+    billingMocks.resolveProfileEntitlement.mockResolvedValueOnce({
+      allowed: false,
+      reason: 'payment_pending_payment',
+      payment_required: true,
+    })
+    await expect(automateSingleSource(db, {
+      profileId: PROFILE,
+      userId: OWNER_USER_ID,
+      source: { grant_id: 'g-1' },
+    })).rejects.toMatchObject({ status: 402, code: 'payment_required' })
+    expect(await taskCount(db)).toBe(0)
   })
 
   it('REFUSES a userId that does not own, create, or share an email with the profile', async () => {

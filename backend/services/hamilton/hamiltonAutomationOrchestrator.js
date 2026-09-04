@@ -127,6 +127,8 @@ import {
   isPublicHttpsPortalUrl,
 } from './controlledBetaBrowserPolicy.js'
 import { getUserIdsWithProfileAccess } from '../../utils/accessControl.js'
+import { resolveProfileEntitlement } from '../billing/entitlementService.js'
+import { CAPABILITY_KEYS } from '../../../shared/tierCatalog.js'
 
 const PERSONA_VERSION = 'hamilton-mba-2026'
 
@@ -588,6 +590,39 @@ async function isUserAuthorizedForProfile(db, userId, profileId, { internalCalle
   }
 }
 
+async function isDatabaseAdmin(db, userId) {
+  if (!db || !userId) return false
+  try {
+    const row = await db.prepare('SELECT is_admin FROM users WHERE id = ?').get(String(userId))
+    return row?.is_admin === true || row?.is_admin === 1
+  } catch {
+    return false
+  }
+}
+
+/** Paid Hamilton work is gated here, before profile hydration or task writes,
+ * so routes, committed-college handoffs, Anya, and the scheduler cannot drift. */
+async function requireHamiltonEngineEntitlement(db, { profileId, userId }) {
+  const decision = await resolveProfileEntitlement(db, {
+    profileId,
+    capabilityKey: CAPABILITY_KEYS.PIPELINE_AUTOMATION,
+    isAdmin: await isDatabaseAdmin(db, userId),
+  })
+  if (decision.allowed === true) return decision
+
+  const error = new Error(`Hamilton automation is not entitled: ${decision.reason}`)
+  error.code = decision.unavailable
+    ? 'entitlement_authority_unavailable'
+    : decision.payment_required
+      ? 'payment_required'
+      : String(decision.reason || '').startsWith('profile_')
+        ? 'profile_access_paused'
+        : 'tier_or_addon_required'
+  error.status = decision.unavailable ? 503 : decision.payment_required ? 402 : error.code === 'profile_access_paused' ? 423 : 403
+  error.entitlement = decision
+  throw error
+}
+
 /**
  * Idle statuses a pre-task-creation SKIP is allowed to close. This is exactly
  * the scheduler-pickable set (hamiltonAgentAdapter.js) plus nothing else:
@@ -673,6 +708,11 @@ export async function automateSingleSource(db, {
     err.code = 'profile_access_denied'
     throw err
   }
+
+  await requireHamiltonEngineEntitlement(db, {
+    profileId: resolvedProfileId,
+    userId,
+  })
 
   // If only the id was given, hydrate the profile bundle now so the
   // document/portal pathways can grab basic_information / essays /

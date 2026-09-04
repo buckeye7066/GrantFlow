@@ -11,6 +11,11 @@
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
+// Billing enforcement is covered separately; this suite exercises downstream Hamilton behavior.
+vi.mock('../services/billing/entitlementService.js', () => ({
+  resolveProfileEntitlement: vi.fn(async () => ({ allowed: true, source: 'tier' })),
+}))
+
 process.env.RUNTIME_SECRETS_KEY = process.env.RUNTIME_SECRETS_KEY || 'c'.repeat(64)
 
 const updateApplicationTask = vi.fn(async () => ({ ok: true }))

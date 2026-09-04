@@ -11,6 +11,11 @@
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 
+// Billing enforcement is covered separately; this suite exercises downstream Hamilton behavior.
+vi.mock('../services/billing/entitlementService.js', () => ({
+  resolveProfileEntitlement: vi.fn(async () => ({ allowed: true, source: 'tier' })),
+}))
+
 process.env.RUNTIME_SECRETS_KEY = process.env.RUNTIME_SECRETS_KEY || 'a'.repeat(64)
 
 const Database = (await import('better-sqlite3')).default
