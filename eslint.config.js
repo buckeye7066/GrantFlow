@@ -74,6 +74,18 @@ export default [
     },
   },
   {
+    // The shadcn/Radix UI primitive modules intentionally re-export component
+    // aliases such as `AccordionPrimitive.Root`. eslint-plugin-react-refresh
+    // 0.5.5 no longer recognizes every alias as a component and otherwise
+    // reports false-positive mixed-export warnings across these component-only
+    // modules. Keep the strict rule everywhere else and scope this exception
+    // only to the generated UI primitive layer.
+    files: ['src/components/ui/**/*.{js,jsx}'],
+    rules: {
+      'react-refresh/only-export-components': 'off',
+    },
+  },
+  {
     // No-console guard: production route/service code must route through
     // backend/utils/logger.js. Test files, scripts, and CLI tooling are
     // still allowed to use console.* directly.
