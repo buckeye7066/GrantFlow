@@ -6,7 +6,9 @@ import { auditMatchQuality } from '../../backend/services/codeGuardService.js'
 
 function makeDb() {
   const raw = new Database(':memory:')
-  // Minimum schema needed by auditMatchQuality + gradeProfile.
+  // Minimum schema needed by auditMatchQuality + gradeProfile. The brain table
+  // mirrors the columns used by the real storeMemory contract so the test does
+  // not pass while silently logging a schema-write failure.
   raw.exec(`
     CREATE TABLE profiles (
       id TEXT PRIMARY KEY,
@@ -27,15 +29,21 @@ function makeDb() {
     );
     CREATE TABLE anya_brain_memory (
       id TEXT PRIMARY KEY,
-      scope TEXT,
-      memory_key TEXT,
+      scope TEXT NOT NULL,
+      scope_id TEXT,
+      memory_key TEXT NOT NULL,
       memory_type TEXT,
       content TEXT,
+      confidence REAL DEFAULT 1.0,
+      expires_at DATETIME,
       source TEXT,
-      ttl_seconds INTEGER,
+      access_count INTEGER DEFAULT 0,
+      last_accessed_at DATETIME,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
       updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
     );
+    CREATE UNIQUE INDEX idx_match_audit_anya_brain_unique
+      ON anya_brain_memory(scope, scope_id, memory_key);
   `)
   // Minimal interface that matches backend/db/index.js prepare() surface.
   const stub = {
@@ -84,6 +92,11 @@ test('auditMatchQuality grades ≥80% of profiles B-or-better after backfill', a
   assert.ok(
     ratio >= 0.8,
     `expected ≥80% B-or-better, got ${gradesAtOrAboveB}/${result.totalProfiles} (grades=${JSON.stringify(result.grades)})`,
+  )
+  assert.equal(
+    raw.prepare('SELECT COUNT(*) AS n FROM anya_brain_memory WHERE memory_key = ?').get('codeguard.match_quality').n,
+    1,
+    'match-quality audit should persist its durable brain memory',
   )
 })
 
