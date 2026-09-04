@@ -33,6 +33,30 @@ function direct(overrides = {}) {
   }
 }
 
+function makeDb() {
+  const db = new Database(':memory:')
+  db.exec(`
+    CREATE TABLE funding_opportunities (
+      id TEXT PRIMARY KEY, opportunity_kind TEXT, result_kind TEXT,
+      opportunity_type TEXT, type TEXT, application_url TEXT, source_url TEXT,
+      last_verified_at TEXT, link_status TEXT, link_status_code INTEGER,
+      verification_method TEXT, verified_by TEXT, verification_error TEXT,
+      final_url TEXT, http_status INTEGER, is_hidden INTEGER DEFAULT 0
+    )
+  `)
+  return db
+}
+
+function insertDirect(db, row) {
+  db.prepare(`INSERT INTO funding_opportunities VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+    .run(
+      row.id, row.opportunity_kind, row.result_kind, row.opportunity_type, row.type,
+      row.application_url, row.source_url, row.last_verified_at, row.link_status,
+      row.link_status_code, row.verification_method, row.verified_by,
+      row.verification_error, row.final_url, row.http_status, row.is_hidden,
+    )
+}
+
 describe('opportunity link proof guard', () => {
   it('recognizes only fresh successful proof', () => {
     expect(hasCurrentSuccessfulLinkProof(direct(), NOW)).toBe(true)
@@ -132,37 +156,10 @@ describe('opportunity link proof guard', () => {
   })
 
   it('enforces URL-change invalidation against the persisted row', async () => {
-    const db = new Database(':memory:')
-    db.exec(`
-      CREATE TABLE funding_opportunities (
-        id TEXT PRIMARY KEY,
-        opportunity_kind TEXT,
-        result_kind TEXT,
-        opportunity_type TEXT,
-        type TEXT,
-        application_url TEXT,
-        source_url TEXT,
-        last_verified_at TEXT,
-        link_status TEXT,
-        link_status_code INTEGER,
-        verification_method TEXT,
-        verified_by TEXT,
-        verification_error TEXT,
-        final_url TEXT,
-        http_status INTEGER,
-        is_hidden INTEGER DEFAULT 0
-      )
-    `)
+    const db = makeDb()
     const beforeRow = direct()
     const after = direct({ application_url: 'https://new.example/apply' })
-    db.prepare(`
-      INSERT INTO funding_opportunities VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(
-      after.id, after.opportunity_kind, after.result_kind, after.opportunity_type, after.type,
-      after.application_url, after.source_url, after.last_verified_at, after.link_status,
-      after.link_status_code, after.verification_method, after.verified_by,
-      after.verification_error, after.final_url, after.http_status, after.is_hidden,
-    )
+    insertDirect(db, after)
 
     const result = await enforceOpportunityLinkProofAfterWrite(db, after.id, {
       beforeRow,
@@ -175,6 +172,59 @@ describe('opportunity link proof guard', () => {
     expect(row.last_verified_at).toBeNull()
     expect(row.final_url).toBeNull()
     expect(row.is_hidden).toBe(1)
+    db.close()
+  })
+
+  it('persists fresh successful proof supplied by a writer whose INSERT omitted it', async () => {
+    const db = makeDb()
+    const stored = direct({ last_verified_at: null, link_status: 'unverified', final_url: null })
+    insertDirect(db, stored)
+
+    const result = await enforceOpportunityLinkProofAfterWrite(db, stored.id, {
+      input: direct(),
+      nowMs: NOW,
+    })
+
+    expect(result).toMatchObject({ changed: true, reason: 'fresh_success' })
+    expect(db.prepare('SELECT link_status, last_verified_at, final_url FROM funding_opportunities WHERE id = ?')
+      .get(stored.id)).toEqual({
+      link_status: 'ok',
+      last_verified_at: FRESH,
+      final_url: 'https://funder.example/apply',
+    })
+    db.close()
+  })
+
+  it('does not overwrite proof concurrently refreshed after the resolver read', async () => {
+    const db = makeDb()
+    const stored = direct({ last_verified_at: null, link_status: 'unverified', final_url: null })
+    insertDirect(db, stored)
+    let injected = false
+    const guardedDb = {
+      prepare(sql) {
+        const statement = db.prepare(sql)
+        if (!injected && /^\s*UPDATE funding_opportunities\s+SET last_verified_at/.test(sql)) {
+          return {
+            run(...args) {
+              injected = true
+              db.prepare(`UPDATE funding_opportunities
+                SET last_verified_at = ?, link_status = 'ok', final_url = ?, verification_method = 'get'
+                WHERE id = ?`).run(FRESH, stored.application_url, stored.id)
+              return statement.run(...args)
+            },
+          }
+        }
+        return statement
+      },
+    }
+
+    const result = await enforceOpportunityLinkProofAfterWrite(guardedDb, stored.id, {
+      input: {},
+      nowMs: NOW,
+    })
+
+    expect(result).toMatchObject({ changed: false, reason: 'concurrent_verification_preserved' })
+    expect(result.row).toMatchObject({ link_status: 'ok', last_verified_at: FRESH, is_hidden: 0 })
     db.close()
   })
 })

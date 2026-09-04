@@ -179,7 +179,7 @@ describe('link backlog repair', () => {
       findOfficialUrlImpl: async () => ({ url: null, searched: true, hits: 0 }),
     })
 
-    expect(result).toMatchObject({ selected: 8, restored: 8, retired: 0, pending: 0 })
+    expect(result).toMatchObject({ selected: 9, restored: 9, retired: 0, pending: 0 })
     for (const [id] of lifecycleRows) {
       expect(db.prepare(`
         SELECT link_status, status, is_hidden, is_active
@@ -192,7 +192,7 @@ describe('link backlog repair', () => {
         is_active: 1,
       })
     }
-    for (const id of ['pointer-result', 'pointer-type', 'unknown-kind']) {
+    for (const id of ['pointer-result', 'pointer-type']) {
       expect(db.prepare(`
         SELECT link_status, status, is_hidden, is_active
           FROM funding_opportunities
@@ -204,6 +204,16 @@ describe('link backlog repair', () => {
         is_active: 0,
       })
     }
+    expect(db.prepare(`
+      SELECT link_status, status, is_hidden, is_active
+        FROM funding_opportunities
+       WHERE id = ?
+    `).get('unknown-kind')).toEqual({
+      link_status: 'ok',
+      status: 'active',
+      is_hidden: 0,
+      is_active: 1,
+    })
     db.close()
   })
 
