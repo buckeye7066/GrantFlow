@@ -177,7 +177,12 @@ export async function computeMissingRequirements(
     return { ok: false, error: { code: 'SCHEMA_MISSING', message: 'Schema missing for opportunity' } }
   }
 
-  const profileContext = await loadProfileContext(db, String(app.profile_id))
+  // Transition callers may hold a write transaction. Profile website refresh
+  // performs bounded network I/O and must never extend that lock window; the
+  // already-persisted website-purpose section remains part of this context.
+  const profileContext = await loadProfileContext(db, String(app.profile_id), {
+    enrichWebsitePurpose: false,
+  })
   const documentStructured = await listDocumentStructuredForProfile(db, String(app.profile_id))
 
   const mappedFields = computeMappedFields({

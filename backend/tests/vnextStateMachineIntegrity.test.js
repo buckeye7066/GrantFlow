@@ -270,5 +270,40 @@ describe('VNext transition integrity', () => {
       deferAudit: true,
     }))
   })
-})
 
+  it('rolls back and blocks when scoring cannot establish its invariant', async () => {
+    getScopedOpportunityForVnextApplication.mockResolvedValue(
+      scopedFixture(VNEXT_STATES.DEDUPED),
+    )
+    scoreApplication.mockResolvedValueOnce({
+      ok: false,
+      error: { code: 'OPPORTUNITY_NOT_FOUND', message: 'Opportunity disappeared' },
+    })
+    const transactionEvents = []
+    const { db } = makeDb()
+    db.withTransaction = vi.fn(async (fn) => {
+      try {
+        const result = await fn(db)
+        transactionEvents.push('committed')
+        return result
+      } catch (error) {
+        transactionEvents.push('rolled_back')
+        throw error
+      }
+    })
+
+    const result = await attemptTransition(db, 'app-1', VNEXT_STATES.QUALIFIED)
+
+    expect(result.ok).toBe(false)
+    expect(result.blockers).toEqual([
+      expect.objectContaining({
+        code: 'SCORING_FAILED',
+        details: { underlying_code: 'OPPORTUNITY_NOT_FOUND' },
+      }),
+    ])
+    expect(transactionEvents).toEqual(['rolled_back'])
+    expect(writeAuditEvent).toHaveBeenCalledWith(db, expect.objectContaining({
+      action: 'transition.blocked',
+    }))
+  })
+})

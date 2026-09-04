@@ -5,6 +5,7 @@ import {
   loadVnextGuidanceByOpportunity,
   VNEXT_GUIDANCE_QUERY_CHUNK_SIZE,
 } from '../services/matching/vnextApplicationGuidance.js'
+import { deduplicateOpportunities } from '../services/opportunityMatcher.js'
 
 let sqlite = null
 const originalShouldersVnext = process.env.SHOULDERS_VNEXT
@@ -61,6 +62,38 @@ describe('profile-scoped vNext application guidance loading', () => {
       vnext_application_state: 'DEDUPED',
       vnext_application_stage: 'DEDUPED',
     })
+  })
+
+  it('keeps profile application guidance when a higher-trust duplicate wins', () => {
+    const applicationBearing = {
+      id: 'catalog-low-trust',
+      title: 'Community Health Grant',
+      state: 'TN',
+      application_url: 'https://example.org/apply',
+      vnext_application_id: 'app-1',
+      vnext_application_state: 'DEDUPED',
+      vnext_application_stage: 'DEDUPED',
+      next_steps: [{ id: 'qualify_application', category: 'application' }],
+    }
+    const higherTrustDuplicate = {
+      id: 'catalog-official',
+      title: 'Community Health Grant',
+      state: 'TN',
+      application_url: 'https://agency.gov/apply',
+      next_steps: [{ id: 'save_to_pipeline', category: 'application' }],
+    }
+
+    expect(deduplicateOpportunities([
+      applicationBearing,
+      higherTrustDuplicate,
+    ])).toEqual([
+      expect.objectContaining({
+        id: 'catalog-official',
+        vnext_application_id: 'app-1',
+        vnext_application_state: 'DEDUPED',
+        next_steps: [{ id: 'qualify_application', category: 'application' }],
+      }),
+    ])
   })
 
   it('deduplicates and chunks large result sets below legacy SQLite bind limits', async () => {

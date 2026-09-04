@@ -115,7 +115,12 @@ export async function scoreApplication(
     }
   }
 
-  const profileCtx = await loadProfileContext(db, String(app.profile_id))
+  // Scoring can run inside the transition transaction. Consume persisted
+  // profile evidence without performing a website fetch while row/write locks
+  // are held.
+  const profileCtx = await loadProfileContext(db, String(app.profile_id), {
+    enrichWebsitePurpose: false,
+  })
   const missing = safeJsonParse(app.missing_requirements, null)
 
   const fit = fitScore(profileCtx, opportunity)

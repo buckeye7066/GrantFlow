@@ -1156,6 +1156,29 @@ function getSourceRank(opp) {
 }
 
 /**
+ * Deduplication may prefer a higher-trust catalog representative, but the
+ * profile-scoped application belongs to the user rather than the source row.
+ * Carry that workflow handoff (and its already-derived guidance) onto the
+ * winning representative instead of silently reverting to "save" guidance.
+ */
+function preserveVnextGuidance(winner, duplicate) {
+  if (winner?.vnext_application_id || !duplicate?.vnext_application_id) return winner
+  return {
+    ...winner,
+    vnext_application_id: duplicate.vnext_application_id,
+    vnext_application_state: duplicate.vnext_application_state ?? null,
+    vnext_application_stage: duplicate.vnext_application_stage ?? null,
+    ...(Array.isArray(duplicate.next_steps) ? { next_steps: duplicate.next_steps } : {}),
+  }
+}
+
+function preferredDuplicate(existing, candidate) {
+  return getSourceRank(candidate) > getSourceRank(existing)
+    ? preserveVnextGuidance(candidate, existing)
+    : preserveVnextGuidance(existing, candidate)
+}
+
+/**
  * Build a dedupe key for exact-match elimination.
  * Combines source_id+source (same crawl record re-inserted) and
  * normalized title + scope (state or 'national').
@@ -1208,9 +1231,7 @@ export function deduplicateOpportunities(opportunities) {
       seen.set(key, opp)
     } else {
       const existing = seen.get(key)
-      if (getSourceRank(opp) > getSourceRank(existing)) {
-        seen.set(key, opp)
-      }
+      seen.set(key, preferredDuplicate(existing, opp))
     }
   }
 
@@ -1221,7 +1242,7 @@ export function deduplicateOpportunities(opportunities) {
 
   for (let i = 0; i < candidates.length; i++) {
     if (dropped.has(i)) continue
-    const oppI = candidates[i]
+    let oppI = candidates[i]
     const normI = normalizeTitleForDedupe(oppI?.title ?? oppI?.program_name ?? '')
     const scopeI = oppI?.state ? String(oppI.state).toLowerCase() : 'national'
 
@@ -1236,9 +1257,12 @@ export function deduplicateOpportunities(opportunities) {
       if (sim >= 0.85) {
         // Keep the higher-trust one; drop the other
         if (getSourceRank(oppJ) > getSourceRank(oppI)) {
+          candidates[j] = preserveVnextGuidance(oppJ, oppI)
           dropped.add(i)
           break // i is already dropped; no need to compare it further
         } else {
+          candidates[i] = preserveVnextGuidance(oppI, oppJ)
+          oppI = candidates[i]
           dropped.add(j)
         }
       }
@@ -1259,7 +1283,7 @@ export function deduplicateOpportunities(opportunities) {
   const domainDropped = new Set()
   for (let i = 0; i < kept.length; i++) {
     if (domainDropped.has(i)) continue
-    const oppI = kept[i]
+    let oppI = kept[i]
     const domI = dedupeDomainOf(oppI)
     if (!domI || MULTI_LISTING_DOMAINS.has(domI)) { domainKept.push(oppI); continue }
     const normI = normalizeTitleForDedupe(oppI?.title ?? oppI?.program_name ?? '')
@@ -1270,9 +1294,12 @@ export function deduplicateOpportunities(opportunities) {
       const normJ = normalizeTitleForDedupe(oppJ?.title ?? oppJ?.program_name ?? '')
       if (titleSimilarity(normI, normJ) >= 0.6) {
         if (getSourceRank(oppJ) > getSourceRank(oppI)) {
+          kept[j] = preserveVnextGuidance(oppJ, oppI)
           domainDropped.add(i)
           break
         }
+        kept[i] = preserveVnextGuidance(oppI, oppJ)
+        oppI = kept[i]
         domainDropped.add(j)
       }
     }

@@ -48,6 +48,18 @@ class ConcurrentTransitionError extends Error {
   }
 }
 
+class TransitionInvariantError extends Error {
+  constructor(applicationId, currentState, targetState, blocker) {
+    super(blocker?.message || `Transition invariant failed for ${applicationId}`)
+    this.name = 'TransitionInvariantError'
+    this.code = 'TRANSITION_INVARIANT_FAILED'
+    this.applicationId = String(applicationId)
+    this.currentState = currentState
+    this.targetState = targetState
+    this.blocker = blocker
+  }
+}
+
 function asState(stageOrState) {
   return normalizeVNextState(stageOrState) || VNEXT_STATES.DISCOVERED
 }
@@ -309,6 +321,16 @@ async function transitionInTransaction(db, applicationId, target, actor) {
     if (Array.isArray(score?.deferredAuditEvents)) {
       deferredAuditEvents.push(...score.deferredAuditEvents)
     }
+    if (!score?.ok) {
+      throw new TransitionInvariantError(applicationId, current, target, {
+        code: 'SCORING_FAILED',
+        message: score?.error?.message || 'Failed to compute the application score',
+        severity: 'error',
+        details: {
+          underlying_code: score?.error?.code || null,
+        },
+      })
+    }
   }
 
   if (target === VNEXT_STATES.DRAFTING) {
@@ -367,6 +389,23 @@ export async function attemptTransition(db, applicationId, targetStateRaw, actor
           severity: 'error',
         }],
       }
+    }
+    if (error instanceof TransitionInvariantError || error?.code === 'TRANSITION_INVARIANT_FAILED') {
+      const blockers = [error.blocker || {
+        code: 'TRANSITION_INVARIANT_FAILED',
+        message: 'A required transition invariant could not be established.',
+        severity: 'error',
+      }]
+      const result = resultWithAudits(blockersToResult(blockers), {
+        actor,
+        entity_type: 'vnext_application',
+        entity_id: String(applicationId),
+        action: 'transition.blocked',
+        before: { state: error.currentState ?? null, target },
+        after: { blockers },
+      })
+      await writeTransitionAudits(db, result)
+      return result
     }
     throw error
   }
