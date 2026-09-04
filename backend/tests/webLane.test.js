@@ -83,6 +83,11 @@ describe('runWebDiscoveryLane', () => {
     expect(matches[0].source_query.length).toBeGreaterThan(0)
     expect(res.queries).toContain(matches[0].source_query)
     expect(matches[0].discovered_via).toBe('web_search')
+    expect(matches[0].decision).toBe('review')
+    const explanation = JSON.parse(matches[0].match_explain_json)
+    expect(explanation.four_truth_proof.all_passed).toBe(false)
+    expect(explanation.four_truth_proof.meets_profile_need.passed).toBe(false)
+    expect(res.recommendations).toEqual([])
   })
 
   it('rejects an expired opportunity via the reality gate', async () => {

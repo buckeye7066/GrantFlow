@@ -724,7 +724,7 @@ export async function runProfileDiscoveryLive({ db = getDb(), profileId, fetcher
           extraQueries: Array.isArray(extraQueries) ? extraQueries : [],
         },
       );
-      const { recommendations: webRecs, targetVerification, ...webTelemetry } = web;
+      const { recommendations: webRecs, research_leads: webResearchLeads, targetVerification, ...webTelemetry } = web;
       // The bounded target-verification promise is awaited AFTER persistRun (it
       // mutates web_lane_blind_shadow.promotion_evidence in place — a shared ref —
       // so recordWebLaneRun below sees the final counter) and is kept OUT of the
@@ -733,6 +733,10 @@ export async function runProfileDiscoveryLive({ db = getDb(), profileId, fetcher
       run.web_lane = webTelemetry;
       if (Array.isArray(webRecs) && webRecs.length) {
         run.recommendations = [...(run.recommendations ?? []), ...webRecs].sort((a, b) => b.match_score - a.match_score);
+      }
+      if (Array.isArray(webResearchLeads) && webResearchLeads.length) {
+        run.research_leads = [...(run.research_leads ?? []), ...webResearchLeads]
+          .sort((a, b) => b.match_score - a.match_score);
       }
 
       // Record the gates' verdict on each seed. A seed that produced a catalog

@@ -14,7 +14,7 @@ import { OPPORTUNITY_KIND } from '../contract.js';
 import { createCountyCityDirectoryAdapter } from '../adapters/countyCityDirectoryAdapter.js';
 import { enforceReality } from '../realityGate.js';
 import { normalize } from '../normalizer.js';
-import { computeMatchDecision, isRecommendable } from '../matchEngine.js';
+import { computeMatchDecision, isRecommendable, isResearchLead } from '../matchEngine.js';
 import { MATCH_DECISION } from '../contract.js';
 
 const COUNTY_CITY = ['usa_gov_local_governments', 'hud_resource_locator', 'findhelp_local_programs'];
@@ -95,16 +95,15 @@ function decisionForCountySource(sourceId, thesis) {
   return { opp, decision: computeMatchDecision(opp, thesis, { floor: 8 }) };
 }
 
-// The #886 guard, restated against the rule that now carries it. A locator's
-// reachability is owned by isRecommendable(), NOT by it claiming ACCEPT: a
-// pointer is admitted to the recommendation list at REVIEW. Asserting ACCEPT
-// here is what previously forced locators to over-claim to stay visible
-// (Amy false_positive x56) — the guard is that the locator stays RECOMMENDABLE.
-test('a county DIRECTORY locator with no apply_url stays recommendation-eligible', () => {
+// A locator remains visible as an explicitly separate research lead. It never
+// enters the direct-funding recommendation collection merely to preserve recall.
+test('a county DIRECTORY locator with no apply_url stays visible as a research lead', () => {
   const { opp, decision } = decisionForCountySource('hud_resource_locator', RICH_THESIS);
   assert.equal(opp.apply_url, null, 'locator honesty: apply_url stays null');
-  assert.ok(isRecommendable(opp, decision.decision),
-    'locator must remain recommendation-eligible (hyperlocal fleet reachability)');
+  assert.ok(!isRecommendable(opp, decision.decision),
+    'locator must never enter direct-funding recommendations');
+  assert.ok(isResearchLead(opp, decision.decision),
+    'locator must remain visible in the research-lead surface');
   assert.ok(
     !decision.match_explain.warnings.some((w) => /no direct application URL/i.test(w)),
     'a locator is never demoted for its by-design missing apply URL',

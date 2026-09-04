@@ -449,6 +449,13 @@ router.post('/recommendations/:id/accept', requireAuth, async (req, res) => {
     const rec = await getRecommendation(req.db, req.params.id)
     if (!rec) return res.status(404).json({ ok: false, error: 'Recommendation not found' })
     if (!(await ensureProfileAccess(req, res, rec.profile_id))) return
+    if (String(rec.match_decision || '').toUpperCase() !== 'ACCEPT') {
+      return res.status(409).json({
+        ok: false,
+        error: 'Research leads are pointers to investigate and cannot be added as direct funding.',
+        code: 'research_lead_not_direct_funding',
+      })
+    }
 
     // Delegate add-to-pipeline to the canonical helper.
     let pipelineResult = null

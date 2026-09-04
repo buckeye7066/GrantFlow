@@ -128,6 +128,7 @@ async function runRobertDiscoveryViaCrawlerOs({
       // table). Actually persist each ACCEPT-band recommendation now, and count
       // only the ones really created. Skipped on dry-run (preview only).
       let recsCreated = 0
+      let researchLeadsCreated = 0
       if (!dryRun) {
         for (const rec of run.recommendations || []) {
           const res = await safe(() => createRecommendationIfHelpful({
@@ -141,8 +142,34 @@ async function runRobertDiscoveryViaCrawlerOs({
           }), { errors: summary.errors, stage: `persist_recommendation:${profileId}` })
           if (res?.created) recsCreated += 1
         }
+        // Pointer rows are intentionally absent from direct recommendations,
+        // but they must not disappear. Persist them as REVIEW items in Robert's
+        // existing user-visible queue; the frontend labels REVIEW as a research
+        // lead and never offers the add-to-pipeline action.
+        for (const lead of run.research_leads || []) {
+          const res = await safe(() => createRecommendationIfHelpful({
+            db,
+            profileId,
+            opportunityId: lead.opportunity_id,
+            matchDecision: lead.decision,
+            matchScore: lead.match_score,
+            opportunityTitle: lead.title || '',
+            whyFound: 'Research lead from Robert discovery — a directory or prior-award pointer to investigate, not direct funding.',
+          }), { errors: summary.errors, stage: `persist_research_lead:${profileId}` })
+          if (res?.created) {
+            researchLeadsCreated += 1
+            summary.research_leads.push({
+              id: res.recommendation_id,
+              profile_id: profileId,
+              opportunity_id: lead.opportunity_id,
+              decision: lead.decision,
+              classification: lead.classification,
+            })
+          }
+        }
       } else {
         recsCreated = run.recommendations.length // preview count only
+        researchLeadsCreated = run.research_leads?.length ?? 0
       }
       counters.recommendations_created += recsCreated
       summary.matched.push({
@@ -151,6 +178,7 @@ async function runRobertDiscoveryViaCrawlerOs({
         stored: run.stored,
         matches: persisted.matches,
         recommendations: recsCreated,
+        research_leads: researchLeadsCreated,
         dry_run: dryRun || undefined,
         sources: run.sources.map((s) => ({
           source_id: s.source_id,
@@ -273,6 +301,7 @@ export async function runRobert({
     ingested: [],
     matched: [],
     recommendations: [],
+    research_leads: [],
     errors: [],
     notes: [],
   }
@@ -875,6 +904,7 @@ async function finishRun({ db, runId, status, counters, summary, error = null, s
     ingested: summary.ingested,
     matched: summary.matched,
     recommendations: summary.recommendations,
+    research_leads: summary.research_leads,
     rejected: summary.rejected,
     errors: summary.errors,
     counters,

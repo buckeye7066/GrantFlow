@@ -115,6 +115,7 @@ export default function RobertRecommendationListener() {
 }
 
 function showRecommendationToast(rec, { setDetailsOpen, setDetailsRecommendation }) {
+  const isResearchLead = String(rec.match_decision || '').toUpperCase() === 'REVIEW'
   toast({
     id: `robert-rec-${rec.id}`,
     title: rec.toast_title || 'Robert found a possible funding source',
@@ -136,9 +137,10 @@ function showRecommendationToast(rec, { setDetailsOpen, setDetailsRecommendation
         >
           View Details
         </Button>
-        <Button
-          size="sm"
-          onClick={async (e) => {
+        {!isResearchLead && (
+          <Button
+            size="sm"
+            onClick={async (e) => {
             e?.preventDefault?.()
             try {
               const result = await apiFetch(
@@ -162,10 +164,11 @@ function showRecommendationToast(rec, { setDetailsOpen, setDetailsRecommendation
                 duration: 8000,
               })
             }
-          }}
-        >
-          Yes, Add to Pipeline
-        </Button>
+            }}
+          >
+            Yes, Add to Pipeline
+          </Button>
+        )}
         <Button
           size="sm"
           variant="ghost"
