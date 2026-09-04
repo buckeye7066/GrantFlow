@@ -128,6 +128,11 @@ export async function createCheckoutSessionForPrice({
   cancelUrl,
   metadata = {},
   idempotencyKey,
+  // 'payment' (one-time service work) or 'subscription' (a recurring tier).
+  // Subscription mode is what lets a purchase reach
+  // services/billing/subscriptionSync.js and actually move billing_accounts.tier_id;
+  // before it existed every checkout was one-time and no plan could ever be bought.
+  mode = 'payment',
 }) {
   const stripe = createStripe()
   if (!stripe) {
@@ -136,6 +141,7 @@ export async function createCheckoutSessionForPrice({
     throw err
   }
 
+  const checkoutMode = mode === 'subscription' ? 'subscription' : 'payment'
   const qty = Math.max(1, Math.floor(Number(quantity) || 1))
   const idem = idempotencyKey ? String(idempotencyKey) : undefined
 
@@ -153,12 +159,19 @@ export async function createCheckoutSessionForPrice({
   try {
     session = await stripe.checkout.sessions.create(
       {
-        mode: 'payment',
+        mode: checkoutMode,
         customer: customerId || undefined,
         line_items: [{ price: priceId, quantity: qty }],
         success_url: successUrl,
         cancel_url: cancelUrl,
         metadata,
+        // Stripe copies session metadata onto the Session, not onto the
+        // Subscription it creates. subscriptionSync resolves a profile from
+        // subscription.metadata.profile_id first, so it must be propagated
+        // explicitly or every subscription event would arrive unattributable.
+        ...(checkoutMode === 'subscription'
+          ? { subscription_data: { metadata } }
+          : {}),
       },
       idem ? { idempotencyKey: idem } : undefined,
     )
