@@ -277,7 +277,17 @@ export function loadEnv({ mode = process.env.NODE_ENV } = {}) {
   }
 
   const corsOrigins = env.CORS_ORIGIN ? splitCsv(env.CORS_ORIGIN) : []
-  if (isProd && env.CORS_ORIGIN && containsCorsWildcard(corsOrigins)) {
+  if (isProd && corsOrigins.length === 0) {
+    return {
+      ok: false,
+      issues: [
+        'CORS_ORIGIN is required in deployed runtimes. Configure one or more explicit HTTPS origins (comma-separated).',
+      ],
+      env: null,
+      warnings: [],
+    }
+  }
+  if (isProd && containsCorsWildcard(corsOrigins)) {
     return {
       ok: false,
       issues: [
