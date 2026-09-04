@@ -634,10 +634,13 @@ async function attachScreencastToCurrentPage(s) {
 export async function retargetLivePage(s, page) {
   if (!s || !page || s.page === page) return false
   const candidateUrl = (() => { try { return page.url() } catch { return null } })()
-  if (candidateUrl && candidateUrl !== 'about:blank'
-      && !isControlledBetaSyntheticBrowserUrl(candidateUrl)) {
+  const syntheticSession = isControlledBetaSyntheticBrowserUrl(s?.meta?.loginUrl)
+  const candidateSafe = syntheticSession
+    ? isControlledBetaSyntheticBrowserUrl(candidateUrl)
+    : (isPublicHttpsPortalUrl(candidateUrl) && (await assertPublicHttpsPortalUrl(candidateUrl)).ok)
+  if (candidateUrl && candidateUrl !== 'about:blank' && !candidateSafe) {
     try { await page.close?.() } catch { /* best-effort quarantine */ }
-    log.warn('cloud login blocked off-fixture popup', { candidateUrl })
+    log.warn('cloud login blocked unsafe popup', { candidateUrl, syntheticSession })
     return false
   }
   s.page = page

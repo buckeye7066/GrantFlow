@@ -73,6 +73,7 @@ describe('real public-portal URL safety gate (isPublicHttpsPortalUrl)', () => {
       'https://10.0.0.1/',           // private
       'https://192.168.1.1/',        // private
       'https://169.254.169.254/',    // metadata
+      'https://[::ffff:127.0.0.1]/', // IPv4-mapped loopback (URL normalizes to ::ffff:7f00:1)
       'https://localhost/',          // loopback name
       `https://${CONTROLLED_BETA_SYNTHETIC_BROWSER_HOST}/`, // .invalid fixture
       'ftp://example.org/',
@@ -151,7 +152,10 @@ describe('real-portal egress guard (installPortalBrowserEgressGuard)', () => {
   it('aborts a public-looking hostname when DNS resolves it to private space', async () => {
     vi.spyOn(dns.promises, 'lookup').mockResolvedValue([{ address: '127.0.0.1', family: 4 }])
     let handler = null
-    await installPortalBrowserEgressGuard({ route: async (_pattern, callback) => { handler = callback } })
+    await installPortalBrowserEgressGuard({
+      route: async (_pattern, callback) => { handler = callback },
+      routeWebSocket: async () => {},
+    })
     const route = {
       request: () => ({ url: () => 'https://attacker.example/internal' }),
       continue: vi.fn(), abort: vi.fn(),
@@ -166,6 +170,7 @@ describe('real-portal egress guard (installPortalBrowserEgressGuard)', () => {
     let handler = null
     const context = {
       route: vi.fn(async (_pattern, callback) => { handler = callback }),
+      routeWebSocket: vi.fn(async () => {}),
     }
     await installPortalBrowserEgressGuard(context)
     expect(handler).toBeTypeOf('function')
@@ -196,12 +201,25 @@ describe('real-portal egress guard (installPortalBrowserEgressGuard)', () => {
       'https://127.0.0.1/admin',
       'https://10.0.0.1/private',
       'http://169.254.169.254/latest/meta-data/',
+      'https://[::ffff:127.0.0.1]/admin',
     ]) {
       expect(isPortalBrowserRequestAllowed(blockedUrl), blockedUrl).toBe(false)
       const route = await dispatch(blockedUrl)
       expect(route.continue, `should NOT continue ${blockedUrl}`).not.toHaveBeenCalled()
       expect(route.abort, `should abort ${blockedUrl}`).toHaveBeenCalledWith('blockedbyclient')
     }
+  })
+
+  it('blocks WebSocket egress before any page is created', async () => {
+    let websocketHandler = null
+    const context = {
+      route: vi.fn(async () => {}),
+      routeWebSocket: vi.fn(async (_pattern, callback) => { websocketHandler = callback }),
+    }
+    await installPortalBrowserEgressGuard(context)
+    const socket = { close: vi.fn(async () => {}) }
+    await websocketHandler(socket)
+    expect(socket.close).toHaveBeenCalledOnce()
   })
 })
 
@@ -238,7 +256,7 @@ describe('browser entry points accept public HTTPS portals, block private IPs', 
       viewportSize: () => ({ width: 1280, height: 900 }),
     }
     const context = {
-      route: vi.fn(async () => {}), newPage: vi.fn(async () => page),
+      route: vi.fn(async () => {}), routeWebSocket: vi.fn(async () => {}), newPage: vi.fn(async () => page),
       storageState: vi.fn(async () => ({ cookies: [], origins: [] })),
     }
     page.context = () => context

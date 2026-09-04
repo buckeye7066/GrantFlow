@@ -1179,7 +1179,7 @@ export async function runAutopilot({
         // normally avoid these controls; if one remains, keep inspecting and
         // filling the page rather than returning a payment/CAPTCHA/2FA/final
         // review hard stop before Hamilton has attempted the authorized run.
-        if (finalAllowSubmit && ['2fa', 'captcha', 'payment', 'bot_protected'].includes(gate.kind)) {
+        if (finalAllowSubmit && ['2fa', 'captcha', 'bot_protected'].includes(gate.kind)) {
           trace.push({ step: 'authorized_gate_attempt', detail: gate })
         } else {
           trace.push({ step: 'gate', detail: gate })
@@ -1240,8 +1240,8 @@ export async function runAutopilot({
             const text = `${name} ${labelText || ''}`
             const matchesStanding = opts.standing.some((r) => new RegExp(r.s, r.f).test(text))
             const matchesHard = opts.hard.some((r) => new RegExp(r.s, r.f).test(text))
-            const tickable = matchesStanding || (opts.allowHard && matchesHard)
-            const blocked = matchesHard && !opts.allowHard
+            const tickable = matchesStanding && !matchesHard
+            const blocked = matchesHard
             if (tickable && !blocked && !el.checked) {
               el.checked = true
               el.dispatchEvent(new Event('change', { bubbles: true }))
@@ -1252,7 +1252,6 @@ export async function runAutopilot({
         }, {
           standing: STANDING_ATTESTATION_PATTERNS.map((r) => ({ s: r.source, f: r.flags })),
           hard:     HARD_ATTESTATION_PATTERNS.map((r) => ({ s: r.source, f: r.flags })),
-          allowHard: finalAllowSubmit && authorizations.submit_applications,
         }).catch(() => [])
         if (checkboxes.length > 0) trace.push({ step: 'attestation_checked', detail: { items: checkboxes } })
       }
@@ -1328,7 +1327,7 @@ export async function runAutopilot({
           return { status: 'blocked', blocker_kind: 'validation', blocker_detail: nativeErrors.slice(0, 5).join(' | '), filled_fields: filled, pages_visited: pagesVisited, trace }
         }
         const boundary = typeof beforeSubmit === 'function'
-          ? await beforeSubmit()
+          ? await beforeSubmit({ url: (() => { try { return page.url() } catch { return null } })() })
           : { allow: false, reason: 'missing_submit_boundary_check' }
         if (signal?.aborted || boundary?.cancelled) {
           return { status: 'cancelled', blocker_kind: 'cancelled', blocker_detail: 'Hamilton task was cancelled before submission.', filled_fields: filled, pages_visited: pagesVisited, trace, logged_in: loggedIn }

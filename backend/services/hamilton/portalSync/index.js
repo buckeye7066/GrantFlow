@@ -52,6 +52,7 @@ import { collectAcceptedFundingSources } from './acceptedFundingSources.js'
 import { deriveNamePartsIntoBasicInfo } from '../../../../shared/nameParsing.js'
 import { createLogger } from '../../../utils/logger.js'
 import { PORTAL_STATUS } from '../portalCompletionStore.js'
+import { getPolicyFor } from '../hamiltonPortalPolicyRegistry.js'
 import { listConnectors, getConnectorForHost, resolveConnector } from './registry.js'
 import {
   ensurePortalSyncSchema,
@@ -562,7 +563,6 @@ export async function runPortalSync(db, {
   // ignored here: portal sync is outside the canonical task
   // authorization/lease/proof protocol. Submission authority lives in the
   // Hamilton task orchestrator (hamiltonAutomationOrchestrator), not here.
-  // eslint-disable-next-line no-unused-vars
   allowSubmit = false,
 } = {}) {
   if (!db) return { ok: false, direction, connectorId: null, runId: null, error: 'db required' }
@@ -584,6 +584,25 @@ export async function runPortalSync(db, {
       error: 'unsafe_portal_url',
       detail: 'Portal sync requires a public HTTPS portal URL.',
       requires_human_handoff: true,
+    }
+  }
+
+  // SSRF safety answers where the browser may connect; portal policy answers
+  // whether Hamilton is authorized to automate there. Apply that authority
+  // before creating a run or launching any connector, and fail closed if the
+  // registry cannot be read. Read/both sync additionally requires scraping
+  // permission; write sync never submits, but still requires automation.
+  if (!isSyntheticFixture) {
+    let policy
+    try { policy = await getPolicyFor(db, host) } catch { policy = null }
+    const readAllowed = dir === 'write' || policy?.scraping_allowed === true
+    if (!policy || policy.automation_allowed !== true || !readAllowed) {
+      return {
+        ok: false, direction: dir, connectorId: null, runId: null,
+        error: !policy ? 'portal_policy_unavailable' : 'portal_policy_disallowed',
+        detail: !readAllowed ? 'Portal policy does not permit automated reads.' : 'Portal policy does not permit browser automation.',
+        requires_human_handoff: true,
+      }
     }
   }
 
