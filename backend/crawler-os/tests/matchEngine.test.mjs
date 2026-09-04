@@ -344,6 +344,24 @@ test('an ACCEPT-derived eligible flag cannot replace stated applicant-type evide
   assert.equal(m.decision, MATCH_DECISION.REVIEW);
 });
 
+test('evidence-backed eligibility prose can prove applicant type for blind web candidates', () => {
+  const m = computeMatchDecision(
+    studentOpp({
+      applicant_types: [],
+      eligibility_text: 'Eligible applicants must be currently enrolled college students.',
+      eligibility_bullets: ['Applicants must be currently enrolled college students.'],
+    }),
+    PROVEN_STUDENT_THESIS,
+    PROVEN_STUDENT_CTX,
+  );
+
+  assert.equal(m.match_explain.matched_profile_type, true);
+  assert.equal(m.match_explain.four_truth_proof.profile_qualifies.passed, true);
+  assert.deepEqual(m.match_explain.four_truth_proof.profile_qualifies.applicant_type_evidence, []);
+  assert.ok(m.match_explain.four_truth_proof.profile_qualifies.eligibility_prose_evidence.length > 0);
+  assert.equal(m.decision, 'accept');
+});
+
 test('OS matcher source contains no standalone scoring weights or decide function', () => {
   const source = fs.readFileSync(path.resolve('backend/crawler-os/matchEngine.js'), 'utf8');
   assert.doesNotMatch(source, /function\s+decide\s*\(/);

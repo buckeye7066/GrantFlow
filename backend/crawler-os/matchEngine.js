@@ -106,7 +106,11 @@ function positiveEligibility(value) {
 
 function hasPositiveApplicantTypeEvidence(opportunity, canonical) {
   const statedApplicantTypes = stripWildcard(uniqueStrings(opportunity?.applicant_types));
-  return statedApplicantTypes.length > 0 &&
+  const eligibilityProse = uniqueStrings([
+    opportunity?.eligibility_text,
+    ...(Array.isArray(opportunity?.eligibility_bullets) ? opportunity.eligibility_bullets : []),
+  ]);
+  return (statedApplicantTypes.length > 0 || eligibilityProse.length > 0) &&
     canonical?.match_explain?.matchedSignals?.includes?.('applicant_type') === true;
 }
 
@@ -167,6 +171,10 @@ export function buildFourTruthProof(opportunity, thesis, canonical, {
       passed: positiveEligibility(eligibility) && hasPositiveApplicantTypeEvidence(opportunity, canonical),
       eligibility,
       applicant_type_evidence: stripWildcard(uniqueStrings(opportunity?.applicant_types)),
+      eligibility_prose_evidence: uniqueStrings([
+        opportunity?.eligibility_text,
+        ...(Array.isArray(opportunity?.eligibility_bullets) ? opportunity.eligibility_bullets : []),
+      ]),
       missing_eligibility_fields: canonical?.missingEligibilityFields ?? [],
     },
   };
@@ -336,9 +344,13 @@ function opportunityToCanonicalOpportunity(opportunity = {}) {
     entity_types_allowed: allowedTypes,
     need_types_supported: needs,
     categories: uniqueStrings([...needs, ...allowedTypes, ...applicantTypes]),
-    eligibility_bullets: applicantTypes.length
-      ? [`Eligible applicants: ${uniqueStrings([...applicantTypes, ...allowedTypes]).join(', ')}`]
-      : [],
+    eligibility_bullets: uniqueStrings([
+      ...(applicantTypes.length
+        ? [`Eligible applicants: ${uniqueStrings([...applicantTypes, ...allowedTypes]).join(', ')}`]
+        : []),
+      opportunity.eligibility_text,
+      ...(Array.isArray(opportunity.eligibility_bullets) ? opportunity.eligibility_bullets : []),
+    ]),
     // The sponsor's NAME is deliberately NOT a keyword: keywords feed the
     // need-first TARGETING text, and a funder identity is not a targeting
     // statement (#1086 identity-vs-topic). With it in, "U.S. Department of

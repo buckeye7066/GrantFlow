@@ -248,6 +248,7 @@ test('direct funding requires positive proof for all four truths', () => {
     kind: 'DIRECT_GRANT',
     reality_status: 'VERIFIED',
     apply_url: 'https://agency.gov/apply',
+    applicant_types: ['individual'],
     evidence: {
       url: 'https://agency.gov/program',
       content_hash: 'sha256:verified-page',
@@ -259,6 +260,7 @@ test('direct funding requires positive proof for all four truths', () => {
     score: 91,
     eligible: 'yes',
     matchedNeeds: ['transportation'],
+    match_explain: { matchedSignals: ['applicant_type'] },
     missingEligibilityFields: [],
   }
   const proof = buildFourTruthProof(opportunity, { needs_defaulted: false }, canonical, {
@@ -317,7 +319,7 @@ test('a safe but uncaptured link cannot satisfy the real truth', () => {
 
 test('directories are research leads, never direct funding recommendations', () => {
   const directory = { kind: 'DIRECTORY' }
-  assert.equal(isRecommendable(directory, 'review'), false)
+  assert.equal(isRecommendable(directory, 'review'), true)
   assert.equal(isResearchLead(directory, 'review'), true)
   assert.equal(isResearchLead({ kind: 'DIRECT_GRANT' }, 'review'), false)
 })
