@@ -176,7 +176,7 @@
     "zod": "^4.5.4"
   },
   "devDependencies": {
-    "@capacitor/cli": "8.5.0",
+    "@capacitor/cli": "8.5.1",
     "@eslint/js": "^9.39.2",
     "@hello-pangea/dnd": "^16.5.0",
     "@hookform/resolvers": "^5.9.1",
@@ -228,7 +228,7 @@
     "eslint-plugin-react-hooks": "^7.1.1",
     "eslint-plugin-react-refresh": "^0.5.5",
     "framer-motion": "^13.1.1",
-    "globals": "^17.11.0",
+    "globals": "^17.12.0",
     "input-otp": "^1.5.0",
     "js-yaml": "5.4.1",
     "jsdom": "^29.1.1",
