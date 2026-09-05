@@ -61,6 +61,12 @@ function nowSqlLiteral(db) {
   return db?.dialect === 'postgres' ? 'now()' : 'CURRENT_TIMESTAMP'
 }
 
+// These columns are BOOLEAN on Postgres but INTEGER in SQLite. Do not rely
+// on the DB shim's partial boolean-column registry to rewrite this statement.
+function falseSqlLiteral(db) {
+  return db?.dialect === 'postgres' ? 'FALSE' : '0'
+}
+
 function isMissingRepairSchema(error) {
   const message = String(error?.message || error).toLowerCase()
   return (
@@ -213,8 +219,8 @@ export async function repairLegacyPointerApplicationTasks(db, {
               status = 'blocked',
               current_step = 'no_application_surface',
               last_agent_message = ?,
-              auto_submit_enabled = 0,
-              allow_auto_submit = 0,
+              auto_submit_enabled = ${falseSqlLiteral(db)},
+              allow_auto_submit = ${falseSqlLiteral(db)},
               next_retry_at = NULL,
               audit_summary_json = ?,
               updated_at = ${nowSqlLiteral(db)}

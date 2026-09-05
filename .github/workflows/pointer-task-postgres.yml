@@ -1,0 +1,69 @@
+name: Pointer task PostgreSQL regression
+
+on:
+  pull_request:
+    paths:
+      - 'backend/services/hamilton/pointerTaskRepair.js'
+      - 'backend/tests/pointerTaskPostgresBooleanRegression.test.js'
+      - '.github/workflows/pointer-task-postgres.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'backend/services/hamilton/pointerTaskRepair.js'
+      - 'backend/tests/pointerTaskPostgresBooleanRegression.test.js'
+      - '.github/workflows/pointer-task-postgres.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pointer-postgres-${{ github.ref == 'refs/heads/main' && github.sha || github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+jobs:
+  pointer-postgres:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: grantflow_pointer_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d grantflow_pointer_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - name: Checkout exact candidate
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - name: Setup Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: 24.19.0
+          cache: npm
+      - name: Install locked dependencies
+        run: npm ci --include=optional
+      - name: Verify native PostgreSQL booleans and preserved task evidence
+        env:
+          POINTER_REPAIR_REQUIRE_POSTGRES: '1'
+          POINTER_REPAIR_TEST_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/grantflow_pointer_test
+        run: |
+          node scripts/run-vitest-isolated.mjs run backend/tests/pointerTaskPostgresBooleanRegression.test.js --reporter=json --outputFile=pointer-postgres-results.json
+          node --input-type=module <<'JS'
+          import assert from 'node:assert/strict'
+          import { readFileSync } from 'node:fs'
+          const result = JSON.parse(readFileSync('pointer-postgres-results.json', 'utf8'))
+          assert.equal(result.success, true)
+          assert.equal(result.numPassedTests, 10)
+          assert.equal(result.numPendingTests, 0)
+          console.log('All 10 pointer regressions passed, including 4 native PostgreSQL tests; none skipped.')
+          JS
+      - name: Verify existing SQLite startup invariant
+        run: node scripts/run-vitest-isolated.mjs run backend/tests/pointerTaskStartupInvariant.test.js
