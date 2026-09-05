@@ -165,6 +165,21 @@ export const STATE_HOUSING_AGENCY_STATES = Object.freeze(
   Object.keys(STATE_REGISTRY).filter((st) => STATE_REGISTRY[st]?.housingUrl).sort(),
 );
 
+/**
+ * `populations` (optional, on population-IDENTITY lanes): the people a lane
+ * exists FOR — foster youth, refugees, military families, survivors, older
+ * adults, homeschool families, farmers, artists, job seekers, parents of
+ * young children, aspiring teachers, health-professions students. A coarse
+ * need token ('education', 'medical', 'employment') is not evidence of any of
+ * them: a first-year forensic-science student's crawl (2026-09-05) ran the
+ * Chafee foster lane, the Iraq & Afghanistan Service Grant, the refugee
+ * resettlement lane, the homeschool grant, SSA survivors, the Eldercare
+ * Locator, the NEA fellowship page and the DOL workforce page because each
+ * shares one such token with her thesis. The planner asks a population lane
+ * for its population (`servesDeclaredPopulation`), the way a condition lane is
+ * asked for a condition; `thesis.declared_populations` is derived from the
+ * profile's STRUCTURED facts only (crawlerOsPersistenceCore).
+ */
 export const SOURCES = Object.freeze([
   {
     source_id: 'grants_gov',
@@ -461,6 +476,7 @@ export const SOURCES = Object.freeze([
     // caregiver respite). An authoritative national locator — surfaced as an
     // honest DIRECTORY so it reaches senior/caregiver profiles the grant sources miss.
     source_id: 'area_agency_on_aging',
+    populations: ['older_adult', 'caregiver'],
     name: 'Area Agencies on Aging (Eldercare Locator)',
     source_type: 'html',
     trust_tier: TRUST_TIER.OFFICIAL_HTML,
@@ -568,6 +584,7 @@ export const SOURCES = Object.freeze([
   },
   {
     source_id: 'teach_grant',
+    populations: ['aspiring_teacher'],
     name: 'TEACH Grant',
     source_type: 'html',
     trust_tier: TRUST_TIER.OFFICIAL_HTML,
@@ -584,6 +601,7 @@ export const SOURCES = Object.freeze([
   },
   {
     source_id: 'iraq_afghanistan_service_grant',
+    populations: ['military_family'],
     name: 'Iraq and Afghanistan Service Grant',
     source_type: 'html',
     trust_tier: TRUST_TIER.OFFICIAL_HTML,
@@ -822,7 +840,7 @@ export const SOURCES = Object.freeze([
     // Research/health-leaning (NOT '*'): only profiles whose needs overlap (or
     // have no specific needs) pull NIH notices, so a fire dept needing turnout
     // gear isn't shown research R01s. The match engine still scores relevance.
-    need_categories: ['medical', 'programs', 'technology', 'education'],
+    need_categories: ['medical', 'programs', 'technology', 'education', 'research_funding'],
     geography: { national: true, states: [] },
     default_kinds: [OPPORTUNITY_KIND.PROGRAM],
     crawler_method: 'html', requires_env: [], refresh_frequency_days: 7, priority_score: 70,
@@ -882,6 +900,7 @@ export const SOURCES = Object.freeze([
   },
   {
     source_id: 'ssa_survivors',
+    populations: ['survivor'],
     name: 'Social Security survivors benefits',
     source_type: 'directory',
     trust_tier: TRUST_TIER.OFFICIAL_HTML,
@@ -959,7 +978,7 @@ export const SOURCES = Object.freeze([
     resource_summary: 'Official Administration for Native Americans grants resource for tribal governments, Native nonprofits, and Native communities.',
     directory: true, loan_allowed: false, cost_share_allowed: true,
     applicant_types: ['tribal', 'government', 'nonprofit'],
-    need_categories: ['capital', 'operations', 'programs', 'technology', 'public_safety', 'agriculture', 'recreation', 'energy'],
+    need_categories: ['capital', 'operations', 'programs', 'technology', 'public_safety', 'agriculture', 'recreation', 'energy', 'tribal_community'],
     geography: { national: true, states: [] },
     default_kinds: [OPPORTUNITY_KIND.DIRECTORY],
     crawler_method: 'html', requires_env: [], refresh_frequency_days: 30, priority_score: 74,
@@ -996,7 +1015,7 @@ export const SOURCES = Object.freeze([
     resource_summary: 'Native-led grantmaker funding Native-controlled nonprofits and tribal programs: community economic development, food systems, youth, language/culture, and stewardship.',
     directory: true, loan_allowed: false, cost_share_allowed: false,
     applicant_types: ['nonprofit', 'tribal', 'school'],
-    need_categories: ['operations', 'programs', 'capital', 'agriculture', 'education', 'economic_development', 'food'],
+    need_categories: ['operations', 'programs', 'capital', 'agriculture', 'education', 'economic_development', 'food', 'tribal_community'],
     geography: { national: true, states: [] },
     keywords: ['native american', 'indigenous', 'tribal', 'first nations', 'native-led', 'reservation', 'native community'],
     default_kinds: [OPPORTUNITY_KIND.DIRECTORY],
@@ -1049,7 +1068,7 @@ export const SOURCES = Object.freeze([
     resource_summary: 'Official CDC grants page for public-health departments, tribes, nonprofits, schools, and eligible partners.',
     directory: true, loan_allowed: false, cost_share_allowed: true,
     applicant_types: ['government', 'tribal', 'nonprofit', 'school'],
-    need_categories: ['medical', 'mental_health', 'substance_recovery', 'public_safety', 'programs'],
+    need_categories: ['medical', 'mental_health', 'substance_recovery', 'public_safety', 'programs', 'research_funding'],
     geography: { national: true, states: [] },
     default_kinds: [OPPORTUNITY_KIND.DIRECTORY],
     crawler_method: 'html', requires_env: [], refresh_frequency_days: 14, priority_score: 66,
@@ -1468,6 +1487,7 @@ export const SOURCES = Object.freeze([
     // employment, and resettlement services map to the existing taxonomy needs
     // below (housing/employment/education/medical/legal).
     source_id: 'orr_refugee',
+    populations: ['refugee'],
     name: 'HHS Office of Refugee Resettlement programs',
     source_type: 'directory',
     trust_tier: TRUST_TIER.OFFICIAL_HTML,
@@ -1477,7 +1497,7 @@ export const SOURCES = Object.freeze([
     resource_summary: 'Official ORR entry point for refugee cash and medical assistance, employment services, and resettlement support programs, for refugees/new arrivals and the organizations serving them.',
     directory: true, loan_allowed: false, cost_share_allowed: false,
     applicant_types: ['nonprofit', 'government', 'individual', 'family'],
-    need_categories: ['housing', 'employment', 'education', 'medical', 'legal'],
+    need_categories: ['housing', 'employment', 'education', 'medical', 'legal', 'refugee_services'],
     geography: { national: true, states: [] },
     default_kinds: [OPPORTUNITY_KIND.DIRECTORY],
     crawler_method: 'html', requires_env: [], refresh_frequency_days: 30, priority_score: 66,
@@ -1487,6 +1507,7 @@ export const SOURCES = Object.freeze([
     // foster youth with education, housing, and employment support, which map to
     // the existing taxonomy needs below.
     source_id: 'acf_chafee_foster',
+    populations: ['foster_youth'],
     name: 'Chafee program for youth aging out of foster care',
     source_type: 'html',
     trust_tier: TRUST_TIER.OFFICIAL_HTML,
@@ -1507,6 +1528,7 @@ export const SOURCES = Object.freeze([
   },
   {
     source_id: 'ccdf_childcare',
+    populations: ['parent_of_young_children'],
     name: 'Childcare.gov (Child Care and Development Fund assistance)',
     source_type: 'html',
     trust_tier: TRUST_TIER.OFFICIAL_HTML,
@@ -1525,6 +1547,7 @@ export const SOURCES = Object.freeze([
     // NOTE: 'displaced_worker' is not an OS need slug — dislocated-worker
     // programs are covered by the existing 'workforce'/'employment' needs.
     source_id: 'dol_eta_workforce',
+    populations: ['job_seeker'],
     name: 'DOL Employment and Training Administration grants',
     source_type: 'directory',
     trust_tier: TRUST_TIER.OFFICIAL_HTML,
@@ -1543,6 +1566,7 @@ export const SOURCES = Object.freeze([
     // NOTE: 'arts' is not an OS need slug — mapped to the existing
     // 'arts_education' need (nearest taxonomy category).
     source_id: 'nea_neh_arts',
+    populations: ['artist'],
     name: 'National Endowment for the Arts grants',
     source_type: 'directory',
     trust_tier: TRUST_TIER.OFFICIAL_HTML,
@@ -1576,6 +1600,7 @@ export const SOURCES = Object.freeze([
   },
   {
     source_id: 'hrsa_health_workforce',
+    populations: ['health_professions_student'],
     name: 'HRSA Bureau of Health Workforce programs',
     source_type: 'directory',
     trust_tier: TRUST_TIER.OFFICIAL_HTML,
@@ -2164,6 +2189,7 @@ export const SOURCES = Object.freeze([
     // grandfamily class no grant feed reaches. A real benefit PROGRAM: the
     // next step (contact your AAA) is on the official page.
     source_id: 'acl_family_caregiver_support',
+    populations: ['caregiver'],
     name: 'National Family Caregiver Support Program (ACL)',
     source_type: 'html',
     trust_tier: TRUST_TIER.OFFICIAL_HTML,
@@ -2182,6 +2208,7 @@ export const SOURCES = Object.freeze([
     // ACL-funded national TA center for kinship/grandfamily caregivers — an
     // honest locator for state kinship navigator programs and support groups.
     source_id: 'gks_network',
+    populations: ['kinship_caregiver'],
     name: 'Grandfamilies & Kinship Support Network',
     source_type: 'directory',
     trust_tier: TRUST_TIER.VERIFIED_FOUNDATION,
@@ -2202,6 +2229,7 @@ export const SOURCES = Object.freeze([
     // (eligibility/intake guidance on the official page) — legal-assistance
     // adjacent, never presented as a grant.
     source_id: 'farmers_gov_heirs_property',
+    populations: ['farmer'],
     name: 'USDA heirs’ property eligibility (farmers.gov)',
     source_type: 'html',
     trust_tier: TRUST_TIER.OFFICIAL_HTML,
@@ -2221,6 +2249,7 @@ export const SOURCES = Object.freeze([
     // Beginning-farmer hub: the coordination point for FSA/NRCS/RD programs a
     // new producer qualifies for — an honest locator.
     source_id: 'farmers_gov_beginning_farmers',
+    populations: ['farmer'],
     name: 'USDA beginning farmers and ranchers (farmers.gov)',
     source_type: 'directory',
     trust_tier: TRUST_TIER.OFFICIAL_HTML,
@@ -2310,6 +2339,7 @@ export const SOURCES = Object.freeze([
     // Extension + the 1890/1994 land-grant network is how a producer actually
     // REACHES most of the above: a locator, honestly classified as one.
     source_id: 'nifa_extension_land_grant',
+    populations: ['farmer'],
     name: 'USDA NIFA Cooperative Extension / land-grant network',
     source_type: 'directory',
     trust_tier: TRUST_TIER.OFFICIAL_HTML,
@@ -2391,6 +2421,7 @@ export const SOURCES = Object.freeze([
     // families in financial need (curriculum/materials). A real grant with a
     // real application path — the homeschool lane's anchor.
     source_id: 'hslda_compassion_grants',
+    populations: ['homeschool_family'],
     name: 'HSLDA Compassion Grants',
     source_type: 'html',
     trust_tier: TRUST_TIER.VERIFIED_FOUNDATION,
@@ -2421,6 +2452,7 @@ export const SOURCES = Object.freeze([
   //    an unverified source is a guess, not coverage. ──────────────────────────
   {
     source_id: 'operation_homefront',
+    populations: ['military_family'],
     name: 'Operation Homefront — Critical Financial Assistance',
     source_type: 'html',
     trust_tier: TRUST_TIER.VERIFIED_FOUNDATION,
@@ -2438,6 +2470,7 @@ export const SOURCES = Object.freeze([
   },
   {
     source_id: 'fc2success_scholarships',
+    populations: ['foster_youth'],
     name: 'Foster Care to Success — Scholarships & Grants',
     source_type: 'html',
     trust_tier: TRUST_TIER.VERIFIED_FOUNDATION,

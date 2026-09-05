@@ -1406,6 +1406,13 @@ export function buildThesis(profile = {}) {
     // The derived-fact set with provenance, carried through so LANE SELECTION
     // (planner.plan) reads the same derivation the query builder does.
     derived_facts: profile?.derived_facts ?? null,
+    // The profile's DECLARED populations (foster_youth, military_family,
+    // refugee, survivor, older_adult, caregiver, ...), derived from structured
+    // facts by the bridge, so a POPULATION lane can be asked for its
+    // population. MISSING = NEUTRAL: null when the caller never supplied it.
+    declared_populations: Array.isArray(profile?.declared_populations)
+      ? profile.declared_populations.map((v) => String(v ?? '').trim()).filter(Boolean)
+      : null,
     // The profile's DECLARED health vocabulary (conditions ∪ support), so a
     // CONDITION lane can be asked for a condition rather than firing on a
     // coarse `disability` need. Empty when the profile names nothing.

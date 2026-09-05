@@ -101,6 +101,30 @@ function servesDeclaredMission(source, thesis) {
   return sourceServesDeclaredMission(source, thesis);
 }
 
+/**
+ * A POPULATION LANE MUST BE ASKED FOR ITS POPULATION (sourceRegistry
+ * `populations`). MISSING = NEUTRAL: a thesis built without
+ * `declared_populations` (older callers, tests) is not gated. ORG theses are
+ * not gated either — an arts nonprofit reaches the NEA lane through its
+ * mission, not through an "artist" population fact.
+ */
+const ORG_APPLICANT_TYPES = new Set([
+  'nonprofit', 'government', 'school', 'school_district', 'business', 'small_business',
+  'church', 'ministry', 'tribal', 'vfd', 'law_enforcement', 'hospital', 'university',
+  'college', 'higher_education_institution', 'library', 'organization', 'farm',
+]);
+
+function servesDeclaredPopulation(source, thesis) {
+  const wanted = Array.isArray(source?.populations) ? source.populations : [];
+  if (wanted.length === 0) return true;
+  if (!Array.isArray(thesis?.declared_populations)) return true;
+  const applicantTypes = Array.isArray(thesis?.applicant_types) ? thesis.applicant_types : [];
+  if (applicantTypes.includes('*')) return true;
+  if (applicantTypes.some((t) => ORG_APPLICANT_TYPES.has(String(t)))) return true;
+  const declared = new Set(thesis.declared_populations.map((v) => String(v)));
+  return wanted.some((population) => declared.has(String(population)));
+}
+
 function servesGeo(source, thesis) {
   if (source.geography?.national) return true;
   const profileStates = new Set([
@@ -254,6 +278,8 @@ export function plan(thesis = {}) {
     if (!servesDeclaredCondition(source, thesis)) { ok = false; reasons.push('condition_not_declared'); }
     // A mission lane must be asked for its mission (see servesDeclaredMission).
     if (!servesDeclaredMission(source, thesis)) { ok = false; reasons.push('mission_not_declared'); }
+    // A population lane must be asked for its population (see servesDeclaredPopulation).
+    if (!servesDeclaredPopulation(source, thesis)) { ok = false; reasons.push('population_not_declared'); }
     // Research-restricted sources (SBIR/STTR solicitations) serve ONLY profiles
     // whose thesis declares research capability — explicit and explainable, so
     // the applicant/need heuristics can't leak solicitations to a food pantry.

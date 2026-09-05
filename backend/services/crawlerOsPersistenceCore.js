@@ -302,6 +302,83 @@ export function sectionSignalText(data, depth = 0) {
  * matches keyword/synonym tables), so the goal is to surface every signal the
  * profile carries: type, location, needs, org, documents, sections.
  */
+const POPULATION_ORG_TERMS_RX = /\b(artist|musician|painter|sculptor|writer|poet|dancer|actor|performer|filmmaker|photographer|illustrator)\b/i
+const TEACHING_RX = /\b(teach|teacher|teaching|educator|education major|elementary education|secondary education|special education)\b/i
+const HEALTH_PROFESSIONS_RX = /\b(nurs\w*|medic\w*|paramedic\w*|emt|health\w*|pharm\w*|dent\w*|physician|clinical|therap\w*|physical therapy|occupational therapy|respiratory|radiolog\w*|sonograph\w*|midwife|surgical)\b/i
+
+function sectionObject(value) {
+  if (!value) return {}
+  if (typeof value === 'string') { try { const parsed = JSON.parse(value); return parsed && typeof parsed === 'object' ? parsed : {} } catch { return {} } }
+  return typeof value === 'object' && !Array.isArray(value) ? value : {}
+}
+
+function ageFromSections(sections) {
+  const basic = sectionObject(sections?.basic_information)
+  const demographics = sectionObject(sections?.demographics)
+  const raw = basic.date_of_birth ?? basic.dob ?? basic.birth_date ?? demographics.date_of_birth ?? demographics.dob ?? null
+  if (!raw) return null
+  const born = new Date(raw)
+  if (Number.isNaN(born.getTime())) return null
+  const now = new Date()
+  let age = now.getUTCFullYear() - born.getUTCFullYear()
+  const m = now.getUTCMonth() - born.getUTCMonth()
+  if (m < 0 || (m === 0 && now.getUTCDate() < born.getUTCDate())) age -= 1
+  return age >= 0 && age < 130 ? age : null
+}
+
+/**
+ * The populations a profile POSITIVELY declares, from structured facts only:
+ * checkboxes, status fields, majors, occupations and the provenance-split
+ * signal sets. Never from prose — a narrative that mentions "veterans" or
+ * "foster care" in passing is not membership. Missing facts contribute
+ * nothing (silence is neutral); the planner reads this list to decide whether
+ * a population-identity lane (sourceRegistry `populations`) may run.
+ */
+export function declaredPopulationsFrom({ sections = {}, signals = {}, needs = [] } = {}) {
+  const has = (set, ...values) => { const list = asList(set).map((v) => String(v ?? '').toLowerCase()); return values.some((v) => list.includes(v)) }
+  const familyLife = sectionObject(sections?.family_life)
+  const family = sectionObject(sections?.family)
+  const demographics = sectionObject(sections?.demographics)
+  const education = sectionObject(sections?.education)
+  const occupation = sectionObject(sections?.occupation)
+  const employment = sectionObject(sections?.employment)
+  const military = sectionObject(sections?.military_service)
+  const out = new Set()
+  if (familyLife.foster_youth === true || familyLife.former_foster_youth === true || demographics.foster_care_alumni === true
+      || demographics.former_foster_youth === true || demographics.in_foster_care === true || has(signals.family, 'foster_youth', 'former_foster_youth')) out.add('foster_youth')
+  if (education.homeschooled === true || education.homeschool === true
+      || /homeschool/i.test(String(education.schooling_type ?? education.school_type ?? education.current_institution ?? ''))) out.add('homeschool_family')
+  if (demographics.is_refugee === true || demographics.is_asylee === true
+      || /refugee|asylee|asylum|parolee/i.test(String(demographics.immigrant_status ?? demographics.citizenship_status ?? ''))
+      || has(signals.demographics, 'refugee', 'asylee')) out.add('refugee')
+  if ([military.veteran, military.is_veteran, military.active_duty, military.military_spouse, military.military_dependent, military.gold_star_family, military.guard_reserve].some((v) => v === true)
+      || asList(signals.military).length > 0
+      || has(signals.applicantTypes, 'veteran', 'military_spouse', 'active_duty', 'guard_reserve', 'transitioning_service_member')) out.add('military_family')
+  if (military.gold_star_family === true || familyLife.orphan === true || familyLife.widowed === true || family.widowed === true
+      || /widow/i.test(String(demographics.marital_status ?? family.marital_status ?? familyLife.marital_status ?? ''))
+      || has(signals.family, 'orphan', 'widow', 'widower', 'surviving_spouse', 'gold_star')) out.add('survivor')
+  const age = ageFromSections(sections)
+  const ageGroup = String(demographics.age_group ?? demographics.age_range ?? sectionObject(sections?.basic_information).age_group ?? '')
+  if ((Number.isFinite(age) && age >= 60) || /\b(senior|older adult|elder(?:ly)?|retire[ed]*|6[0-9]\s*\+|[6-9][0-9]\s*(?:and|or) (?:older|over|up))\b/i.test(ageGroup)
+      || has(signals.applicantTypes, 'senior') || has(signals.demographics, 'senior', 'older_adult', 'elderly')) out.add('older_adult')
+  if (familyLife.caregiver === true || family.caregiver === true || has(signals.family, 'caregiver') || has(signals.applicantTypes, 'caregiver')) out.add('caregiver')
+  if (familyLife.kinship_caregiver === true || familyLife.raising_grandchildren === true || familyLife.grandparent_caregiver === true
+      || family.raising_grandchildren === true || has(signals.family, 'kinship', 'kinship_caregiver', 'grandfamily', 'grandparent_caregiver')) out.add('kinship_caregiver')
+  if (occupation.artist === true || POPULATION_ORG_TERMS_RX.test(String([occupation.job_title, occupation.industry, employment.career_goal].filter(Boolean).join(' ')))
+      || has(signals.applicantTypes, 'artist')) out.add('artist')
+  if (has(signals.assistance, 'unemployed', 'displaced_worker', 'underemployed')) out.add('job_seeker')
+  const children = Number(family.children_count ?? familyLife.children_count ?? family.dependents ?? family.number_of_children ?? 0)
+  if (familyLife.single_parent === true || familyLife.first_time_parent === true || (Number.isFinite(children) && children > 0)
+      || has(signals.family, 'parent', 'single_parent', 'children') || asList(needs).map((n) => String(n).toLowerCase()).includes('childcare')) out.add('parent_of_young_children')
+  if (occupation.farmer === true || occupation.rancher === true || occupation.agricultural_producer === true || has(signals.applicantTypes, 'farm', 'farmer')) out.add('farmer')
+  if (occupation.educator === true || TEACHING_RX.test(String([education.intended_major, education.major, employment.career_goal].filter(Boolean).join(' ')))
+      || has(signals.applicantTypes, 'teacher')) out.add('aspiring_teacher')
+  if (occupation.healthcare_worker === true || occupation.ems_worker === true
+      || HEALTH_PROFESSIONS_RX.test(String([education.intended_major, education.major, employment.career_goal, occupation.healthcare_worker_type].filter(Boolean).join(' ')))
+      || has(signals.applicantTypes, 'healthcare_worker', 'nurse', 'ems')) out.add('health_professions_student')
+  return [...out]
+}
+
 export function profileContextToThesisInput(ctx = {}) {
   const profile = ctx.profile ?? {};
   const sections = ctx.sections ?? {};
@@ -438,6 +515,11 @@ export function profileContextToThesisInput(ctx = {}) {
     // `signals.health` (the UNION with free text and flags) is deliberately
     // NOT used: ~14 consumers test canonical tokens on it and it is exactly
     // the conflated bag the provenance split was created to stop reading.
+    // The profile's DECLARED populations (structured facts only), so a
+    // POPULATION lane is asked for its population (planner
+    // servesDeclaredPopulation). Always an array here: this bridge has read
+    // the structured sections, so an empty list is a real "declares none".
+    declared_populations: declaredPopulationsFrom({ sections, signals, needs: needCategories }),
     declared_health_terms: [...new Set([
       ...asList(signals.health_conditions),
       ...asList(signals.health_support),

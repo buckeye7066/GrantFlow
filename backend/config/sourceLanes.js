@@ -447,6 +447,30 @@ export const MISSION_SPECIFIC_SOURCE_REQUIREMENTS = Object.freeze({
   ovw_grants: Object.freeze(['domestic_violence']),
   bja_second_chance: Object.freeze(['reentry', 'substance_recovery']),
   lsc_grants: Object.freeze(['legal']),
+  // 2026-09-05, measured on a rural church (needs: disability, education,
+  // emergency, capital, programs, medical) and a biotech research org
+  // (medical, research_funding, equipment, capital, programs, education):
+  // both selected the Native American programs, the library/museum agency,
+  // the refugee resettlement office, the NEA, the DOL workforce page, the
+  // health-workforce agency, farm credit, broadband, homeless assistance,
+  // SAMHSA, CDC, DOJ, EPA water and the NIH guide on generic `nonprofit` /
+  // `business` tokens plus a coarse need. Each lane below names the mission
+  // category (or, via clause (b), the distinctive identity) it exists for.
+  ana_grants: Object.freeze(['tribal_community']),
+  first_nations_dev_institute: Object.freeze(['tribal_community']),
+  imls_library_museum: Object.freeze(['library_media']),
+  orr_refugee: Object.freeze(['refugee_services']),
+  nea_neh_arts: Object.freeze(['arts_education']),
+  dol_eta_workforce: Object.freeze(['workforce']),
+  hrsa_health_workforce: Object.freeze(['professional_development']),
+  farm_credit_young_beginning_small: Object.freeze(['agriculture']),
+  broadband_grants: Object.freeze(['broadband', 'technology', 'infrastructure']),
+  hud_homeless_assistance: Object.freeze(['housing', 'housing_development']),
+  samhsa_grants: Object.freeze(['mental_health', 'substance_recovery']),
+  cdc_grants: Object.freeze(['mental_health', 'substance_recovery', 'research_funding']),
+  doj_grants: Object.freeze(['public_safety', 'legal']),
+  epa_water_infrastructure: Object.freeze(['water_sewer', 'environmental_remediation', 'infrastructure']),
+  nih_guide: Object.freeze(['research_funding']),
 });
 
 /**
