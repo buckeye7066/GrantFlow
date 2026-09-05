@@ -97,6 +97,120 @@ function isPresentArray(value) {
   return Array.isArray(value) && value.length > 0
 }
 
+// Extract a shallow object for section data regardless of whether the caller
+// passed a raw section row, a { data } wrapper, or an { answers } wrapper.
+function getSectionData(section) {
+  if (!section || typeof section !== 'object') return null
+  const candidate =
+    (section && (section.data || section.answers)) ||
+    section
+  return candidate && typeof candidate === 'object' ? candidate : null
+}
+
+// Read location-like scalars from a section data object
+function readLocationScalars(obj) {
+  if (!obj || typeof obj !== 'object') return {}
+  const pick = (...candidates) => {
+    for (const c of candidates) {
+      if (typeof c === 'string' && c.trim()) return c.trim()
+    }
+    return null
+  }
+  const country = pick(
+    obj.country,
+    obj?.address?.country
+  )
+  const state = pick(
+    obj.state,
+    obj.region,
+    obj?.address?.state
+  )
+  const city = pick(
+    obj.city,
+    obj?.address?.city
+  )
+  const zip = pick(
+    obj.zip,
+    obj.zip_code,
+    obj.postal,
+    obj.postal_code,
+    obj?.address?.zip,
+    obj?.address?.zip_code
+  )
+  return { country, state, city, zip }
+}
+
+// Build an augmented normalized profile that includes location fields derived
+// from rawSections when the normalized object lacks them.
+function withSectionLocationFallbacks(normalized, rawSections) {
+  if (!rawSections || typeof rawSections !== 'object') return normalized
+
+  const locData = getSectionData(rawSections.location_focus)
+  const basicInfoData = getSectionData(rawSections.basic_information)
+  const fromBasic = readLocationScalars(basicInfoData)
+  const fromLoc = readLocationScalars(locData)
+  // Prefer basic_information over location_focus when both provide a value
+  const derived = {
+    country: fromBasic.country || fromLoc.country || null,
+    state: fromBasic.state || fromLoc.state || null,
+    city: fromBasic.city || fromLoc.city || null,
+    zip: fromBasic.zip || fromLoc.zip || null,
+  }
+
+  // If nothing to add, return original
+  if (!isPresentScalar(derived.country) &&
+      !isPresentScalar(derived.state) &&
+      !isPresentScalar(derived.city) &&
+      !isPresentScalar(derived.zip)) {
+    return normalized
+  }
+
+  // Shallow-merge without overwriting existing normalized values
+  const augmented = { ...normalized }
+  const ensureObj = (o, k) => {
+    if (!o[k] || typeof o[k] !== 'object') o[k] = {}
+    return o[k]
+  }
+
+  if (!isPresentScalar(augmented.country) && isPresentScalar(derived.country)) {
+    augmented.country = derived.country
+  }
+  if (!isPresentScalar(augmented.state) && isPresentScalar(derived.state)) {
+    augmented.state = derived.state
+  }
+  if (!isPresentScalar(augmented.city) && isPresentScalar(derived.city)) {
+    augmented.city = derived.city
+  }
+  if (!isPresentScalar(augmented.zip) && isPresentScalar(derived.zip)) {
+    augmented.zip = derived.zip
+  }
+
+  const addr = ensureObj(augmented, 'address')
+  if (!isPresentScalar(addr.country) && isPresentScalar(derived.country)) addr.country = derived.country
+  if (!isPresentScalar(addr.state) && isPresentScalar(derived.state)) addr.state = derived.state
+  if (!isPresentScalar(addr.city) && isPresentScalar(derived.city)) addr.city = derived.city
+  if (!isPresentScalar(addr.zip) && isPresentScalar(derived.zip)) addr.zip = derived.zip
+  if (!isPresentScalar(addr.zip_code) && isPresentScalar(derived.zip)) addr.zip_code = derived.zip
+
+  const loc = ensureObj(augmented, 'location')
+  if (!isPresentScalar(loc.country) && isPresentScalar(derived.country)) loc.country = derived.country
+  if (!isPresentScalar(loc.state) && isPresentScalar(derived.state)) loc.state = derived.state
+  if (!isPresentScalar(loc.city) && isPresentScalar(derived.city)) loc.city = derived.city
+  if (!isPresentScalar(loc.zip) && isPresentScalar(derived.zip)) loc.zip = derived.zip
+  if (!isPresentScalar(loc.zip_code) && isPresentScalar(derived.zip)) loc.zip_code = derived.zip
+
+  const bi = ensureObj(augmented, 'basic_information')
+  if (!isPresentScalar(bi.country) && isPresentScalar(derived.country)) bi.country = derived.country
+  const biAddr = ensureObj(bi, 'address')
+  if (!isPresentScalar(biAddr.country) && isPresentScalar(derived.country)) biAddr.country = derived.country
+  if (!isPresentScalar(biAddr.state) && isPresentScalar(derived.state)) biAddr.state = derived.state
+  if (!isPresentScalar(biAddr.city) && isPresentScalar(derived.city)) biAddr.city = derived.city
+  if (!isPresentScalar(biAddr.zip) && isPresentScalar(derived.zip)) biAddr.zip = derived.zip
+  if (!isPresentScalar(biAddr.postal_code) && isPresentScalar(derived.zip)) biAddr.postal_code = derived.zip
+
+  return augmented
+}
+
 function firstSpecificLocationValue(normalized, keys) {
   for (const key of keys) {
     const value = normalized?.[key]
@@ -189,6 +303,10 @@ function summarizeSections(sections) {
  * }}
  */
 export function computeProfileCoverage(normalized, rawSections = null) {
+  // Augment normalized with section-derived location fields so inference
+  // (e.g., country from state/zip) works when callers keep structured address
+  // only in profile_sections.
+  const augmented = withSectionLocationFallbacks(normalized, rawSections)
   const fieldSignals = []
   let weighted = 0
   let weightedPresent = 0
@@ -196,7 +314,7 @@ export function computeProfileCoverage(normalized, rawSections = null) {
   const missingFields = []
 
   for (const def of FIELD_DEFS) {
-    const value = readField(normalized, def.key)
+    const value = readField(augmented, def.key)
     const present = def.isArray ? isPresentArray(value) : isPresentScalar(value)
     fieldSignals.push({
       key: def.key,
