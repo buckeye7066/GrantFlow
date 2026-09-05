@@ -51,22 +51,28 @@ import {
 // ("check_timeout") and the sweep continues. Generous enough for legitimate
 // DB/HTTP checks; heavy code-tooling checks are excluded by default anyway.
 const CHECK_TIMEOUT_MS = Number(process.env.SAM_CHECK_TIMEOUT_MS) || 15000
+// Heavy checks (tree walks, ESLint, multi-route probes) legitimately run longer.
+// When they are explicitly included (includeHeavy=true), give them a larger budget
+// so they do not race the per-check timeout and silently downgrade to a skip.
+const HEAVY_CHECK_TIMEOUT_MS =
+  Number(process.env.SAM_HEAVY_CHECK_TIMEOUT_MS) || Math.max(CHECK_TIMEOUT_MS, 60000)
 
 function withCheckTimeout(promise, check) {
+  const timeoutMs = check?.heavy ? HEAVY_CHECK_TIMEOUT_MS : CHECK_TIMEOUT_MS
   let timer
   const timeout = new Promise((resolve) => {
     timer = setTimeout(() => resolve({
       __timed_out: true,
-      detail: { ok: true, skipped: true, reason: `check_timeout_${CHECK_TIMEOUT_MS}ms`, check_id: check.id },
+      detail: { ok: true, skipped: true, reason: `check_timeout_${timeoutMs}ms`, check_id: check.id },
       findings: [makeFinding({
         severity: SEVERITY.INFO,
         category: check.category,
-        title: `Sam check skipped: ${check.label} exceeded ${CHECK_TIMEOUT_MS}ms`,
+        title: `Sam check skipped: ${check.label} exceeded ${timeoutMs}ms`,
         description: `The check did not complete within the per-check time budget and was skipped so the cycle never hangs. Not a production-readiness defect by itself.`,
-        evidence: { check_id: check.id, timeout_ms: CHECK_TIMEOUT_MS },
+        evidence: { check_id: check.id, timeout_ms: timeoutMs },
         confidence: 0.5,
       })],
-    }), CHECK_TIMEOUT_MS)
+    }), timeoutMs)
   })
   return Promise.race([promise.finally(() => clearTimeout(timer)), timeout])
 }
