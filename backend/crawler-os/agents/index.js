@@ -1,3 +1,9 @@
+// ============================================================================
+// NOT THE LIVE IMPLEMENTATION. createFleet() below has no caller outside
+// backend/tests/. The agents that actually run live under backend/services/.
+// See the banner on each sibling module.
+// ============================================================================
+
 // crawler-os/agents/index.js
 //
 // The agent fleet. createFleet wires all six canonical agents against shared
