@@ -268,14 +268,15 @@ export async function ensureCrawlerJobsTypeCheckSqlite(db, { logger = console } 
         .prepare(`SELECT sql FROM sqlite_master WHERE type = 'index' AND tbl_name = 'crawler_jobs' AND sql IS NOT NULL`)
         .all()
 
-      // ponytail: Minimal, targeted fix — perform the rebuild inside a single transaction
-      // with foreign_keys temporarily disabled so dropping the parent table does NOT
-      // fire ON DELETE actions on child tables. This avoids wiping or unlinking rows
-      // in crawler_logs / dead_letter_queue / geo_* tables while still producing the
-      // repaired CHECK list atomically.
+      // ponytail: Minimal, targeted fix — disable foreign_keys BEFORE beginning
+      // the rebuild transaction. SQLite ignores PRAGMA foreign_keys changes that
+      // happen inside an open transaction (the connection keeps FK=ON), so the
+      // previous "BEGIN then OFF" order still CASCADE-deleted crawler_logs /
+      // dead_letter_queue rows when DROP TABLE crawler_jobs ran. Disable outside
+      // the txn, rebuild atomically, then restore FK enforcement.
+      await db.exec('PRAGMA foreign_keys=OFF')
       try {
         await db.exec('BEGIN IMMEDIATE')
-        await db.exec('PRAGMA foreign_keys=OFF')
         await db.exec('DROP TABLE IF EXISTS crawler_jobs_typecheck_rebuild')
         await db.exec(rebuiltDdl)
         await db.exec(
@@ -283,7 +284,6 @@ export async function ensureCrawlerJobsTypeCheckSqlite(db, { logger = console } 
         )
         await db.exec('DROP TABLE crawler_jobs')
         await db.exec('ALTER TABLE crawler_jobs_typecheck_rebuild RENAME TO crawler_jobs')
-        await db.exec('PRAGMA foreign_keys=ON')
         await db.exec('COMMIT')
       } catch (err) {
         try {
@@ -291,13 +291,13 @@ export async function ensureCrawlerJobsTypeCheckSqlite(db, { logger = console } 
         } catch (rollbackErr) {
           logger?.warn?.('[database] crawler_jobs rollback after rebuild failure also failed:', rollbackErr?.message || rollbackErr)
         }
-        // Best-effort restore of FK enforcement before surfacing the error to the step wrapper.
+        throw err
+      } finally {
         try {
           await db.exec('PRAGMA foreign_keys=ON')
         } catch (fkRestoreErr) {
-          logger?.warn?.('[database] crawler_jobs FK restore after rebuild failure also failed:', fkRestoreErr?.message || fkRestoreErr)
+          logger?.warn?.('[database] crawler_jobs FK restore after rebuild also failed:', fkRestoreErr?.message || fkRestoreErr)
         }
-        throw err
       }
       for (const idx of indexRows || []) {
         try {
