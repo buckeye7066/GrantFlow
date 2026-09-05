@@ -2359,13 +2359,13 @@ registerTool({
 
 registerTool({
   name: 'admin.code.scan',
-  description: 'Scan the codebase for TODOs, console.logs, debugger statements, and other issues. Admin only.',
+  description: 'Scan the codebase for TODOs, console.logs, debugger statements, and other issues. Reports how many files it discovered vs actually scanned. Admin only.',
   requiresAdmin: true,
   schema: {
     type: 'object',
     properties: {
       directory: { type: 'string', description: 'Directory to scan (default: entire repo)' },
-      filePattern: { type: 'string', description: 'File pattern to match (default: "*.js")' },
+      filePattern: { type: 'string', description: 'Basename pattern, e.g. "*.jsx" — actually applied (default: every source file)' },
       issueTypes: {
         type: 'array',
         items: { type: 'string', enum: ['todo', 'console', 'debugger', 'fixme', 'hack', 'all'] },

@@ -1832,97 +1832,238 @@ export async function adminHealthCheck(_params, context) {
   return health
 }
 
+/** The five issue classes this scanner knows how to look for. */
+const SCAN_ISSUE_KEYS = Object.freeze(['todo', 'console', 'debugger', 'fixme', 'hack'])
+
 /**
- * Scan codebase for specific issues: TODOs, console.logs, debugger statements, etc.
+ * Compile a shell-style file pattern ("*.js", "route?.mjs") into a BASENAME
+ * matcher. Returns null for a match-everything pattern, which is the default:
+ * this check's job is the whole tree, and a caller wanting a subset says so.
+ */
+function compileFilePattern(pattern) {
+  const raw = String(pattern ?? '').trim()
+  if (!raw || raw === '*' || raw === '*.*') return null
+  const source = [...raw]
+    .map((ch) => (ch === '*' ? '.*' : ch === '?' ? '.' : ch.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')))
+    .join('')
+  return new RegExp(`^${source}$`, 'i')
+}
+
+/**
+ * Scan the codebase for TODO / FIXME / HACK markers, leftover console.* calls
+ * and debugger statements.
+ *
+ * WHAT THIS USED TO BE. The owner's report — "Sam's code sweep is a
+ * placeholder. He does not actually sweep code, the whole code" — was right
+ * about this check for THREE separate reasons:
+ *
+ *  1. IT SCANNED 200 FILES AND SAID NOTHING ABOUT THE REST. The loop was
+ *     `files.slice(0, 200)`, against 1,821 files under backend/ alone, and the
+ *     result carried no discovered/scanned split and no truncation flag — so
+ *     "0 debugger statements" read as a claim about the repository when it was
+ *     a claim about the first 200 files a directory walk happened to return.
+ *     Same defect adminCodeLint carried (`files_checked` reporting 36x the work
+ *     actually done), same treatment.
+ *  2. `filePattern` WAS ECHOED BACK BUT NEVER APPLIED. `collectFiles()` returns
+ *     every js/jsx/ts/tsx/mjs/cjs file regardless, so a caller asking for
+ *     "*.jsx" got the whole tree scanned under a response that said otherwise.
+ *  3. NOTHING IT FOUND EVER REACHED SAM. `samDiagnostics.pickList()` mines
+ *     `result.findings` only when it is an ARRAY; this tool returns an OBJECT
+ *     keyed by issue type, so `mineToolFindings` fell through to `issues`
+ *     (absent) and every scan contributed exactly ZERO findings to Sam's
+ *     report no matter what it found. The bounded `issues` array below is the
+ *     projection that actually carries out: every debugger statement (a real
+ *     defect, and normally zero), one line if the sweep was truncated or hit
+ *     unreadable files, and ONE aggregate line for the informational markers —
+ *     deliberately not 3,000 individual console.log findings, which would bury
+ *     Sam's report rather than inform it. `findings` still holds everything.
+ *
+ * Issue classes the caller did not ask for are no longer returned as empty
+ * arrays: an empty `hack_items` when HACK was never scanned for reads as "there
+ * are none". They are named in `issue_types_not_scanned` instead.
+ *
  * @param {string} directory - Directory to scan (default: entire repo)
- * @param {string} filePattern - File pattern to match (default: "*.js")
- * @param {Array<string>} issueTypes - Types of issues to find (todo, console, debugger, fixme, hack)
+ * @param {string} filePattern - Basename pattern, actually applied (default: every source file)
+ * @param {Array<string>} issueTypes - todo | console | debugger | fixme | hack | all (default: all)
  * @param {Object} context - Request context with user and db info
- * @returns {Promise<Object>} Scan results with found issues grouped by type and file
+ * @returns {Promise<Object>} Scan results, with the coverage they were derived from
  * @admin ADMIN ONLY
  */
-export async function adminCodeScan({ directory = '.', filePattern = '*.js', issueTypes = ['todo', 'console', 'debugger'] }, context) {
+export async function adminCodeScan({ directory = '.', filePattern = '*', issueTypes = ['all'] }, context) {
   requireAdmin(context.user)
 
   const searchRoot = directory ? path.resolve(REPO_ROOT, directory) : REPO_ROOT
-
-  const findings = {
-    todo_items: [],
-    console_statements: [],
-    debugger_statements: [],
-    fixme_items: [],
-    hack_items: [],
+  const repoRootWithSep = REPO_ROOT.endsWith(path.sep) ? REPO_ROOT : REPO_ROOT + path.sep
+  if (searchRoot !== REPO_ROOT && !searchRoot.startsWith(repoRootWithSep)) {
+    throw new Error('Path outside repository root not allowed')
   }
 
-  const scanPatterns = [
-    { type: 'todo_items', regex: /\/\/\s*TODO|\/\*\s*TODO/gi, severity: 'info', description: 'TODO comment found' },
-    { type: 'console_statements', regex: /console\.(log|warn|error|debug|info|table)\(/g, severity: 'warning', description: 'Console statement found' },
-    { type: 'debugger_statements', regex: /^\s*debugger\s*;?\s*$/m, severity: 'error', description: 'Debugger statement found' },
-    { type: 'fixme_items', regex: /\/\/\s*FIXME|\/\*\s*FIXME/gi, severity: 'warning', description: 'FIXME comment found' },
-    { type: 'hack_items', regex: /\/\/\s*HACK|\/\*\s*HACK/gi, severity: 'warning', description: 'HACK comment found' },
+  const requestedTypes = Array.isArray(issueTypes) && issueTypes.length ? issueTypes : ['all']
+  const scanAll = requestedTypes.includes('all')
+  const scannedTypes = SCAN_ISSUE_KEYS.filter((key) => scanAll || requestedTypes.includes(key))
+  const skippedTypes = SCAN_ISSUE_KEYS.filter((key) => !scannedTypes.includes(key))
+
+  const allPatterns = [
+    { key: 'todo', type: 'todo_items', regex: /\/\/\s*TODO|\/\*\s*TODO/gi, severity: 'info', description: 'TODO comment found' },
+    { key: 'console', type: 'console_statements', regex: /console\.(log|warn|error|debug|info|table)\(/g, severity: 'warning', description: 'Console statement found' },
+    { key: 'debugger', type: 'debugger_statements', regex: /^\s*debugger\s*;?\s*$/m, severity: 'error', description: 'Debugger statement found' },
+    { key: 'fixme', type: 'fixme_items', regex: /\/\/\s*FIXME|\/\*\s*FIXME/gi, severity: 'warning', description: 'FIXME comment found' },
+    { key: 'hack', type: 'hack_items', regex: /\/\/\s*HACK|\/\*\s*HACK/gi, severity: 'warning', description: 'HACK comment found' },
   ]
+  const scanPatterns = allPatterns.filter((pattern) => scannedTypes.includes(pattern.key))
+
+  const findings = {}
+  for (const pattern of scanPatterns) findings[pattern.type] = []
+
+  /* The cap is now an env knob rather than a literal, and — unlike the old 200
+     — it is set above the size of this repository, so the default run really
+     does cover the whole tree. Whatever it is set to, exceeding it is REPORTED
+     rather than silently applied. */
+  const maxFiles = Math.max(1, Number(process.env.SAM_SCAN_MAX_FILES || 5000))
+  const patternRegex = compileFilePattern(filePattern)
+
+  let discoveredCount = 0
+  let matchedCount = 0
+  let scannedCount = 0
+  let unreadableCount = 0
+  let truncated = false
 
   try {
-    const files = await collectFiles(searchRoot)
+    const discovered = await collectFiles(searchRoot)
+    discoveredCount = discovered.length
+    const matching = patternRegex
+      ? discovered.filter((file) => patternRegex.test(path.basename(file)))
+      : discovered
+    matchedCount = matching.length
+    const selected = matching.slice(0, maxFiles)
+    truncated = matchedCount > selected.length
 
-    for (const file of files.slice(0, 200)) {
+    for (const file of selected) {
+      let content
       try {
-        const content = await fs.readFile(file, 'utf8')
-        const rawLines = content.split('\n')
-        // Strip JSDoc / line comments / block comments before regex scans
-        // so mentions of "debugger" inside /** … */ do not trigger the
-        // debugger-statement rule (audit false-positive).
-        const codeOnlyLines = stripCommentsPreservingLayout(content).split('\n')
+        content = await fs.readFile(file, 'utf8')
+      } catch {
+        /* A file we could not read is a hole in the sweep, not a clean file.
+           It is COUNTED and reported; the old code dropped it silently. */
+        unreadableCount += 1
+        continue
+      }
+      scannedCount += 1
+      const rawLines = content.split('\n')
+      // Strip JSDoc / line comments / block comments before regex scans
+      // so mentions of "debugger" inside /** … */ do not trigger the
+      // debugger-statement rule (audit false-positive).
+      const codeOnlyLines = stripCommentsPreservingLayout(content).split('\n')
+      const relativePath = path.relative(REPO_ROOT, file)
 
-        for (let idx = 0; idx < rawLines.length; idx++) {
-          const rawLine = rawLines[idx]
-          const codeLine = codeOnlyLines[idx] ?? ''
-          // Respect explicit `audit:allow <category>` opt-outs placed by
-          // maintainers on intentional validator literals.
-          if (hasAuditAllowTag(rawLine)) continue
+      for (let idx = 0; idx < rawLines.length; idx++) {
+        const rawLine = rawLines[idx]
+        const codeLine = codeOnlyLines[idx] ?? ''
+        // Respect explicit `audit:allow <category>` opt-outs placed by
+        // maintainers on intentional validator literals.
+        if (hasAuditAllowTag(rawLine)) continue
 
-          for (const pattern of scanPatterns) {
-            const issueKey = pattern.type.replace('_items', '').replace('_statements', '')
-            if (!issueTypes.includes(issueKey) && !issueTypes.includes('all')) continue
-            // Task-marker tokens live in comments by design, so keep scanning
-            // the raw line for those. Everything else scans the
-            // code-only projection.
-            const lineForScan = /_items$/.test(pattern.type) ? rawLine : codeLine
-            pattern.regex.lastIndex = 0
-            const matchesPattern = pattern.type === 'debugger_statements'
-              ? pattern.regex.test(codeLine)
-              : pattern.regex.test(lineForScan)
-            if (matchesPattern) {
-              const relativePath = path.relative(REPO_ROOT, file)
-              findings[pattern.type].push({
-                file: relativePath,
-                line: idx + 1,
-                severity: pattern.severity,
-                description: pattern.description,
-                preview: rawLine.trim().slice(0, 100),
-                fix: `Review and address the ${pattern.description.toLowerCase()}`,
-              })
-            }
+        for (const pattern of scanPatterns) {
+          // Task-marker tokens live in comments by design, so keep scanning
+          // the raw line for those. Everything else scans the
+          // code-only projection.
+          const lineForScan = /_items$/.test(pattern.type) ? rawLine : codeLine
+          pattern.regex.lastIndex = 0
+          const matchesPattern = pattern.type === 'debugger_statements'
+            ? pattern.regex.test(codeLine)
+            : pattern.regex.test(lineForScan)
+          if (matchesPattern) {
+            findings[pattern.type].push({
+              file: relativePath,
+              line: idx + 1,
+              severity: pattern.severity,
+              description: pattern.description,
+              preview: rawLine.trim().slice(0, 100),
+              fix: `Review and address the ${pattern.description.toLowerCase()}`,
+            })
           }
         }
-      } catch {
-        /* intentionally ignored: unreadable file — skip and continue scanning */
       }
     }
   } catch (err) {
     throw new Error(`Failed to scan codebase: ${err.message}`)
   }
 
+  const byType = Object.fromEntries(Object.entries(findings).map(([type, items]) => [type, items.length]))
   const totalIssues = Object.values(findings).reduce((sum, arr) => sum + arr.length, 0)
+  const debuggerFindings = findings.debugger_statements ?? []
+  const markerCount = totalIssues - debuggerFindings.length
+  const coverageNote = truncated
+    ? `TRUNCATED: scanned ${scannedCount} of ${matchedCount} matching files (cap SAM_SCAN_MAX_FILES=${maxFiles}). These findings describe the scanned subset ONLY.`
+    : `Scanned ${scannedCount} of the ${matchedCount} matching files${unreadableCount ? `; ${unreadableCount} could not be read` : ''}.`
+
+  /* Sam mines an ARRAY (samDiagnostics.pickList), so this is what actually
+     reaches his report. Bounded on purpose — see the header. */
+  const issues = []
+  for (const item of debuggerFindings) {
+    issues.push({
+      severity: 'error',
+      title: `debugger statement left in ${item.file}:${item.line}`,
+      description: item.preview,
+      file: item.file,
+      fix: 'Remove the debugger statement.',
+      confidence: 0.95,
+    })
+  }
+  if (truncated) {
+    issues.push({
+      severity: 'warning',
+      title: `Code scan was TRUNCATED at ${scannedCount} of ${matchedCount} files`,
+      description: coverageNote,
+      fix: `Raise SAM_SCAN_MAX_FILES (currently ${maxFiles}) or scan a narrower directory, so the result covers everything it names.`,
+      confidence: 1,
+    })
+  }
+  if (unreadableCount > 0) {
+    issues.push({
+      severity: 'warning',
+      title: `${unreadableCount} file(s) could not be read during the code scan`,
+      description: 'Those files were skipped. They are not evidence of a clean tree.',
+      fix: 'Check file permissions / encoding for the skipped paths.',
+      confidence: 0.9,
+    })
+  }
+  if (markerCount > 0) {
+    issues.push({
+      severity: 'info',
+      title: `${markerCount} task/console marker(s) across ${scannedCount} scanned file(s)`,
+      description: Object.entries(byType)
+        .filter(([type]) => type !== 'debugger_statements')
+        .map(([type, count]) => `${type}: ${count}`)
+        .join(', '),
+      fix: 'Informational. Full per-line list is in findings.',
+      confidence: 0.9,
+    })
+  }
+
   return {
-    scanned_directory: path.relative(REPO_ROOT, searchRoot),
-    file_pattern: filePattern,
-    issue_types: issueTypes,
+    scanned_directory: path.relative(REPO_ROOT, searchRoot) || '.',
+    file_pattern: patternRegex ? String(filePattern) : '*',
+    issue_types: requestedTypes,
+    issue_types_scanned: scannedTypes,
+    issue_types_not_scanned: skippedTypes,
+    /* Discovered / matched / scanned are three different numbers and are
+       reported as three different numbers. */
+    files_discovered: discoveredCount,
+    files_matching_pattern: matchedCount,
+    files_scanned: scannedCount,
+    files_unreadable: unreadableCount,
+    truncated,
     issues_found: totalIssues,
     findings,
+    issues,
     summary: {
       total: totalIssues,
-      by_type: Object.fromEntries(Object.entries(findings).map(([type, items]) => [type, items.length])),
+      by_type: byType,
+      files_discovered: discoveredCount,
+      files_scanned: scannedCount,
+      truncated,
+      coverage_note: coverageNote,
       timestamp: new Date().toISOString(),
     },
   }

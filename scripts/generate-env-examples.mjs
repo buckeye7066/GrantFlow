@@ -164,6 +164,17 @@ const DOCUMENTED_RUNTIME_DEFAULTS = Object.freeze({
   // the sweep is unbounded, and so the honest files_discovered vs files_linted
   // reporting has a knob a reader can find.
   SAM_LINT_MAX_FILES: '500',
+  // Sam's code-scan check (TODO / console / debugger). Set ABOVE the size of
+  // this repository so a default run really does cover the whole tree; the
+  // knob exists so the bound is findable, and exceeding it is reported as
+  // `truncated` rather than silently applied.
+  SAM_SCAN_MAX_FILES: '5000',
+  // A heavy check (tree walk, ESLint, multi-route probe) gets its own, larger
+  // per-check budget. Documented with its real default so the generated
+  // examples cannot imply a heavy check shares the 15s ordinary budget — it
+  // does not, and a heavy check that races the ordinary budget downgrades to
+  // an INFO "skipped" note, which reads as health.
+  SAM_HEAVY_CHECK_TIMEOUT_MS: '60000',
 })
 
 function placeholderFor(name) {
