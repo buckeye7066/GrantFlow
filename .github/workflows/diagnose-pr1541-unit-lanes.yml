@@ -1,0 +1,96 @@
+name: Diagnose PR 1541 unit lanes
+
+on:
+  push:
+    branches: [fix/production-cors-current-main-20260905]
+    paths:
+      - .github/workflows/diagnose-pr1541-unit-lanes.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: diagnose-pr1541-unit-lanes
+  cancel-in-progress: true
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout exact branch head
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+
+      - name: Setup Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 24.19.0
+          cache: npm
+
+      - name: Install exact dependencies
+        run: npm ci --include=optional
+
+      - name: Run each unit lane independently and retain complete output
+        id: lanes
+        shell: bash
+        run: |
+          set +e
+          set -o pipefail
+
+          UNIT_TEST_CONCURRENCY=2 node scripts/run-unit-tests.mjs 2>&1 | tee node-unit.log
+          node_code=${PIPESTATUS[0]}
+
+          node scripts/run-vitest-isolated.mjs run \
+            --exclude "backend/tests/otp*.test.js" \
+            --exclude "backend/tests/emailOtpTokenNoVerifier.test.js" \
+            2>&1 | tee vitest-general.log
+          general_code=${PIPESTATUS[0]}
+
+          node scripts/run-vitest-isolated.mjs run \
+            --no-file-parallelism \
+            backend/tests/otp \
+            backend/tests/emailOtpTokenNoVerifier \
+            2>&1 | tee vitest-otp.log
+          otp_code=${PIPESTATUS[0]}
+
+          {
+            echo "node_unit_exit=$node_code"
+            echo "vitest_general_exit=$general_code"
+            echo "vitest_otp_exit=$otp_code"
+          } | tee lane-exits.txt
+
+          {
+            echo "=== lane exit codes ==="
+            cat lane-exits.txt
+            for log in node-unit.log vitest-general.log vitest-otp.log; do
+              echo
+              echo "=== $log failure-oriented excerpts ==="
+              grep -nEi "(^|[[:space:]])(not ok|fail(ed|ure)?|assertionerror|error:|err_|unhandled|test files|tests)" "$log" | tail -n 500 || true
+              echo
+              echo "=== $log final 1200 lines ==="
+              tail -n 1200 "$log"
+            done
+          } > diagnostic-summary.log
+
+          cat lane-exits.txt
+          exit 0
+
+      - name: Upload complete diagnostic evidence
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: pr1541-unit-lane-diagnostic
+          path: |
+            node-unit.log
+            vitest-general.log
+            vitest-otp.log
+            lane-exits.txt
+            diagnostic-summary.log
+          retention-days: 2
+          if-no-files-found: error
+
+      - name: Show bounded terminal diagnosis
+        shell: bash
+        run: tail -n 1800 diagnostic-summary.log
