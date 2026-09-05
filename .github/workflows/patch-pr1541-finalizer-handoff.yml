@@ -1,0 +1,57 @@
+name: Ensure PR 1541 remediation hands off to the finalizer
+
+on:
+  push:
+    branches: [fix/production-cors-current-main-20260905]
+    paths:
+      - .github/workflows/patch-pr1541-finalizer-handoff.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout exact branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Trigger final verification after any evidence-proven unit repair
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path('.github/workflows/apply-container-cors-default-and-finalize.yml')
+          text = path.read_text(encoding='utf-8')
+          old = """    paths:
+      - .github/workflows/apply-container-cors-default-and-finalize.yml
+"""
+          new = """    paths:
+      - .github/workflows/apply-container-cors-default-and-finalize.yml
+      - .github/workflows/remediate-pr1541-unit-lanes.yml
+      - .github/workflows/diagnose-pr1541-unit-lanes.yml
+      - .github/workflows/diagnose-pr1541-unit-lanes-v3.yml
+      - diagnostics/pr1541-unit-lanes.md
+      - scripts/run-unit-tests.mjs
+      - package.json
+"""
+          if old in text:
+              text = text.replace(old, new, 1)
+          elif new not in text:
+              raise SystemExit('Refused: finalizer trigger block was not recognized')
+          path.write_text(text, encoding='utf-8')
+          PY
+          rm -f .github/workflows/patch-pr1541-finalizer-handoff.yml
+          git diff --check
+          git add -A
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "ci: hand unit remediation back to final verification"
+          git push origin HEAD:fix/production-cors-current-main-20260905
