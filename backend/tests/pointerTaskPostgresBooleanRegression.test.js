@@ -160,8 +160,10 @@ describe.runIf(isDisposableTestUrl(postgresUrl))('pointer repair on native Postg
 
   beforeEach(async () => {
     await client.query('TRUNCATE application_tasks, grants, funding_opportunities')
-    await client.query(`INSERT INTO funding_opportunities (id, opportunity_kind, title)
-      VALUES ('synthetic-pointer', 'referral', 'Synthetic Referral Directory')`)
+    const seeded = await client.query(`INSERT INTO funding_opportunities (id, opportunity_kind, title)
+      VALUES ('synthetic-pointer', 'referral', 'Synthetic Referral Directory')
+      ON CONFLICT (id) DO NOTHING RETURNING id`)
+    expect(seeded.rowCount).toBe(1)
     await seed('synthetic-task', 'queued')
   })
 
@@ -170,11 +172,14 @@ describe.runIf(isDisposableTestUrl(postgresUrl))('pointer repair on native Postg
   })
 
   async function seed(id, status) {
-    await client.query(`INSERT INTO application_tasks
+    const seeded = await client.query(`INSERT INTO application_tasks
       (id, profile_id, opportunity_id, automation_type, status, current_step,
        auto_submit_enabled, allow_auto_submit, output_document_id, audit_summary_json)
       VALUES ($1, 'synthetic-profile', 'synthetic-pointer', 'portal', $2, $2,
-              TRUE, TRUE, 'synthetic-document', '{"retained":"synthetic-evidence"}')`, [id, status])
+              TRUE, TRUE, 'synthetic-document', '{"retained":"synthetic-evidence"}')
+      ON CONFLICT (id) DO NOTHING RETURNING id`, [id, status])
+    // Duplicate setup is still an error, not a silently accepted stale fixture.
+    expect(seeded.rowCount).toBe(1)
   }
 
   it('demonstrates that the old integer assignment is rejected with SQLSTATE 42804', async () => {
@@ -187,20 +192,24 @@ describe.runIf(isDisposableTestUrl(postgresUrl))('pointer repair on native Postg
     expect(rows).toEqual([{ auto_submit_enabled: true, allow_auto_submit: true }])
   })
 
-  it('repairs BOOLEAN flags, preserves evidence, and is idempotent on a fresh rerun', async () => {
+  it('repairs queued and failed tasks, preserves evidence, and is idempotent', async () => {
+    await seed('synthetic-failed', 'failed')
     const first = await repairLegacyPointerApplicationTasks(db)
-    expect(first.repaired).toBe(1)
-    const { rows } = await client.query('SELECT * FROM application_tasks WHERE id = $1', ['synthetic-task'])
-    expect(rows[0]).toMatchObject({
-      status: 'blocked', automation_type: 'research_lead', current_step: 'no_application_surface',
-      auto_submit_enabled: false, allow_auto_submit: false,
-      output_document_id: 'synthetic-document',
-    })
-    expect(JSON.parse(rows[0].audit_summary_json).retained).toBe('synthetic-evidence')
+    expect(first.repaired).toBe(2)
+    const { rows } = await client.query('SELECT * FROM application_tasks ORDER BY id')
+    expect(rows.map(row => row.id)).toEqual(['synthetic-failed', 'synthetic-task'])
+    for (const row of rows) {
+      expect(row).toMatchObject({
+        status: 'blocked', automation_type: 'research_lead', current_step: 'no_application_surface',
+        auto_submit_enabled: false, allow_auto_submit: false,
+        output_document_id: 'synthetic-document',
+      })
+      expect(JSON.parse(row.audit_summary_json).retained).toBe('synthetic-evidence')
+    }
     const second = await repairLegacyPointerApplicationTasks(db)
     expect(second.repaired).toBe(0)
-    expect(second.already_repaired).toBe(1)
-    expect(store.appendTaskEvent).toHaveBeenCalledTimes(1)
+    expect(second.already_repaired).toBe(2)
+    expect(store.appendTaskEvent).toHaveBeenCalledTimes(2)
   })
 
   it('preserves all protected task states and their true flags on Postgres', async () => {
