@@ -55,7 +55,7 @@ describe('pointer repair dialect contract', () => {
     const report = await repairLegacyPointerApplicationTasks(db)
     expect(report.repaired).toBe(1)
     expect(db.writes).toHaveLength(1)
-    const literal = dialect === 'postgres' ? 'FALSE' : '0'
+    const literal = 'FALSE'
     for (const column of ['auto_submit_enabled', 'allow_auto_submit']) {
       expect(db.writes[0].sql).toMatch(new RegExp(`${column}\\s*=\\s*${literal}\\b`))
     }
