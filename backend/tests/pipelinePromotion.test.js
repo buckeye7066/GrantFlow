@@ -444,6 +444,28 @@ describe('qualified pipeline promotion', () => {
     db.close()
   })
 
+  it('a profile whose candidate listing throws is skipped this run; the run itself completes', async () => {
+    const db = makeDb()
+    seedProfile(db, 'real')
+    seedCandidate(db, 'real', { id: 'unreached' })
+    const failingDb = {
+      dialect: 'sqlite',
+      prepare(sql) {
+        if (/FROM profile_opportunity_matches m\s+JOIN funding_opportunities o/i.test(String(sql)) && /LEFT JOIN pipeline_promotion_outcomes po/i.test(String(sql)) && !/COUNT\(\*\)/i.test(String(sql))) {
+          return { all() { throw new Error('current transaction is aborted, commands ignored until end of transaction block') } }
+        }
+        return db.prepare(sql)
+      },
+      withTransaction(fn) {
+        return db.withTransaction(() => fn(failingDb))
+      },
+    }
+    const result = await runQualifiedPipelinePromotion(failingDb, { batch: 10, amountFollowup: false })
+    expect(result).toMatchObject({ mode: 'live', attempted: 0, promoted: 0 })
+    expect(grantsFor(db, 'real')).toHaveLength(0)
+    db.close()
+  })
+
   it('dry-run is REMOVED: naming the old switch fails before any candidate is read', async () => {
     const db = makeDb()
     seedProfile(db, 'real')
