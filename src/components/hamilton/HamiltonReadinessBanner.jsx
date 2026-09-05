@@ -41,6 +41,9 @@ export default function HamiltonReadinessBanner({ profileId }) {
   // qualifying portal, so the banner never understates the backlog.
   const totalNeedingSync = r.sync_needs?.total_needing_action ?? syncPortals.length
   const truncatedCount = r.sync_needs?.truncated_count ?? 0
+  // Identity values Hamilton still needs from the person (owner order
+  // 2026-09-05): each links to the vault card with the kind pre-selected.
+  const identityNeeds = Array.isArray(r.identity_needs?.needs) ? r.identity_needs.needs : []
 
   return (
     <div className="rounded-lg border border-amber-300 bg-amber-50 p-4 text-amber-900">
@@ -63,6 +66,25 @@ export default function HamiltonReadinessBanner({ profileId }) {
               You have {r.pending_task_count} application{r.pending_task_count === 1 ? "" : "s"} ready.
               Set a schedule so Hamilton prepares them — she&apos;ll flag any times you need to be available for 2FA.
             </p>
+          )}
+          {identityNeeds.length > 0 && (
+            <div className="space-y-1.5 text-sm" data-testid="hamilton-identity-needs">
+              <p className="flex items-center gap-1.5">
+                <KeyRound className="h-4 w-4" />
+                Hamilton needs {identityNeeds.length} item{identityNeeds.length === 1 ? "" : "s"} from you to submit applications. They are stored encrypted in your identity vault and never shown again:
+              </p>
+              <ul className="ml-6 list-disc space-y-1">
+                {identityNeeds.map((need) => (
+                  <li key={need.kind}>
+                    <a className="font-semibold underline" href={need.add_link}>{need.label}</a>
+                    <span className="block text-xs opacity-80">
+                      {need.reasons.join(" ")}
+                      {need.sources?.length > 0 && <> Needed for: {need.sources.slice(0, 3).join(", ")}.</>}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            </div>
           )}
           {syncPortals.length > 0 && (
             <div className="space-y-1.5 text-sm">

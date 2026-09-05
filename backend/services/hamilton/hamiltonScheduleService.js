@@ -1,3 +1,4 @@
+import { resolveIdentityNeeds } from './hamiltonIdentityNeeds.js'
 /**
  * hamiltonScheduleService.js
  *
@@ -111,6 +112,14 @@ export async function getHamiltonReadiness(db, { profileId } = {}) {
   try {
     syncNeeds = await resolveProfileSyncNeeds(db, { profileId })
   } catch { syncNeeds = null }
+  // WHAT HAMILTON STILL NEEDS FROM THE PERSON (owner order 2026-09-05): the
+  // vault kinds this profile's pipeline needs (university SSO for its own
+  // scholarship portal, the FSA ID for state/federal aid, SSN for forms) minus
+  // what the vault holds. Best-effort; never fails readiness.
+  let identityNeeds = null
+  try {
+    identityNeeds = await resolveIdentityNeeds(db, { profileId })
+  } catch { identityNeeds = null }
 
   const portalsNeedingCapture = portals.filter((p) => p.needs_capture)
   return {
@@ -124,12 +133,16 @@ export async function getHamiltonReadiness(db, { profileId } = {}) {
     // Login-time sync prompt: which portals are stale / changed-since-sync, why,
     // and whether the ask is "sync now" or "sign in once".
     sync_needs: syncNeeds,
+    // Login-time identity ask: the missing vault kinds, why, and the deep link
+    // that opens the vault card with the kind pre-selected.
+    identity_needs: identityNeeds,
     // The banner should prompt setup when there is work to do AND either no
     // schedule is set, or a portal needs a session captured — OR, independently
     // of Hamilton's task queue, when a portal has drifted out of sync. A stale
     // portal is actionable even when there is no pending application work.
     needs_attention: (pendingCount > 0 && (!schedule.enabled || portalsNeedingCapture.length > 0))
-      || Boolean(syncNeeds?.needs_attention),
+      || Boolean(syncNeeds?.needs_attention)
+      || Boolean(identityNeeds?.needs_attention),
   }
 }
 
