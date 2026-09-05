@@ -90,22 +90,35 @@ describe('pointer repair dialect contract', () => {
   })
 })
 
-// Never reuse DATABASE_URL: this opt-in is restricted to a dedicated loopback
-// database containing synthetic fixtures. CI explicitly requires this lane.
-const postgresUrl = process.env.POINTER_REPAIR_TEST_DATABASE_URL
-if (process.env.POINTER_REPAIR_REQUIRE_POSTGRES === '1' && !postgresUrl) {
-  throw new Error('POINTER_REPAIR_TEST_DATABASE_URL is required for the Postgres regression lane')
+// CI injects only this synthetic DATABASE_URL after stripping inherited live
+// credentials with buildIsolatedTestEnv. Ordinary isolated suites have no URL.
+// A real/local application's DATABASE_URL must never activate this test lane.
+function isDisposableTestUrl(value) {
+  try {
+    const url = new URL(value)
+    return ['postgres:', 'postgresql:'].includes(url.protocol)
+      && ['127.0.0.1', 'localhost'].includes(url.hostname)
+      && url.pathname === '/grantflow_pointer_test'
+  } catch {
+    return false
+  }
 }
 
-describe.runIf(Boolean(postgresUrl))('pointer repair on native PostgreSQL', () => {
+it('only enables native SQL tests for the explicitly named loopback fixture database', () => {
+  expect(isDisposableTestUrl(undefined)).toBe(false)
+  expect(isDisposableTestUrl('not-a-url')).toBe(false)
+  expect(isDisposableTestUrl('postgres://example.invalid/grantflow_pointer_test')).toBe(false)
+  expect(isDisposableTestUrl('postgres://127.0.0.1/production')).toBe(false)
+  expect(isDisposableTestUrl('postgres://127.0.0.1/grantflow_pointer_test')).toBe(true)
+})
+
+const postgresUrl = process.env.DATABASE_URL
+describe.runIf(isDisposableTestUrl(postgresUrl))('pointer repair on native PostgreSQL', () => {
   let client
   let db
 
   beforeAll(async () => {
-    const url = new URL(postgresUrl)
-    if (!['postgres:', 'postgresql:'].includes(url.protocol)
-      || !['127.0.0.1', 'localhost'].includes(url.hostname)
-      || url.pathname !== '/grantflow_pointer_test') {
+    if (!isDisposableTestUrl(postgresUrl)) {
       throw new Error('Refusing a non-disposable pointer repair test database')
     }
     client = new pg.Client({ connectionString: postgresUrl, connectionTimeoutMillis: 5000 })
