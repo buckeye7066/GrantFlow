@@ -11,7 +11,7 @@ import { getProfileType, resolveProfileType } from './profileTypeRegistry.js'
 import { resolveStudentFundingLocation } from './college/committedCollege.js'
 import { buildProfileFacets } from './profile/profileTaxonomy.js'
 import { normalizeProfile, normalizeNeedCategory } from './profileNormalizer.js'
-import { containsTermWholeWord } from './shared/textMatch.js'
+import { containsTermWholeWord, containsAffirmedTermWholeWord, stripNegatedClauses } from './shared/textMatch.js'
 
 // Field NAMES that are drafting-only prose / unscored across the whole schema
 // (mission, narrative.*, every *.notes, essays, deprecated fields). The keyword
@@ -981,9 +981,31 @@ const MILITARY_FLAGS = {
 
 const TOKEN_SPLIT_REGEX = /[^a-z0-9]+/gi
 
+/**
+ * Placeholder strings an intake form or an intake model writes to say "this
+ * field has NO value": "none", "unknown", "n/a", "not provided" ... A live
+ * student profile carried `medicaid_waiver_program: "none"` and the signal
+ * builder read the word "none" as a waiver NAME — minting a medicaid_waiver
+ * assistance flag and a "medicaid waiver" search keyword for a person who is
+ * on no waiver (owner finding, 2026-09-05). 37 of 51 production profiles carry
+ * at least one such field (75 fields total). A sentinel is an absence, never
+ * a fact, everywhere in this reader.
+ */
+const SENTINEL_TEXT_RX = /^\s*(?:none|no|n\/?a|nil|null|undefined|unknown|unsure|not applicable|not provided|not specified|not reported|not available|not stated|none reported|none provided|none listed|none noted|not listed|no data|tbd|to be determined|pending|-+|\?+|\.)\s*[.!]?\s*$/i
+
+export function isSentinelText(value) {
+  return typeof value === 'string' && SENTINEL_TEXT_RX.test(value)
+}
+
+/** True for a non-empty string that is a VALUE, not a sentinel placeholder. */
+export function hasTextValue(value) {
+  return typeof value === 'string' && value.trim().length > 0 && !SENTINEL_TEXT_RX.test(value)
+}
+
 function normalizeString(value) {
   if (typeof value !== 'string') return ''
-  return value.trim().toLowerCase()
+  const normalized = value.trim().toLowerCase()
+  return SENTINEL_TEXT_RX.test(normalized) ? '' : normalized
 }
 
 /**
@@ -1099,8 +1121,11 @@ function collectNarrativeKeywords(section = {}, register) {
     // .js), so mission keywords inform need derivation + add matched credit
     // WITHOUT inflating the denominator. Do not re-add a field-name gate here.
     const value = section[field]
-    if (!value || typeof value !== 'string') return
-    value
+    if (!hasTextValue(value)) return
+    // Denied clauses are not keywords: "No military affiliation ... veteran
+    // status" was registering veteran/military vocabulary for a student whose
+    // section positively states no service (2026-09-05).
+    stripNegatedClauses(value)
       .split(/[,;]+/)
       .map((entry) => entry.trim())
       .filter((entry) => entry.length > 0 && entry.length <= 60)
@@ -1495,6 +1520,9 @@ export function buildProfileSignals({ profile, sections, asOf = null, documents 
   const registerKeyword = (value) => {
     const normalized = normalizeString(value)
     if (!normalized) return
+    // "unknown support needs", "none reported ..." — a composite built around
+    // a placeholder is a placeholder.
+    if (/^(?:unknown|none|n\/a|not (?:provided|specified|applicable|reported|available))\b/.test(normalized)) return
     phraseSet.add(normalized)
     addKeyword(keywordSet, normalized)
   }
@@ -1621,14 +1649,14 @@ export function buildProfileSignals({ profile, sections, asOf = null, documents 
     if (domainName && domainName.length > 3) registerKeyword(domainName)
   }
   // Nationality — immigration/citizenship context
-  if (basic.nationality && typeof basic.nationality === 'string') {
+  if (hasTextValue(basic.nationality)) {
     registerKeyword(basic.nationality)
     if (/^us|united\s*states|american/i.test(basic.nationality)) {
       demographicSet.add('us_citizen')
     }
   }
   // Freeform notes — intake context that may mention needs
-  if (basic.notes && typeof basic.notes === 'string') {
+  if (hasTextValue(basic.notes)) {
     collectNarrativeKeywords({ notes: basic.notes }, registerKeyword)
   }
 
@@ -1694,7 +1722,7 @@ export function buildProfileSignals({ profile, sections, asOf = null, documents 
   if (financialSection.notes) {
     collectNarrativeKeywords({ notes: financialSection.notes }, registerKeyword)
   }
-  if (financialSection.employment_status) {
+  if (hasTextValue(financialSection.employment_status)) {
     registerKeyword(financialSection.employment_status)
     if (financialSection.employment_status === 'unemployed') {
       assistanceSet.add('unemployed')
@@ -1720,7 +1748,7 @@ export function buildProfileSignals({ profile, sections, asOf = null, documents 
       if (canonical) needs.add(canonical)
     }
   }
-  if (financialSection.funding_needs && typeof financialSection.funding_needs === 'string') {
+  if (hasTextValue(financialSection.funding_needs)) {
     collectNarrativeKeywords({ funding_needs: financialSection.funding_needs }, registerKeyword)
     const fnLower = financialSection.funding_needs.toLowerCase()
     // Map explicit funding needs to canonical need categories
@@ -1742,7 +1770,7 @@ export function buildProfileSignals({ profile, sections, asOf = null, documents 
       if (triggers.some(t => containsTermWholeWord(fnLower, t))) needs.add(need)
     }
   }
-  if (financialSection.funding_purpose && typeof financialSection.funding_purpose === 'string') {
+  if (hasTextValue(financialSection.funding_purpose)) {
     collectNarrativeKeywords({ funding_purpose: financialSection.funding_purpose }, registerKeyword)
   }
 
@@ -1769,7 +1797,7 @@ export function buildProfileSignals({ profile, sections, asOf = null, documents 
       if (/liheap|energy.?assist/i.test(norm)) { assistanceSet.add('liheap'); needs.add('utilities') }
     }
   }
-  if (financialSection.assistance_notes && typeof financialSection.assistance_notes === 'string') {
+  if (hasTextValue(financialSection.assistance_notes)) {
     collectNarrativeKeywords({ assistance_notes: financialSection.assistance_notes }, registerKeyword)
   }
 
@@ -1821,8 +1849,8 @@ export function buildProfileSignals({ profile, sections, asOf = null, documents 
     const value = String(text || '')
     if (!value.trim()) return
     const isEcf =
-      containsTermWholeWord(value, 'ecf') ||
-      containsTermWholeWord(value, 'ecf choices') ||
+      containsAffirmedTermWholeWord(value, 'ecf') ||
+      containsAffirmedTermWholeWord(value, 'ecf choices') ||
       containsTermWholeWord(value, 'employment and community first')
     const isHcbs =
       containsTermWholeWord(value, 'hcbs') ||
@@ -1846,7 +1874,7 @@ export function buildProfileSignals({ profile, sections, asOf = null, documents 
     }
   }
   // Other programs as free text
-  if (government.other_programs && typeof government.other_programs === 'string') {
+  if (hasTextValue(government.other_programs)) {
     collectNarrativeKeywords({ other_programs: government.other_programs }, registerKeyword)
     // Also register the whole thing as a keyword if short
     if (government.other_programs.length < 100) {
@@ -1855,7 +1883,7 @@ export function buildProfileSignals({ profile, sections, asOf = null, documents 
     deriveWaiverSignalsFromText(government.other_programs)
   }
   // Medicaid waiver program — e.g., "ecf_choices", "HCBS", "Katie Beckett"
-  if (government.medicaid_waiver_program && typeof government.medicaid_waiver_program === 'string') {
+  if (hasTextValue(government.medicaid_waiver_program)) {
     const waiver = normalizeString(government.medicaid_waiver_program)
     if (waiver) {
       registerKeyword(waiver)
@@ -1875,7 +1903,7 @@ export function buildProfileSignals({ profile, sections, asOf = null, documents 
     }
   }
   // ECF CHOICES role — participant, caregiver, or provider
-  if (government.ecf_choices_role && typeof government.ecf_choices_role === 'string') {
+  if (hasTextValue(government.ecf_choices_role)) {
     const role = normalizeString(government.ecf_choices_role)
     if (role) {
       registerKeyword('ecf choices ' + role)
@@ -1955,14 +1983,14 @@ export function buildProfileSignals({ profile, sections, asOf = null, documents 
   if (health.neurodivergent) { healthSet.add('neurodivergent'); registerKeyword('neurodivergent'); registerKeyword('autism'); registerKeyword('adhd') }
   if (health.mental_health_condition) { healthSet.add('mental_health'); registerKeyword('mental health'); registerKeyword('behavioral health') }
   if (health.chronic_illness) { healthSet.add('chronic_illness'); registerKeyword('chronic illness'); registerKeyword('chronic condition') }
-  if (health.chronic_illness_type && typeof health.chronic_illness_type === 'string') { registerKeyword(health.chronic_illness_type) }
+  if (hasTextValue(health.chronic_illness_type)) { registerKeyword(health.chronic_illness_type) }
   if (health.rare_disease) { healthSet.add('rare_disease'); registerKeyword('rare disease'); registerKeyword('orphan disease') }
   if (health.visual_impairment) { healthSet.add('visual_impairment'); registerKeyword('visual impairment'); registerKeyword('blind'); registerKeyword('low vision') }
   if (health.hearing_impairment) { healthSet.add('hearing_impairment'); registerKeyword('hearing impairment'); registerKeyword('deaf'); registerKeyword('hard of hearing') }
   if (health.cancer_survivor) { healthSet.add('cancer'); registerKeyword('cancer survivor'); registerKeyword('oncology') }
   if (health.substance_recovery) { healthSet.add('recovery'); registerKeyword('recovery'); registerKeyword('substance recovery'); registerKeyword('sober living') }
   if (health.terminal_illness) { healthSet.add('terminal'); registerKeyword('terminal illness'); registerKeyword('hospice') }
-  if (health.support_needs_level) {
+  if (hasTextValue(health.support_needs_level)) {
     registerKeyword(health.support_needs_level + ' support needs')
     if (['High', 'Critical'].includes(health.support_needs_level)) {
       healthSet.add('high_support_needs')
@@ -1981,7 +2009,7 @@ export function buildProfileSignals({ profile, sections, asOf = null, documents 
       labels.forEach((label) => registerKeyword(label))
     }
   })
-  if (demographicsSection.immigrant_status && demographicsSection.immigrant_status !== 'unknown') {
+  if (hasTextValue(demographicsSection.immigrant_status)) {
     const statusLabel = demographicsSection.immigrant_status.replace(/_/g, ' ')
     demographicSet.add(demographicsSection.immigrant_status)
     registerKeyword(statusLabel)
@@ -1990,15 +2018,15 @@ export function buildProfileSignals({ profile, sections, asOf = null, documents 
       registerKeyword('immigrant')
     }
   }
-  if (demographicsSection.tribal_affiliation && typeof demographicsSection.tribal_affiliation === 'string') {
+  if (hasTextValue(demographicsSection.tribal_affiliation)) {
     registerKeyword(demographicsSection.tribal_affiliation)
     demographicSet.add('tribal_affiliation')
     registerKeyword('tribal affiliation')
   }
-  if (demographicsSection.ethnicity) {
+  if (hasTextValue(demographicsSection.ethnicity)) {
     registerKeyword(demographicsSection.ethnicity)
   }
-  if (demographicsSection.race) {
+  if (hasTextValue(demographicsSection.race)) {
     registerKeyword(demographicsSection.race)
   }
   if (demographicsSection.first_generation) {
@@ -2016,18 +2044,18 @@ export function buildProfileSignals({ profile, sections, asOf = null, documents 
   if (demographicsSection.greek_heritage) { registerKeyword('greek_heritage'); registerKeyword('greek_american'); registerKeyword('ahepa') }
   if (demographicsSection.armenian_heritage) { registerKeyword('armenian_heritage'); registerKeyword('armenian_american') }
   if (demographicsSection.appalachian_heritage) { registerKeyword('appalachian_heritage'); registerKeyword('appalachian'); registerKeyword('arc') }
-  if (demographicsSection.religious_denomination && typeof demographicsSection.religious_denomination === 'string') {
+  if (hasTextValue(demographicsSection.religious_denomination)) {
     registerKeyword(demographicsSection.religious_denomination.toLowerCase().replace(/\s+/g, '_'))
     registerKeyword('denominational_scholarship')
   }
   if (demographicsSection.lgbtq) { registerKeyword('lgbtq'); registerKeyword('lgbtq_scholarship'); registerKeyword('queer') }
   if (demographicsSection.good_credit_score) { registerKeyword('good_credit'); registerKeyword('financial_literacy') }
   // General heritage field (free text)
-  if (demographicsSection.heritage && typeof demographicsSection.heritage === 'string') {
+  if (hasTextValue(demographicsSection.heritage)) {
     registerKeyword(demographicsSection.heritage)
   }
   // Citizenship / US citizen — programs requiring citizenship
-  if (demographicsSection.citizenship && typeof demographicsSection.citizenship === 'string') {
+  if (hasTextValue(demographicsSection.citizenship)) {
     registerKeyword(demographicsSection.citizenship)
     if (/^us|united\s*states|american/i.test(demographicsSection.citizenship)) {
       demographicSet.add('us_citizen')
@@ -2037,7 +2065,7 @@ export function buildProfileSignals({ profile, sections, asOf = null, documents 
     demographicSet.add('us_citizen')
   }
   // Disability status (high-level descriptor) — supplements health_medical section
-  if (demographicsSection.disability_status && typeof demographicsSection.disability_status === 'string') {
+  if (hasTextValue(demographicsSection.disability_status)) {
     const ds = normalizeString(demographicsSection.disability_status)
     if (ds && ds !== 'none' && ds !== 'unknown') {
       healthSet.add('disability')
@@ -2047,7 +2075,7 @@ export function buildProfileSignals({ profile, sections, asOf = null, documents 
     }
   }
   // Veteran status (high-level descriptor) — supplements military_service section
-  if (demographicsSection.veteran_status && typeof demographicsSection.veteran_status === 'string') {
+  if (hasTextValue(demographicsSection.veteran_status)) {
     const vs = normalizeString(demographicsSection.veteran_status)
     if (vs && vs !== 'none' && vs !== 'unknown' && vs !== 'not a veteran') {
       militarySet.add('veteran')
@@ -2059,18 +2087,24 @@ export function buildProfileSignals({ profile, sections, asOf = null, documents 
     const langs = typeof demographicsSection.languages === 'string'
       ? demographicsSection.languages.split(/[,;\n]+/).map(s => s.trim()).filter(Boolean)
       : Array.isArray(demographicsSection.languages) ? demographicsSection.languages : []
-    for (const lang of langs) {
-      const norm = normalizeString(lang)
-      if (norm && norm !== 'english') {
-        registerKeyword(norm)
+    // `non_english_speaker` is an ABSENCE of English, not the presence of a
+    // second language: a live profile listing ["English", "Russian"] (fluent
+    // in both, per its own narrative) was flagged non-English-speaking and
+    // handed ESL vocabulary (2026-09-05). Bilingual stays a keyword.
+    const normLangs = langs.map((lang) => normalizeString(lang)).filter(Boolean)
+    const speaksEnglish = normLangs.some((norm) => /^english\b/.test(norm))
+    for (const norm of normLangs) {
+      if (norm === 'english') continue
+      registerKeyword(norm)
+      registerKeyword('bilingual')
+      if (!speaksEnglish) {
         demographicSet.add('non_english_speaker')
-        registerKeyword('bilingual')
         registerKeyword('esl')
       }
     }
   }
   // Religious affiliation — faith-based programs
-  if (demographicsSection.religious_affiliation && typeof demographicsSection.religious_affiliation === 'string') {
+  if (hasTextValue(demographicsSection.religious_affiliation)) {
     const affil = normalizeString(demographicsSection.religious_affiliation)
     if (affil) {
       registerKeyword(affil)
@@ -2143,17 +2177,17 @@ export function buildProfileSignals({ profile, sections, asOf = null, documents 
       labels.forEach((label) => registerKeyword(label))
     }
   })
-  if (military.military_branch) {
+  if (hasTextValue(military.military_branch)) {
     registerKeyword(military.military_branch)
     militarySet.add(normalizeString(military.military_branch))
   }
-  if (military.service_era) {
+  if (hasTextValue(military.service_era)) {
     registerKeyword(military.service_era)
     if (['vietnam', 'korea', 'wwii', 'gulf_war', 'oef', 'oif'].includes(normalizeString(military.service_era))) {
       registerKeyword('war veteran')
     }
   }
-  if (military.discharge_status) {
+  if (hasTextValue(military.discharge_status)) {
     registerKeyword(military.discharge_status)
   }
   if (military.va_disability_rating) {
@@ -2313,10 +2347,10 @@ export function buildProfileSignals({ profile, sections, asOf = null, documents 
   }
 
   // ============ LOCATION FOCUS ============
-  if (locationFocus.geographic_focus) {
+  if (hasTextValue(locationFocus.geographic_focus)) {
     registerKeyword(locationFocus.geographic_focus)
   }
-  if (locationFocus.service_area) {
+  if (hasTextValue(locationFocus.service_area)) {
     registerKeyword(locationFocus.service_area)
   }
   if (locationFocus.counties_served && Array.isArray(locationFocus.counties_served)) {
@@ -2356,7 +2390,7 @@ export function buildProfileSignals({ profile, sections, asOf = null, documents 
     registerKeyword(organizationDetails.nicra_rate)
     registerKeyword(`nicra ${organizationDetails.nicra_rate}`)
   }
-  if (organizationDetails.audit_status) {
+  if (hasTextValue(organizationDetails.audit_status)) {
     registerKeyword(organizationDetails.audit_status)
   }
   if (organizationDetails.mission) {
@@ -2446,7 +2480,7 @@ export function buildProfileSignals({ profile, sections, asOf = null, documents 
     registerKeywords(programsServices.interests)
     programsServices.interests.forEach((i) => interestSet.add(normalizeString(i)))
   }
-  if (programsServices.notes && typeof programsServices.notes === 'string') {
+  if (hasTextValue(programsServices.notes)) {
     collectNarrativeKeywords({ notes: programsServices.notes }, registerKeyword)
   }
 
@@ -2459,7 +2493,7 @@ export function buildProfileSignals({ profile, sections, asOf = null, documents 
 
   // ============ SMALL BUSINESS DETAILS (real funding for business/startup needs: NAICS, USDA, SBA) ============
   const smallBusiness = sections?.small_business_details ?? {}
-  if (smallBusiness.naics_code && typeof smallBusiness.naics_code === 'string') {
+  if (hasTextValue(smallBusiness.naics_code)) {
     const naics = String(smallBusiness.naics_code).trim()
     if (naics) {
       registerKeyword(naics)
@@ -2476,19 +2510,20 @@ export function buildProfileSignals({ profile, sections, asOf = null, documents 
       }
     }
   }
-  if (smallBusiness.notes && typeof smallBusiness.notes === 'string') {
+  if (hasTextValue(smallBusiness.notes)) {
     collectNarrativeKeywords({ notes: smallBusiness.notes }, registerKeyword)
-    const notesLower = smallBusiness.notes.toLowerCase()
     // Explicit program keywords from notes (USDA, SBA microloan, microenterprise, etc.)
+    // Affirmed whole words only: "No small business details provided in the
+    // profile." was minting a 'small business' intent phrase for a student.
     const programTerms = ['usda', 'sba', 'microloan', 'microenterprise', 'community development', 'small business', 'startup', 'rural business', 'rural development']
     programTerms.forEach((term) => {
-      if (notesLower.includes(term)) {
+      if (containsAffirmedTermWholeWord(smallBusiness.notes, term)) {
         registerKeyword(term)
         if (term.includes(' ')) intentPhraseSet.add(term)
       }
     })
   }
-  if (smallBusiness.business_name && typeof smallBusiness.business_name === 'string') {
+  if (hasTextValue(smallBusiness.business_name)) {
     registerKeyword(smallBusiness.business_name)
   }
   if ((smallBusiness.years_in_business !== null && smallBusiness.years_in_business !== undefined)) {
@@ -2572,7 +2607,7 @@ export function buildProfileSignals({ profile, sections, asOf = null, documents 
     if (application.name) registerKeyword(application.name)
     if (application.application_type) registerKeyword(application.application_type)
     if (application.institution_type) registerKeyword(application.institution_type)
-    if (application.intended_major) {
+    if (hasTextValue(application.intended_major)) {
       registerKeyword(application.intended_major)
       interestSet.add(normalizeString(application.intended_major))
     }
@@ -2621,7 +2656,7 @@ export function buildProfileSignals({ profile, sections, asOf = null, documents 
     education.programs.forEach((program) => registerKeyword(program))
   }
   if (education.degree_type) registerKeyword(education.degree_type)
-  if (education.field_of_study) {
+  if (hasTextValue(education.field_of_study)) {
     registerKeyword(education.field_of_study)
     interestSet.add(normalizeString(education.field_of_study))
   }
@@ -2643,7 +2678,7 @@ export function buildProfileSignals({ profile, sections, asOf = null, documents 
     registerKeyword('first generation college student')
   }
   if (education.current_institution) registerKeyword(education.current_institution)
-  if (education.highest_level) {
+  if (hasTextValue(education.highest_level)) {
     registerKeyword(education.highest_level)
     const lvl = normalizeString(education.highest_level)
     if (lvl && /high\s*school|ged/i.test(lvl)) demographicSet.add('high_school')
@@ -2666,7 +2701,7 @@ export function buildProfileSignals({ profile, sections, asOf = null, documents 
   }
   if (education.pell_grant_eligible) { registerKeyword('pell_grant'); registerKeyword('need_based_aid'); registerKeyword('low_income_student') }
   if (education.fafsa_completed) { registerKeyword('fafsa'); registerKeyword('federal_financial_aid') }
-  if (education.cte_pathway && typeof education.cte_pathway === 'string') {
+  if (hasTextValue(education.cte_pathway)) {
     registerKeyword('cte'); registerKeyword('career_technical')
     registerKeyword(education.cte_pathway.toLowerCase().replace(/\s+/g, '_'))
   }
@@ -2675,7 +2710,7 @@ export function buildProfileSignals({ profile, sections, asOf = null, documents 
   if (education.first_generation_college_student) { registerKeyword('first_generation'); registerKeyword('first_gen_college') }
   if (education.dual_enrollment) { registerKeyword('dual_enrollment'); registerKeyword('early_college') }
   // EFC/SAI band — Expected Family Contribution for financial aid matching
-  if (education.efc_sai_band && typeof education.efc_sai_band === 'string') {
+  if (hasTextValue(education.efc_sai_band)) {
     const efc = normalizeString(education.efc_sai_band)
     if (efc) {
       registerKeyword('efc ' + efc)
@@ -2689,7 +2724,7 @@ export function buildProfileSignals({ profile, sections, asOf = null, documents 
     }
   }
   // Intended major — scholarship targeting by field
-  if (education.intended_major && typeof education.intended_major === 'string') {
+  if (hasTextValue(education.intended_major)) {
     registerKeyword(education.intended_major)
     interestSet.add(normalizeString(education.intended_major))
   }
@@ -2698,7 +2733,7 @@ export function buildProfileSignals({ profile, sections, asOf = null, documents 
   // matcher's keyword overlap and category scoring.
   if (Array.isArray(education.interests)) {
     education.interests.forEach((interest) => {
-      if (interest && typeof interest === 'string') {
+      if (hasTextValue(interest)) {
         registerKeyword(interest)
         interestSet.add(normalizeString(interest))
       }
@@ -2735,7 +2770,7 @@ export function buildProfileSignals({ profile, sections, asOf = null, documents 
     }
   }
   // Education notes — additional context keywords
-  if (education.notes && typeof education.notes === 'string') {
+  if (hasTextValue(education.notes)) {
     collectNarrativeKeywords({ notes: education.notes }, registerKeyword)
   }
 
@@ -2759,7 +2794,7 @@ export function buildProfileSignals({ profile, sections, asOf = null, documents 
       }
     }
   }
-  if (medicalInsurance.insurance_provider) {
+  if (hasTextValue(medicalInsurance.insurance_provider)) {
     registerKeyword(medicalInsurance.insurance_provider)
   }
   if (medicalInsurance.notes) {
@@ -2790,7 +2825,7 @@ export function buildProfileSignals({ profile, sections, asOf = null, documents 
       }
     }
   }
-  if (medicalHistory.mobility_needs) {
+  if (hasTextValue(medicalHistory.mobility_needs)) {
     registerKeyword(medicalHistory.mobility_needs)
     healthSet.add('mobility_needs')
     registerKeyword('mobility assistance')
@@ -2819,7 +2854,7 @@ export function buildProfileSignals({ profile, sections, asOf = null, documents 
   if (nonprofitCompliance.fiscal_sponsor) {
     registerKeyword('fiscal sponsor')
     registerKeyword('fiscal sponsorship')
-    if (nonprofitCompliance.fiscal_sponsor_name) {
+    if (hasTextValue(nonprofitCompliance.fiscal_sponsor_name)) {
       registerKeyword(nonprofitCompliance.fiscal_sponsor_name)
     }
   }
@@ -2840,7 +2875,14 @@ export function buildProfileSignals({ profile, sections, asOf = null, documents 
     if (status) {
       registerKeyword(status)
       occupationSet.add(status)
-      if (/unemploy|job.?seek|between.?jobs|laid.?off/i.test(employment.current_status)) {
+      // A full-time STUDENT whose status reads "Unemployed" has not lost a
+      // job: a live high-school senior ("High school student focused on
+      // academics") was minted an unemployed flag, an employment need and
+      // the DOL workforce vocabulary from that one word (2026-09-05).
+      const studentProfile = applicantTypeSet.has('student')
+        || /\bstudent\b/i.test(String(employment.notes ?? ''))
+        || /student/i.test(String(profile?.primary_type ?? ''))
+      if (!studentProfile && /unemploy|job.?seek|between.?jobs|laid.?off/i.test(employment.current_status)) {
         assistanceSet.add('unemployed')
         registerKeyword('job seeker')
         registerKeyword('workforce development')
@@ -2855,7 +2897,7 @@ export function buildProfileSignals({ profile, sections, asOf = null, documents 
       }
     }
   }
-  if (employment.career_goal) {
+  if (hasTextValue(employment.career_goal)) {
     registerKeyword(employment.career_goal)
     // Career goals are strong intent signals for matching
     const goalNorm = normalizeString(employment.career_goal)
@@ -2890,7 +2932,7 @@ export function buildProfileSignals({ profile, sections, asOf = null, documents 
       }
     }
   }
-  if (housing.type) {
+  if (hasTextValue(housing.type)) {
     registerKeyword(housing.type)
     if (/rent/i.test(housing.type)) registerKeyword('renter')
     if (/section.?8|voucher/i.test(housing.type)) {

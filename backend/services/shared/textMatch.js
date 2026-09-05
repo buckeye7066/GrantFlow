@@ -70,6 +70,58 @@ export function containsTermWholeWord(text, term) {
 }
 
 /**
+ * Negation cues that, earlier in the SAME clause, turn a mention into a
+ * denial. Clauses are cut at sentence/list punctuation and line breaks; a cue
+ * in an earlier sentence does not carry over.
+ */
+const NEGATION_CUE_RX = /(?:^|[^a-z])(?:no|not|none|never|without|non|n\/a|nor|neither|does not|do not|did not|doesn't|don't|isn't|aren't|wasn't|not applicable|not a|not an|unknown|declined|denied|no longer)(?=$|[^a-z])/i
+
+function clauseStart(text, index) {
+  return Math.max(
+    text.lastIndexOf('.', index),
+    text.lastIndexOf(';', index),
+    text.lastIndexOf('\n', index),
+    text.lastIndexOf('!', index),
+    text.lastIndexOf('?', index),
+  ) + 1
+}
+
+/**
+ * The text with every NEGATED clause removed. Intake notes are where a human
+ * or an intake model writes what the applicant is NOT ("No military
+ * affiliation ... veteran status", "No small business details provided"),
+ * and a keyword miner that reads those clauses mints the very facts they
+ * deny. Clauses are cut at . ; ! ? and line breaks.
+ */
+export function stripNegatedClauses(text) {
+  const haystack = String(text ?? '')
+  if (!haystack) return ''
+  return haystack
+    .split(/(?<=[.;!?\n])/)
+    .filter((clause) => !NEGATION_CUE_RX.test(clause))
+    .join('')
+}
+
+/**
+ * Whole-word containment that only counts AFFIRMED occurrences: at least one
+ * match whose clause carries no negation cue before it.
+ */
+export function containsAffirmedTermWholeWord(text, term) {
+  const haystack = String(text ?? '')
+  if (!haystack) return false
+  const re = wholeWordTermRegex(term)
+  if (!re) return false
+  const rx = new RegExp(re.source, re.flags.includes('g') ? re.flags : re.flags + 'g')
+  let match
+  while ((match = rx.exec(haystack)) !== null) {
+    const lead = haystack.slice(clauseStart(haystack, match.index), match.index)
+    if (!NEGATION_CUE_RX.test(lead)) return true
+    if (rx.lastIndex === match.index) rx.lastIndex += 1
+  }
+  return false
+}
+
+/**
  * True when any of the terms appears as a whole word in the text.
  */
 export function containsAnyTermWholeWord(text, terms) {

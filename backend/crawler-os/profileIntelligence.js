@@ -103,7 +103,10 @@ const NEED_KEYWORDS = {
   active_duty_support: ['active duty', 'currently serving', 'servicemember', 'service member support', 'military onesource'],
   military_transition: ['transition assistance', 'tap', 'transitioning service member', 'separating from service', 'separation from service', 'retiring from service', 'ets'],
   military_spouse_support: ['military spouse', 'spouse education', 'spouse career', 'mycaa'],
-  employment: ['employment', 'job', 'jobs', 'career', 'workforce', 'work study', 'work-study', 'campus job'],
+  // 'career' alone is an ASPIRATION word ("pursue a career in forensic
+  // science") and minted an employment need for a student; only the
+  // service/training phrasings declare a need.
+  employment: ['employment', 'job', 'jobs', 'career services', 'career training', 'career center', 'career counseling', 'job training', 'job placement', 'workforce', 'work study', 'work-study', 'campus job'],
   workforce: ['workforce', 'job training', 'career training', 'apprenticeship', 'reentry employment', 'work readiness'],
   energy: ['energy', 'heating', 'liheap', 'weatherization', 'solar', 'utility', 'utilities', 'electric bill', 'gas bill'],
   agriculture: ['agriculture', 'farm', 'farmer', 'ranch', 'livestock', 'crop', 'usda'],
