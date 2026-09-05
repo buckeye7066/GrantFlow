@@ -1345,8 +1345,13 @@ export function buildProfileSignals({ profile, sections, asOf = null, documents 
   const locationFocus = sections?.location_focus ?? {}
   const organizationDetails = sections?.organization_details ?? {}
 
+  // The corroborated section reader comes first: a stray flat `zip_code`
+  // (a live profile carried a Minneapolis ZIP beside two sources that agreed
+  // on 37312) must not become the crawl thesis's location.
+  const corroborated = readSectionLocation(sections)
   const location = {
     zip:
+      corroborated.zip ||
       extractZipFromContext({ profile, sections }) ||
       extractZipFromAddress(basic.address) ||
       extractZipFromAddress(comprehensive.address),
