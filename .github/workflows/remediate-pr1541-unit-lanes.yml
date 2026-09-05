@@ -1,0 +1,229 @@
+name: Diagnose and conditionally remediate PR 1541 unit lanes
+
+on:
+  push:
+    branches: [fix/production-cors-current-main-20260905]
+    paths:
+      - .github/workflows/remediate-pr1541-unit-lanes.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: finalize-pr1541
+  cancel-in-progress: true
+
+jobs:
+  diagnose-remediate-and-reverify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - name: Checkout exact branch head
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Exit harmlessly when PR 1541 is already merged
+        id: pr
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          merged="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/1541" --jq '.merged')"
+          echo "merged=$merged" >> "$GITHUB_OUTPUT"
+
+      - name: Setup Node
+        if: steps.pr.outputs.merged != 'true'
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 24.19.0
+          cache: npm
+
+      - name: Install exact dependencies
+        if: steps.pr.outputs.merged != 'true'
+        run: npm ci --include=optional
+
+      - name: Diagnose each compound unit lane without masking failures
+        if: steps.pr.outputs.merged != 'true'
+        id: diagnose
+        shell: bash
+        run: |
+          set +e
+          mkdir -p /tmp/pr1541-remediation
+
+          CI=true UNIT_TEST_CONCURRENCY=2 node scripts/run-unit-tests.mjs \
+            > /tmp/pr1541-remediation/node-c2.log 2>&1
+          node_c2=$?
+
+          node_c1=not_run
+          if [ "$node_c2" -ne 0 ]; then
+            CI=true UNIT_TEST_CONCURRENCY=1 node scripts/run-unit-tests.mjs \
+              > /tmp/pr1541-remediation/node-c1.log 2>&1
+            node_c1=$?
+          else
+            : > /tmp/pr1541-remediation/node-c1.log
+          fi
+
+          CI=true node scripts/run-vitest-isolated.mjs run \
+            --exclude "backend/tests/otp*.test.js" \
+            --exclude "backend/tests/emailOtpTokenNoVerifier.test.js" \
+            > /tmp/pr1541-remediation/vitest-parallel.log 2>&1
+          vitest_parallel=$?
+
+          vitest_serial=not_run
+          if [ "$vitest_parallel" -ne 0 ]; then
+            CI=true node scripts/run-vitest-isolated.mjs run \
+              --no-file-parallelism \
+              --exclude "backend/tests/otp*.test.js" \
+              --exclude "backend/tests/emailOtpTokenNoVerifier.test.js" \
+              > /tmp/pr1541-remediation/vitest-serial.log 2>&1
+            vitest_serial=$?
+          else
+            : > /tmp/pr1541-remediation/vitest-serial.log
+          fi
+
+          CI=true node scripts/run-vitest-isolated.mjs run \
+            --no-file-parallelism \
+            backend/tests/otp \
+            backend/tests/emailOtpTokenNoVerifier \
+            > /tmp/pr1541-remediation/otp.log 2>&1
+          otp=$?
+
+          {
+            echo "node_c2=$node_c2"
+            echo "node_c1=$node_c1"
+            echo "vitest_parallel=$vitest_parallel"
+            echo "vitest_serial=$vitest_serial"
+            echo "otp=$otp"
+          } | tee /tmp/pr1541-remediation/exits.env
+
+          unrecoverable=0
+          [ "$node_c2" -ne 0 ] && [ "$node_c1" != 0 ] && unrecoverable=1
+          [ "$vitest_parallel" -ne 0 ] && [ "$vitest_serial" != 0 ] && unrecoverable=1
+          [ "$otp" -ne 0 ] && unrecoverable=1
+
+          echo "node_c2=$node_c2" >> "$GITHUB_OUTPUT"
+          echo "node_c1=$node_c1" >> "$GITHUB_OUTPUT"
+          echo "vitest_parallel=$vitest_parallel" >> "$GITHUB_OUTPUT"
+          echo "vitest_serial=$vitest_serial" >> "$GITHUB_OUTPUT"
+          echo "otp=$otp" >> "$GITHUB_OUTPUT"
+          echo "unrecoverable=$unrecoverable" >> "$GITHUB_OUTPUT"
+          exit 0
+
+      - name: Publish exact unrecoverable failure evidence
+        if: steps.pr.outputs.merged != 'true' && steps.diagnose.outputs.unrecoverable == '1'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          {
+            echo '<!-- pr1541-unit-remediation -->'
+            echo '## PR #1541 has a reproducible unit defect, not merely a concurrency failure'
+            echo
+            echo "Exact SHA: \`$(git rev-parse HEAD)\`"
+            echo
+            echo '| Lane | Exit |'
+            echo '|---|---:|'
+            while IFS='=' read -r lane code; do echo "| \`$lane\` | $code |"; done < /tmp/pr1541-remediation/exits.env
+            for log in /tmp/pr1541-remediation/*.log; do
+              echo
+              echo "### $(basename "$log")"
+              echo '```text'
+              grep -nEi '(^|[[:space:]])(not ok|fail(ed|ure)?|assertionerror|error:|err_|unhandled|test files|tests|timed out|timeout|killed|signal)' "$log" | tail -n 260 || true
+              echo
+              echo '--- terminal 360 lines ---'
+              tail -n 360 "$log" || true
+              echo '```'
+            done
+          } > /tmp/pr1541-remediation/comment.md
+          gh pr comment 1541 --body-file /tmp/pr1541-remediation/comment.md
+          cat /tmp/pr1541-remediation/comment.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload all diagnostic logs
+        if: steps.pr.outputs.merged != 'true'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: pr1541-unit-remediation-evidence
+          path: /tmp/pr1541-remediation
+          retention-days: 3
+          if-no-files-found: error
+
+      - name: Stop before changing code when a real assertion remains red
+        if: steps.pr.outputs.merged != 'true' && steps.diagnose.outputs.unrecoverable == '1'
+        run: exit 1
+
+      - name: Apply only evidence-proven determinism repairs
+        if: steps.pr.outputs.merged != 'true' && steps.diagnose.outputs.unrecoverable == '0'
+        shell: bash
+        env:
+          NODE_C2: ${{ steps.diagnose.outputs.node_c2 }}
+          NODE_C1: ${{ steps.diagnose.outputs.node_c1 }}
+          VITEST_PARALLEL: ${{ steps.diagnose.outputs.vitest_parallel }}
+          VITEST_SERIAL: ${{ steps.diagnose.outputs.vitest_serial }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          import os
+
+          runner = Path('scripts/run-unit-tests.mjs')
+          runner_text = runner.read_text(encoding='utf-8')
+          package = Path('package.json')
+          package_text = package.read_text(encoding='utf-8')
+
+          if os.environ['NODE_C2'] != '0' and os.environ['NODE_C1'] == '0':
+              old = "const concurrencyRaw = process.env.UNIT_TEST_CONCURRENCY || process.env.TEST_CONCURRENCY || '2'"
+              new = "const concurrencyRaw = process.env.UNIT_TEST_CONCURRENCY || process.env.TEST_CONCURRENCY || (process.env.CI ? '1' : '2')"
+              if old in runner_text:
+                  runner_text = runner_text.replace(old, new, 1)
+              elif new not in runner_text:
+                  raise SystemExit('Refused: unit concurrency contract was not recognized')
+
+          if os.environ['VITEST_PARALLEL'] != '0' and os.environ['VITEST_SERIAL'] == '0':
+              old = 'node scripts/run-vitest-isolated.mjs run --exclude \\"backend/tests/otp*.test.js\\" --exclude \\"backend/tests/emailOtpTokenNoVerifier.test.js\\"'
+              new = 'node scripts/run-vitest-isolated.mjs run --no-file-parallelism --exclude \\"backend/tests/otp*.test.js\\" --exclude \\"backend/tests/emailOtpTokenNoVerifier.test.js\\"'
+              if old in package_text:
+                  package_text = package_text.replace(old, new, 1)
+              elif new not in package_text:
+                  raise SystemExit('Refused: general Vitest unit contract was not recognized')
+
+          runner.write_text(runner_text, encoding='utf-8')
+          package.write_text(package_text, encoding='utf-8')
+          PY
+          git diff --check
+
+      - name: Re-run the complete authoritative unit contract after any repair
+        if: steps.pr.outputs.merged != 'true' && steps.diagnose.outputs.unrecoverable == '0'
+        env:
+          CI: 'true'
+        run: npm run unit
+
+      - name: Remove all unit-diagnostic and remediation machinery
+        if: steps.pr.outputs.merged != 'true' && steps.diagnose.outputs.unrecoverable == '0'
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -f .github/workflows/diagnose-pr1541-unit-lanes.yml
+          rm -f .github/workflows/diagnose-pr1541-unit-lanes-v3.yml
+          rm -f .github/workflows/remediate-pr1541-unit-lanes.yml
+          rm -f diagnostics/pr1541-unit-lanes.md
+          rmdir diagnostics 2>/dev/null || true
+          git add -A
+          git diff --cached --check
+
+      - name: Publish the deterministically verified branch revision
+        if: steps.pr.outputs.merged != 'true' && steps.diagnose.outputs.unrecoverable == '0'
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if git diff --cached --quiet; then
+            echo 'No source repair was necessary; removing only the completed diagnostic machinery.'
+          fi
+          git commit -m "ci: make PR 1541 unit verification deterministic"
+          git push origin HEAD:fix/production-cors-current-main-20260905
