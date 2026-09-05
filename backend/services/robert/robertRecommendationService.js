@@ -32,8 +32,31 @@ import {
   translateLegacyMinScore,
 } from '../../config/matchThresholds.js'
 import { hasPositiveFourTruthProof } from '../../config/fundingTruthPolicy.js'
+import { isPointerKind } from '../../config/opportunityKindClasses.js'
 
 const DEFAULT_TOAST_TITLE = 'Robert found a possible funding source'
+export const RESEARCH_LEAD_TOAST_TITLE = 'Robert found a research lead'
+export const RESEARCH_LEAD_CLASSIFICATION = 'research_lead_not_direct_funding'
+
+/**
+ * A queued REVIEW row is a research lead — a directory or prior-award pointer
+ * to investigate, never direct funding. Only an ACCEPT-band recommendation
+ * (which carried positive four-truth proof at creation) may be added to the
+ * pipeline. Returns the refusal payload for the accept route, or null.
+ */
+export function researchLeadAcceptRefusal(rec) {
+  const decision = String(rec?.match_decision || '').toUpperCase()
+  if (decision === MATCH_DECISION.ACCEPT) return null
+  return {
+    status: 409,
+    body: {
+      ok: false,
+      error: 'Research leads are pointers to investigate and cannot be added as direct funding.',
+      code: RESEARCH_LEAD_CLASSIFICATION,
+      match_decision: decision || null,
+    },
+  }
+}
 
 function resolveToastPriorityThreshold(config = {}) {
   const configured = Number(config.minToastMatchScore ?? STRONG_MATCH_SCORE)
@@ -171,6 +194,89 @@ export async function createRecommendationIfHelpful({
     recommendation_id: insertResult.id,
     reason: 'created',
     over_daily_cap: overCap,
+    score_scale_id: SCORE_SCALE_ID,
+  }
+}
+
+/**
+ * Queue a RESEARCH LEAD in Robert's existing user-visible recommendation
+ * table. Pointer rows (DIRECTORY / PAST_AWARD_INTEL) are intentionally absent
+ * from direct recommendations, but they must not disappear: they land here at
+ * REVIEW, the frontend labels REVIEW as a research lead and never offers
+ * add-to-pipeline, and the accept route refuses them (researchLeadAcceptRefusal).
+ *
+ * Admission is the mirror image of createRecommendationIfHelpful: the decision
+ * MUST be REVIEW and the kind MUST be a pointer. No four-truth proof is
+ * required because nothing here is direct funding; a non-pointer REVIEW is
+ * still refused so a weak direct match can never sneak into the queue.
+ *
+ * @returns {{ created, recommendation_id, reason, recommendation? }}
+ */
+export async function createResearchLeadIfHelpful({
+  db,
+  profileId,
+  opportunityId,
+  matchDecision,
+  matchScore,
+  opportunityKind,
+  opportunityTitle = '',
+  profileDisplayName = '',
+  whyFound = '',
+  robertRunId = null,
+  searchQueryUsed = '',
+  classification = RESEARCH_LEAD_CLASSIFICATION,
+} = {}) {
+  if (!db) throw new Error('createResearchLeadIfHelpful: db required')
+  if (!profileId) return { created: false, reason: 'missing_profile_id' }
+  if (!opportunityId) return { created: false, reason: 'missing_opportunity_id' }
+
+  const decision = String(matchDecision || '').toUpperCase()
+  if (decision !== MATCH_DECISION.REVIEW) {
+    return { created: false, reason: decision ? `decision_${decision.toLowerCase()}` : 'invalid_match_decision' }
+  }
+  if (!isPointerKind(opportunityKind)) {
+    return { created: false, reason: 'not_a_pointer_kind' }
+  }
+
+  const existing = await findRecommendationByPair(db, profileId, opportunityId)
+  if (existing) {
+    if (existing.recommendation_status === RECOMMENDATION_STATUS.DECLINED) {
+      return { created: false, reason: 'previously_declined', recommendation: existing }
+    }
+    if ([RECOMMENDATION_STATUS.PENDING, RECOMMENDATION_STATUS.DELIVERED, RECOMMENDATION_STATUS.VIEWED].includes(existing.recommendation_status)) {
+      return { created: false, reason: 'duplicate_active', recommendation: existing }
+    }
+    if (existing.recommendation_status === RECOMMENDATION_STATUS.ACCEPTED) {
+      return { created: false, reason: 'previously_accepted', recommendation: existing }
+    }
+  }
+
+  const score = Number(matchScore || 0)
+  const insertResult = await insertRecommendation(db, {
+    profile_id: profileId,
+    opportunity_id: opportunityId,
+    robert_run_id: robertRunId,
+    recommendation_status: RECOMMENDATION_STATUS.PENDING,
+    delivery_status: DELIVERY_STATUS.QUEUED,
+    match_score: Number.isFinite(score) ? score : null,
+    match_decision: MATCH_DECISION.REVIEW,
+    match_reasons: [classification || RESEARCH_LEAD_CLASSIFICATION],
+    missing_profile_fields: [],
+    why_found: whyFound || 'Research lead from Robert discovery — a directory or prior-award pointer to investigate, not direct funding.',
+    search_query_used: searchQueryUsed,
+    toast_title: RESEARCH_LEAD_TOAST_TITLE,
+    toast_body: `${opportunityTitle || 'A directory or prior-award pointer'} may be worth researching for ${profileDisplayName || 'this profile'}. It is not verified as direct funding.`,
+    // Leads never compete with a verified direct recommendation for the toast slot.
+    toast_priority: TOAST_PRIORITY.LOW,
+  })
+  if (!insertResult.inserted) {
+    return { created: false, reason: insertResult.duplicate ? 'duplicate_active' : 'insert_failed', recommendation: insertResult.existing }
+  }
+  return {
+    created: true,
+    recommendation_id: insertResult.id,
+    reason: 'created',
+    classification: classification || RESEARCH_LEAD_CLASSIFICATION,
     score_scale_id: SCORE_SCALE_ID,
   }
 }

@@ -51,6 +51,7 @@ import {
   markDeclined,
   markDismissed,
   markViewed,
+  researchLeadAcceptRefusal,
 } from '../services/robert/robertRecommendationService.js'
 import {
   listRecommendationsSince,
@@ -449,6 +450,10 @@ router.post('/recommendations/:id/accept', requireAuth, async (req, res) => {
     const rec = await getRecommendation(req.db, req.params.id)
     if (!rec) return res.status(404).json({ ok: false, error: 'Recommendation not found' })
     if (!(await ensureProfileAccess(req, res, rec.profile_id))) return
+    // A REVIEW row is a research lead (directory / prior-award pointer): it is
+    // never direct funding and cannot be added to the pipeline from here.
+    const refusal = researchLeadAcceptRefusal(rec)
+    if (refusal) return res.status(refusal.status).json(refusal.body)
 
     // Delegate add-to-pipeline to the canonical helper.
     let pipelineResult = null

@@ -25,7 +25,7 @@
 
 import { enforceReality } from './realityGate.js';
 import { normalize } from './normalizer.js';
-import { computeMatchDecision } from './matchEngine.js';
+import { computeMatchDecision, isResearchLead } from './matchEngine.js';
 import { isVerifiedDirectFundingRecommendation } from './fundingTruthPolicy.js';
 import { upsertSource, upsertOpportunity, upsertMatch, recordRejection } from './storage.js';
 import { OPPORTUNITY_KIND, TRUST_TIER, MATCH_DECISION, canonicalOpportunityKey } from './contract.js';
@@ -353,6 +353,9 @@ export async function runWebDiscoveryLane(deps, opts = {}) {
     deduped: 0,
     rejected: 0,
     recommendations: [],
+    // Pointer rows (DIRECTORY / PAST_AWARD_INTEL) held at REVIEW. Never direct
+    // funding; carried separately so they stay visible for research.
+    research_leads: [],
     search_provenance: [],
     search_provider_counts: {},
     search_cache_hits: 0,
@@ -651,6 +654,22 @@ export async function runWebDiscoveryLane(deps, opts = {}) {
             topical_evidence: decision.match_explain?.score_breakdown?.topical_evidence ?? null,
           });
         }
+        // Same research-lead surface as the registry pipeline (pipeline.js):
+        // a web-found locator is a place to search, never an award.
+        if (isResearchLead(matchOpp, decision.decision) && mp.profile_id === thesis.profile_id) {
+          result.research_leads.push({
+            opportunity_id: matchOpp.id,
+            title: matchOpp.title,
+            description: matchOpp.description ?? null,
+            sponsor: matchOpp.sponsor,
+            kind: matchOpp.kind ?? null,
+            info_url: matchOpp.info_url ?? matchOpp.apply_url ?? null,
+            match_score: decision.match_score,
+            decision: decision.decision,
+            classification: 'research_lead_not_direct_funding',
+            source: 'web_search',
+          });
+        }
       }
     }
 
@@ -761,6 +780,7 @@ export async function runWebDiscoveryLane(deps, opts = {}) {
   result.seeded_adopted_urls = [...seededAdopted];
   result.seeded_adopted = seededAdopted.size;
   result.recommendations.sort((a, b) => b.match_score - a.match_score);
+  result.research_leads.sort((a, b) => b.match_score - a.match_score);
 
   // ── Phase 1d: INDEPENDENT TARGET VERIFICATION (promotion evidence) ─────────
   // Runs ONLY when the shadow is active (WEB_LANE_PROFILE_BLIND ON), and its ONLY
