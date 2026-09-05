@@ -353,8 +353,12 @@ export const DIAGNOSTIC_CHECKS = Object.freeze([
     tool: 'admin.code.lint',
     parameters: { dryRun: true },
     severityOnFailure: SEVERITY.LOW,
-    heavy: true, // shells out to ESLint over the tree
-    description: 'Delegates to Anya admin.code.lint to surface ESLint-style issues without applying autofixes.',
+    heavy: true, // runs ESLint's Node API over the tree
+    /* This entry used to say "shells out to ESLint" while admin.code.lint ran
+       two hand-rolled regexes over 50 files. The check now genuinely runs
+       ESLint, and its result carries `engine` so a reader can tell a real lint
+       from the labelled heuristic fallback used when ESLint is absent. */
+    description: 'Delegates to Anya admin.code.lint, which runs the repo ESLint config over the tree and reports files_discovered vs files_linted. Never applies autofixes.',
   },
   {
     id: 'code.missionAudit',
