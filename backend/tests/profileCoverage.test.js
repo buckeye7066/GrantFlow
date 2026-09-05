@@ -50,6 +50,44 @@ describe('profileCoverage', () => {
     }
   })
 
+  it('infers United States from a US state and suppresses the bogus Add Country suggestion', () => {
+    const r = computeProfileCoverage({
+      address: {
+        line1: '100 Main Street',
+        city: 'Cleveland',
+        state: 'TN',
+        zip: '37311',
+      },
+    })
+
+    expect(r.covered).toContain('country')
+    expect(r.missingFields).not.toContain('country')
+    expect(r.suggestions.some((s) => s.key === 'country')).toBe(false)
+
+    const countrySignal = listPresentProfileSignals({
+      address: { city: 'Cleveland', state: 'Tennessee', zip_code: '37311' },
+    }).find((signal) => signal.key === 'country')
+    expect(countrySignal?.value).toBe('US')
+  })
+
+  it('infers United States from a five-digit ZIP when state is absent', () => {
+    const r = computeProfileCoverage({
+      basic_information: {
+        address: { city: 'Cleveland', postal_code: '37311' },
+      },
+    })
+    expect(r.covered).toContain('country')
+    expect(r.suggestions.some((s) => s.key === 'country')).toBe(false)
+  })
+
+  it('does not invent a country from an ambiguous non-US location', () => {
+    const r = computeProfileCoverage({
+      address: { city: 'London', postal_code: 'SW1A 1AA' },
+    })
+    expect(r.missingFields).toContain('country')
+    expect(r.suggestions.some((s) => s.key === 'country')).toBe(true)
+  })
+
   it('detects missing canonical sections when rawSections omits them', () => {
     const r = computeProfileCoverage(
       { state: 'CA' },
