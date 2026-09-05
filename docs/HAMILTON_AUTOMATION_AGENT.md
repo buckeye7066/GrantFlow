@@ -37,11 +37,13 @@ Archived — and click a single bulk action:
 > **Automate selected with Hamilton**
 
 For every selected source Hamilton decides the correct **completion
-pathway** and automates the safe preparation steps. It pauses and persists its
-state at missing information or any human/security boundary (login, 2FA,
-CAPTCHA, payment, signature, attestation, terms, or ambiguous mapping). Real
-portal completion does not resume server-side in controlled beta; the owner
-uses the official portal.
+pathway** and automates the preparation AND the portal run. Under the profile's
+full-automation consent it pauses only for the owner's four conditions (a
+physical-copy-only funder, information genuinely missing from the profile, a
+bot wall it cannot pass after trying, or an existing external login not in the
+vault). Login, 2FA and CAPTCHA are first attempted (saved session, Hamilton's own
+inbox, the owner-configured solver) and become a hand-off only when the attempt
+fails. Missing information and an explicit automation-off toggle always pause.
 
 ## Eight completion pathways
 
@@ -50,7 +52,7 @@ deterministic function that maps a funding source to one of:
 
 | `automation_type` | Hamilton's behaviour                                                                                                                                  |
 | ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `portal`          | Prepare the scoped packet and official portal handoff. Controlled beta never launches Playwright on a real domain; only the reserved synthetic fixture exercises browser automation. |
+| `portal`          | Open the real public HTTPS portal in the server-side Playwright browser (saved session first), fill, upload, and submit when auto-submit is authorized. The SSRF floor (public HTTPS only, every request DNS-resolved, private/loopback/metadata refused) and the per-host ToS policy registry are the only hard gates. Falls back to a packet + handoff when the host's terms forbid agent automation or no browser is available. |
 | `pdf_docx`        | Generate a complete DOCX + PDF packet from the profile, save it under the profile's Documents, hand it to the user for review and signing.       |
 | `mail`            | Same as `pdf_docx` plus structured **mailing instructions** (funder address, postmark deadline, certified-mail recommendation, envelope subject). |
 | `fax`             | Generate the packet plus structured fax instructions (number, cover-sheet content, deadline).                                                     |
@@ -160,10 +162,35 @@ status, persist a missing-info record, and emit a notification:
 - ambiguous field mapping below confidence threshold
 
 Hamilton never invents missing info, bypasses a security control, types an
-FSA-ID or other federal credential, or fakes a signature. In controlled beta,
-the listed authorization records are retained as scoped intent and audit data;
-they do not authorize browser launch or final submission on a real domain.
-Submit-path automation is confined to the reserved synthetic fixture.
+FSA-ID or other federal credential, or fakes a signature. The listed
+authorization records (plus the profile's full-automation consent) ARE the
+consent that authorizes browser launch and final submission on a real public
+HTTPS portal; a submission is still reported only with captured confirmation
+evidence.
+
+### Browser boundary (real portals)
+
+`backend/services/hamilton/controlledBetaBrowserPolicy.js` is the single
+authority on where a Hamilton browser may connect:
+
+- **URL shape** — `https:` only for navigation targets, no credentials in the
+  URL, no private / loopback / link-local / CGNAT / cloud-metadata host.
+- **DNS resolution** (`resolvePublicBrowserTarget`) — every A/AAAA answer for
+  the hostname is resolved before egress; any private answer refuses the
+  request, and a host whose answers change mid-session is refused as DNS
+  rebinding. The shared launcher runs it once for the launch target; the
+  egress guard runs it for every http(s) request in the context (subresources,
+  redirects, popups, fetch/XHR) and closes WebSockets to unsafe hosts.
+- **Live document revalidation** — before the first field fill on a page,
+  before a document upload, and before the submit click, the engine re-checks
+  the page it is actually ON against the SSRF floor and asks the orchestrator's
+  `validatePortalUrl` hook, which re-reads the per-host portal policy registry
+  for the live host. Only an explicit `automation_allowed === false` (a host
+  whose terms forbid agent automation) refuses; CDN subresources are never
+  consulted here. The submit boundary also receives the live URL.
+
+None of these is a host allowlist or a human-approval gate: a real public
+HTTPS portal whose DNS answers are public passes every layer.
 
 ## Provider catalogue (Phase F)
 
@@ -253,9 +280,9 @@ node --test tests/unit/hamilton-automation.test.mjs
 
 ## Limitations / TODOs
 
-- Controlled beta deliberately refuses real-domain server-browser launches.
-  The reserved synthetic fixture proves the state machine, not permission or
-  reliability on a live funder portal.
+- The reserved synthetic fixture (`hamilton-submit-fixture.invalid`) proves
+  the irreversible-boundary state machine in tests; reliability on a live
+  funder portal is measured in production runs, not by the fixture.
 - PDF rendering uses Playwright's `page.pdf()`. When chromium is not
   installed (e.g. CI without `npx playwright install`), Hamilton falls back
   to DOCX-only and skips the PDF row.
@@ -276,15 +303,15 @@ resolution strategy *before* asking the user.
 | login_required | reuse saved Playwright storage state when authorized | no plaintext credentials |
 | sso_required | reuse saved SSO session | never bypass the IdP |
 | two_factor_required | reuse trusted-device session | never intercept codes |
-| captcha_required | reuse session that does not trigger CAPTCHA | never solve / spoof |
-| payment_required | stop for the owner on a real portal; authorization records remain audit-only in controlled beta | never charge a real portal unattended; no raw card data |
+| captcha_required | reuse a session that does not trigger CAPTCHA; otherwise the owner-configured solver (`CAPTCHA_SOLVER_API_KEY`) is tried once, re-solved at the submit boundary | never hand-forge a challenge |
+| payment_required | never charged — grants do not require payment (payment automation was removed 2026-08-22) | no raw card data |
 | wet_signature_required | always degrade to printable signature packet | never forge |
-| digital_signature_required | fill everything else, then escalate for the applicant to e-sign | never e-sign on the user's behalf |
-| legal_attestation_required | stop for the owner on a real portal | never attest for the owner |
+| digital_signature_required | under full-automation consent, type the applicant's legal name / tick the e-sign control and record the attestation | never e-sign without consent |
+| legal_attestation_required | tick under standing/full-automation authorization; otherwise hand off | never invent an attestation |
 | portal_terms_block | switch to `policy.fallback_path` (pdf_docx / mail / fax / email / manual / api) | always respect ToS |
 | portal_anti_bot_block | stop and switch to the manual handoff/packet | no session replay, stealth, or fingerprint evasion on real domains |
 | ambiguous_required_field | reuse cached resolved field, otherwise ask once | never guess |
-| final_review_screen | reserved fixture may proceed; a real portal stops for owner review and final submission | no configuration override |
+| final_review_screen | proceed when auto-submit is authorized and no required question is open; the live document is revalidated (SSRF floor + portal policy) at the click | never claim `submitted` without confirmation evidence |
 | deadline_expired | mark task blocked + suggest related opportunities | n/a |
 | unknown_application_method | generate funder contact packet | n/a |
 | portal_unreachable | mark task blocked with a human-readable "site unreachable / link may be dead" alert (DNS, connection, navigation-timeout failures) | never surface raw Playwright errors to users |

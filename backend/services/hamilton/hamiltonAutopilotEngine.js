@@ -63,8 +63,11 @@ import {
   controlledBetaBrowserContextOptions,
   controlledBetaBrowserRefusal,
   installControlledBetaBrowserEgressGuard,
+  isControlledBetaSyntheticBrowserUrl,
   isHamiltonBrowserTargetAllowed,
+  isPrivateResolutionVerdict,
   normalizeBrowserTargetUrl,
+  resolvePublicBrowserTarget,
 } from './controlledBetaBrowserPolicy.js'
 import path from 'node:path'
 import { registrableDomain } from './hamiltonPortalCredentialService.js'
@@ -1810,6 +1813,16 @@ export async function runAutopilot({
   sessionSink = null,
   signal = null,
   beforeSubmit = null,
+  // Live top-level document revalidation (ported from #1520). Called with the
+  // page's CURRENT url right before applicant data is disclosed — before the
+  // first field fill on a page, before a document upload, and before the
+  // submit click. Signature: (liveUrl, { stage }) => Promise<{ allow, reason? }>.
+  // The orchestrator answers from the portal policy registry for the LIVE host
+  // (a redirect into a host whose terms forbid agent automation must not
+  // receive a fill). Absent = only the SSRF floor is re-checked on the live
+  // document. CDN subresources are never consulted here — they are governed by
+  // the egress guard alone.
+  validatePortalUrl = null,
   // MBA-level long-form answers drafted by hamiltonFullProposalGenerator
   // (buildPortalNarrativeAnswers). Only the narrative keys below may be
   // overridden — short factual fields (name, address, …) always come from
@@ -1921,7 +1934,28 @@ export async function runAutopilot({
       return { status: 'failed', blocker_kind: 'no_browser', blocker_detail: 'Playwright chromium binary not installed', filled_fields: filled, pages_visited: 0, trace }
     }
 
-    ;({ browser } = await launchPortalBrowser(chromium, { headless, targetUrl: url }))
+    try {
+      ;({ browser } = await launchPortalBrowser(chromium, { headless, targetUrl: url }))
+    } catch (launchErr) {
+      // The launcher's DNS gate refused the target (a public-looking name that
+      // resolves to private/loopback/metadata space, or a rebinding attempt).
+      // Report it as the same unsafe-target refusal the URL-shape check gives,
+      // never as a crashed run.
+      if (launchErr?.code === 'unsafe_browser_target') {
+        const refusal = controlledBetaBrowserRefusal()
+        trace.push({ step: 'unsafe_target_dns', detail: { reason: launchErr.reason || null } })
+        return {
+          status: 'blocked',
+          blocker_kind: refusal.code,
+          blocker_detail: `${refusal.message} (${launchErr.reason || 'dns_rejected'})`,
+          requires_human_handoff: true,
+          filled_fields: filled,
+          pages_visited: 0,
+          trace,
+        }
+      }
+      throw launchErr
+    }
     // Only an in-memory storageState OBJECT from the profile-owned encrypted
     // session store is accepted. Request-supplied filesystem paths are never
     // passed to Playwright.
@@ -1942,6 +1976,32 @@ export async function runAutopilot({
       await browser.close().catch(() => {})
       throw setupErr
     }
+  }
+  // Live top-level document revalidation (ported from #1520): the page the
+  // browser is ON right now, re-checked against the SSRF floor (URL shape +
+  // DNS answers, so a redirect chain that lands on a public-looking alias for
+  // private space is refused) and against the orchestrator's portal-policy
+  // hook. Stages: before_fill / before_upload / before_submit. This is a
+  // floor, not a same-origin pin: real portals legitimately hop to vendor
+  // application hosts and SSO providers, and those stay allowed.
+  const validateLiveDocument = async (stage) => {
+    const liveUrl = (() => { try { return page?.url?.() || url } catch { return url } })()
+    if (!isControlledBetaSyntheticBrowserUrl(liveUrl) && !_testPage) {
+      const verdict = await resolvePublicBrowserTarget(liveUrl)
+      if (isPrivateResolutionVerdict(verdict)) {
+        return { allow: false, reason: verdict.reason, url: liveUrl, stage }
+      }
+    }
+    if (typeof validatePortalUrl === 'function') {
+      let policy = null
+      try { policy = await validatePortalUrl(liveUrl, { stage }) } catch (err) {
+        policy = { allow: false, reason: `portal_policy_error:${err?.message || err}` }
+      }
+      if (policy?.allow !== true) {
+        return { allow: false, reason: policy?.reason || 'portal_policy_block', url: liveUrl, stage }
+      }
+    }
+    return { allow: true, url: liveUrl, stage }
   }
   const valuesByKey = applyNarrativeAnswers(readProfileValues(profile), narrativeAnswers)
   let narrativeProviderResolved = !narrativeProvider
@@ -2238,6 +2298,17 @@ export async function runAutopilot({
       if (sigGate) {
         trace.push({ step: 'attestation_gate', detail: sigGate })
         return { status: 'blocked', blocker_kind: sigGate.kind, blocker_detail: sigGate.detail, filled_fields: filled, pages_visited: pagesVisited, trace }
+      }
+
+      // Revalidate the LIVE top-level document before any applicant data is
+      // typed into it. Placed AFTER the gate handling on purpose: an SSO or
+      // login hop is handled by the gate logic above (credentials are already
+      // pinned to the credential's own domain in attemptLogin); this check
+      // only governs where PROFILE data goes.
+      const fillBoundary = await validateLiveDocument('before_fill')
+      if (!fillBoundary.allow) {
+        trace.push({ step: 'portal_policy_block', detail: { stage: 'before_fill', url: fillBoundary.url, reason: fillBoundary.reason } })
+        return { status: 'blocked', blocker_kind: 'portal_policy_block', blocker_detail: `Hamilton refused to fill the live portal document (${fillBoundary.url}): ${fillBoundary.reason}`, filled_fields: filled, pages_visited: pagesVisited, trace, logged_in: loggedIn }
       }
 
       const fields = await retryOnContextLoss(page, () => detectFields(page))
@@ -2549,6 +2620,11 @@ export async function runAutopilot({
         if (signal?.aborted) {
           return { status: 'cancelled', blocker_kind: 'cancelled', blocker_detail: 'Hamilton task was cancelled before document upload.', filled_fields: filled, pages_visited: pagesVisited, trace, logged_in: loggedIn }
         }
+        const uploadBoundary = await validateLiveDocument('before_upload')
+        if (!uploadBoundary.allow) {
+          trace.push({ step: 'portal_policy_block', detail: { stage: 'before_upload', url: uploadBoundary.url, reason: uploadBoundary.reason } })
+          return { status: 'blocked', blocker_kind: 'portal_policy_block', blocker_detail: `Hamilton refused to upload documents to the live portal document (${uploadBoundary.url}): ${uploadBoundary.reason}`, filled_fields: filled, pages_visited: pagesVisited, trace, logged_in: loggedIn }
+        }
         const fileInputs = fields.filter((f) => f.type === 'file')
         for (const inp of fileInputs) {
           const wanted = documents.map(resolveSafeUploadDocument).filter(Boolean).find((d) => {
@@ -2652,13 +2728,21 @@ export async function runAutopilot({
       }
 
       if (canSubmit && finalAllowSubmit) {
+        const submitBoundary = await validateLiveDocument('before_submit')
+        if (!submitBoundary.allow) {
+          trace.push({ step: 'portal_policy_block', detail: { stage: 'before_submit', url: submitBoundary.url, reason: submitBoundary.reason } })
+          return { status: 'blocked', blocker_kind: 'portal_policy_block', blocker_detail: `Hamilton refused to submit on the live portal document (${submitBoundary.url}): ${submitBoundary.reason}`, filled_fields: filled, unanswered_required_fields: unansweredRequiredFields, pages_visited: pagesVisited, trace, logged_in: loggedIn }
+        }
         const nativeErrors = await detectNativeValidationErrors(page, submitCandidates[0].bid)
         if (nativeErrors.length > 0) {
           trace.push({ step: 'submit_native_validation_failed', detail: { errors: nativeErrors.slice(0, 5) } })
           return { status: 'blocked', blocker_kind: 'validation', blocker_detail: nativeErrors.slice(0, 5).join(' | '), filled_fields: filled, unanswered_required_fields: unansweredRequiredFields, pages_visited: pagesVisited, trace }
         }
+        // The orchestrator's irreversible-boundary check receives the LIVE
+        // document url so it re-checks executability + portal policy for the
+        // host Hamilton is actually about to submit on, not the launch url.
         const boundary = typeof beforeSubmit === 'function'
-          ? await beforeSubmit()
+          ? await beforeSubmit({ url: submitBoundary.url })
           : { allow: false, reason: 'missing_submit_boundary_check' }
         if (signal?.aborted || boundary?.cancelled) {
           return { status: 'cancelled', blocker_kind: 'cancelled', blocker_detail: 'Hamilton task was cancelled before submission.', filled_fields: filled, pages_visited: pagesVisited, trace, logged_in: loggedIn }

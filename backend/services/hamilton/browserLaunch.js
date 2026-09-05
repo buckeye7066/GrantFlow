@@ -1,4 +1,8 @@
-import { isHamiltonBrowserTargetAllowed } from './controlledBetaBrowserPolicy.js'
+import {
+  isHamiltonBrowserTargetAllowed,
+  isPrivateResolutionVerdict,
+  resolvePublicBrowserTarget,
+} from './controlledBetaBrowserPolicy.js'
 import { createLogger } from '../../utils/logger.js'
 
 const log = createLogger('service:browserLaunch')
@@ -34,8 +38,10 @@ export const REALISTIC_PORTAL_UA =
 /**
  * launchPortalBrowser — the one launcher for Hamilton portal-facing flows.
  * Accepts the reserved synthetic fixture OR a public HTTPS portal URL.
- * Private / loopback / metadata targets are refused (SSRF). Callers still
- * gate enablement via HAMILTON_ENABLE_BROWSER_AUTOMATION + host allowlist.
+ * Private / loopback / metadata targets are refused (SSRF), by URL shape AND
+ * by resolving the hostname's DNS answers first (a public-looking alias for
+ * 127.0.0.1 / 10.x is refused the same way). Callers still gate enablement
+ * via HAMILTON_ENABLE_BROWSER_AUTOMATION + host allowlist.
  * PDF/print flows that only render local HTML should keep using plain
  * `chromium.launch` + args.
  *
@@ -63,11 +69,26 @@ function bypassStrategyLaunchArgs(strategy) {
   return out
 }
 
-export async function launchPortalBrowser(chromium, { headless = true, extraArgs = [], targetUrl = null, bypassStrategy = null } = {}) {
+export async function launchPortalBrowser(chromium, { headless = true, extraArgs = [], targetUrl = null, bypassStrategy = null, lookup = undefined } = {}) {
   if (targetUrl !== null && !isHamiltonBrowserTargetAllowed(targetUrl)) {
     const err = new Error('unsafe_browser_target')
     err.code = 'unsafe_browser_target'
+    err.reason = 'unsafe_target'
     throw err
+  }
+  // SSRF DNS gate (ported from #1515/#1520): a public-LOOKING name whose A/AAAA
+  // answers include private/loopback/metadata space is refused BEFORE a
+  // Chromium process exists. A lookup failure is deliberately not a refusal —
+  // the browser's own resolver fails the same navigation and the run reports
+  // an honest portal_unreachable instead of a misleading "unsafe target".
+  if (targetUrl !== null) {
+    const verdict = await resolvePublicBrowserTarget(targetUrl, lookup ? { lookup } : {})
+    if (isPrivateResolutionVerdict(verdict)) {
+      const err = new Error(`unsafe_browser_target:${verdict.reason}`)
+      err.code = 'unsafe_browser_target'
+      err.reason = verdict.reason
+      throw err
+    }
   }
   // Condition 3 (owner 2026-08-22): apply a PERSISTED, VALIDATED per-host bypass
   // strategy (hamiltonBotBypassRegistry) — data-only launch knobs (a user agent,

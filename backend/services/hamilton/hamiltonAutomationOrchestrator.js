@@ -2339,7 +2339,7 @@ async function runAutopilotPathway(db, {
   // authorization decision that acquired the irreversible-action lease. The
   // engine result must not be able to overwrite or omit this boundary proof.
   let irreversibleSubmissionDecision = null
-  const beforeSubmit = async () => {
+  const beforeSubmit = async ({ url: liveSubmitUrl = null } = {}) => {
     const liveTask = await reload(db, task.id)
     if (!liveTask || liveTask.status === 'cancelled') {
       return { allow: false, cancelled: true, reason: 'task_cancelled' }
@@ -2415,6 +2415,27 @@ async function runAutopilotPathway(db, {
     // Re-check executable coverage at the click boundary as well as launch.
     if (!reviewedPortalSubmissionExecutionAvailable(url, { fullAutomation: fullAutomationLive })) {
       return { allow: false, reason: 'portal_url_not_browser_executable', decision: fresh }
+    }
+    // The LIVE document (ported from #1515/#1520): the engine hands over the
+    // url the browser is actually on at the click. A redirect chain may have
+    // left the launch host, so the SSRF floor and the per-host portal-policy
+    // registry are re-read for THAT host. Only an explicit `false` in the
+    // registry withholds the click — an unreadable registry falls through to
+    // the launch-time verdict exactly as before, and a public HTTPS portal
+    // with no registry row (the default) proceeds.
+    const liveUrl = liveSubmitUrl || url
+    if (liveUrl !== url && !reviewedPortalSubmissionExecutionAvailable(liveUrl, { fullAutomation: fullAutomationLive })) {
+      return { allow: false, reason: 'portal_url_not_browser_executable', decision: fresh, live_url: liveUrl }
+    }
+    const liveSubmitHost = hostOfUrl(liveUrl)
+    if (liveSubmitHost) {
+      const liveSubmitPolicy = await getPolicyFor(db, liveSubmitHost).catch(() => null)
+      if (liveSubmitPolicy?.automation_allowed === false) {
+        return { allow: false, reason: `portal_terms_forbid_automation:${liveSubmitHost}`, decision: fresh, live_url: liveUrl }
+      }
+      if (liveSubmitPolicy?.agent_submission_allowed === false) {
+        return { allow: false, reason: `portal_terms_forbid_agent_submission:${liveSubmitHost}`, decision: fresh, live_url: liveUrl }
+      }
     }
     if (grant?.id) {
       let freshGate
@@ -2737,6 +2758,20 @@ async function runAutopilotPathway(db, {
           narrativeProvider,
           signal: controller.signal,
           beforeSubmit,
+          // Live-document policy (ported from #1520): before the engine fills,
+          // uploads to, or submits on the page it is ON, the portal-policy
+          // registry is re-read for that page's host. Only an explicit
+          // `automation_allowed === false` (ToS-forbidden host such as
+          // studentaid.gov / commonapp.org) refuses; a registry read failure
+          // or an unknown host never blocks a real public portal.
+          validatePortalUrl: async (liveUrl) => {
+            const liveHost = hostOfUrl(liveUrl)
+            if (!liveHost) return { allow: true }
+            const livePolicy = await getPolicyFor(db, liveHost).catch(() => null)
+            return livePolicy?.automation_allowed === false
+              ? { allow: false, reason: `portal_terms_forbid_automation:${liveHost}` }
+              : { allow: true }
+          },
           // 2FA (owner order 2026-08-21): under full automation, let the engine
           // clear a one-time-code wall by reading the code from HAMILTON'S OWN
           // mailbox/SMS inbox. That is what HAMILTON_IDENTITY exists for — the
