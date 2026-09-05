@@ -39,6 +39,23 @@ function changesOf(result) {
   return Number(result?.changes ?? result?.rowCount ?? 0) || 0
 }
 
+/** A failure, named well enough to act on from a production log line. */
+function describeError(error) {
+  return {
+    error: String(error?.message || error || 'unknown').slice(0, 300),
+    code: error?.code ? String(error.code) : null,
+    detail: error?.detail ? String(error.detail).slice(0, 200) : null,
+    stack: String(error?.stack || '').split('\n').slice(1, 5).map((line) => line.trim()).join(' | '),
+  }
+}
+
+function describePhaseFailure(phase, error) {
+  const wrapped = error instanceof Error ? error : new Error(String(error))
+  wrapped.message = `qualified promotion phase "${phase}" failed: ${wrapped.message}`
+  wrapped.promotionPhase = phase
+  return wrapped
+}
+
 function parseJson(value, fallback) {
   try { return typeof value === 'string' ? JSON.parse(value) : (value ?? fallback) } catch { return fallback }
 }
@@ -145,7 +162,13 @@ async function loadRealProfiles(db) {
   const real = []
   for (const profile of rows || []) {
     let context
-    try { context = await loadProfileContext(db, profile.id) } catch { continue }
+    // No website-purpose enrichment here: that is a bounded NETWORK read per
+    // profile with a public website, and this loader runs for every profile
+    // row (synthetics included) BEFORE a single candidate is attempted. On
+    // prod it consumed most of the 30 s run budget, so each run attempted ~3
+    // candidates and the pipelines never refilled. The match engine reads the
+    // persisted website purpose from the section either way.
+    try { context = await loadProfileContext(db, profile.id, { enrichWebsitePurpose: false }) } catch { continue }
     if (!isSyntheticProfile(profile, context.sections)) real.push({ profile, context })
   }
   return real
@@ -297,13 +320,43 @@ export async function runQualifiedPipelinePromotion(db, options = {}) {
   const deletedDryRun = changesOf(await db.prepare("DELETE FROM pipeline_promotion_outcomes WHERE mode = 'dry_run'").run())
   if (deletedDryRun) log.info('cleared legacy dry-run promotion outcomes', { deletedDryRun })
 
-  const profiles = await loadRealProfiles(db)
+  // Every phase below names itself when it fails. Prod 2026-09-05: the run
+  // died three deploys running with only "current transaction is aborted" in
+  // the log and no way to tell WHICH statement, profile or phase produced it.
+  let profiles
+  try {
+    profiles = await loadRealProfiles(db)
+  } catch (error) {
+    throw describePhaseFailure('load_profiles', error)
+  }
   const cursor = await kvGet(db, CURSOR_KEY).catch(() => null)
   const ordered = rotateProfiles(profiles, cursor)
   const queues = new Map()
+  let candidateTotal = 0
   for (const item of ordered) {
-    queues.set(item.profile.id, await listEligibleCandidates(db, item.context, item.profile.id, startedMs))
+    try {
+      const queue = await listEligibleCandidates(db, item.context, item.profile.id, startedMs)
+      queues.set(item.profile.id, queue)
+      candidateTotal += queue.length
+    } catch (error) {
+      queues.set(item.profile.id, [])
+      log.warn('qualified promotion candidate listing failed; profile skipped this run', {
+        profileId: item.profile.id,
+        ...describeError(error),
+      })
+    }
   }
+  log.info('qualified promotion run', {
+    profiles: ordered.length,
+    candidates: candidateTotal,
+    batch,
+    timeBudgetMs,
+    loadMs: Date.now() - startedMs,
+  })
+  // The time budget bounds the ATTEMPT loop. Profile loading and candidate
+  // listing above are accounted separately (loadMs) so a slow load can never
+  // starve the loop of its whole budget.
+  const loopStartedMs = Date.now()
 
   let attempted = 0
   let promoted = 0
@@ -314,10 +367,10 @@ export async function runQualifiedPipelinePromotion(db, options = {}) {
   const summaries = new Map()
   let lastProfileId = cursor
 
-  while (attempted < batch && Date.now() - startedMs < timeBudgetMs) {
+  while (attempted < batch && Date.now() - loopStartedMs < timeBudgetMs) {
     let progressed = false
     for (const { profile, context } of ordered) {
-      if (attempted >= batch || Date.now() - startedMs >= timeBudgetMs) break
+      if (attempted >= batch || Date.now() - loopStartedMs >= timeBudgetMs) break
       const queue = queues.get(profile.id) || []
       const candidate = queue.shift()
       if (!candidate) continue
@@ -371,8 +424,7 @@ export async function runQualifiedPipelinePromotion(db, options = {}) {
           profileId: profile.id,
           opportunityId: candidate.id,
           title: String(candidate.title || '').slice(0, 120),
-          error: message.slice(0, 300),
-          stack: String(error?.stack || '').split('\n').slice(1, 4).map((line) => line.trim()).join(' | '),
+          ...describeError(error),
         })
         recordedPayload = {
           ...pipelineAdmissionFingerprints(context, candidate),
@@ -412,27 +464,53 @@ export async function runQualifiedPipelinePromotion(db, options = {}) {
     if (!progressed) break
   }
 
-  if (lastProfileId) await kvSet(db, CURSOR_KEY, lastProfileId)
+  if (lastProfileId) {
+    try { await kvSet(db, CURSOR_KEY, lastProfileId) } catch (error) { log.warn('qualified promotion phase failed (continuing)', { phase: 'cursor', ...describeError(error) }) }
+  }
 
   // The report-only projection is gone; leave no stale projection behind for
   // Sam's registry to mistake for a live result.
   try { await db.prepare('DELETE FROM system_kv WHERE key = ?').run(PROJECTION_KEY) } catch { /* system_kv absent in minimal fixtures */ }
   if (promotedGrantIds.length) {
-    await enforceGrantCatalogLink(db, { grantIds: promotedGrantIds, limit: amountBudget })
-    if (options.amountFollowup !== false) {
-      await enforceAmountEnrichment(db, {
-        opportunityIds: promotedOpportunityIds,
-        limit: amountBudget,
-        timeBudgetMs: Math.min(timeBudgetMs, 10_000),
-      })
+    try {
+      await enforceGrantCatalogLink(db, { grantIds: promotedGrantIds, limit: amountBudget })
+    } catch (error) {
+      log.warn('qualified promotion phase failed (continuing)', { phase: 'catalog_link', ...describeError(error) })
     }
-    await reconcileDismissedGrants(db)
+    if (options.amountFollowup !== false) {
+      try {
+        await enforceAmountEnrichment(db, {
+          opportunityIds: promotedOpportunityIds,
+          limit: amountBudget,
+          timeBudgetMs: Math.min(timeBudgetMs, 10_000),
+        })
+      } catch (error) {
+        log.warn('qualified promotion phase failed (continuing)', { phase: 'amount_enrich', ...describeError(error) })
+      }
+    }
+    try {
+      await reconcileDismissedGrants(db)
+    } catch (error) {
+      log.warn('qualified promotion phase failed (continuing)', { phase: 'reconcile_dismissed', ...describeError(error) })
+    }
   }
 
-  const remaining = await remainingFromDb(db, profiles)
+  let remaining = null
+  try {
+    remaining = await remainingFromDb(db, profiles)
+  } catch (error) {
+    log.warn('qualified promotion phase failed (continuing)', { phase: 'remaining', ...describeError(error) })
+  }
   for (const [profileId, summary] of summaries) {
     log.info('qualified promotion profile summary', { profileId, mode, ...summary })
   }
+  log.info('qualified promotion run finished', {
+    attempted,
+    promoted,
+    remaining,
+    profiles: summaries.size,
+    elapsedMs: Date.now() - startedMs,
+  })
   return {
     mode,
     attempted,

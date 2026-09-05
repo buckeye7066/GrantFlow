@@ -1171,7 +1171,7 @@ if (!app.locals.db_startup_error) {
       const { runScheduledQualifiedPipelinePromotion } = await import('./services/pipelinePromotion.js')
       return await runScheduledQualifiedPipelinePromotion(db, { source: 'post-listen', logger: console })
     } catch (err) {
-      console.warn('[pipeline-promotion] post-listen run failed (non-fatal):', err?.message || err)
+      console.warn('[pipeline-promotion] post-listen run failed (non-fatal):', err?.message || err, '\n', String(err?.stack || '').split('\n').slice(1, 6).join('\n'))
       return null
     }
   }
@@ -3205,7 +3205,7 @@ if (process.env.NODE_ENV !== 'test') {
         const promotePromise = promote()
         bootJobs.push(promotePromise)
         promotePromise.catch((err) => {
-          console.warn('[pipeline-promotion] deferred post-listen run failed (non-fatal):', err?.message || err);
+          console.warn('[pipeline-promotion] deferred post-listen run failed (non-fatal):', err?.message || err, '\n', String(err?.stack || '').split('\n').slice(1, 6).join('\n'));
         })
       }
       app.locals.bootMaintenancePromise = Promise.allSettled(bootJobs)
@@ -4427,7 +4427,7 @@ if (process.env.NODE_ENV !== 'test') {
         })
         console.log('[pipeline-promotion] nightly', result)
       } catch (err) {
-        console.warn('[pipeline-promotion] nightly failed:', err?.message || err)
+        console.warn('[pipeline-promotion] nightly failed:', err?.message || err, '\n', String(err?.stack || '').split('\n').slice(1, 6).join('\n'))
       }
     }
     setTimeout(runOnce, 180_000)

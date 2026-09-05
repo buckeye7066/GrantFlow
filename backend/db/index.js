@@ -502,10 +502,32 @@ export class SqliteDb {
   }
 }
 
+/**
+ * PostgreSQL aborts the WHOLE transaction on the first failed statement; every
+ * later statement then fails with 25P02 "current transaction is aborted". A
+ * caller that swallows the first error and keeps going therefore surfaces only
+ * the second, useless message. Name the first one, once per transaction, so a
+ * production log can say which statement poisoned the transaction.
+ */
+function noteTransactionStatementFailure(tx, error, sql) {
+  if (!error || tx._firstFailureLogged) return
+  tx._firstFailureLogged = true
+  const code = error?.code ? String(error.code) : ''
+  if (code === '25P02') return
+  console.warn(
+    '[db:tx] first statement failure inside a transaction (the transaction is now aborted):',
+    code || 'no-code',
+    String(error?.message || error).slice(0, 300),
+    'sql=',
+    String(sql || '').replace(/\s+/g, ' ').slice(0, 220),
+  )
+}
+
 class PostgresTx {
   constructor(client) {
     this.dialect = 'postgres';
     this._client = client;
+    this._firstFailureLogged = false;
   }
 
   prepare(sql) {
@@ -523,6 +545,7 @@ class PostgresTx {
           const res = await this._client.query(converted.text, values);
           return res.rows[0];
         } catch (error) {
+          noteTransactionStatementFailure(this, error, converted.text)
           throw decoratePgErrorWithSqlSnippet(error, converted.text)
         }
       },
@@ -535,6 +558,7 @@ class PostgresTx {
           const res = await this._client.query(converted.text, values);
           return res.rows;
         } catch (error) {
+          noteTransactionStatementFailure(this, error, converted.text)
           throw decoratePgErrorWithSqlSnippet(error, converted.text)
         }
       },
@@ -550,6 +574,7 @@ class PostgresTx {
             lastInsertRowid: null,
           };
         } catch (error) {
+          noteTransactionStatementFailure(this, error, converted.text)
           throw decoratePgErrorWithSqlSnippet(error, converted.text)
         }
       },
