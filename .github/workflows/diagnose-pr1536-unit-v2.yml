@@ -1,0 +1,67 @@
+name: Diagnose PR 1536 unit failure v2
+
+on:
+  push:
+    branches: [fix/vnext-transition-integrity-current-main-20260904]
+    paths:
+      - .github/workflows/diagnose-pr1536-unit-v2.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: diagnose-pr1536-unit-v2
+  cancel-in-progress: true
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout exact branch head
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - name: Install exact dependencies
+        run: npm ci
+
+      - name: Run unit suite and retain complete output
+        id: unit
+        shell: bash
+        run: |
+          set +e
+          npm run unit > unit-full.log 2>&1
+          code=$?
+          echo "exit_code=$code" >> "$GITHUB_OUTPUT"
+          printf 'unit exit code: %s\n' "$code" > unit-summary.log
+          printf '\n=== failure-oriented excerpts ===\n' >> unit-summary.log
+          grep -nE '(^|[[:space:]])(FAIL|FAILED|AssertionError|Error:|Test Files|Tests|Unhandled|not ok|ERR_)' unit-full.log | tail -n 400 >> unit-summary.log || true
+          printf '\n=== final 1200 lines ===\n' >> unit-summary.log
+          tail -n 1200 unit-full.log >> unit-summary.log
+          cat unit-summary.log
+          exit 0
+
+      - name: Upload diagnostic logs
+        uses: actions/upload-artifact@v4
+        with:
+          name: pr1536-unit-diagnostic-v2
+          path: |
+            unit-full.log
+            unit-summary.log
+          retention-days: 2
+          if-no-files-found: error
+
+      - name: Record diagnostic outcome
+        shell: bash
+        run: |
+          echo "The diagnostic intentionally preserves the unit command exit code without failing before artifact upload."
+          echo "unit_exit_code=${{ steps.unit.outputs.exit_code }}"
