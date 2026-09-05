@@ -42,7 +42,7 @@ import {
   _resetSchemaCache,
 } from '../../backend/services/hamilton/applicationTaskStore.js'
 import { _resetNotificationsSchemaCache } from '../../backend/services/hamilton/hamiltonNotifications.js'
-import { _resetAuthSchemaCache } from '../../backend/services/hamilton/hamiltonAuthorizationStore.js'
+import { _resetAuthSchemaCache, recordAuthorizations } from '../../backend/services/hamilton/hamiltonAuthorizationStore.js'
 
 function makeMemoryDb() {
   const sqlite = new Database(':memory:')
@@ -693,5 +693,47 @@ describe('hamiltonAutomationOrchestrator — multi-source dispatch', () => {
     assert.equal(counts.working, 1)
     assert.equal(counts.finished, 501)
     assert.equal(counts.total, 502)
+  })
+})
+
+describe('own-institution portal without a way in (owner order 2026-09-05)', () => {
+  it('parks as waiting_for_login with the portal login hint and asks for the SSO vault kinds — never launches the browser', async () => {
+    resetCaches()
+    const db = makeMemoryDb()
+    db.raw.prepare(`INSERT INTO funding_opportunities (id, title, description, application_url, application_mode, funder_name, eligibility_text)
+                    VALUES ('opp-dream', 'MTSU Guaranteed Scholarship', 'A direct education scholarship for eligible Tennessee college students enrolled at Middle Tennessee State University.', 'https://mtsu.edu/scholarships', 'portal', 'Middle Tennessee State University', 'Eligible Tennessee college students at Middle Tennessee State University may apply.')`).run()
+    const prev = process.env.HAMILTON_ENABLE_BROWSER_AUTOMATION
+    process.env.HAMILTON_ENABLE_BROWSER_AUTOMATION = 'true'
+    try {
+      await recordAuthorizations(db, {
+        userId: 'u-A', profileId: 'p-A', scope: 'profile',
+        authorizationTypes: ['complete_forms', 'use_saved_session', 'use_saved_credentials_reference'],
+        authorizationText: 'test authorization',
+      })
+      const result = await automateSingleSource(db, {
+        profileId: 'p-A', userId: 'u-A',
+        source: { opportunity_id: 'opp-dream', current_stage: 'discovered' },
+      })
+      assert.ok(result.classification, JSON.stringify({ ...result, task: result.task?.status }))
+      assert.equal(result.classification.own_institution_portal?.portal_host, 'mtsu.scholarships.ngwebsolutions.com')
+      const task = await getApplicationTask(db, result.task.id)
+      assert.equal(task.status, 'waiting_for_login', JSON.stringify({ status: task.status, msg: task.last_agent_message }))
+      assert.equal(task.portal_url, 'https://mtsu.scholarships.ngwebsolutions.com/')
+      assert.match(String(task.last_agent_message), /PipelineMT/)
+      const events = db.raw.prepare('SELECT step, message FROM application_task_events WHERE task_id = ?').all(task.id)
+      assert.ok(events.some((e) => e.step === 'own_portal_login_wall'), JSON.stringify(events))
+      assert.ok(!events.some((e) => /login_attempt|launch/i.test(String(e.step))))
+      const run = db.raw.prepare('SELECT status, blocker_kind FROM hamilton_autopilot_runs WHERE task_id = ?').get(task.id)
+      assert.equal(run.status, 'blocked')
+      assert.equal(run.blocker_kind, 'login')
+      const notes = db.raw.prepare('SELECT type, message, data FROM notifications').all()
+      const ask = notes.find((n) => n.type === 'hamilton_identity_needed')
+      assert.ok(ask, JSON.stringify(notes.map((n) => n.type)))
+      assert.match(String(ask.message), /University SSO username/)
+      assert.match(String(ask.data), /addIdentity=sso_username/)
+    } finally {
+      if (prev === undefined) delete process.env.HAMILTON_ENABLE_BROWSER_AUTOMATION
+      else process.env.HAMILTON_ENABLE_BROWSER_AUTOMATION = prev
+    }
   })
 })

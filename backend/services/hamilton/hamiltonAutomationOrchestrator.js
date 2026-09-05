@@ -118,6 +118,8 @@ import { attemptCaptchaSolve, isCaptchaSolverConfigured } from './hamiltonCaptch
 import { answerUnknownField } from './hamiltonFieldAnswerer.js'
 import { loadIdentityValuesForFill } from './hamiltonProfileIdentityVault.js'
 import { emitIdentityRequest } from './hamiltonIdentityRequest.js'
+import { listIdentitySecrets } from './hamiltonProfileIdentityVault.js'
+import { resolveOwnPortalAccess, ssoCredentialFromVault } from './hamiltonOwnPortalAccess.js'
 import { makeHamiltonGraphTokenProvider } from './hamiltonGraphToken.js'
 import { getPolicyFor } from './hamiltonPortalPolicyRegistry.js'
 import { isSearchEngineUrl } from '../../config/urlRules.js'
@@ -2661,8 +2663,76 @@ async function runAutopilotPathway(db, {
   // or session appears the next retry takes the real browser path. First
   // attempts are never skipped (no prior evidence), so open portals still get
   // their genuine try.
+  // OWN-INSTITUTION PORTAL: A WAY IN, OR AN HONEST LOGIN WALL (owner order
+  // 2026-09-05). A registered school scholarship portal (#1571: PipelineMT,
+  // CougarNet) keeps its General Application behind the school SSO. With no
+  // saved session, no portal login and no University SSO in the vault the
+  // engine used to open the PUBLIC landing page and end "found no application
+  // form" — a dead end that named nothing the person could fix. Decide here,
+  // before any browser launch: the vault's SSO pair (under credential consent)
+  // becomes the engine's login credential; otherwise synthesize the login wall
+  // the shared blocked branch already knows how to park (waiting_for_login +
+  // sign-in-once capture + the portal's login hint) and ASK for the missing
+  // vault kinds by name. Placed BEFORE the known-wall fast-skip so its signup
+  // recovery never tries to register an account on a school SSO.
   let knownAuthWallKind = null
-  if (!loginCredential && !storageState) {
+  const ownPortal = classification?.own_institution_portal || null
+  if (ownPortal && !loginCredential && !storageState) {
+    let vaultKinds = []
+    try { vaultKinds = (await listIdentitySecrets(db, task.profile_id)) ?? [] } catch { vaultKinds = [] }
+    const credentialUseAuthorized = authorizations.use_saved_credentials_reference === true
+    const access = resolveOwnPortalAccess({ ownPortal, loginCredential, storageState, vaultKinds, credentialUseAuthorized })
+    if (!access) {
+      // Both SSO halves are on file and their use is authorized: hand the pair
+      // to the engine as the login for this portal host. Decrypted in memory,
+      // never logged or traced.
+      const identityValues = await loadIdentityValuesForFill(db, task.profile_id).catch(() => null)
+      const bridged = ssoCredentialFromVault({ ownPortal, identityValues })
+      if (bridged) {
+        loginCredential = bridged
+        await appendTaskEvent(db, {
+          taskId: task.id, eventType: 'progress', status: 'filling_portal', step: 'own_portal_sso_from_vault',
+          message: `${ownPortal.institution}'s scholarship portal: using the University SSO login from the identity vault.`,
+          actorUserId: userId, actorRole: 'agent',
+          details: { autopilot_run_id: run.id, portal_host: ownPortal.portal_host },
+        }).catch(() => {})
+      }
+    } else {
+      knownAuthWallKind = 'login'
+      engineResult = {
+        status: 'blocked',
+        blocker_kind: 'login',
+        blocker_detail: access.blocker_detail,
+        own_institution_portal: ownPortal.portal_host,
+        missing_identity_kinds: access.missing_kinds,
+        fast_skipped: true,
+      }
+      await appendTaskEvent(db, {
+        taskId: task.id, eventType: 'progress', status: 'filling_portal', step: 'own_portal_login_wall',
+        message: access.blocker_detail,
+        actorUserId: userId, actorRole: 'agent',
+        details: {
+          autopilot_run_id: run.id, blocker_kind: 'login', fast_skipped: true,
+          portal_host: ownPortal.portal_host, missing_identity_kinds: access.missing_kinds,
+          credential_use_unauthorized: access.credential_use_unauthorized,
+        },
+      }).catch(() => {})
+      // Ask ONCE per task for the vault kinds (the retry ladder re-checks the
+      // vault on every pass; the login-time reminder in hamiltonIdentityNeeds
+      // carries the standing ask). Values are never read or written here.
+      const priorRetryCount = Number((await reload(db, task.id))?.retry_count) || 0
+      if (access.missing_kinds.length > 0 && priorRetryCount === 0) {
+        await emitIdentityRequest(db, {
+          profileId: task.profile_id,
+          profileUserId: task.user_id,
+          kinds: access.missing_kinds,
+          host: ownPortal.portal_host,
+          fundingTitle: opportunity?.title || grant?.title || null,
+        }).catch(() => {})
+      }
+    }
+  }
+  if (!knownAuthWallKind && !loginCredential && !storageState) {
     const priorKind = await latestFinishedBlockerKind(db, { taskId: task.id, excludeRunId: run.id }).catch(() => null)
     if (priorKind && isAuthBlocker(priorKind)) {
       knownAuthWallKind = priorKind

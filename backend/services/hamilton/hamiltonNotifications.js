@@ -57,6 +57,13 @@ export const HAMILTON_USER_NOTIFICATION_TYPES = Object.freeze([
   // A portal needs a saved login the owner hasn't added yet (sent to the student
   // and admins, with a deep link to add it).
   'hamilton_missing_credential',
+  // Hamilton needs an identity value (SSN / DOB / gov-ID / FSA ID / University
+  // SSO) that is not in the encrypted vault — asked by KIND with a deep link to
+  // the vault card (hamiltonIdentityRequest / hamiltonIdentityNeeds). Found
+  // 2026-09-05: the emitter existed since 2026-08-21 but the type was never
+  // registered here, so every identity ask was refused as "invalid type" and
+  // swallowed by the caller's catch — nobody was ever asked.
+  'hamilton_identity_needed',
   // A portal needs a captured browser SESSION (post-2FA) before Hamilton can act
   // inside the real account — proactive reminder to (re)capture.
   'hamilton_session_capture_needed',

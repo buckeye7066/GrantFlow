@@ -7,6 +7,8 @@
 import { describe, expect, it } from 'vitest'
 import Database from 'better-sqlite3'
 import { resolveIdentityNeeds, emitIdentityNeedsReminder } from '../services/hamilton/hamiltonIdentityNeeds.js'
+import { HAMILTON_NOTIFICATION_TYPES, emitHamiltonNotificationToProfileAndAdmins } from '../services/hamilton/hamiltonNotifications.js'
+import { IDENTITY_REQUEST_NOTIFICATION_TYPE, emitIdentityRequest } from '../services/hamilton/hamiltonIdentityRequest.js'
 
 function makeDb() {
   const db = new Database(':memory:')
@@ -125,5 +127,31 @@ describe('emitIdentityNeedsReminder', () => {
     })
     expect(count).toBe(0)
     expect(emitted).toHaveLength(0)
+  })
+})
+
+describe('the identity ask actually reaches the notification store (registry guard)', () => {
+  it('hamilton_identity_needed is a registered Hamilton notification type', () => {
+    expect(HAMILTON_NOTIFICATION_TYPES).toContain(IDENTITY_REQUEST_NOTIFICATION_TYPE)
+  })
+
+  it('a REAL emit (no injected emitter) lands a row instead of being refused as an invalid type', async () => {
+    // Found 2026-09-05: the emitter had existed since 2026-08-21 but the type was
+    // never registered, so every ask threw "invalid hamilton notification type"
+    // into a swallowing catch. Drive the real emitter end to end.
+    const db = makeDb()
+    db.exec('CREATE TABLE users (id TEXT PRIMARY KEY, role TEXT, email TEXT)')
+    db.exec("DROP TABLE notifications")
+    const emitted = await emitIdentityRequest(db, { profileId: 'p-a', profileUserId: 'u-a', kinds: ['sso_username'], host: 'mtsu.scholarships.ngwebsolutions.com', fundingTitle: 'MTSU Guaranteed Scholarship' })
+    expect(emitted).toBeTruthy()
+    const rows = db.prepare('SELECT type, message FROM notifications').all()
+    expect(rows.some((r) => r.type === IDENTITY_REQUEST_NOTIFICATION_TYPE)).toBe(true)
+    expect(rows[0].message).toMatch(/University SSO username/)
+    const count = await emitIdentityNeedsReminder(db, {
+      profileId: 'p-a',
+      deps: { loadProfile: committedProfile, listIdentitySecrets: async () => [{ kind: 'date_of_birth' }], emit: emitHamiltonNotificationToProfileAndAdmins },
+    })
+    expect(count).toBe(1)
+    expect(db.prepare('SELECT COUNT(*) AS n FROM notifications WHERE type = ?').get(IDENTITY_REQUEST_NOTIFICATION_TYPE).n).toBeGreaterThanOrEqual(2)
   })
 })
