@@ -1,3 +1,4 @@
+import { institutionPortalForUrl } from '../../config/institutionScholarshipPortals.js'
 /**
  * hamiltonAuthBackupPlan.js
  *
@@ -86,8 +87,14 @@ function exhaustedMessage(waitingStatus, { where, attempts, reasonNote }) {
   }
 }
 
+function institutionLoginHint(where) {
+  const entry = institutionPortalForUrl(/^https?:/i.test(String(where || '')) ? where : `https://${String(where || '')}`)
+  return entry ? ` ${entry.login_hint}.` : ''
+}
+
 function deferralMessage(waitingStatus, { where, mins, reasonNote }) {
   const when = humanizeMinutes(mins)
+  const hint = institutionLoginHint(where)
   switch (waitingStatus) {
     case 'waiting_for_email_verification':
       return `The portal account at ${where} is awaiting email verification. Hamilton re-checks his mailbox for the verification link in ~${when}; you can also open the message and click the verification link yourself. Hamilton resumes on his own once it is verified.`
@@ -96,7 +103,7 @@ function deferralMessage(waitingStatus, { where, mins, reasonNote }) {
     case 'waiting_for_2fa':
       return `The portal at ${where} asked for a one-time code Hamilton could not read${reasonNote}. He retries in ~${when}; pointing the portal's 2FA at his email/phone, or one side-by-side sign-in with a saved session, lets him resume immediately.`
     default:
-      return `Hamilton could not sign in at ${where}${reasonNote}. He keeps working other applications and retries in ~${when} (re-checking the vault and saved sessions); one side-by-side sign-in with a saved session lets him resume immediately.`
+      return `Hamilton could not sign in at ${where}${reasonNote}.${hint} He keeps working other applications and retries in ~${when} (re-checking the vault and saved sessions); one side-by-side sign-in with a saved session lets him resume immediately.`
   }
 }
 

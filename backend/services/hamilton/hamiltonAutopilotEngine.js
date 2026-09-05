@@ -218,6 +218,36 @@ const DRAFT_BUTTON_PATTERNS  = [/save\s*draft/i, /save\s*&\s*exit/i, /save\s*for
 // (86 of 200, 2026-08-22). These patterns are for NAVIGATION only, followed just
 // when no fillable form and no next-control were found, so they never intercept
 // a real submit.
+// An ADMISSIONS application is not a scholarship application. Live 2026-09-05:
+// from mtsu.edu/scholarships the engine followed "Apply to MTSU" into the
+// Slate admissions portal (apply.mtsu.edu/portal/app_management) for a
+// student already committed to MTSU, and parked at its single sign-on wall.
+// A student who is provably enrolled or committed post-secondary never needs
+// an admissions application; these links are skipped for them, recorded in
+// the trace, and everything else (a scholarship "Apply", a general
+// application) is followed exactly as before.
+const ADMISSIONS_LINK_TEXT_RX = /\b(?:apply (?:to|for admission)|admissions?|undergraduate application|freshman application|transfer application|graduate application|common app|apply as a (?:freshman|transfer))\b/i
+const ADMISSIONS_LINK_HREF_RX = /^https?:\/\/(?:apply|admissions?|go|connect)\.[a-z0-9.-]+\.edu(?:\/|$)|\/applynow(?:\/|$)|\/admissions?(?:\/|$)|\/portal\/app_management|\/manage\/login/i
+
+export function isAdmissionsApplicationLink({ text = '', href = '' } = {}) {
+  const t = String(text || '')
+  const h = String(href || '')
+  if (ADMISSIONS_LINK_TEXT_RX.test(t)) return true
+  if (/\.edu(?:\/|$)/i.test(h) && ADMISSIONS_LINK_HREF_RX.test(h)) return true
+  return false
+}
+
+/** Committed / enrolled post-secondary — from structured fields only. */
+export function applicantProvablyEnrolled(profile) {
+  if (!profile || typeof profile !== 'object') return false
+  const apps = pick(profile, ['university_applications.applications'])
+  if (Array.isArray(apps) && apps.some((app) => ['committed', 'enrolled', 'attending'].includes(String(app?.status || '').toLowerCase()))) return true
+  const institution = pick(profile, ['education.current_institution', 'education_information.current_institution', 'student_info.school_name'])
+  if (typeof institution === 'string' && institution.trim() && !/^(?:none|n\/a|unknown|-)$/i.test(institution.trim())) return true
+  const level = String(pick(profile, ['education.highest_level']) || '')
+  return /associate|bachelor|master|doctor|graduate/i.test(level)
+}
+
 const APPLY_NAV_PATTERNS = [
   /^apply(?:\s|$)/i, /apply\s*now/i, /apply\s*online/i, /apply\s*here/i, /apply\s*today/i,
   /start\s*(?:your\s*|an?\s*)?application/i, /begin\s*(?:your\s*|an?\s*)?application/i,
@@ -2056,6 +2086,12 @@ export async function runAutopilot({
   // the same control) — see APPLY_NAV_PATTERNS.
   let applyNavClicks = 0
   const clickedApplyNav = new Set()
+  const enrolledApplicant = applicantProvablyEnrolled(profile)
+  const skipAdmissions = (link) => {
+    if (!enrolledApplicant || !isAdmissionsApplicationLink(link)) return false
+    trace.push({ step: 'admissions_link_skipped', detail: { text: String(link.text || '').slice(0, 40), href: String(link.href || '').slice(0, 120), reason: 'applicant is already enrolled/committed; an admissions application is not a scholarship application' } })
+    return true
+  }
   // Follow an apply BUTTON ("Apply", "Start application") from a landing page
   // — bounded, never the same control twice. Returns true when it navigated.
   // thegatesscholarship.org's apply control is a BUTTON on a page with no
@@ -2065,7 +2101,7 @@ export async function runAutopilot({
     if (applyNavClicks >= MAX_APPLY_NAV_CLICKS) return false
     const applyNav = await detectButtons(page, APPLY_NAV_PATTERNS)
     const nextApply = applyNav.find(
-      (b) => !clickedApplyNav.has(String(b.text || '').trim().toLowerCase()),
+      (b) => !clickedApplyNav.has(String(b.text || '').trim().toLowerCase()) && !skipAdmissions({ text: b.text, href: '' }),
     )
     if (!nextApply) return false
     applyNavClicks += 1
@@ -2089,7 +2125,7 @@ export async function runAutopilot({
     const nextLink = applyLinks.find((l) => {
       const target = normalizeBrowserTargetUrl(l.href)
       const key = `href:${target.split('#')[0]}`
-      return target.split('#')[0] !== currentPage && !clickedApplyNav.has(key) && isHamiltonBrowserTargetAllowed(target)
+      return target.split('#')[0] !== currentPage && !clickedApplyNav.has(key) && isHamiltonBrowserTargetAllowed(target) && !skipAdmissions({ text: l.text, href: target })
     })
     if (!nextLink) return false
     const target = normalizeBrowserTargetUrl(nextLink.href)
@@ -3049,6 +3085,7 @@ export async function runAutopilot({
 }
 
 export const _internal = {
+  isAdmissionsApplicationLink, applicantProvablyEnrolled,
   computeAgeYears,
   ageAffirmationVerdict, eligibilityAffirmationVerdict, deriveEligibilityFacts,
   parseAddressBlob, stateValueAlternates,
