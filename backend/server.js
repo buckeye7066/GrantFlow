@@ -46,11 +46,34 @@ import realCrawlersRouter from './routes/realCrawlers.js';
 import matchingRouter from './routes/matching.js';
 import grantMonitoringRouter from './routes/grantMonitoring.js';
 import billingRouter from './routes/billing.js';
-import { enforceTierCapability } from './middleware/entitlements.js';
+import {
+  bypassEntitlementWhen,
+  enforceTierCapability,
+  isApplicationTaskEntitlementSafetyAction,
+  isHamiltonEntitlementSafetyAction,
+  isHamiltonSharedSecretRoute,
+} from './middleware/entitlements.js';
 import { TIER_CAPABILITIES } from './utils/tierGating.js';
 import { maintenanceGuard } from './services/maintenance/maintenanceMode.js';
 const maintenanceGuardMw = maintenanceGuard();
 const requirePipelineAutomation = enforceTierCapability(TIER_CAPABILITIES.PIPELINE_AUTOMATION);
+// Losing a paid capability must never trap already-granted authority or active
+// work: disabling auto-submit and cancelling a task stay reachable. The route
+// handlers keep their own session + task ownership checks; only the billing
+// gate steps aside for the safety action.
+const requireApplicationTaskPipelineAutomation = bypassEntitlementWhen(
+  isApplicationTaskEntitlementSafetyAction,
+  requirePipelineAutomation,
+);
+// The owner's Tasker/Gmail bridges (/sms-inbox, /inbox, /inbox-status) have no
+// GrantFlow session; their handlers authenticate with HAMILTON_SMS_INGEST_TOKEN,
+// so they must reach the router before any user/profile entitlement decision.
+// Revoking an authorization and cancelling a task are safety actions (above).
+// Every other Hamilton/Yana route still meets the canonical billing gate.
+const requireHamiltonPipelineAutomation = bypassEntitlementWhen(
+  (req) => isHamiltonSharedSecretRoute(req) || isHamiltonEntitlementSafetyAction(req),
+  requirePipelineAutomation,
+);
 import authRouter from './routes/auth.js';
 import preferencesRouter from './routes/preferences.js';
 import incognitoRouter from './routes/incognito.js';
@@ -2512,10 +2535,10 @@ app.use('/api', lazyRouter('./routes/announcements.js'));
 // aggregate COA / FAFSA / aid / matched funding / Hamilton status). Same
 // /:profileId path convention as studentPortals.
 app.use('/api', lazyRouter('./routes/committedCollege.js'));
-app.use('/api/application-tasks', requirePipelineAutomation, lazyRouter('./routes/applicationTasks.js'));
+app.use('/api/application-tasks', requireApplicationTaskPipelineAutomation, lazyRouter('./routes/applicationTasks.js'));
 // Hamilton Automation Agent — Application Autopilot / Funding Completion.
 // Note: existing Yana = Client Discovery / Lead Funnel and is unchanged.
-app.use('/api/hamilton/automation', requirePipelineAutomation, lazyRouter('./routes/hamiltonAutomation.js'));
+app.use('/api/hamilton/automation', requireHamiltonPipelineAutomation, lazyRouter('./routes/hamiltonAutomation.js'));
 // Hamilton Portal Sync — two-way portal ↔ GrantFlow data sync. READ pulls real
 // data (test scores, financial-aid awards, application status) from a school /
 // funder portal into the profile + pipeline using the profile's saved session /
@@ -2529,7 +2552,7 @@ app.use('/api/hamilton/portal-sync', requirePipelineAutomation, lazyRouter('./ro
 app.use('/api/hamilton/tailored', requirePipelineAutomation, lazyRouter('./routes/hamiltonTailoredApplication.js'));
 // Backwards-compatible alias so any in-flight client still works during
 // the rollout. Both paths resolve to the same router.
-app.use('/api/yana/automation', requirePipelineAutomation, lazyRouter('./routes/hamiltonAutomation.js'));
+app.use('/api/yana/automation', requireHamiltonPipelineAutomation, lazyRouter('./routes/hamiltonAutomation.js'));
 app.use('/api/saved-grants', savedGrantsRouter);
 // Canonical persisted 990 intelligence reads precede the legacy foundation
 // router; both share the same authenticated foundation namespace.

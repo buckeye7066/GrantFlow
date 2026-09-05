@@ -2,6 +2,50 @@ import { requireTierCapability } from '../utils/tierGating.js'
 import { TIER_CAPABILITIES } from '../utils/tierGating.js'
 import { ADMIN_PROFILE_SENTINEL } from '../config/userProfileMappings.js'
 
+function mountRelativePath(req) {
+  return String(req?.path || '').replace(/\/+$/, '') || '/'
+}
+
+/**
+ * Tasker and the Gmail forwarder POST verification codes here with no
+ * GrantFlow browser session. Their handlers authenticate with the dedicated
+ * HAMILTON_SMS_INGEST_TOKEN shared secret, so they must reach the router
+ * BEFORE any user/profile entitlement decision is attempted at the mount.
+ */
+const HAMILTON_SHARED_SECRET_PATHS = new Set(['/sms-inbox', '/inbox', '/inbox-status'])
+
+export function isHamiltonSharedSecretRoute(req) {
+  return HAMILTON_SHARED_SECRET_PATHS.has(mountRelativePath(req))
+}
+
+/**
+ * Losing a paid capability must never trap already-granted authority or
+ * active work. A user whose tier/payment lapsed can still REVOKE a Hamilton
+ * authorization and CANCEL a task. The handlers keep their own session +
+ * profile/task ownership checks; only the billing gate steps aside.
+ */
+export function isHamiltonEntitlementSafetyAction(req) {
+  if (String(req?.method || '').toUpperCase() !== 'POST') return false
+  const path = mountRelativePath(req)
+  return /^\/authorizations\/[^/]+\/revoke$/.test(path) || /^\/tasks\/[^/]+\/cancel$/.test(path)
+}
+
+/**
+ * Same principle at the application-tasks mount: disabling auto-submit
+ * (`approve-submit` with `enable: false`) and cancelling a task are safety
+ * actions, never paid work.
+ */
+export function isApplicationTaskEntitlementSafetyAction(req) {
+  if (String(req?.method || '').toUpperCase() !== 'POST') return false
+  const path = mountRelativePath(req)
+  if (/^\/[^/]+\/cancel$/.test(path)) return true
+  return /^\/[^/]+\/approve-submit$/.test(path) && req?.body?.enable === false
+}
+
+export function bypassEntitlementWhen(predicate, middleware) {
+  return (req, res, next) => (predicate(req) ? next() : middleware(req, res, next))
+}
+
 export function resolveProfileId(req) {
   const fromParams = req?.params?.profileId ?? req?.params?.profile_id ?? null
   const fromBody = req?.body?.profile_id ?? req?.body?.profileId ?? null
@@ -25,12 +69,42 @@ function identifierFromPath(req, segment) {
   try { return decodeURIComponent(match[1]) } catch { return null }
 }
 
+function identifierFromPattern(req, pattern) {
+  const path = String(req?.originalUrl || `${req?.baseUrl || ''}${req?.path || ''}`).split('?')[0]
+  const match = pattern.exec(path)
+  if (!match?.[1]) return null
+  try { return decodeURIComponent(match[1]) } catch { return null }
+}
+
+/**
+ * Hamilton routes that expose PROFILE-OWNED records through a generic `:id`.
+ * The billing decision must be made for the record's owner, never for the
+ * caller-controlled active-profile header — otherwise one profile can borrow
+ * another profile's paid access by naming its saved session, capture request,
+ * credential, authorization or attestation.
+ */
+const OWNED_HAMILTON_RECORDS = Object.freeze([
+  { table: 'hamilton_authorizations', pattern: /\/authorizations\/([^/]+)\/revoke(?:\/|$)/i },
+  { table: 'hamilton_session_capture_requests', pattern: /\/sessions\/capture-requests\/([^/]+)\/(?:launched|cancel)(?:\/|$)/i },
+  { table: 'hamilton_saved_sessions', pattern: /\/sessions\/([^/]+)\/(?:revoke|expire)(?:\/|$)/i },
+  { table: 'hamilton_portal_credentials', pattern: /\/(?:admin\/)?credentials\/([^/]+)(?:\/reveal-once|\/move|\/copy|\/|$)/i },
+  { table: 'hamilton_attestation_authorizations', pattern: /\/attestations\/([^/]+)\/revoke(?:\/|$)/i },
+])
+
+const CLOUD_LOGIN_LIVE_SESSION_PATTERN = /\/sessions\/cloud-login\/([^/]+)\/(?:stream|input|complete|cancel)(?:\/|$)/i
+
+async function recordProfileId(db, table, id) {
+  if (!id) return null
+  const row = await db.prepare(`SELECT profile_id FROM ${table} WHERE id = ? LIMIT 1`).get(String(id))
+  return row?.profile_id ? String(row.profile_id) : null
+}
+
 /**
  * Resolve indirect Hamilton identities before an entitlement decision. A task
  * id or grant id is not a profile id; treating generic `params.id` as one made
  * route-wide enforcement impossible and could evaluate the wrong account.
  */
-export async function resolveEntitlementProfileId(req) {
+export async function resolveEntitlementProfileId(req, { getCloudLoginMetaFn = null } = {}) {
   if (!req?.db) return null
 
   const explicitCandidate = req?.params?.profileId
@@ -66,6 +140,21 @@ export async function resolveEntitlementProfileId(req) {
       'SELECT profile_id FROM grants WHERE id = ? LIMIT 1',
     ).get(String(grantId))
     if (row?.profile_id) indirectProfileIds.push(String(row.profile_id))
+  }
+
+  for (const record of OWNED_HAMILTON_RECORDS) {
+    const owner = await recordProfileId(req.db, record.table, identifierFromPattern(req, record.pattern))
+    if (owner) indirectProfileIds.push(owner)
+  }
+
+  // Live cloud-login sessions are in-process state, not rows; their owner is
+  // recorded when the session starts.
+  const liveSessionId = identifierFromPattern(req, CLOUD_LOGIN_LIVE_SESSION_PATTERN)
+  if (liveSessionId) {
+    const lookup = getCloudLoginMetaFn
+      ?? (await import('../services/hamilton/hamiltonCloudLogin.js')).getCloudLoginMeta
+    const owner = lookup(liveSessionId)?.profileId
+    if (owner) indirectProfileIds.push(String(owner))
   }
 
   const uniqueIndirect = [...new Set(indirectProfileIds)]

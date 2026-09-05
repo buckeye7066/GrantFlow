@@ -19,6 +19,7 @@ function startServer(extraEnv = {}) {
       SQLITE_DB_PATH: dbPath,
       DB_AUTO_MIGRATE: 'true',
       AUTH_JWT_SECRET: 'test-secret',
+      HAMILTON_SMS_INGEST_TOKEN: 'test-hamilton-inbox-secret',
       ...extraEnv,
     },
     stdio: ['ignore', 'pipe', 'pipe'],
@@ -130,6 +131,18 @@ test('tier enforcement is backend-authoritative (pipeline automation, item fundi
         access_status TEXT
       );
 
+      -- Shared-secret inbox store (migrations 176/178). Kept local so the
+      -- mount-bypass assertion below does not depend on migration timing.
+      CREATE TABLE IF NOT EXISTS hamilton_inbound_sms (
+        id TEXT PRIMARY KEY,
+        channel TEXT NOT NULL DEFAULT 'sms',
+        sender TEXT,
+        subject TEXT,
+        body TEXT NOT NULL,
+        received_at TEXT NOT NULL,
+        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+      );
+
       CREATE TABLE IF NOT EXISTS billing_addon_entitlements (
         id TEXT PRIMARY KEY,
         profile_id TEXT NOT NULL,
@@ -204,6 +217,23 @@ test('tier enforcement is backend-authoritative (pipeline automation, item fundi
     `)
 
     db.close()
+
+    // Shared-secret inbox traffic has no GrantFlow session and must reach the
+    // router's own token authentication under both the Hamilton and Yana
+    // aliases instead of being refused by the mount-wide entitlement gate.
+    for (const alias of ['hamilton', 'yana']) {
+      const inbox = await fetchJson(`http://127.0.0.1:${port}/api/${alias}/automation/inbox`, {
+        method: 'POST',
+        headers: { 'x-hamilton-sms-token': 'test-hamilton-inbox-secret' },
+        body: JSON.stringify({ body: `Verification code for ${alias}: 123456` }),
+      })
+      assert.equal(inbox.status, 202, `inbox via ${alias}: ${JSON.stringify(inbox.json)}`)
+      assert.equal(inbox.json?.ok, true)
+      const status = await fetchJson(`http://127.0.0.1:${port}/api/${alias}/automation/inbox-status`, {
+        headers: { 'x-hamilton-sms-token': 'test-hamilton-inbox-secret' },
+      })
+      assert.equal(status.status, 200, `inbox-status via ${alias}: ${JSON.stringify(status.json)}`)
+    }
 
     const adminToken = await loginEmailOtp({ port, email: adminEmail, profileId: null })
     const userToken = await loginEmailOtp({ port, email: userEmail, profileId })
