@@ -36,6 +36,11 @@ export const MAX_AUTO_RELEASES = 2
 export const AUTO_RELEASE_COOLDOWN_MS = 24 * 60 * 60_000
 export const AUTO_RELEASE_STEP = 'auto_release_full_automation'
 export const CONTACT_FORM_RESOLVED_STEP = 'contact_form_verification_resolved'
+export const UNEVIDENCED_CLOSE_STEP = 'submission_unevidenced_closed'
+/** Mirrors hamiltonSubmissionVerifier's durable recheck event step. */
+const RECHECK_STEP = 'submission_verification_recheck'
+/** Mirrors hamiltonSubmissionVerifier.VERIFICATION_MAX_ATTEMPTS. */
+const DEFAULT_MAX_RECHECKS = 3
 // A TERMINAL `failed` task whose recorded failure is a race / network / click
 // condition (the class the orchestrator now retries instead of failing) — the
 // backlog that existed before that change. Nothing re-picks `failed`, so under
@@ -260,4 +265,107 @@ export default {
   isContactShapedSubmission,
   MAX_AUTO_RELEASES,
   AUTO_RELEASE_COOLDOWN_MS,
+}
+
+/**
+ * Sweep 3. Settle a parked "verify the portal" card that can never settle
+ * itself (owner incident #1475: the live queue kept inappropriate Needs-you
+ * cards forever — HUD program offices, housing directories, a pledge page).
+ *
+ * A task reaches `submission_verification_required` when a run crossed the
+ * submit boundary without receipt evidence. The read-only verifier re-checks
+ * it VERIFICATION_MAX_ATTEMPTS times; when nothing turns up the doctrine was
+ * "park for a human". That is correct while the source is still a valid
+ * funding source. It is NOT correct once the four-gate reconciliation has
+ * already removed the grant from the profile's pipeline as ineligible: the
+ * only remaining question was "did a submission go through", every
+ * evidence-bearing re-check said no, and the card is a permanent obligation
+ * for an application GrantFlow itself ruled out.
+ *
+ * Closes ONLY tasks that satisfy every condition:
+ *   - still parked, never cancelled, never stamped `submitted_at`;
+ *   - the pipeline grant is gone (grant_id NULL or no `grants` row);
+ *   - the verifier exhausted its re-checks (>= maxAttempts durable events);
+ *   - no autopilot run for the task carries a confirmation reference.
+ * The attempt evidence (URLs, screenshots, saved pages, run rows) is retained;
+ * the task becomes cancelled HISTORY with a message that says exactly why.
+ * Bounded + idempotent; never throws.
+ */
+export async function closeUnevidencedParkedSubmissions(db, { limit = 50, maxAttempts = DEFAULT_MAX_RECHECKS, now = Date.now(), logger = log } = {}) {
+  const out = { scanned: 0, closed: 0, kept: 0, failed: 0, closed_ids: [] }
+  if (!db) return out
+  const bounded = Math.max(1, Math.min(500, Number(limit) || 50))
+  const attempts = Math.max(1, Number(maxAttempts) || DEFAULT_MAX_RECHECKS)
+  const runsGuard = `AND NOT EXISTS (
+          SELECT 1 FROM hamilton_autopilot_runs r
+           WHERE r.task_id = t.id
+             AND r.confirmation_reference IS NOT NULL
+             AND r.confirmation_reference <> ''
+        )`
+  const selectSql = (withRunsGuard) => `
+    SELECT t.id, t.profile_id, t.application_url, t.portal_url,
+           (SELECT COUNT(*) FROM application_task_events e
+             WHERE e.task_id = t.id AND e.step = ?) AS rechecks
+      FROM application_tasks t
+     WHERE t.status = 'submission_verification_required'
+       AND t.cancelled_at IS NULL
+       AND t.submitted_at IS NULL
+       AND (t.grant_id IS NULL OR NOT EXISTS (SELECT 1 FROM grants g WHERE g.id = t.grant_id))
+       AND (SELECT COUNT(*) FROM application_task_events e
+             WHERE e.task_id = t.id AND e.step = ?) >= ?
+       ${withRunsGuard ? runsGuard : ''}
+     ORDER BY t.updated_at ASC
+     LIMIT ?`
+  let rows = []
+  try {
+    await ensureApplicationTaskSchema(db)
+    try {
+      rows = await db.prepare(selectSql(true)).all(RECHECK_STEP, RECHECK_STEP, attempts, bounded)
+    } catch {
+      // Minimal databases without the autopilot-runs table: the reference
+      // guard cannot be evaluated, so fall back to the task-level evidence only.
+      rows = await db.prepare(selectSql(false)).all(RECHECK_STEP, RECHECK_STEP, attempts, bounded)
+    }
+  } catch (err) {
+    logger?.warn?.('unevidenced_submission_scan_failed', { err: err?.message || String(err) })
+    return out
+  }
+  const nowIso = new Date(now).toISOString()
+  for (const task of rows || []) {
+    out.scanned += 1
+    try {
+      const url = task.application_url || task.portal_url || 'the page'
+      const rechecks = Number(task.rechecks) || 0
+      const message = `Hamilton re-checked ${url} ${rechecks} time(s) (read-only) and found no confirmation reference or receipt, and GrantFlow has since removed this funding source from the profile's pipeline as ineligible. No application is recorded as submitted; the attempt evidence (URLs, screenshots, saved pages) is retained. Closed as unverified history.`
+      const result = await db.prepare(`
+        UPDATE application_tasks
+           SET status = 'cancelled',
+               current_step = 'cancelled',
+               cancelled_at = ?,
+               next_retry_at = NULL,
+               auto_submit_enabled = FALSE,
+               allow_auto_submit = FALSE,
+               last_agent_message = ?,
+               updated_at = ?
+         WHERE id = ?
+           AND status = 'submission_verification_required'
+           AND cancelled_at IS NULL
+           AND submitted_at IS NULL
+      `).run(nowIso, message, nowIso, String(task.id))
+      const changes = Number(result?.changes ?? result?.rowCount ?? 0)
+      if (!changes) { out.kept += 1; continue }
+      await appendTaskEvent(db, {
+        taskId: task.id, eventType: 'cancelled', status: 'cancelled', step: UNEVIDENCED_CLOSE_STEP,
+        message, actorRole: 'agent',
+        details: { rechecks, max_attempts: attempts, grant_removed: true, submission_evidence: 'none' },
+      })
+      out.closed += 1
+      out.closed_ids.push(task.id)
+    } catch (err) {
+      out.failed += 1
+      logger?.warn?.('unevidenced_submission_close_failed', { taskId: task.id, err: err?.message || String(err) })
+    }
+  }
+  if (out.scanned > 0) logger?.info?.('unevidenced_submission_close_sweep', out)
+  return out
 }

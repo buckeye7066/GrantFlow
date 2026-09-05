@@ -234,6 +234,20 @@ async function tick({ db, logger = console } = {}) {
     } catch (err) {
       logger?.warn?.('[hamilton:scheduler] submission verification re-check failed:', err?.message || err)
     }
+    // Settle parked "verify the portal" cards whose source the four-gate
+    // reconciliation already removed and whose re-checks are exhausted with no
+    // receipt evidence: they become cancelled history instead of permanent
+    // Needs-you cards (#1475). Bounded + idempotent; never fails the tick.
+    let unevidencedCloseSummary = null
+    try {
+      const { closeUnevidencedParkedSubmissions } = await import('./hamiltonAutonomySweeps.js')
+      unevidencedCloseSummary = await closeUnevidencedParkedSubmissions(db, { limit: 50 })
+      if ((unevidencedCloseSummary?.closed || 0) > 0) {
+        logger?.info?.('[hamilton:scheduler] unevidenced parked submissions closed', unevidencedCloseSummary)
+      }
+    } catch (err) {
+      logger?.warn?.('[hamilton:scheduler] unevidenced submission close failed:', err?.message || err)
+    }
 
     const summary = result?.summary || {}
     if ((summary.attempted || 0) > 0) {
