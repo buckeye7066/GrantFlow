@@ -1,11 +1,12 @@
 /**
  * openWithHamiltonWatching — the ONE way profile surfaces open a portal /
- * application URL. Guards the controlled-beta manual-browser boundary:
+ * application URL. Pins the watched-open contract for REAL portals as well as
+ * the reserved fixture (the fixture-only refuse was retired — #1515/#1520):
  *
  *   1. The secure popup is claimed SYNCHRONOUSLY (before the async cloud-login
  *      start), else popup blockers kill it.
  *   2. Success navigates the popup to the same-origin /HamiltonLiveLogin view.
- *   3. A failed synthetic cloud-login start degrades to the fixture URL in the SAME
+ *   3. A failed cloud-login start degrades to the portal URL in the SAME
  *      popup (never a dead window) and reports watched:false honestly.
  *   4. No profileId → plain window.open fallback (nothing to bind a session to).
  *   5. Non-http(s) URLs are refused outright.
@@ -52,7 +53,7 @@ describe('openWithHamiltonWatching', () => {
     vi.clearAllMocks()
   })
 
-  it('keeps the watched path testable only on the reserved synthetic fixture', async () => {
+  it('routes the reserved synthetic fixture through cloud login and the watched popup', async () => {
     let popupOpenedFirst = false
     startCloudLogin.mockImplementation(async () => {
       // By the time the async start runs, the popup must already be claimed.
@@ -78,11 +79,25 @@ describe('openWithHamiltonWatching', () => {
     expect(res).toEqual({ opened: true, watched: true, blocked: false })
   })
 
-  it('opens a real portal directly and never calls cloud login', async () => {
-    const res = await openWithHamiltonWatching({ profileId: 'p1', url: 'https://studentaid.gov/fseog' })
-    expect(window.open).toHaveBeenCalledWith('https://studentaid.gov/fseog', '_blank', 'noopener,noreferrer')
-    expect(openPendingLoginWindow).not.toHaveBeenCalled()
-    expect(startCloudLogin).not.toHaveBeenCalled()
+  it('routes a REAL public portal through cloud login and the watched popup (no fixture-only refuse)', async () => {
+    startCloudLogin.mockResolvedValueOnce({ liveSessionId: 'cl_real', portalHost: 'example.org' })
+    const res = await openWithHamiltonWatching({ profileId: 'p1', url: 'https://example.org/apply' })
+    expect(window.open).not.toHaveBeenCalled()
+    expect(openPendingLoginWindow).toHaveBeenCalledOnce()
+    expect(startCloudLogin).toHaveBeenCalledWith('p1', {
+      portalHost: 'example.org', loginUrl: 'https://example.org/apply', label: 'example.org',
+    })
+    expect(popup.navigate).toHaveBeenCalledWith(
+      'https://app.axiombiolabs.org/HamiltonLiveLogin?session=cl_real&host=example.org',
+    )
+    expect(res).toEqual({ opened: true, watched: true, blocked: false })
+  })
+
+  it('degrades a real portal to a direct open in the SAME popup when cloud login refuses', async () => {
+    startCloudLogin.mockRejectedValueOnce(new Error('cloud_login_start_failed'))
+    const res = await openWithHamiltonWatching({ profileId: 'p1', url: 'https://example.org/apply' })
+    expect(popup.navigate).toHaveBeenCalledWith('https://example.org/apply')
+    expect(window.open).not.toHaveBeenCalled()
     expect(res).toEqual({ opened: true, watched: false, blocked: false })
   })
 
@@ -109,7 +124,7 @@ describe('openWithHamiltonWatching', () => {
 
   it('canHamiltonWatch requires a profileId and a valid http(s) URL', () => {
     expect(canHamiltonWatch({ profileId: 'p1', url: 'https://hamilton-submit-fixture.invalid/apply' })).toBe(true)
-    expect(canHamiltonWatch({ profileId: 'p1', url: 'https://a.org' })).toBe(false)
+    expect(canHamiltonWatch({ profileId: 'p1', url: 'https://a.org' })).toBe(true)
     expect(canHamiltonWatch({ url: 'https://a.org' })).toBe(false)
     expect(canHamiltonWatch({ profileId: 'p1', url: 'ftp://a.org' })).toBe(false)
   })
