@@ -1,0 +1,48 @@
+name: Repair PR1542 rollback logging
+on:
+  push:
+    branches: [fix/salvage-abandoned-sweep]
+    paths: [.github/workflows/repair-pr1542-empty-catches.yml]
+permissions:
+  contents: write
+jobs:
+  repair:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: '24.19.0'
+      - run: npm ci --include=optional --legacy-peer-deps
+      - name: Replace silent recovery failures with explicit diagnostics
+        shell: bash
+        run: |
+          node --input-type=module <<'JS'
+          import { readFileSync, writeFileSync } from 'node:fs';
+          const path = 'backend/startup/ensureSchemaInvariants.js';
+          let source = readFileSync(path, 'utf8');
+          const from = `        try { await db.exec('ROLLBACK') } catch {}\n        // Best-effort restore of FK enforcement before surfacing the error to the step wrapper.\n        try { await db.exec('PRAGMA foreign_keys=ON') } catch {}`;
+          const to = `        try {\n          await db.exec('ROLLBACK')\n        } catch (rollbackErr) {\n          logger?.warn?.('[database] crawler_jobs rollback after rebuild failure also failed:', rollbackErr?.message || rollbackErr)\n        }\n        // Best-effort restore of FK enforcement before surfacing the error to the step wrapper.\n        try {\n          await db.exec('PRAGMA foreign_keys=ON')\n        } catch (fkRestoreErr) {\n          logger?.warn?.('[database] crawler_jobs FK restore after rebuild failure also failed:', fkRestoreErr?.message || fkRestoreErr)\n        }`;
+          if (source.split(from).length !== 2) throw new Error('Exact rollback block changed; refusing unrelated edit.');
+          writeFileSync(path, source.replace(from, to));
+          JS
+          npm run lint:ci
+          node scripts/detect-code-corruption.mjs
+          git diff --check
+      - name: Publish verified cleanup and remove temporary workflow
+        env:
+          GH_PUSH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          rm .github/workflows/repair-pr1542-empty-catches.yml
+          git add backend/startup/ensureSchemaInvariants.js .github/workflows/repair-pr1542-empty-catches.yml
+          git diff --cached --check
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'fix(sqlite): report crawler_jobs recovery failures'
+          git remote set-url origin "https://x-access-token:${GH_PUSH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          git push origin HEAD:fix/salvage-abandoned-sweep
