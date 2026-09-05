@@ -162,7 +162,13 @@ async function loadRealProfiles(db) {
   const real = []
   for (const profile of rows || []) {
     let context
-    try { context = await loadProfileContext(db, profile.id) } catch { continue }
+    // No website-purpose enrichment here: that is a bounded NETWORK read per
+    // profile with a public website, and this loader runs for every profile
+    // row (synthetics included) BEFORE a single candidate is attempted. On
+    // prod it consumed most of the 30 s run budget, so each run attempted ~3
+    // candidates and the pipelines never refilled. The match engine reads the
+    // persisted website purpose from the section either way.
+    try { context = await loadProfileContext(db, profile.id, { enrichWebsitePurpose: false }) } catch { continue }
     if (!isSyntheticProfile(profile, context.sections)) real.push({ profile, context })
   }
   return real
@@ -345,7 +351,12 @@ export async function runQualifiedPipelinePromotion(db, options = {}) {
     candidates: candidateTotal,
     batch,
     timeBudgetMs,
+    loadMs: Date.now() - startedMs,
   })
+  // The time budget bounds the ATTEMPT loop. Profile loading and candidate
+  // listing above are accounted separately (loadMs) so a slow load can never
+  // starve the loop of its whole budget.
+  const loopStartedMs = Date.now()
 
   let attempted = 0
   let promoted = 0
@@ -356,10 +367,10 @@ export async function runQualifiedPipelinePromotion(db, options = {}) {
   const summaries = new Map()
   let lastProfileId = cursor
 
-  while (attempted < batch && Date.now() - startedMs < timeBudgetMs) {
+  while (attempted < batch && Date.now() - loopStartedMs < timeBudgetMs) {
     let progressed = false
     for (const { profile, context } of ordered) {
-      if (attempted >= batch || Date.now() - startedMs >= timeBudgetMs) break
+      if (attempted >= batch || Date.now() - loopStartedMs >= timeBudgetMs) break
       const queue = queues.get(profile.id) || []
       const candidate = queue.shift()
       if (!candidate) continue
