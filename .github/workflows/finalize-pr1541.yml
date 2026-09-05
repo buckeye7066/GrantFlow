@@ -1,0 +1,139 @@
+name: Finalize PR 1541 after exact-head verification
+
+on:
+  push:
+    branches: [fix/production-cors-current-main-20260905]
+    paths:
+      - .github/workflows/finalize-pr1541.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: finalize-pr1541
+  cancel-in-progress: false
+
+jobs:
+  verify-clean-and-merge:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - name: Checkout exact branch head
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Prove application diff is only the reviewed CORS repair
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch origin main
+          git diff --check origin/main...HEAD
+          application_changed="$({
+            git diff --name-only origin/main...HEAD \
+              | grep -Ev '^\.github/workflows/(diagnose-pr1541-unit-lanes(-v3)?|finalize-pr1541)\.yml$|^diagnostics/pr1541-unit-lanes\.md$' \
+              || true
+          } | sort)"
+          expected="$(printf '%s\n' \
+            .github/workflows/ci.yml \
+            backend/config/env.js \
+            tests/unit/admin-email.test.mjs \
+            tests/unit/auth-access-check.test.mjs \
+            tests/unit/auth-email-production-503.test.mjs \
+            | sort)"
+          test "$application_changed" = "$expected"
+
+      - name: Setup Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 24.19.0
+          cache: npm
+
+      - name: Install exact dependencies
+        run: npm ci --include=optional
+
+      - name: Verify source quality and production build
+        run: |
+          npm run lint
+          npm run typecheck
+          npm run build
+          npm audit --omit=dev --audit-level=high
+
+      - name: Run complete unit contract exactly as the repository defines it
+        env:
+          UNIT_TEST_CONCURRENCY: '2'
+        run: npm run unit
+
+      - name: Run the second blocking regression, security, grounding, and queue suite
+        run: node scripts/run-vitest-isolated.mjs run --config vitest.suite.config.js
+
+      - name: Run authoritative release gates
+        run: npm run release:gates
+
+      - name: Remove all one-time diagnosis and finalization machinery
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -f .github/workflows/diagnose-pr1541-unit-lanes.yml
+          rm -f .github/workflows/diagnose-pr1541-unit-lanes-v3.yml
+          rm -f .github/workflows/finalize-pr1541.yml
+          rm -f diagnostics/pr1541-unit-lanes.md
+          rmdir diagnostics 2>/dev/null || true
+          git add -A
+          git diff --cached --check
+
+      - name: Publish the clean verified PR head
+        id: publish
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if ! git diff --cached --quiet; then
+            git commit -m "chore: remove completed PR 1541 diagnostics"
+          fi
+          git push origin HEAD:fix/production-cors-current-main-20260905
+          final_sha="$(git rev-parse HEAD)"
+          echo "sha=$final_sha" >> "$GITHUB_OUTPUT"
+
+          final_application_changed="$({
+            git diff --name-only origin/main...HEAD || true
+          } | sort)"
+          expected="$(printf '%s\n' \
+            .github/workflows/ci.yml \
+            backend/config/env.js \
+            tests/unit/admin-email.test.mjs \
+            tests/unit/auth-access-check.test.mjs \
+            tests/unit/auth-email-production-503.test.mjs \
+            | sort)"
+          test "$final_application_changed" = "$expected"
+
+      - name: Merge the exact verified PR head
+        env:
+          GH_TOKEN: ${{ github.token }}
+          FINAL_SHA: ${{ steps.publish.outputs.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          response="$(gh api \
+            --method PUT \
+            -H 'Accept: application/vnd.github+json' \
+            "repos/${GITHUB_REPOSITORY}/pulls/1541/merge" \
+            -f merge_method=squash \
+            -f sha="$FINAL_SHA" \
+            -f commit_title='fix: require explicit production CORS origins' \
+            -f commit_message='Fail closed when deployed runtimes omit an explicit non-wildcard CORS origin; keep production-shaped tests and the production-image proof aligned.')"
+          printf '%s\n' "$response" | jq -e '.merged == true'
+          merge_sha="$(printf '%s\n' "$response" | jq -r '.sha')"
+          echo "Merged PR #1541 as $merge_sha" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Close the superseded stale CORS PR
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          gh pr close 1529 \
+            --comment 'Superseded by the current-main, exact-head verified CORS repair in #1541. The reviewed production contract was preserved; stale unrelated branch drift was not merged.'
