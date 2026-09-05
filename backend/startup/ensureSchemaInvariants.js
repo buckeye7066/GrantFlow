@@ -286,9 +286,17 @@ export async function ensureCrawlerJobsTypeCheckSqlite(db, { logger = console } 
         await db.exec('PRAGMA foreign_keys=ON')
         await db.exec('COMMIT')
       } catch (err) {
-        try { await db.exec('ROLLBACK') } catch {}
+        try {
+          await db.exec('ROLLBACK')
+        } catch (rollbackErr) {
+          logger?.warn?.('[database] crawler_jobs rollback after rebuild failure also failed:', rollbackErr?.message || rollbackErr)
+        }
         // Best-effort restore of FK enforcement before surfacing the error to the step wrapper.
-        try { await db.exec('PRAGMA foreign_keys=ON') } catch {}
+        try {
+          await db.exec('PRAGMA foreign_keys=ON')
+        } catch (fkRestoreErr) {
+          logger?.warn?.('[database] crawler_jobs FK restore after rebuild failure also failed:', fkRestoreErr?.message || fkRestoreErr)
+        }
         throw err
       }
       for (const idx of indexRows || []) {
