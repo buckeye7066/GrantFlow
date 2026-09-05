@@ -77,6 +77,14 @@ const SECTION_LABELS = Object.freeze({
   comprehensive_application: 'Comprehensive Application',
 })
 
+const US_STATE_CODES = new Set([
+  'AL','AK','AZ','AR','CA','CO','CT','DE','FL','GA','HI','ID','IL','IN','IA','KS','KY','LA','ME','MD','MA','MI','MN','MS','MO','MT','NE','NV','NH','NJ','NM','NY','NC','ND','OH','OK','OR','PA','RI','SC','SD','TN','TX','UT','VT','VA','WA','WV','WI','WY','DC',
+])
+
+const US_STATE_NAMES = new Set([
+  'alabama','alaska','arizona','arkansas','california','colorado','connecticut','delaware','florida','georgia','hawaii','idaho','illinois','indiana','iowa','kansas','kentucky','louisiana','maine','maryland','massachusetts','michigan','minnesota','mississippi','missouri','montana','nebraska','nevada','new hampshire','new jersey','new mexico','new york','north carolina','north dakota','ohio','oklahoma','oregon','pennsylvania','rhode island','south carolina','south dakota','tennessee','texas','utah','vermont','virginia','washington','west virginia','wisconsin','wyoming','district of columbia',
+])
+
 function isPresentScalar(value) {
   if (value === null || value === undefined) return false
   if (typeof value === 'string') return value.trim().length > 0
@@ -89,6 +97,38 @@ function isPresentArray(value) {
   return Array.isArray(value) && value.length > 0
 }
 
+function firstSpecificLocationValue(normalized, keys) {
+  for (const key of keys) {
+    const value = normalized?.[key]
+      ?? normalized?.location?.[key]
+      ?? normalized?.address?.[key]
+      ?? normalized?.basic_information?.[key]
+      ?? normalized?.basic_information?.address?.[key]
+    if (typeof value === 'string' && value.trim()) return value.trim()
+  }
+  return null
+}
+
+function inferCountry(normalized) {
+  const explicit = normalized?.country
+    ?? normalized?.location?.country
+    ?? normalized?.address?.country
+    ?? normalized?.basic_information?.country
+    ?? normalized?.basic_information?.address?.country
+  if (isPresentScalar(explicit)) return explicit
+
+  const state = firstSpecificLocationValue(normalized, ['state', 'region'])
+  if (state) {
+    const upper = state.toUpperCase()
+    if (US_STATE_CODES.has(upper) || US_STATE_NAMES.has(state.toLowerCase())) return 'US'
+  }
+
+  const zip = firstSpecificLocationValue(normalized, ['zip', 'zip_code', 'postal', 'postal_code'])
+  if (zip && /^\d{5}(?:-\d{4})?$/.test(zip)) return 'US'
+
+  return null
+}
+
 function readField(normalized, key) {
   if (!normalized || typeof normalized !== 'object') return undefined
   if (normalized[key] !== undefined) return normalized[key]
@@ -97,10 +137,10 @@ function readField(normalized, key) {
   // explicitly supplied a value — `false` is a real signal (user said no)
   // and should not be auto-fabricated by the coverage util.
   const nested = {
-    country: normalized.country ?? normalized.location?.country ?? null,
-    state: normalized.state ?? normalized.location?.state ?? null,
-    city: normalized.city ?? normalized.location?.city ?? null,
-    zip: normalized.zip ?? normalized.location?.zip ?? null,
+    country: inferCountry(normalized),
+    state: normalized.state ?? normalized.location?.state ?? normalized.address?.state ?? null,
+    city: normalized.city ?? normalized.location?.city ?? normalized.address?.city ?? null,
+    zip: normalized.zip ?? normalized.location?.zip ?? normalized.location?.zip_code ?? normalized.address?.zip ?? normalized.address?.zip_code ?? null,
     employeeCount: normalized.employeeCount ?? normalized.business?.employeeCount ?? null,
     annualRevenue: normalized.annualRevenue ?? normalized.business?.annualRevenue ?? null,
     yearsInOperation: normalized.yearsInOperation ?? normalized.business?.yearsInOperation ?? null,
