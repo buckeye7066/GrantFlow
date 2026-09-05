@@ -268,13 +268,29 @@ export async function ensureCrawlerJobsTypeCheckSqlite(db, { logger = console } 
         .prepare(`SELECT sql FROM sqlite_master WHERE type = 'index' AND tbl_name = 'crawler_jobs' AND sql IS NOT NULL`)
         .all()
 
-      await db.exec('DROP TABLE IF EXISTS crawler_jobs_typecheck_rebuild')
-      await db.exec(rebuiltDdl)
-      await db.exec(
-        `INSERT INTO crawler_jobs_typecheck_rebuild (${columnNames}) SELECT ${columnNames} FROM crawler_jobs`,
-      )
-      await db.exec('DROP TABLE crawler_jobs')
-      await db.exec('ALTER TABLE crawler_jobs_typecheck_rebuild RENAME TO crawler_jobs')
+      // ponytail: Minimal, targeted fix — perform the rebuild inside a single transaction
+      // with foreign_keys temporarily disabled so dropping the parent table does NOT
+      // fire ON DELETE actions on child tables. This avoids wiping or unlinking rows
+      // in crawler_logs / dead_letter_queue / geo_* tables while still producing the
+      // repaired CHECK list atomically.
+      try {
+        await db.exec('BEGIN IMMEDIATE')
+        await db.exec('PRAGMA foreign_keys=OFF')
+        await db.exec('DROP TABLE IF EXISTS crawler_jobs_typecheck_rebuild')
+        await db.exec(rebuiltDdl)
+        await db.exec(
+          `INSERT INTO crawler_jobs_typecheck_rebuild (${columnNames}) SELECT ${columnNames} FROM crawler_jobs`,
+        )
+        await db.exec('DROP TABLE crawler_jobs')
+        await db.exec('ALTER TABLE crawler_jobs_typecheck_rebuild RENAME TO crawler_jobs')
+        await db.exec('PRAGMA foreign_keys=ON')
+        await db.exec('COMMIT')
+      } catch (err) {
+        try { await db.exec('ROLLBACK') } catch {}
+        // Best-effort restore of FK enforcement before surfacing the error to the step wrapper.
+        try { await db.exec('PRAGMA foreign_keys=ON') } catch {}
+        throw err
+      }
       for (const idx of indexRows || []) {
         try {
           await db.exec(String(idx.sql))
