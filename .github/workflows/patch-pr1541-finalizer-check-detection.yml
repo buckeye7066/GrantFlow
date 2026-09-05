@@ -1,0 +1,69 @@
+name: Correct PR 1541 exact-head check detection
+
+on:
+  push:
+    branches: [fix/production-cors-current-main-20260905]
+    paths:
+      - .github/workflows/patch-pr1541-finalizer-check-detection.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout exact branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Require core checks while still failing on every emitted check
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path('.github/workflows/apply-container-cors-default-and-finalize.yml')
+          text = path.read_text(encoding='utf-8')
+          old = """          required_patterns=(
+            '^test-suite$'
+            '^test$'
+            'Windows build compatibility'
+            '^postgres-migrations$'
+            '^browser-smoke$'
+            '^production-image$'
+            'CodeQL|Analyze'
+            'Android'
+            'iOS'
+            'Release language'
+          )
+"""
+          new = """          # These job names are stable release authorities. Android, iOS, and
+          # release-language workflows are still included in the all-checks
+          # pending/failure scan below, but their internal job names may vary.
+          required_patterns=(
+            '^test-suite$'
+            '^test$'
+            'Windows build compatibility'
+            '^postgres-migrations$'
+            '^browser-smoke$'
+            '^production-image$'
+            'CodeQL|Analyze'
+          )
+"""
+          if text.count(old) != 1:
+              raise SystemExit('Refused: finalizer check block did not match exactly once')
+          path.write_text(text.replace(old, new), encoding='utf-8')
+          PY
+          rm -f .github/workflows/patch-pr1541-finalizer-check-detection.yml
+          git diff --check
+          git add -A
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "ci: correct exact-head workflow name detection"
+          git push origin HEAD:fix/production-cors-current-main-20260905
