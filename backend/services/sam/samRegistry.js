@@ -332,7 +332,7 @@ export const DIAGNOSTIC_CHECKS = Object.freeze([
     // not the operational agent-control cycle (it would add tens of seconds to
     // every Sam preflight and stall the Robert→Yana→John→Hamilton chain).
     heavy: true,
-    description: 'Delegates to Anya admin.code.scan to find TODO / debugger / leftover console.* statements without mutating any files.',
+    description: 'Delegates to Anya admin.code.scan to find TODO / FIXME / HACK / debugger / leftover console.* statements without mutating any files. Reports files_discovered vs files_scanned and flags a truncated sweep, so the result says how much of the tree it actually covered.',
   },
   {
     id: 'code.crawl',
