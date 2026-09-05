@@ -26,6 +26,10 @@ RUN npm prune --omit=dev
 # Stage 2: Production stage
 FROM node:24.19.0-slim
 
+# Explicit deployment origins, never a wildcard. Operators can override this
+# list at runtime; an explicitly empty override still fails startup validation.
+ENV CORS_ORIGIN=https://grant-flow-three.vercel.app,https://app.axiombiolabs.org,https://grantflow.axiombiolabs.org
+
 WORKDIR /app
 
 # Runtime deps for document ingestion:

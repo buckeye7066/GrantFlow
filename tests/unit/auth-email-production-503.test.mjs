@@ -37,6 +37,7 @@ function startServer(extraEnv = {}) {
     SQLITE_DB_PATH: dbPath,
     DB_AUTO_MIGRATE: 'true',
     AUTH_JWT_SECRET: 'test-secret-prod',
+    CORS_ORIGIN: 'https://test.grantflow.local',
     ALLOW_SQLITE_IN_PROD: 'true',
     ALLOW_EPHEMERAL_SQLITE: 'true',
     ALLOW_EPHEMERAL_UPLOADS: 'true',
