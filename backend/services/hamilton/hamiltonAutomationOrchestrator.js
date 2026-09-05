@@ -895,6 +895,10 @@ export async function automateSingleSource(db, {
     // when the batch didn't specify AND the profile is not in full automation
     // → stored value left untouched.
     allowAutoSubmit: batchAllowAutoSubmit,
+    // A person re-selecting or retrying a source re-opens a task that was
+    // closed WITHOUT submission proof (see ensureApplicationTask). The
+    // autonomous scheduler never does — it must not churn closed leads.
+    reopenClosed: options?.autonomous !== true,
   })
 
   await appendTaskEvent(db, {
