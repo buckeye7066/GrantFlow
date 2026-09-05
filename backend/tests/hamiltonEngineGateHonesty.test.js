@@ -391,6 +391,41 @@ describe('robustness: navigation races, slow hosts, file targets', () => {
   })
 })
 
+// ── B0. an ADMISSIONS link is not a scholarship application ──────────────────
+describe('admissions links for an enrolled applicant (live MTSU case, 2026-09-05)', () => {
+  const ENROLLED = {
+    basic_information: { first_name: 'Student', last_name: 'A', email: 'a@example.org' },
+    education: { current_institution: 'Middle Tennessee State University', intended_major: 'Forensic Science' },
+    university_applications: { applications: [{ name: 'Middle Tennessee State University', status: 'committed' }] },
+  }
+  it('classifies the live links', () => {
+    const { isAdmissionsApplicationLink, applicantProvablyEnrolled } = _internal
+    expect(isAdmissionsApplicationLink({ text: 'Apply to MTSU', href: 'https://www.mtsu.edu/applynow/' })).toBe(true)
+    expect(isAdmissionsApplicationLink({ text: 'APPLY', href: 'https://apply.mtsu.edu/apply' })).toBe(true)
+    expect(isAdmissionsApplicationLink({ text: 'MTSU Current Student Login', href: 'https://apply.mtsu.edu/manage/login?realm=&r=/apply/status' })).toBe(true)
+    expect(isAdmissionsApplicationLink({ text: 'Apply Now', href: 'https://mtsu.scholarships.ngwebsolutions.com/' })).toBe(false)
+    expect(isAdmissionsApplicationLink({ text: 'Apply for this scholarship', href: 'https://www.mtsu.edu/financial-aid/scholarships/apply' })).toBe(false)
+    expect(isAdmissionsApplicationLink({ text: 'Apply Now', href: 'https://apply.thegatesscholarship.org/' })).toBe(false)
+    expect(applicantProvablyEnrolled(ENROLLED)).toBe(true)
+    expect(applicantProvablyEnrolled(PROFILE)).toBe(false)
+  })
+  it('runAutopilot skips "Apply to MTSU" for the committed student and records why; a high-school applicant still follows it', async () => {
+    const html = `<html><body><p>Scholarships at MTSU</p><a href="https://www.mtsu.edu/applynow/">Apply to MTSU</a></body></html>`
+    const enrolledRun = await runAutopilot({
+      url: 'https://www.mtsu.edu/financial-aid/scholarships/', profile: ENROLLED, authorizations: FULL_AUTH,
+      allowAutoSubmit: false, _testPage: jsdomPage(html, { url: 'https://www.mtsu.edu/financial-aid/scholarships/' }),
+    })
+    const enrolledSteps = enrolledRun.trace.map((t) => t.step)
+    expect(enrolledSteps).toContain('admissions_link_skipped')
+    expect(enrolledSteps.filter((s) => s === 'follow_apply_link')).toHaveLength(0)
+    const freshmanRun = await runAutopilot({
+      url: 'https://www.mtsu.edu/financial-aid/scholarships/', profile: PROFILE, authorizations: FULL_AUTH,
+      allowAutoSubmit: false, _testPage: jsdomPage(html, { url: 'https://www.mtsu.edu/financial-aid/scholarships/' }),
+    })
+    expect(freshmanRun.trace.map((t) => t.step)).not.toContain('admissions_link_skipped')
+  })
+})
+
 // ── B. apply LINKS (anchors) are followed from landing pages ─────────────────
 describe('apply-link discovery', () => {
   it('detectApplyLinks returns the real apply anchor and skips "how to apply" prose links', async () => {

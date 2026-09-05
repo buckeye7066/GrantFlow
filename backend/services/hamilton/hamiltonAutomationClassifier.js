@@ -49,6 +49,8 @@
 import { isSearchEngineUrl } from '../../config/urlRules.js'
 import { normalizeBrowserTargetUrl } from './controlledBetaBrowserPolicy.js'
 import { isPointerKind } from '../../config/opportunityKindClasses.js'
+import { resolveAttendedInstitutions, opportunitySponsoredByInstitution } from '../../config/profileInstitutions.js'
+import { resolveInstitutionScholarshipPortal, urlOnInstitutionDomain, urlOnScholarshipPlatform } from '../../config/institutionScholarshipPortals.js'
 
 // Owner directive 2026-08-03: a POINTER row that carries a usable web URL is a
 // PAGE OF several awards — route it to the portal engine so listing triage can
@@ -261,10 +263,41 @@ function readContact(opportunity, grant, key) {
  *   fafsa_link: boolean,
  * }}
  */
+/**
+ * A scholarship sponsored by the student's OWN institution is applied for on
+ * that institution's scholarship portal (institutionScholarshipPortals.js),
+ * never on the generic school page the row happens to link — and never
+ * through the ADMISSIONS portal a student already committed there has no use
+ * for. Returns the registry entry when the row is such a scholarship and the
+ * row's URL is a generic institution page; null otherwise (silence keeps the
+ * row's own URL).
+ */
+export function resolveOwnInstitutionPortal({ opportunity = null, grant = null, profile = null, url = null } = {}) {
+  if (!profile) return null
+  const sections = profile?.sections && typeof profile.sections === 'object' ? profile.sections : profile
+  const attended = resolveAttendedInstitutions(sections)
+  if (!Array.isArray(attended) || attended.length === 0) return null
+  if (url && urlOnScholarshipPlatform(url)) return null
+  const row = { sponsor: opportunity?.sponsor ?? grant?.funder ?? grant?.sponsor ?? null, title: opportunity?.title ?? grant?.title ?? '' }
+  for (const institution of attended) {
+    const entry = resolveInstitutionScholarshipPortal(institution)
+    if (!entry) continue
+    const sponsored = opportunitySponsoredByInstitution(institution, row)
+      || (row.sponsor && resolveInstitutionScholarshipPortal(row.sponsor) === entry)
+    const onOwnDomain = url ? urlOnInstitutionDomain(url, entry) : false
+    if (sponsored || onOwnDomain) {
+      return { institution: entry.institution, portal_url: entry.portal_url, portal_host: entry.portal_host, platform: entry.platform, login_hint: entry.login_hint, vault_kinds: [...entry.vault_kinds], umbrella: entry.umbrella, replaced_url: url || null }
+    }
+  }
+  return null
+}
+
 export function classifyFundingSource({ opportunity = null, grant = null, profile = null, portalLink = null } = {}) {
-  void profile
   const reasons = []
-  const url = readUrl(opportunity, grant)
+  const rowUrl = readUrl(opportunity, grant)
+  const ownPortal = resolveOwnInstitutionPortal({ opportunity, grant, profile, url: rowUrl })
+  if (ownPortal) reasons.push({ rule: 'own_institution.scholarship_portal', signal: ownPortal.portal_host })
+  const url = ownPortal ? ownPortal.portal_url : rowUrl
   const mode = readMode(opportunity, grant)
   const text = buildText(opportunity || {})
   const resultKind = lower(opportunity?.result_kind || grant?.result_kind || '')
@@ -302,6 +335,9 @@ export function classifyFundingSource({ opportunity = null, grant = null, profil
       evidence_strength: EVIDENCE_STRENGTH[rule] || (conf >= 0.8 ? 'declared' : 'guessed'),
       reasons,
       resolved_url: url || null,
+      // The student's own institution's scholarship portal, when the row was
+      // re-routed there (see resolveOwnInstitutionPortal); null otherwise.
+      own_institution_portal: ownPortal,
       mailing_address: mailingAddress || null,
       apply_email: applyEmail || null,
       apply_fax: applyFax || null,
