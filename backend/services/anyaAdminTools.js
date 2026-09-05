@@ -472,17 +472,50 @@ export async function adminCodeCrawl({ pattern, directory, includeTests = false 
   let filesScanned = 0
   let bytesScanned = 0
   const unreadablePaths = []
-  const ignorePatterns = [
-    'node_modules',
-    '.git',
-    'dist',
-    'build',
-    'coverage',
-    '.turbo',
-  ]
+  let directoriesExcluded = 0
+  const excludedDirectoryNames = new Set()
 
-  if (!includeTests) {
-    ignorePatterns.push('test', 'tests', '__tests__', '*.test.js', '*.spec.js')
+  /* WHAT THIS EXCLUDES, AND WHY IT IS A SEGMENT TEST NOW.
+   *
+   * The old rule was `ignorePatterns.some((p) => relativePath.includes(p))` —
+   * a bare SUBSTRING test, the same defect CLAUDE.md documents for the SQL
+   * guard (`updated_at` ⊃ *update*). Measured on this repo it never read 52
+   * real source files: ALL of backend/services/coverageAudit/ (7 modules),
+   * coverageEvidenceService.js, coverageGapScoreboard.js, coverageOutcomes.js,
+   * crawler-os/coverageMatrix.js ("coverage"), hamiltonAttestationStore.js
+   * ("test" inside "Attestation"), scripts/score-distribution.mjs ("dist"
+   * inside "distribution"), scripts/build-mobile-bundle.mjs. `coverage.complete`
+   * still reported TRUE for all of them, because they were never unreadable —
+   * they were never VISITED, and a completeness flag that counts only read
+   * failures cannot see a narrowed candidate set.
+   *
+   * The dot-directory rule is the other half. This walk had no such rule (its
+   * sibling `collectFiles` in this file always had one), so it descended into
+   * `.claude/worktrees/` — the throwaway checkouts other agents leave behind —
+   * and read 82,299 files there against 2,344 in the actual working tree
+   * (97.2% of the crawl). Findings cited paths that are not this repository and
+   * `bytes_scanned` was inflated ~36x.
+   */
+  const IGNORED_DIR_SEGMENTS = new Set(['node_modules', 'dist', 'build', 'coverage', 'out', 'vendor'])
+  const TEST_DIR_SEGMENTS = new Set(['test', 'tests', '__tests__'])
+  const TEST_FILE_RX = /\.(test|spec)\.[cm]?[jt]sx?$/i
+
+  function isExcludedDirectory(name) {
+    if (name.startsWith('.')) return true // .git, .claude worktrees, .cursor, .turbo, .vercel, .next …
+    if (IGNORED_DIR_SEGMENTS.has(name)) return true
+    if (!includeTests && TEST_DIR_SEGMENTS.has(name)) return true
+    return false
+  }
+
+  function isExcludedFile(name) {
+    return !includeTests && TEST_FILE_RX.test(name)
+  }
+
+  /** A path is a TEST path when a real segment says so, or the file is named as one. */
+  function isTestPath(relativePath) {
+    const segments = String(relativePath).split(/[\\/]/)
+    const base = segments[segments.length - 1] ?? ''
+    return segments.slice(0, -1).some((s) => TEST_DIR_SEGMENTS.has(s)) || TEST_FILE_RX.test(base)
   }
 
   async function scanDirectory(dir) {
@@ -494,7 +527,13 @@ export async function adminCodeCrawl({ pattern, directory, includeTests = false 
         const fullPath = path.join(dir, entry.name)
         const relativePath = path.relative(REPO_ROOT, fullPath)
 
-        if (ignorePatterns.some((p) => relativePath.includes(p))) {
+        /* Exclusion is decided on the ENTRY NAME — a path segment — never on a
+           substring of the whole path. */
+        if (entry.isDirectory() ? isExcludedDirectory(entry.name) : isExcludedFile(entry.name)) {
+          if (entry.isDirectory()) {
+            directoriesExcluded += 1
+            excludedDirectoryNames.add(entry.name)
+          }
           continue
         }
 
@@ -539,7 +578,10 @@ export async function adminCodeCrawl({ pattern, directory, includeTests = false 
                 if (hasAuditAllowTag(rawLine)) return
 
                 // console.log in production code
-                if (codeLine.includes('console.log') && !relativePath.includes('test')) {
+                // Same segment-vs-substring rule as the walk: a path containing
+                // the letters "test" is not a test file. `hamiltonAttestationStore.js`
+                // and `services/latestRun.js` are production code.
+                if (codeLine.includes('console.log') && !isTestPath(relativePath)) {
                   findings.push({
                     file: relativePath,
                     line: idx + 1,
@@ -673,12 +715,21 @@ export async function adminCodeCrawl({ pattern, directory, includeTests = false 
     pattern: pattern ?? null,
     include_tests: includeTests,
     coverage: {
+      /* `complete` counts READ FAILURES only, so it says nothing about what the
+         walk declined to visit. Deliberate exclusions are reported beside it —
+         otherwise a narrowed candidate set reads as full coverage, which is how
+         52 real source files went unscanned under a green flag. */
       complete: unreadablePaths.length === 0,
       directories_scanned: directoriesScanned,
       source_files_scanned: filesScanned,
       bytes_scanned: bytesScanned,
       unreadable_count: unreadablePaths.length,
       unreadable_paths: unreadablePaths.slice(0, 50),
+      directories_excluded: directoriesExcluded,
+      excluded_directory_names: [...excludedDirectoryNames].sort(),
+      tests_included: Boolean(includeTests),
+      exclusion_rule: 'path SEGMENT match: dot-directories (incl. .claude worktrees), node_modules/dist/build/coverage/out/vendor'
+        + (includeTests ? '' : ', and test/tests/__tests__ dirs plus *.test.*/*.spec.* files'),
     },
     findings_count: actionableFindings.length,
     findings: actionableFindings.slice(0, 100), // Limit to 100 results
