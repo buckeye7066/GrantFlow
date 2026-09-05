@@ -9,7 +9,7 @@ const EXPECTED = [
 ]
 
 test('final runtime stage carries only explicit owned HTTPS origins', async () => {
-  const dockerfile = await readFile(new URL('../../../Dockerfile', import.meta.url), 'utf8')
+  const dockerfile = await readFile(new URL('../../Dockerfile', import.meta.url), 'utf8')
   const stages = dockerfile.split(/^FROM\s+/m)
   const runtime = stages.at(-1)
   const matches = [...runtime.matchAll(/^ENV\s+CORS_ORIGIN=(.+)$/gm)]
