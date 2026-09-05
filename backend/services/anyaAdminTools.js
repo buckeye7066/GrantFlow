@@ -698,67 +698,136 @@ export async function adminCodeCrawl({ pattern, directory, includeTests = false 
 /**
  * Run ESLint-style checks and report issues
  */
+/**
+ * Lint the repository.
+ *
+ * WHAT THIS USED TO BE. Sam's registry advertises this check as
+ * "shells out to ESLint over the tree" and "surface ESLint-style issues".
+ * What actually ran was TWO hand-rolled regexes — `no-var` and a loose-equality
+ * test — over at most 50 files, with the function's own comment admitting
+ * "Simplified linting - in production, you'd integrate with ESLint".
+ *
+ * It also OVERSTATED ITS OWN COVERAGE: `files_checked` reported every file
+ * discovered (1,800+ under backend/ alone) while the loop linted 50 of them. A
+ * check that reports 36x the work it did is worse than no check, because the
+ * number reads as reassurance.
+ *
+ * It now runs the REAL ESLint through its Node API, with the repo's own
+ * configuration, and reports the files it actually linted.
+ *
+ * ESLint is a devDependency, so it can be genuinely absent in a production
+ * image. When that happens this reports `engine: 'unavailable'` and says so —
+ * it does NOT quietly fall back to the two regexes while the caller still reads
+ * the word "ESLint". A heuristic pass is still offered, but it is labelled
+ * `builtin-heuristics` so nothing downstream can mistake it for a lint run.
+ */
 export async function adminCodeLint({ targetPath, fix = false }, context) {
-  const { db } = context
+  void context
   const resolvedPath = targetPath
     ? path.resolve(REPO_ROOT, targetPath)
     : REPO_ROOT
 
-  // Simplified linting - in production, you'd integrate with ESLint
-  const issues = []
+  const repoRootWithSep = REPO_ROOT.endsWith(path.sep) ? REPO_ROOT : REPO_ROOT + path.sep
+  if (resolvedPath !== REPO_ROOT && !resolvedPath.startsWith(repoRootWithSep)) {
+    throw new Error('Path outside repository root not allowed')
+  }
+
+  const maxFiles = Math.max(1, Number(process.env.SAM_LINT_MAX_FILES || 500))
 
   try {
     const stats = await fs.stat(resolvedPath)
-    const files = []
+    const discovered = []
+    if (stats.isFile()) discovered.push(resolvedPath)
+    else if (stats.isDirectory()) discovered.push(...(await collectFiles(resolvedPath)))
 
-    if (stats.isFile()) {
-      files.push(resolvedPath)
-    } else if (stats.isDirectory()) {
-      const nested = await collectFiles(resolvedPath)
-      files.push(...nested)
+    const selected = discovered.slice(0, maxFiles)
+    const truncated = discovered.length > selected.length
+
+    let ESLintCtor = null
+    try {
+      ;({ ESLint: ESLintCtor } = await import('eslint'))
+    } catch {
+      ESLintCtor = null
     }
 
-    // Basic lint checks
-    for (const file of files.slice(0, 50)) {
-      const content = await fs.readFile(file, 'utf8')
-      const lines = content.split('\n')
-      const relativePath = path.relative(REPO_ROOT, file)
+    if (!ESLintCtor) {
+      /* Honest degradation. The caller is told the engine is not ESLint, so a
+         low issue count cannot be read as a clean lint. */
+      const heuristic = await runHeuristicLint(selected)
+      return {
+        path: path.relative(REPO_ROOT, resolvedPath),
+        engine: 'builtin-heuristics',
+        engine_note: 'ESLint is not installed in this environment (it is a devDependency). These are two heuristics, NOT a lint run.',
+        files_discovered: discovered.length,
+        files_linted: selected.length,
+        truncated,
+        issues_found: heuristic.length,
+        issues: heuristic.slice(0, 50),
+        fix_applied: false,
+      }
+    }
 
-      lines.forEach((line, idx) => {
-        // Check for var usage
-        if (line.match(/^\s*var\s+/)) {
-          issues.push({
-            file: relativePath,
-            line: idx + 1,
-            severity: 'warning',
-            rule: 'no-var',
-            message: 'Use const or let instead of var',
-          })
-        }
+    const eslint = new ESLintCtor({ cwd: REPO_ROOT, fix: false, errorOnUnmatchedPattern: false })
+    const results = await eslint.lintFiles(selected)
 
-        // Check for loose equality only; strict === / !== are valid.
-        if (/(^|[^=!])==($|[^=])/.test(line) || /(^|[^!])!=($|[^=])/.test(line)) {
-          issues.push({
-            file: relativePath,
-            line: idx + 1,
-            severity: 'error',
-            rule: 'eqeqeq',
-            message: 'Use === or !== instead of == or !=',
-          })
-        }
-      })
+    const issues = []
+    let errorCount = 0
+    let warningCount = 0
+    for (const result of results) {
+      errorCount += result.errorCount ?? 0
+      warningCount += result.warningCount ?? 0
+      for (const message of result.messages ?? []) {
+        issues.push({
+          file: path.relative(REPO_ROOT, result.filePath),
+          line: message.line ?? null,
+          severity: message.severity === 2 ? 'error' : 'warning',
+          rule: message.ruleId ?? 'parse-error',
+          message: message.message,
+        })
+      }
     }
 
     return {
       path: path.relative(REPO_ROOT, resolvedPath),
-      files_checked: files.length,
+      engine: 'eslint',
+      /* Discovered vs linted are reported separately and truncation is stated,
+         so "how much of the tree did Sam actually sweep" is answerable rather
+         than implied. */
+      files_discovered: discovered.length,
+      files_linted: results.length,
+      truncated,
+      error_count: errorCount,
+      warning_count: warningCount,
       issues_found: issues.length,
       issues: issues.slice(0, 50),
-      fix_applied: fix && issues.length > 0,
+      /* Autofix is deliberately never applied here. The registry entry passes
+         dryRun:true and its description promises issues "without applying
+         autofixes"; silently writing to the tree from a reporting check would
+         be the opposite of what the caller asked for. */
+      fix_applied: false,
+      fix_requested: Boolean(fix),
     }
   } catch (error) {
     throw new Error(`Failed to lint: ${error.message}`)
   }
+}
+
+/** The pre-existing two heuristics, kept ONLY as an honestly-labelled fallback. */
+async function runHeuristicLint(files) {
+  const issues = []
+  for (const file of files) {
+    const content = await fs.readFile(file, 'utf8')
+    const relativePath = path.relative(REPO_ROOT, file)
+    content.split(/\r?\n/).forEach((line, idx) => {
+      if (line.match(/^\s*var\s+/)) {
+        issues.push({ file: relativePath, line: idx + 1, severity: 'warning', rule: 'no-var', message: 'Use const or let instead of var' })
+      }
+      if (/(^|[^=!])==($|[^=])/.test(line) || /(^|[^!])!=($|[^=])/.test(line)) {
+        issues.push({ file: relativePath, line: idx + 1, severity: 'error', rule: 'eqeqeq', message: 'Use === or !== instead of == or !=' })
+      }
+    })
+  }
+  return issues
 }
 
 /**

@@ -159,6 +159,11 @@ const DOCUMENTED_RUNTIME_DEFAULTS = Object.freeze({
   NOFO_PARSE_CHUNK_OVERLAP: '600',
   NOFO_PARSE_MAX_TEXT_CHARS: '2000000',
   PROFILE_SCORING_MAX_CANDIDATES: '25000',
+  // Sam's code-lint check bounds how much of the tree one run covers. It is
+  // documented with its real default so the generated examples cannot imply
+  // the sweep is unbounded, and so the honest files_discovered vs files_linted
+  // reporting has a knob a reader can find.
+  SAM_LINT_MAX_FILES: '500',
 })
 
 function placeholderFor(name) {
