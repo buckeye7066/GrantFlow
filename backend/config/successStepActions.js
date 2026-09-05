@@ -356,7 +356,6 @@ const CATEGORY_DEFAULTS = {
       'Add a short note in your narrative if the document proves need or capacity',
     ],
     documents: true,
-    profile_section: 'narrative',
   },
   insurance: {
     how: 'Get the right insurance certificate on file — many grants and licenses stop without it.',
@@ -366,7 +365,6 @@ const CATEGORY_DEFAULTS = {
       'Upload the certificate to Documents',
     ],
     documents: true,
-    profile_section: 'organization_details',
     document_hint: 'Certificate of insurance',
   },
   legal: {
@@ -378,7 +376,6 @@ const CATEGORY_DEFAULTS = {
       'Update organization details with any new numbers (EIN, license #)',
     ],
     documents: true,
-    profile_section: 'organization_details',
   },
   compliance: {
     how: 'Finish the compliance registration this step names so you stay eligible for the funding pool.',
@@ -388,7 +385,6 @@ const CATEGORY_DEFAULTS = {
       'Upload proof to Documents and note status on the profile',
     ],
     documents: true,
-    profile_section: 'organization_details',
   },
   planning: {
     how: 'Write down the plan funders expect — then save it so proposals can reuse it.',
@@ -398,7 +394,6 @@ const CATEGORY_DEFAULTS = {
       'Upload a finished PDF if you have one',
     ],
     documents: true,
-    profile_section: 'programs_services',
   },
   financial: {
     how: 'Set up the financial account or budget artifact this step requires.',
@@ -408,7 +403,6 @@ const CATEGORY_DEFAULTS = {
       'Upload statements or budgets if funders will ask for them',
     ],
     documents: true,
-    profile_section: 'financial_information',
   },
   financial_aid: {
     how: 'Start the aid application on the official site, then update your profile status.',
@@ -418,7 +412,6 @@ const CATEGORY_DEFAULTS = {
       'Update education / financial sections and Documents',
     ],
     documents: true,
-    profile_section: 'education',
   },
   benefits: {
     how: 'Enroll through the official benefits channel, then record enrollment on your profile.',
@@ -428,7 +421,6 @@ const CATEGORY_DEFAULTS = {
       'Update government assistance / financial sections',
     ],
     documents: true,
-    profile_section: 'government_assistance',
   },
   governance: {
     how: 'Document board or governance steps funders expect to see.',
@@ -438,7 +430,6 @@ const CATEGORY_DEFAULTS = {
       'Upload governance documents',
     ],
     documents: true,
-    profile_section: 'organization_details',
   },
   operations: {
     how: 'Secure the operational capability this step names and keep proof on file.',
@@ -448,7 +439,6 @@ const CATEGORY_DEFAULTS = {
       'Upload agreements to Documents',
     ],
     documents: true,
-    profile_section: 'programs_services',
   },
   equipment: {
     how: 'Specify the equipment need with quotes — funders rarely fund vague asks.',
@@ -458,7 +448,6 @@ const CATEGORY_DEFAULTS = {
       'Upload quotes to Documents and note the need under financial information',
     ],
     documents: true,
-    profile_section: 'financial_information',
   },
   safety: {
     how: 'Use the official hotline or safety path first — then document only what you are comfortable sharing.',
@@ -468,7 +457,6 @@ const CATEGORY_DEFAULTS = {
       'Add only non-sensitive next-step notes to your profile if helpful',
     ],
     documents: false,
-    profile_section: 'narrative',
   },
   education: {
     how: 'Complete the education step and record progress on your profile.',
@@ -478,7 +466,6 @@ const CATEGORY_DEFAULTS = {
       'Upload certificates when received',
     ],
     documents: true,
-    profile_section: 'education',
   },
 }
 
@@ -492,12 +479,20 @@ function categoryDefault(category) {
       'Update the matching profile section when done',
     ],
     documents: true,
-    profile_section: 'narrative',
   }
 }
 
 /**
- * Attach actionable fields to a {label, category, why} success step.
+ * Attach actionable fields to a {label, category, why, section_key?, field?}
+ * success step.
+ *
+ * The profile deep link (`profile_section` / `profile_field`) is OPT-IN per
+ * step: an explicit `section_key` from the archetype wins, then a per-step
+ * ACTION_PATTERNS match. A category NEVER implies an editor — "legal" holds an
+ * EIN filing (organization_details.ein) and an immigration document (no home
+ * on the profile), and "planning" holds a sustainability plan (narrative) and
+ * a phone call to 211. Steps without a verified destination stay plain rows
+ * rather than links that land the user on an unrelated section.
  * @returns {object} serializable step (no functions)
  */
 export function enrichSuccessStep(step) {
@@ -523,7 +518,8 @@ export function enrichSuccessStep(step) {
       : fallback.checklist,
     official_url: matched?.official_url ?? null,
     official_label: matched?.official_label ?? null,
-    profile_section: matched?.profile_section || fallback.profile_section || null,
+    profile_section: step?.section_key || matched?.profile_section || null,
+    profile_field: step?.section_key && step?.field ? String(step.field) : null,
     documents: matched?.documents ?? fallback.documents ?? false,
     document_hint: matched?.document_hint || fallback.document_hint || null,
     anya_prompt:
@@ -541,6 +537,7 @@ export function enrichSuccessStep(step) {
     official_url: action.official_url,
     official_label: action.official_label,
     profile_section: action.profile_section,
+    profile_field: action.profile_field,
     documents: Boolean(action.documents),
     document_hint: action.document_hint,
     anya_prompt: action.anya_prompt,
