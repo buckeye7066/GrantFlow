@@ -1,0 +1,101 @@
+name: Normalize PR 1541 finalizer invariants
+
+on:
+  push:
+    branches: [fix/production-cors-current-main-20260905]
+    paths:
+      - .github/workflows/normalize-pr1541-finalizer.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: normalize-pr1541-finalizer
+  cancel-in-progress: true
+
+jobs:
+  normalize:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout latest branch head
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Enforce both finalizer invariants idempotently
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path('.github/workflows/apply-container-cors-default-and-finalize.yml')
+          text = path.read_text(encoding='utf-8')
+
+          extended = """          required_patterns=(
+            '^test-suite$'
+            '^test$'
+            'Windows build compatibility'
+            '^postgres-migrations$'
+            '^browser-smoke$'
+            '^production-image$'
+            'CodeQL|Analyze'
+            'Android'
+            'iOS'
+            'Release language'
+          )
+"""
+          core = """          # These job names are stable release authorities. Android, iOS, and
+          # release-language workflows are still included in the all-checks
+          # pending/failure scan below, but their internal job names may vary.
+          required_patterns=(
+            '^test-suite$'
+            '^test$'
+            'Windows build compatibility'
+            '^postgres-migrations$'
+            '^browser-smoke$'
+            '^production-image$'
+            'CodeQL|Analyze'
+          )
+"""
+          if extended in text:
+              text = text.replace(extended, core, 1)
+          elif core not in text:
+              raise SystemExit('Refused: neither recognized exact-head check block is present')
+
+          old_publish = """          git config user.name \"github-actions[bot]\"
+          git config user.email \"41898282+github-actions[bot]@users.noreply.github.com\"
+          git reset --soft origin/main
+"""
+          guarded_publish = """          git config user.name \"github-actions[bot]\"
+          git config user.email \"41898282+github-actions[bot]@users.noreply.github.com\"
+          # Never manufacture a squash commit that silently reverts a main
+          # revision which landed while this exact tree was being tested.
+          git fetch origin main
+          if ! git merge-base --is-ancestor origin/main HEAD; then
+            echo 'Current main advanced after this candidate was tested. Refusing to rewrite or merge; rerun on the new base.'
+            exit 1
+          fi
+          git reset --soft origin/main
+"""
+          if old_publish in text:
+              text = text.replace(old_publish, guarded_publish, 1)
+          elif guarded_publish not in text:
+              raise SystemExit('Refused: neither recognized publish block is present')
+
+          path.write_text(text, encoding='utf-8')
+          PY
+
+          rm -f .github/workflows/patch-pr1541-finalizer-check-detection.yml
+          rm -f .github/workflows/patch-pr1541-main-race-guard.yml
+          rm -f .github/workflows/normalize-pr1541-finalizer.yml
+          git diff --check
+          git add -A
+          if git diff --cached --quiet; then exit 0; fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "ci: normalize PR 1541 finalizer safeguards"
+          git push origin HEAD:fix/production-cors-current-main-20260905
