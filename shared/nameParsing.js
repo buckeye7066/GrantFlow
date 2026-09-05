@@ -89,8 +89,23 @@ export function parseFullName(fullName) {
   }
 
   // Handle "Last, First Middle" comma form.
-  if (cleaned.includes(',')) {
-    const [lastPart, restPart] = cleaned.split(',', 2).map((s) => s.trim())
+  //
+  // MUST run off `tokens` (honorific- and suffix-stripped), NOT off `cleaned`.
+  // Reading `cleaned` here threw away the two strips above and inverted every
+  // credentialed name: "John Smith, PhD" split into lastPart "John Smith" /
+  // restPart "PhD", yielding first_name "PhD", last_name "John Smith" — even
+  // though `suffix` had ALREADY correctly captured "PhD" three lines earlier.
+  // That is not cosmetic: deriveNamePartsIntoBasicInfo() below writes these
+  // into basic_information.first_name/last_name, hamiltonPreflight reads them,
+  // and Hamilton types them into real portal application forms. A wrong
+  // applicant name on a submitted application is a submission defect.
+  //
+  // The trailing comma is stripped first so "John Smith, PhD" — whose comma
+  // belonged to the suffix that is now gone — is no longer seen as a comma form
+  // at all, and falls through to the normal first/last path.
+  const remaining = tokens.join(' ').replace(/,+\s*$/, '').trim()
+  if (remaining.includes(',')) {
+    const [lastPart, restPart] = remaining.split(',', 2).map((s) => s.trim())
     const restTokens = restPart ? restPart.split(' ').filter(Boolean) : []
     if (lastPart && restTokens.length > 0) {
       return {
@@ -102,6 +117,7 @@ export function parseFullName(fullName) {
       }
     }
   }
+  tokens = remaining.split(' ').filter(Boolean)
 
   if (tokens.length === 0) return empty
   if (tokens.length === 1) {

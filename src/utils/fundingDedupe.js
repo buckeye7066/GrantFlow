@@ -220,10 +220,31 @@ function compatibleSharedUrlIdentity(a = {}, b = {}) {
 }
 
 export function areDuplicateFundingResults(a = {}, b = {}) {
+  // canonical_opportunity_key is PERSISTED and UNIQUE on funding_opportunities
+  // (schema truth: read it, never recompute it). Matching keys settle identity
+  // immediately. DISAGREEING keys must at minimum veto the weakest tier — the
+  // bare `id:` key — because two DIFFERENT opportunities can share a row id
+  // across shapes (a catalog row and a live-run row both default `source` to
+  // 'catalog'), and merging on that alone silently drops a real opportunity
+  // from the Discover results list. Disagreement deliberately does NOT veto
+  // the url/title/family tiers: the same real-world program crawled twice can
+  // carry two different canonical keys (the known sameProgram-inert class),
+  // and those tiers exist to catch exactly that.
+  const aCanonical = a?.canonical_opportunity_key
+    ? String(a.canonical_opportunity_key).trim().toLowerCase()
+    : ''
+  const bCanonical = b?.canonical_opportunity_key
+    ? String(b.canonical_opportunity_key).trim().toLowerCase()
+    : ''
+  if (aCanonical && bCanonical && aCanonical === bCanonical) return true
+  const canonicalDisagree = Boolean(aCanonical && bCanonical && aCanonical !== bCanonical)
+
   const aStrong = strongIdentityKeys(a)
   if (aStrong.length > 0) {
     const bStrong = new Set(strongIdentityKeys(b))
-    if (aStrong.some((key) => bStrong.has(key))) return true
+    const matched = aStrong.filter((key) => bStrong.has(key))
+    if (matched.some((key) => !key.startsWith('id:'))) return true
+    if (matched.length > 0 && !canonicalDisagree) return true
   }
 
   const aUrl = resultUrlKey(a)

@@ -177,6 +177,7 @@ const CRAWLER_JOB_TYPES = [
 ]
 
 export async function ensureCrawlerJobsTypeCheck(db, { logger = console } = {}) {
+  if (db?.dialect === 'sqlite') return ensureCrawlerJobsTypeCheckSqlite(db, { logger })
   if (db?.dialect !== 'postgres') return true
   return runStep(
     'crawler_jobs.type CHECK',
@@ -213,6 +214,101 @@ export async function ensureCrawlerJobsTypeCheck(db, { logger = console } = {}) 
           ${inList}
           ))
       `)
+    },
+  )
+}
+
+/**
+ * SQLite arm of the crawler_jobs.type CHECK invariant.
+ *
+ * WHY THIS EXISTS (2026-08-30 sweep): on a FRESH SQLite database, migrate.js
+ * bootstraps the modern schema.sql (whose crawler_jobs CHECK already carries
+ * every current job type) and then replays ALL numbered migrations — including
+ * 017 and 023, which rebuild crawler_jobs to add types that were new in THEIR
+ * day, using their era's full CHECK list. The replay therefore DOWNGRADES the
+ * fresh table to 023's 13-type list, and every modern job type
+ * (portal_check, government_funding, student_grants, anya_match_scout,
+ * foundation_990, clinical_trials, live_search, …) fails with a CHECK
+ * violation. Reproduced directly: schema.sql + 017 + 023 → INSERT of a
+ * 'portal_check' job fails. The migration files themselves cannot be edited
+ * (verifyOrBaselineMigrationLedger hard-fails on a checksum change), so this
+ * boot choke point repairs the table the same way those migrations built it:
+ * rebuild with the canonical list, copy every existing column, keep indexes.
+ */
+export async function ensureCrawlerJobsTypeCheckSqlite(db, { logger = console } = {}) {
+  return runStep(
+    'crawler_jobs.type CHECK (sqlite)',
+    '[database]',
+    logger,
+    async () => {
+      const row = await db
+        .prepare(`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'crawler_jobs'`)
+        .get()
+      const ddl = String(row?.sql || '')
+      if (!ddl) return
+      const missing = CRAWLER_JOB_TYPES.filter((t) => !ddl.includes(`'${t}'`))
+      if (missing.length === 0) return
+
+      const checkPattern = /type\s+TEXT\s+NOT\s+NULL\s+CHECK\s*\(\s*type\s+IN\s*\([\s\S]*?\)\s*\)/
+      if (!checkPattern.test(ddl)) {
+        logger?.warn?.(
+          '[database] crawler_jobs type CHECK not found in DDL — cannot repair stale list; missing types:',
+          missing.join(', '),
+        )
+        return
+      }
+      const inList = CRAWLER_JOB_TYPES.map((t) => `'${t}'`).join(', ')
+      const rebuiltDdl = ddl
+        .replace(checkPattern, 'type TEXT NOT NULL CHECK(type IN (' + inList + '))')
+        .replace(/CREATE TABLE\s+(?:IF NOT EXISTS\s+)?["']?crawler_jobs["']?/i, 'CREATE TABLE crawler_jobs_typecheck_rebuild')
+
+      const columns = await db.prepare('PRAGMA table_info(crawler_jobs)').all()
+      const columnNames = (columns || []).map((c) => `"${String(c.name)}"`).join(', ')
+      const indexRows = await db
+        .prepare(`SELECT sql FROM sqlite_master WHERE type = 'index' AND tbl_name = 'crawler_jobs' AND sql IS NOT NULL`)
+        .all()
+
+      // ponytail: Minimal, targeted fix — perform the rebuild inside a single transaction
+      // with foreign_keys temporarily disabled so dropping the parent table does NOT
+      // fire ON DELETE actions on child tables. This avoids wiping or unlinking rows
+      // in crawler_logs / dead_letter_queue / geo_* tables while still producing the
+      // repaired CHECK list atomically.
+      try {
+        await db.exec('BEGIN IMMEDIATE')
+        await db.exec('PRAGMA foreign_keys=OFF')
+        await db.exec('DROP TABLE IF EXISTS crawler_jobs_typecheck_rebuild')
+        await db.exec(rebuiltDdl)
+        await db.exec(
+          `INSERT INTO crawler_jobs_typecheck_rebuild (${columnNames}) SELECT ${columnNames} FROM crawler_jobs`,
+        )
+        await db.exec('DROP TABLE crawler_jobs')
+        await db.exec('ALTER TABLE crawler_jobs_typecheck_rebuild RENAME TO crawler_jobs')
+        await db.exec('PRAGMA foreign_keys=ON')
+        await db.exec('COMMIT')
+      } catch (err) {
+        try {
+          await db.exec('ROLLBACK')
+        } catch (rollbackErr) {
+          logger?.warn?.('[database] crawler_jobs rollback after rebuild failure also failed:', rollbackErr?.message || rollbackErr)
+        }
+        // Best-effort restore of FK enforcement before surfacing the error to the step wrapper.
+        try {
+          await db.exec('PRAGMA foreign_keys=ON')
+        } catch (fkRestoreErr) {
+          logger?.warn?.('[database] crawler_jobs FK restore after rebuild failure also failed:', fkRestoreErr?.message || fkRestoreErr)
+        }
+        throw err
+      }
+      for (const idx of indexRows || []) {
+        try {
+          await db.exec(String(idx.sql))
+        } catch (err) {
+          logger?.warn?.('[database] crawler_jobs index recreate failed (non-fatal):', err?.message || err)
+        }
+      }
+      logger?.info?.(
+        `[database] crawler_jobs.type CHECK repaired (sqlite) — restored ${missing.length} missing job types: ${missing.join(', ')}`,
+      )
     },
   )
 }

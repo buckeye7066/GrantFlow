@@ -35,6 +35,43 @@ describe('parseFullName', () => {
     })
   })
 
+  // REGRESSION. "John Smith, PhD" used to parse INSIDE-OUT — first_name "PhD",
+  // last_name "John Smith" — because the comma branch read the raw input
+  // instead of the token stream the honorific/suffix strips had already
+  // produced. `suffix` was correct the whole time, which is what made it look
+  // harmless. It was not: deriveNamePartsIntoBasicInfo writes these into
+  // basic_information, hamiltonPreflight reads them, and Hamilton types them
+  // into real portal forms — so this shipped the wrong applicant name onto
+  // submitted applications.
+  it('a credential after a comma is a SUFFIX, not a surname', () => {
+    expect(parseFullName('John Smith, PhD')).toMatchObject({
+      first_name: 'John',
+      middle_name: '',
+      last_name: 'Smith',
+      suffix: 'PhD',
+    })
+    expect(parseFullName('Jane Doe, MD')).toMatchObject({ first_name: 'Jane', last_name: 'Doe', suffix: 'MD' })
+    expect(parseFullName('Dr. John Smith, PhD')).toMatchObject({
+      first_name: 'John',
+      last_name: 'Smith',
+      suffix: 'PhD',
+    })
+  })
+
+  it('the comma form still wins when the comma really does mark "Last, First"', () => {
+    // Both forms carry a comma; only the token stream tells them apart.
+    expect(parseFullName('Smith, John Jr.')).toMatchObject({
+      first_name: 'John',
+      last_name: 'Smith',
+      suffix: 'Jr',
+    })
+    expect(parseFullName('Doe, Jane A.')).toMatchObject({
+      first_name: 'Jane',
+      middle_name: 'A.',
+      last_name: 'Doe',
+    })
+  })
+
   it('does not split organization names', () => {
     expect(parseFullName('Helping Hands Foundation')).toMatchObject({ is_org: true, first_name: '', last_name: '' })
     expect(looksLikeOrganization('Acme Inc')).toBe(true)

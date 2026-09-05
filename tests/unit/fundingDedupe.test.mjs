@@ -178,3 +178,16 @@ test('funding result dedupe does not collapse generic acronym umbrella titles wi
   assert.equal(areDuplicateFundingResults(rows[0], rows[1]), false)
   assert.equal(dedupeFundingResults(rows).length, 2)
 })
+
+test('DISAGREEING canonical keys veto the bare id tier (different opportunities never merge on a shared row id)', () => {
+  const a = { id: 1, title: 'Rural Health Innovation', sponsor: 'HRSA', canonical_opportunity_key: 'c:hrsa:rural-health-innovation' }
+  const b = { id: 1, title: 'Community Arts Fellowship', sponsor: 'NEA', canonical_opportunity_key: 'c:nea:community-arts-fellowship' }
+  assert.equal(areDuplicateFundingResults(a, b), false)
+  assert.equal(dedupeFundingResults([a, b]).length, 2)
+})
+
+test('drifted canonical keys do NOT veto the URL tier (the sameProgram-inert class stays merged)', () => {
+  const a = { id: 2, title: 'STEM Grant 2026', sponsor: 'Acme Fdn', source_url: 'https://acme.org/stem', canonical_opportunity_key: 'c:acme:stem-a' }
+  const b = { id: 3, title: 'STEM Grant 2026', sponsor: 'Acme Fdn', source_url: 'https://acme.org/stem', canonical_opportunity_key: 'c:acme:stem-b' }
+  assert.equal(areDuplicateFundingResults(a, b), true)
+})
