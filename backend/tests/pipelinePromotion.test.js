@@ -58,7 +58,10 @@ function makeDb() {
       profile_id TEXT, source_trust_tier TEXT, test_decision TEXT, live_score REAL
     );
     CREATE TABLE profile_opportunity_matches (
-      id TEXT PRIMARY KEY, profile_id TEXT NOT NULL, opportunity_id TEXT NOT NULL,
+      -- NOT NULL mirrors production PostgreSQL (0123): SQLite alone lets a
+      -- TEXT PRIMARY KEY hold NULL, which is exactly how an id-less INSERT
+      -- passed every test here while poisoning every live run in prod.
+      id TEXT PRIMARY KEY NOT NULL, profile_id TEXT NOT NULL, opportunity_id TEXT NOT NULL,
       match_score REAL, match_confidence REAL, match_decision TEXT,
       match_explanation TEXT, match_reasons TEXT, match_explain_json TEXT,
       matcher_version TEXT, computed_at TEXT, updated_at TEXT, evaluated_at TEXT,

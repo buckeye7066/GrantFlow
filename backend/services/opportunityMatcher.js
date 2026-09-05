@@ -173,6 +173,13 @@ async function persistFreshCanonicalDecision(db, profileId, opportunityId, decis
   ].filter(([column]) => columns.has(column))
 
   const insertValues = [
+    // Production PostgreSQL (migration 0123) declares `id TEXT PRIMARY KEY`
+    // with NO default; SQLite silently accepts a NULL text primary key, which
+    // is how an id-less INSERT here passed every test while failing with
+    // 23502 on every live promotion run (prod 2026-09-05, three deploys).
+    // The identity follows the crawler-os convention `<profile_id>:<opp_id>`;
+    // ON CONFLICT never rewrites an existing row's id.
+    ...(columns.has('id') ? [['id', `${String(profileId)}:${String(opportunityId)}`]] : []),
     ['profile_id', profileId],
     ['opportunity_id', opportunityId],
     ...decisionValues,
