@@ -1132,11 +1132,13 @@ export default function SmartMatcher() {
                           // Deep-link to the profile section this step actually
                           // fills. `profile_section` comes from
                           // successStepActions.enrichSuccessStep, which resolves
-                          // it PER STEP (ACTION_PATTERNS) with a per-category
-                          // fallback — deliberately finer than a category->section
-                          // map, which would send every legal/compliance/
-                          // governance/insurance/operations/safety step to the
-                          // same place.
+                          // it PER STEP only: an explicit archetype
+                          // `section_key` or an ACTION_PATTERNS match. A
+                          // category never implies an editor — "legal" holds
+                          // both an EIN filing and an immigration document, and
+                          // only one of those has a home on the profile.
+                          // `profile_field` (optional) lands the user on the
+                          // exact field that records completion.
                           //
                           // Why this is worth wiring at all: match_score here is
                           // matched profile data points over total, so a card
@@ -1146,6 +1148,7 @@ export default function SmartMatcher() {
                           // section (an external filing, a document upload) stays
                           // a plain row rather than a link that goes nowhere.
                           const target = step.profile_section
+                          const targetField = target && step.profile_field ? String(step.profile_field) : null
                           const body = (
                             <>
                               <div className="w-6 h-6 rounded-full bg-amber-100 text-amber-700 flex items-center justify-center text-xs font-bold shrink-0">
@@ -1171,7 +1174,11 @@ export default function SmartMatcher() {
                           return target ? (
                             <Link
                               key={idx}
-                              to={createPageUrl("ProfileDetail", { id: selectedProfileId, section: target })}
+                              to={createPageUrl("ProfileDetail", {
+                                id: selectedProfileId,
+                                section: target,
+                                ...(targetField ? { field: targetField } : {}),
+                              })}
                               className={`${shell} group transition-colors hover:bg-amber-50 hover:border-amber-300`}
                               aria-label={`${step.label} — open the ${String(target).replace(/_/g, ' ')} section of your profile`}
                             >

@@ -1040,7 +1040,13 @@ router.patch('/profile/:profileId/success-steps/:stepId', async (req, res) => {
 // Each archetype has:
 //   keywords   — trigger when any appear in allText (goals + story + tags)
 //   types      — trigger when applicantType includes any of these
-//   steps      — array of { label, category, why, skip? }
+//   steps      — array of { label, category, why, section_key?, field?, skip? }
+//                section_key/field are assigned PER STEP, and only where that
+//                profile editor can actually record completion of the named
+//                action (an EIN field, a SAM.gov checkbox). A broad category
+//                never implies an editor: "legal" covers both an EIN filing
+//                and an immigration document, and only one of those has a
+//                home on the profile.
 //                skip(allText, sections) is an optional guard to suppress
 //                the step when the profile already has it covered
 // ---------------------------------------------------------------------------
@@ -1051,8 +1057,8 @@ const SUCCESS_ARCHETYPES = [
   { keywords: ['business', 'startup', 'entrepreneur', 'self-employ', 'sole proprietor', 'llc'],
     types: ['business', 'entrepreneur', 'small_business'],
     steps: [
-      { label: 'Obtain an EIN (Employer Identification Number)', category: 'legal', why: 'Required for most business grants, bank accounts, and tax filings', skip: (t, s) => t.includes('ein') || s.organization_details?.ein },
-      { label: 'Get a business license / vendor permit', category: 'legal', why: 'Required before operating in most jurisdictions', skip: (t) => t.includes('license') || t.includes('permit') },
+      { label: 'Obtain an EIN (Employer Identification Number)', category: 'legal', section_key: 'organization_details', field: 'ein', why: 'Required for most business grants, bank accounts, and tax filings', skip: (t, s) => t.includes('ein') || s.organization_details?.ein },
+      { label: 'Get a business license / vendor permit', category: 'legal', section_key: 'organization_details', field: 'licenses_held', why: 'Required before operating in most jurisdictions', skip: (t) => t.includes('license') || t.includes('permit') },
       { label: 'Write a business plan', category: 'planning', why: 'Most business grants require a formal plan with financial projections', skip: (t) => t.includes('business plan') },
       { label: 'Open a dedicated business bank account', category: 'financial', why: 'Grant funds must be deposited into a separate account for audit compliance' },
     ],
@@ -1062,9 +1068,9 @@ const SUCCESS_ARCHETYPES = [
   { keywords: ['food truck', 'mobile food', 'street food'],
     steps: [
       { label: 'Obtain a food handler\'s / health department permit', category: 'legal', why: 'Required before serving food to the public' },
-      { label: 'Secure a food truck or commercial vehicle', category: 'equipment', why: 'Your primary asset — many grants cover vehicle acquisition' },
-      { label: 'Get a mobile vendor\'s license', category: 'legal', why: 'Required in most cities for mobile food operations' },
-      { label: 'Obtain commercial liability insurance', category: 'insurance', why: 'Required by commissary kitchens and event venues', skip: (t) => t.includes('insurance') },
+      { label: 'Secure a food truck or commercial vehicle', category: 'equipment', section_key: 'organization_details', field: 'equipment_owned', why: 'Your primary asset — many grants cover vehicle acquisition' },
+      { label: 'Get a mobile vendor\'s license', category: 'legal', section_key: 'organization_details', field: 'licenses_held', why: 'Required in most cities for mobile food operations' },
+      { label: 'Obtain commercial liability insurance', category: 'insurance', section_key: 'organization_details', field: 'insurance_held', why: 'Required by commissary kitchens and event venues', skip: (t) => t.includes('insurance') },
       { label: 'Find a licensed commissary kitchen', category: 'operations', why: 'Most health departments require prep in a certified facility, not at home' },
     ],
   },
@@ -1076,7 +1082,7 @@ const SUCCESS_ARCHETYPES = [
       { label: 'Get a food service establishment license', category: 'legal', why: 'Required by your city or county to operate a fixed-location food business' },
       { label: 'Pass a health department inspection', category: 'compliance', why: 'Inspectors must approve your kitchen before you can open' },
       { label: 'Obtain a liquor license (if serving alcohol)', category: 'legal', why: 'Alcohol licensing has long lead times — apply early', skip: (t) => !t.includes('bar') && !t.includes('alcohol') && !t.includes('wine') && !t.includes('beer') },
-      { label: 'Obtain commercial liability insurance', category: 'insurance', why: 'Covers slip-and-fall, foodborne illness, and property damage', skip: (t) => t.includes('insurance') },
+      { label: 'Obtain commercial liability insurance', category: 'insurance', section_key: 'organization_details', field: 'insurance_held', why: 'Covers slip-and-fall, foodborne illness, and property damage', skip: (t) => t.includes('insurance') },
     ],
   },
 
@@ -1084,11 +1090,11 @@ const SUCCESS_ARCHETYPES = [
   { keywords: ['nonprofit', '501c3', '501(c)(3)', 'charitable', 'tax-exempt'],
     types: ['nonprofit', 'organization'],
     steps: [
-      { label: 'File for 501(c)(3) tax-exempt status', category: 'legal', why: 'Most foundation and government grants require 501(c)(3) determination', skip: (t, s) => s.organization_details?.ein || s.organization_details?.is_501c3_public_charity },
-      { label: 'Register on SAM.gov', category: 'compliance', why: 'Required for all federal grant applications', skip: (t, s) => s.organization_details?.sam_gov_registered },
-      { label: 'Create a Grants.gov account', category: 'compliance', why: 'Federal grant applications are submitted through Grants.gov', skip: (t, s) => s.organization_details?.grants_gov_account },
+      { label: 'File for 501(c)(3) tax-exempt status', category: 'legal', section_key: 'organization_details', field: 'is_501c3_public_charity', why: 'Most foundation and government grants require 501(c)(3) determination', skip: (t, s) => s.organization_details?.ein || s.organization_details?.is_501c3_public_charity },
+      { label: 'Register on SAM.gov', category: 'compliance', section_key: 'organization_details', field: 'sam_gov_registered', why: 'Required for all federal grant applications', skip: (t, s) => s.organization_details?.sam_gov_registered },
+      { label: 'Create a Grants.gov account', category: 'compliance', section_key: 'organization_details', field: 'grants_gov_account', why: 'Federal grant applications are submitted through Grants.gov', skip: (t, s) => s.organization_details?.grants_gov_account },
       { label: 'Establish a board of directors', category: 'governance', why: 'Most funders require a functioning board with meeting minutes' },
-      { label: 'Develop a fundraising / sustainability plan', category: 'planning', why: 'Funders want to see how you\'ll sustain operations beyond the grant period' },
+      { label: 'Develop a fundraising / sustainability plan', category: 'planning', section_key: 'narrative', field: 'sustainability_plan', why: 'Funders want to see how you\'ll sustain operations beyond the grant period' },
     ],
   },
 
@@ -1097,7 +1103,7 @@ const SUCCESS_ARCHETYPES = [
     types: ['church', 'ministry'],
     steps: [
       { label: 'Obtain 501(c)(3) determination or church exemption letter', category: 'legal', why: 'Churches are auto-exempt but a determination letter speeds grant applications' },
-      { label: 'Register on SAM.gov (for federal grants)', category: 'compliance', why: 'Required even for faith-based organizations applying for federal funds', skip: (t, s) => s.organization_details?.sam_gov_registered },
+      { label: 'Register on SAM.gov (for federal grants)', category: 'compliance', section_key: 'organization_details', field: 'sam_gov_registered', why: 'Required even for faith-based organizations applying for federal funds', skip: (t, s) => s.organization_details?.sam_gov_registered },
       { label: 'Document community programs separately from worship activities', category: 'compliance', why: 'Federal funds cannot support religious instruction — show clear separation' },
       { label: 'Prepare audited or reviewed financial statements', category: 'financial', why: 'Funders need to see responsible stewardship of donor and grant dollars' },
     ],
@@ -1108,7 +1114,7 @@ const SUCCESS_ARCHETYPES = [
     types: ['school'],
     steps: [
       { label: 'Obtain state accreditation or approval', category: 'compliance', why: 'Most education grants require accreditation or state approval to participate' },
-      { label: 'Register on SAM.gov and Grants.gov', category: 'compliance', why: 'Required for Title I, IDEA, and other federal education funding' },
+      { label: 'Register on SAM.gov and Grants.gov', category: 'compliance', section_key: 'organization_details', field: 'sam_gov_registered', why: 'Required for Title I, IDEA, and other federal education funding' },
       { label: 'Compile student outcome data (enrollment, graduation, test scores)', category: 'documentation', why: 'Grant reviewers evaluate need and impact through measurable data' },
       { label: 'Identify a fiscal agent or grants administrator', category: 'operations', why: 'Federal grants require compliance with Uniform Guidance (2 CFR 200)' },
     ],
@@ -1195,7 +1201,7 @@ const SUCCESS_ARCHETYPES = [
       { label: 'Build a minimum viable product (MVP) or prototype', category: 'planning', why: 'SBIR/STTR Phase I requires proof of concept; investors expect a working demo' },
       { label: 'File provisional patent or document IP', category: 'legal', why: 'Protects your innovation and strengthens SBIR/STTR applications' },
       { label: 'Explore SBIR/STTR Phase I eligibility', category: 'financial_aid', why: '$150K-$275K in non-dilutive funding for R&D across 11 federal agencies' },
-      { label: 'Register on SAM.gov and get a UEI number', category: 'compliance', why: 'Required for all federal SBIR/STTR applications' },
+      { label: 'Register on SAM.gov and get a UEI number', category: 'compliance', section_key: 'organization_details', field: 'sam_gov_registered', why: 'Required for all federal SBIR/STTR applications' },
     ],
   },
 
@@ -1407,7 +1413,7 @@ const SUCCESS_ARCHETYPES = [
       { label: 'Obtain a cosmetology or barbering license', category: 'legal', why: 'State board licensure is required before providing any beauty services' },
       { label: 'Get a salon/shop establishment license', category: 'legal', why: 'The physical location needs its own license separate from your personal license' },
       { label: 'Pass a state board health and sanitation inspection', category: 'compliance', why: 'Required before opening — covers sterilization, ventilation, and workspace standards' },
-      { label: 'Obtain commercial liability insurance', category: 'insurance', why: 'Covers chemical reactions, burns, allergic reactions, and slip-and-fall incidents' },
+      { label: 'Obtain commercial liability insurance', category: 'insurance', section_key: 'organization_details', field: 'insurance_held', why: 'Covers chemical reactions, burns, allergic reactions, and slip-and-fall incidents' },
     ],
   },
 
@@ -1679,7 +1685,15 @@ function buildSuccessSteps(profile, sections, applicantType) {
           if (step.skip(allText, sections)) continue
         } catch { /* guard threw — include the step */ }
       }
-      steps.push(enrichSuccessStep({ label: step.label, category: step.category, why: step.why }))
+      steps.push(enrichSuccessStep({
+        label: step.label,
+        category: step.category,
+        why: step.why,
+        // Explicit per-step editor target only. enrichSuccessStep never infers
+        // one from the category: most success steps are external actions.
+        section_key: step.section_key ?? null,
+        field: step.field ?? null,
+      }))
     }
   }
 

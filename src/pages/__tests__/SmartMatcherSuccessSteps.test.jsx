@@ -10,10 +10,12 @@
  * — better profile, better need determination, better sources.
  *
  * The section comes from `successStepActions.enrichSuccessStep`, which
- * resolves `profile_section` PER STEP with a per-category fallback. A
- * category->section map was rejected as the source of truth because it sends
- * every legal / compliance / governance / insurance / operations / safety
- * step to the same section.
+ * resolves `profile_section` PER STEP ONLY — an explicit archetype
+ * `section_key` (with an optional exact `field`) or an ACTION_PATTERNS
+ * match. A category never implies an editor: "legal" holds both an EIN filing
+ * and an immigration document, and only one of those has a home on the
+ * profile, so a category->section map (or fallback) would send the user to
+ * an unrelated editor.
  *
  * These drive the real markup rather than grepping the source, so they fail
  * if the Link is removed, if it points at the wrong param, or if a step with
@@ -33,6 +35,7 @@ import { ArrowRight } from 'lucide-react'
  */
 function SuccessStep({ step, idx, selectedProfileId }) {
   const target = step.profile_section
+  const targetField = target && step.profile_field ? String(step.profile_field) : null
   const body = (
     <>
       <div>{idx + 1}</div>
@@ -46,7 +49,11 @@ function SuccessStep({ step, idx, selectedProfileId }) {
   )
   return target ? (
     <Link
-      to={createPageUrl('ProfileDetail', { id: selectedProfileId, section: target })}
+      to={createPageUrl('ProfileDetail', {
+        id: selectedProfileId,
+        section: target,
+        ...(targetField ? { field: targetField } : {}),
+      })}
       aria-label={`${step.label} — open the ${String(target).replace(/_/g, ' ')} section of your profile`}
     >
       {body}
@@ -104,6 +111,29 @@ describe('success step cards', () => {
     expect(screen.queryByRole('link')).toBeNull()
     expect(screen.getByText(/Upload your determination letter/i)).toBeTruthy()
     expect(screen.queryByTestId('chev')).toBeNull()
+  })
+
+  it('carries the exact field when the step names one, and omits it otherwise', () => {
+    const withField = renderStep({
+      label: 'Obtain an EIN (Employer Identification Number)',
+      category: 'legal',
+      profile_section: 'organization_details',
+      profile_field: 'ein',
+    })
+    const hrefA = screen.getByRole('link').getAttribute('href')
+    expect(hrefA).toContain('section=organization_details')
+    expect(hrefA).toContain('field=ein')
+    withField.unmount()
+
+    renderStep({ label: 'Get an NPI', category: 'compliance', profile_section: 'organization_details' })
+    const hrefB = screen.getByRole('link').getAttribute('href')
+    expect(hrefB).toContain('section=organization_details')
+    expect(hrefB).not.toContain('field=')
+  })
+
+  it('never links a step whose field has no section', () => {
+    renderStep({ label: 'Obtain employment authorization document (EAD)', category: 'legal', profile_section: null, profile_field: 'ein' })
+    expect(screen.queryByRole('link')).toBeNull()
   })
 
   it('names the destination for screen readers', () => {
