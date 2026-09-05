@@ -56,7 +56,7 @@ import { normalizeForCanonicalInsert } from './robertOpportunityNormalizer.js'
 import { verifyOpportunity } from './robertVerification.js'
 import { ingestOpportunity } from './robertIngestionBridge.js'
 import { scoreOpportunityForProfile } from './robertMatchBridge.js'
-import { createRecommendationIfHelpful } from './robertRecommendationService.js'
+import { createRecommendationIfHelpful, createResearchLeadIfHelpful } from './robertRecommendationService.js'
 import { mineCatalogForProfiles } from './robertCatalogMiner.js'
 import { runEmailFeedForRobert } from './robertEmailFeedBridge.js'
 import { runProfileDiscoveryLive } from '../crawlerOsService.js'
@@ -128,6 +128,7 @@ async function runRobertDiscoveryViaCrawlerOs({
       // table). Actually persist each ACCEPT-band recommendation now, and count
       // only the ones really created. Skipped on dry-run (preview only).
       let recsCreated = 0
+      let researchLeadsCreated = 0
       if (!dryRun) {
         for (const rec of run.recommendations || []) {
           const res = await safe(() => createRecommendationIfHelpful({
@@ -142,16 +143,49 @@ async function runRobertDiscoveryViaCrawlerOs({
           }), { errors: summary.errors, stage: `persist_recommendation:${profileId}` })
           if (res?.created) recsCreated += 1
         }
+        // Pointer rows (registry AND web lane) are intentionally absent from
+        // direct recommendations, but they must not disappear. Persist them as
+        // REVIEW research leads in Robert's existing user-visible queue; the
+        // frontend labels REVIEW as a research lead and never offers the
+        // add-to-pipeline action, and the accept route refuses them.
+        for (const lead of run.research_leads || []) {
+          const res = await safe(() => createResearchLeadIfHelpful({
+            db,
+            profileId,
+            opportunityId: lead.opportunity_id,
+            matchDecision: lead.decision,
+            matchScore: lead.match_score,
+            opportunityKind: lead.kind,
+            opportunityTitle: lead.title || '',
+            classification: lead.classification,
+            whyFound: 'Research lead from Robert discovery — a directory or prior-award pointer to investigate, not direct funding.',
+          }), { errors: summary.errors, stage: `persist_research_lead:${profileId}` })
+          if (res?.created) {
+            researchLeadsCreated += 1
+            summary.research_leads.push({
+              id: res.recommendation_id,
+              profile_id: profileId,
+              opportunity_id: lead.opportunity_id,
+              decision: lead.decision,
+              kind: lead.kind ?? null,
+              classification: lead.classification,
+              source: lead.source ?? 'crawler_os',
+            })
+          }
+        }
       } else {
         recsCreated = run.recommendations.length // preview count only
+        researchLeadsCreated = run.research_leads?.length ?? 0
       }
       counters.recommendations_created += recsCreated
+      counters.research_leads_created += researchLeadsCreated
       summary.matched.push({
         profile_id: profileId,
         applicant_types: thesis.applicant_types,
         stored: run.stored,
         matches: persisted.matches,
         recommendations: recsCreated,
+        research_leads: researchLeadsCreated,
         dry_run: dryRun || undefined,
         sources: run.sources.map((s) => ({
           source_id: s.source_id,
@@ -256,6 +290,7 @@ export async function runRobert({
     opportunities_ingested: 0,
     opportunities_matched: 0,
     recommendations_created: 0,
+    research_leads_created: 0,
     recommendations_delivered: 0,
     recommendations_accepted: 0,
     recommendations_declined: 0,
@@ -274,6 +309,7 @@ export async function runRobert({
     ingested: [],
     matched: [],
     recommendations: [],
+    research_leads: [],
     errors: [],
     notes: [],
   }
@@ -877,6 +913,7 @@ async function finishRun({ db, runId, status, counters, summary, error = null, s
     ingested: summary.ingested,
     matched: summary.matched,
     recommendations: summary.recommendations,
+    research_leads: summary.research_leads,
     rejected: summary.rejected,
     errors: summary.errors,
     counters,

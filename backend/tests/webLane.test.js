@@ -83,6 +83,55 @@ describe('runWebDiscoveryLane', () => {
     expect(matches[0].source_query.length).toBeGreaterThan(0)
     expect(res.queries).toContain(matches[0].source_query)
     expect(matches[0].discovered_via).toBe('web_search')
+
+    // Four-truth gate on the open web: this thesis never declared a need
+    // (`needs_defaulted` is not false), so a direct ACCEPT is impossible and
+    // nothing reaches the direct-funding recommendation list.
+    expect(matches[0].decision).toBe('review')
+    const explanation = JSON.parse(matches[0].match_explain_json)
+    expect(explanation.four_truth_proof.all_passed).toBe(false)
+    expect(explanation.four_truth_proof.meets_profile_need.passed).toBe(false)
+    expect(res.recommendations).toEqual([])
+    expect(res.research_leads).toEqual([])
+  })
+
+  it('carries a web-found DIRECTORY locator through research_leads, never recommendations', async () => {
+    const store = createMemoryStore()
+    const searchWeb = vi.fn().mockResolvedValue([
+      { url: 'https://tn.gov/youth-funders', title: 'Youth funder directory', snippet: '' },
+    ])
+    const extractOpportunities = vi.fn().mockResolvedValue([
+      {
+        kind: 'DIRECTORY',
+        title: 'Tennessee Youth and After School Program Funder Directory',
+        funder: 'Tennessee Commission on Children and Youth',
+        summary: 'Directory of foundations and state programs funding youth and after school nonprofits in Tennessee',
+        info_url: 'https://tn.gov/youth-funders',
+        state: 'TN',
+        need_categories: ['youth', 'after school'],
+        relevant: true,
+      },
+    ])
+    const res = await runWebDiscoveryLane(
+      { store, fetcher: fakeFetcher({ 'https://tn.gov/youth-funders': '<body>directory</body>' }), searchWeb, extractOpportunities },
+      { thesis: { ...thesis, needs_defaulted: false }, runId: 'run-dir' },
+    )
+    expect(res.ok).toBe(true)
+    expect(res.stored).toBe(1)
+    const matches = store.all('profile_opportunity_matches').filter((m) => m.profile_id === 'p1')
+    expect(matches.length).toBe(1)
+    expect(matches[0].decision).toBe('review')
+    // A locator is a place to search, never an award: it must be visible as a
+    // research lead and absent from the direct-funding list.
+    expect(res.recommendations).toEqual([])
+    expect(res.research_leads.length).toBe(1)
+    expect(res.research_leads[0]).toMatchObject({
+      kind: 'DIRECTORY',
+      decision: 'review',
+      classification: 'research_lead_not_direct_funding',
+      source: 'web_search',
+      info_url: 'https://tn.gov/youth-funders',
+    })
   })
 
   it('rejects an expired opportunity via the reality gate', async () => {

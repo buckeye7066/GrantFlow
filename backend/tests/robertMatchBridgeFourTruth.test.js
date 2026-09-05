@@ -50,7 +50,10 @@ const PROFILE_CONTEXT = {
     },
     demographics: { first_generation: true },
   },
-  signals: { state: 'TN', city: 'Murfreesboro', zip: '37132' },
+  // Production signals (buildProfileSignals) always carry the profile's
+  // applicant types; the four-truth profile_qualifies leg requires the
+  // canonical engine to have matched the funder's stated applicant type.
+  signals: { state: 'TN', city: 'Murfreesboro', zip: '37132', applicantTypes: ['student'] },
 }
 
 function verifiedCatalogRow(overrides = {}) {

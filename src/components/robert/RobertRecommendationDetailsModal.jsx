@@ -52,6 +52,9 @@ export default function RobertRecommendationDetailsModal({ open, recommendation,
   const hasScore = Number.isFinite(rawScore)
   const matchLabel = hasScore ? scoreToMatchLabel(rawScore) : null
   const decision = String(recommendation.match_decision || '').toUpperCase()
+  // REVIEW rows are research leads (directory / prior-award pointers): shown
+  // for investigation, never offered as direct funding. The API refuses accept.
+  const isResearchLead = decision === 'REVIEW'
   const reasons = Array.isArray(recommendation.match_reasons) ? recommendation.match_reasons : []
 
   async function handleAccept() {
@@ -105,9 +108,11 @@ export default function RobertRecommendationDetailsModal({ open, recommendation,
     <Dialog open={open} onOpenChange={(o) => { if (!o) onClose?.() }}>
       <DialogContent className="max-w-xl">
         <DialogHeader>
-          <DialogTitle>Robert recommendation details</DialogTitle>
+          <DialogTitle>{isResearchLead ? 'Robert research lead details' : 'Robert recommendation details'}</DialogTitle>
           <DialogDescription>
-            Robert found this opportunity from a verified source and matched it to your profile using GrantFlow's canonical scoring engine.
+            {isResearchLead
+              ? 'Robert found a directory or pointer worth researching. It is not verified as direct funding and cannot be added to your pipeline.'
+              : 'Robert found this opportunity from a verified source and matched it to your profile using GrantFlow\'s canonical scoring engine.'}
           </DialogDescription>
         </DialogHeader>
 
@@ -164,7 +169,7 @@ export default function RobertRecommendationDetailsModal({ open, recommendation,
         <DialogFooter className="flex flex-col sm:flex-row gap-2">
           <Button variant="ghost" onClick={onClose} disabled={busy}>Close</Button>
           <Button variant="outline" onClick={handleDecline} disabled={busy}>No, Keep in Resources</Button>
-          <Button onClick={handleAccept} disabled={busy}>Yes, Add to Pipeline</Button>
+          {!isResearchLead && <Button onClick={handleAccept} disabled={busy}>Yes, Add to Pipeline</Button>}
         </DialogFooter>
       </DialogContent>
     </Dialog>

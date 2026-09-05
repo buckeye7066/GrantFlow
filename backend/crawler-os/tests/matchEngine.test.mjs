@@ -25,6 +25,9 @@ const STUDENT_THESIS = buildThesis({
   location: { state: 'TN', city: 'Murfreesboro' },
   school: { name: 'Middle Tennessee State University', type: 'university' },
 });
+// Four-truth fixtures: a DECLARED need (not a type-shaped default) and the
+// reality gate's positive verdict are required before any direct ACCEPT.
+const PROVEN_STUDENT_THESIS = { ...STUDENT_THESIS, needs_defaulted: false };
 const STUDENT_CTX = {
   profileRow: {
     id: 'p_stu', display_name: 'Jordan Lee', primary_type: 'student',
@@ -47,6 +50,7 @@ const STUDENT_CTX = {
     demographics: { first_generation: true },
   },
 };
+const PROVEN_STUDENT_CTX = { ...STUDENT_CTX, realityPassed: true };
 function studentOpp(over = {}) {
   return makeOpportunity({
     source_id: 'tn_tsac', kind: OPPORTUNITY_KIND.DIRECT_GRANT,
@@ -56,6 +60,11 @@ function studentOpp(over = {}) {
     deadline: new Date(Date.now() + 40 * 86400000).toISOString(),
     apply_url: 'https://www.tn.gov/collegepays/tsaa/apply',
     trust_tier: TRUST_TIER.OFFICIAL_HTML, reality_status: REALITY_STATUS.VERIFIED,
+    evidence: {
+      url: 'https://www.tn.gov/collegepays/tsaa/apply',
+      content_hash: 'sha256:student-aid-fixture',
+      fetched_at: '2026-09-04T00:00:00.000Z',
+    },
     ...over,
   });
 }
@@ -79,7 +88,7 @@ test('the decision triad is exactly accept / review / reject (lowercase)', () =>
 });
 
 test('a strong, well-matched grant ACCEPTs with a high score (full profile context)', () => {
-  const m = computeMatchDecision(studentOpp(), STUDENT_THESIS, STUDENT_CTX);
+  const m = computeMatchDecision(studentOpp(), PROVEN_STUDENT_THESIS, PROVEN_STUDENT_CTX);
   assert.equal(m.decision, MATCH_DECISION.ACCEPT);
   // Data-point scale: 11 is the ACCEPT band (top ~quarter of real matches).
   // The old ">= 70" expectation was calibrated against the inflated stub-
@@ -180,7 +189,7 @@ test('full context + accept-level coverage: the locator demotion and #886 no-app
     info_url: 'https://studentaid.example.gov/finder',
     title: 'Tennessee student aid finder',
   });
-  const d1 = computeMatchDecision(dir, STUDENT_THESIS, STUDENT_CTX);
+  const d1 = computeMatchDecision(dir, PROVEN_STUDENT_THESIS, PROVEN_STUDENT_CTX);
   assert.notEqual(d1.decision, MATCH_DECISION.ACCEPT);
   if (d1.match_score >= 11) {
     assert.ok(d1.match_explain.warnings.some((w) => /pointer to look through/i.test(w)),
@@ -190,7 +199,7 @@ test('full context + accept-level coverage: the locator demotion and #886 no-app
   // Same strong fit as a PROGRAM with no apply target: held at REVIEW with
   // the explicit #886 warning.
   const program = studentOpp({ kind: 'PROGRAM', apply_url: null, info_url: 'https://studentaid.example.gov/tsaa' });
-  const d2 = computeMatchDecision(program, STUDENT_THESIS, STUDENT_CTX);
+  const d2 = computeMatchDecision(program, PROVEN_STUDENT_THESIS, PROVEN_STUDENT_CTX);
   assert.equal(d2.decision, MATCH_DECISION.REVIEW);
   assert.ok(d2.match_explain.warnings.some((w) => /no direct application URL/i.test(w)),
     `accept-level PROGRAM without apply target must carry the #886 warning (score ${d2.match_score})`);
@@ -227,7 +236,7 @@ test('an unrelated opportunity stays low and never ACCEPTs', () => {
 });
 
 test('an explicit floor override is honored', () => {
-  const m = computeMatchDecision(studentOpp(), STUDENT_THESIS, { floor: 99, ...STUDENT_CTX });
+  const m = computeMatchDecision(studentOpp(), PROVEN_STUDENT_THESIS, { floor: 99, ...PROVEN_STUDENT_CTX });
   assert.equal(m.match_explain.matcher_version, CANONICAL_MATCHER_VERSION);
   assert.equal(m.decision, MATCH_DECISION.ACCEPT, 'OS floor is a display/filter concern; canonical thresholds decide');
 });
@@ -314,7 +323,60 @@ test('OS facade and canonical engine agree on score and decision after shape map
     reality_status: opp.reality_status,
   });
   assert.equal(osDecision.match_score, canonicalDecision.score);
-  assert.equal(osDecision.decision.toUpperCase(), canonicalDecision.decision);
+  // The OS facade may hold a canonical ACCEPT at REVIEW (four-truth gate); the
+  // canonical verdict itself must still be reported verbatim.
+  assert.equal(osDecision.match_explain.canonical_decision, canonicalDecision.decision);
+});
+
+test('the four-truth gate is mandatory even when a caller omits the enforcement option', () => {
+  // Same strong fit, but the caller never threaded the reality verdict.
+  const m = computeMatchDecision(studentOpp(), PROVEN_STUDENT_THESIS, STUDENT_CTX);
+  assert.equal(m.match_explain.canonical_decision, 'ACCEPT');
+  assert.equal(m.match_explain.four_truth_proof.real.passed, false);
+  assert.equal(m.decision, MATCH_DECISION.REVIEW);
+  assert.ok(m.match_explain.warnings.some((warning) => /four-truth gate held at REVIEW: real/.test(warning)));
+});
+
+test('an ACCEPT-derived eligible flag cannot replace stated applicant-type evidence', () => {
+  const m = computeMatchDecision(
+    studentOpp({ applicant_types: [] }),
+    PROVEN_STUDENT_THESIS,
+    PROVEN_STUDENT_CTX,
+  );
+  assert.equal(m.match_explain.four_truth_proof.profile_qualifies.passed, false);
+  assert.deepEqual(m.match_explain.four_truth_proof.profile_qualifies.applicant_type_evidence, []);
+  assert.deepEqual(m.match_explain.four_truth_proof.profile_qualifies.eligibility_prose_evidence, []);
+  assert.notEqual(m.decision, MATCH_DECISION.ACCEPT);
+});
+
+test('evidence-backed eligibility prose can prove applicant type for blind web candidates', () => {
+  // A blind web candidate carries NO applicant_types; the funder's own
+  // eligibility words are the only evidence. Profile data is never copied in.
+  const m = computeMatchDecision(
+    studentOpp({
+      applicant_types: [],
+      eligibility_text: 'Eligible applicants must be currently enrolled college students.',
+      eligibility_bullets: ['Applicants must be currently enrolled college students.'],
+    }),
+    PROVEN_STUDENT_THESIS,
+    PROVEN_STUDENT_CTX,
+  );
+  assert.equal(m.match_explain.matched_profile_type, true);
+  assert.equal(m.match_explain.four_truth_proof.profile_qualifies.passed, true);
+  assert.deepEqual(m.match_explain.four_truth_proof.profile_qualifies.applicant_type_evidence, []);
+  assert.ok(m.match_explain.four_truth_proof.profile_qualifies.eligibility_prose_evidence.length > 0);
+  assert.equal(m.decision, MATCH_DECISION.ACCEPT);
+});
+
+test('past-award intel is held at REVIEW as a research pointer, never ACCEPT', () => {
+  const intel = studentOpp({ kind: OPPORTUNITY_KIND.PAST_AWARD_INTEL, title: 'TSAA prior-year award recipients' });
+  const m = computeMatchDecision(intel, PROVEN_STUDENT_THESIS, PROVEN_STUDENT_CTX);
+  assert.notEqual(m.decision, MATCH_DECISION.ACCEPT);
+  assert.equal(m.match_explain.four_truth_proof.direct_funding, false);
+  if (m.match_explain.canonical_decision === 'ACCEPT') {
+    assert.equal(m.decision, MATCH_DECISION.REVIEW);
+    assert.ok(m.match_explain.warnings.some((w) => /research pointer/i.test(w)));
+  }
 });
 
 test('OS matcher source contains no standalone scoring weights or decide function', () => {

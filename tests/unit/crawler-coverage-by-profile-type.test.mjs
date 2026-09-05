@@ -248,6 +248,8 @@ test('direct funding requires positive proof for all four truths', () => {
     kind: 'DIRECT_GRANT',
     reality_status: 'VERIFIED',
     apply_url: 'https://agency.gov/apply',
+    // The funder states who may apply; the canonical engine matched it.
+    applicant_types: ['individual'],
     evidence: {
       url: 'https://agency.gov/program',
       content_hash: 'sha256:verified-page',
@@ -260,6 +262,7 @@ test('direct funding requires positive proof for all four truths', () => {
     eligible: 'yes',
     matchedNeeds: ['transportation'],
     missingEligibilityFields: [],
+    match_explain: { matchedSignals: ['applicant_type'] },
   }
   const proof = buildFourTruthProof(opportunity, { needs_defaulted: false }, canonical, {
     realityPassed: true,
@@ -269,7 +272,45 @@ test('direct funding requires positive proof for all four truths', () => {
   assert.equal(proof.relatable.passed, true)
   assert.equal(proof.meets_profile_need.passed, true)
   assert.equal(proof.profile_qualifies.passed, true)
+  assert.deepEqual(proof.profile_qualifies.applicant_type_evidence, ['individual'])
   assert.equal(proof.all_passed, true)
+})
+
+test('an eligible flag without funder-stated applicant evidence cannot prove the profile qualifies', () => {
+  const opportunity = {
+    kind: 'DIRECT_GRANT',
+    reality_status: 'VERIFIED',
+    apply_url: 'https://agency.gov/apply',
+    evidence: {
+      url: 'https://agency.gov/program',
+      content_hash: 'sha256:verified-page',
+      fetched_at: '2026-09-02T19:00:00.000Z',
+    },
+  }
+  const canonical = {
+    decision: 'ACCEPT',
+    score: 91,
+    eligible: 'yes',
+    matchedNeeds: ['transportation'],
+    missingEligibilityFields: [],
+    match_explain: { matchedSignals: [] },
+  }
+  const proof = buildFourTruthProof(opportunity, { needs_defaulted: false }, canonical, { realityPassed: true })
+  assert.equal(proof.profile_qualifies.passed, false)
+  assert.equal(proof.all_passed, false)
+
+  // Eligibility prose captured from the page counts as the funder's statement
+  // once the canonical engine has matched the applicant type against it.
+  const prose = buildFourTruthProof(
+    { ...opportunity, eligibility_text: 'Open to individuals and families in Tennessee.' },
+    { needs_defaulted: false },
+    { ...canonical, match_explain: { matchedSignals: ['applicant_type'] } },
+    { realityPassed: true },
+  )
+  assert.equal(prose.profile_qualifies.passed, true)
+  assert.deepEqual(prose.profile_qualifies.applicant_type_evidence, [])
+  assert.equal(prose.profile_qualifies.eligibility_prose_evidence.length, 1)
+  assert.equal(prose.all_passed, true)
 })
 
 test('unknown qualification or type-defaulted needs cannot authorize direct funding', () => {

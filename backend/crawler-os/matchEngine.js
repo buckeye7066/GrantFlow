@@ -102,6 +102,28 @@ function positiveEligibility(value) {
   return ['yes', 'eligible', 'qualified', 'true'].includes(String(value ?? '').trim().toLowerCase());
 }
 
+function eligibilityProseOf(opportunity) {
+  return uniqueStrings([
+    opportunity?.eligibility_text,
+    ...(Array.isArray(opportunity?.eligibility_bullets) ? opportunity.eligibility_bullets : []),
+  ]);
+}
+
+/**
+ * The funder must SAY who may apply, and the canonical engine must have
+ * matched the profile against that statement. Evidence is either a stated
+ * opportunity-side applicant type or eligibility prose captured from the
+ * source page (a blind web candidate carries no applicant_types — its
+ * eligibility text is the only place the funder's own words live). The
+ * profile's answers are never copied into the opportunity to manufacture it.
+ */
+function hasPositiveApplicantTypeEvidence(opportunity, canonical) {
+  const statedApplicantTypes = stripWildcard(uniqueStrings(opportunity?.applicant_types));
+  const eligibilityProse = eligibilityProseOf(opportunity);
+  return (statedApplicantTypes.length > 0 || eligibilityProse.length > 0) &&
+    canonical?.match_explain?.matchedSignals?.includes?.('applicant_type') === true;
+}
+
 function hasPositiveRealityEvidence(opportunity, realityPassed) {
   const status = String(opportunity?.reality_status ?? '').trim().toUpperCase();
   const evidence = opportunity?.evidence ?? {};
@@ -152,8 +174,14 @@ export function buildFourTruthProof(opportunity, thesis, canonical, {
       profile_needs_defaulted: thesis?.needs_defaulted === true,
     },
     profile_qualifies: {
-      passed: positiveEligibility(eligibility),
+      // The canonical engine's `eligible` output is decision-derived for an
+      // ACCEPT, so it cannot by itself prove that the funder says this profile
+      // may apply. Require stated opportunity-side applicant evidence AND the
+      // canonical engine's positive match against it.
+      passed: positiveEligibility(eligibility) && hasPositiveApplicantTypeEvidence(opportunity, canonical),
       eligibility,
+      applicant_type_evidence: stripWildcard(uniqueStrings(opportunity?.applicant_types)),
+      eligibility_prose_evidence: eligibilityProseOf(opportunity),
       missing_eligibility_fields: canonical?.missingEligibilityFields ?? [],
     },
   };
@@ -186,7 +214,11 @@ export function computeMatchDecision(opportunity, thesis = {}, opts = {}) {
     realityPassed: opts.realityPassed === true,
   });
 
-  if (opts.enforceFourTruths === true && fourTruthProof.direct_funding &&
+  // The four-truth gate is UNCONDITIONAL. Every producer already opted in
+  // (`enforceFourTruths: true` in pipeline.js, webLane.js, robertMatchBridge);
+  // that flag is now accepted for compatibility and ignored, so a caller that
+  // forgets it can never hand a direct ACCEPT to a surface without proof.
+  if (fourTruthProof.direct_funding &&
       decision === MATCH_DECISION.ACCEPT && !fourTruthProof.all_passed) {
     decision = MATCH_DECISION.REVIEW;
     const failedTruths = [
@@ -202,6 +234,7 @@ export function computeMatchDecision(opportunity, thesis = {}, opts = {}) {
   // Directory locators are exempt because their contract is the information link.
   const hasApplyUrl = Boolean(opportunity?.apply_url ?? opportunity?.application_url);
   const isDirectoryLocator = String(opportunity?.kind ?? '').toUpperCase() === OPPORTUNITY_KIND.DIRECTORY;
+  const isPastAwardIntel = String(opportunity?.kind ?? '').toUpperCase() === OPPORTUNITY_KIND.PAST_AWARD_INTEL;
   if (!hasApplyUrl && !isDirectoryLocator && decision === MATCH_DECISION.ACCEPT) {
     decision = MATCH_DECISION.REVIEW;
     warnings.push('no direct application URL — strong fit held at REVIEW until an apply target is known');
@@ -212,6 +245,13 @@ export function computeMatchDecision(opportunity, thesis = {}, opts = {}) {
     decision = MATCH_DECISION.REVIEW;
     warnings.push('directory locator surfaced as a pointer to look through, not a strong match');
   }
+  // Past-award intel is a research pointer, never direct funding. Held at
+  // REVIEW so it travels through research_leads instead of vanishing (an
+  // ACCEPT-level pointer is neither recommendable nor a research lead).
+  if (isPastAwardIntel && decision === MATCH_DECISION.ACCEPT) {
+    decision = MATCH_DECISION.REVIEW;
+    warnings.push('past-award intel surfaced as a research pointer, not a strong match');
+  }
   // The need-first overlay's resource routing usually holds a directory at
   // REVIEW before this facade ever sees an ACCEPT — but the demotion WARNING
   // is part of the locator contract ("Recommended ≠ strong match"): an
@@ -221,6 +261,10 @@ export function computeMatchDecision(opportunity, thesis = {}, opts = {}) {
   if (isDirectoryLocator && decision === MATCH_DECISION.REVIEW && isAcceptLevelScore(score) &&
       !warnings.some((w) => /pointer to look through/i.test(String(w ?? '')))) {
     warnings.push('directory locator surfaced as a pointer to look through, not a strong match');
+  }
+  if (isPastAwardIntel && decision === MATCH_DECISION.REVIEW && isAcceptLevelScore(score) &&
+      !warnings.some((w) => /research pointer/i.test(String(w ?? '')))) {
+    warnings.push('past-award intel surfaced as a research pointer, not a strong match');
   }
 
   return {
@@ -323,9 +367,17 @@ function opportunityToCanonicalOpportunity(opportunity = {}) {
     entity_types_allowed: allowedTypes,
     need_types_supported: needs,
     categories: uniqueStrings([...needs, ...allowedTypes, ...applicantTypes]),
-    eligibility_bullets: applicantTypes.length
-      ? [`Eligible applicants: ${uniqueStrings([...applicantTypes, ...allowedTypes]).join(', ')}`]
-      : [],
+    // Validated eligibility prose/bullets captured from the source page ride
+    // along with the stated applicant types, so a blind web candidate (no
+    // applicant_types) can still earn the canonical applicant_type signal from
+    // the funder's own words. Profile data is never copied in here.
+    eligibility_bullets: uniqueStrings([
+      ...(applicantTypes.length
+        ? [`Eligible applicants: ${uniqueStrings([...applicantTypes, ...allowedTypes]).join(', ')}`]
+        : []),
+      opportunity.eligibility_text,
+      ...(Array.isArray(opportunity.eligibility_bullets) ? opportunity.eligibility_bullets : []),
+    ]),
     // The sponsor's NAME is deliberately NOT a keyword: keywords feed the
     // need-first TARGETING text, and a funder identity is not a targeting
     // statement (#1086 identity-vs-topic). With it in, "U.S. Department of

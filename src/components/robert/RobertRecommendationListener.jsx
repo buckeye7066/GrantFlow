@@ -115,6 +115,9 @@ export default function RobertRecommendationListener() {
 }
 
 function showRecommendationToast(rec, { setDetailsOpen, setDetailsRecommendation }) {
+  // REVIEW rows are research leads (directory / prior-award pointers): never
+  // offer add-to-pipeline; the API refuses it anyway (409).
+  const isResearchLead = String(rec.match_decision || '').toUpperCase() === 'REVIEW'
   toast({
     id: `robert-rec-${rec.id}`,
     title: rec.toast_title || 'Robert found a possible funding source',
@@ -136,36 +139,38 @@ function showRecommendationToast(rec, { setDetailsOpen, setDetailsRecommendation
         >
           View Details
         </Button>
-        <Button
-          size="sm"
-          onClick={async (e) => {
-            e?.preventDefault?.()
-            try {
-              const result = await apiFetch(
-                `/api/robert/recommendations/${encodeURIComponent(rec.id)}/accept`,
-                { method: 'POST' },
-              )
-              toast({
-                id: `robert-rec-accepted-${rec.id}`,
-                title: 'Added to pipeline.',
-                description: result?.pipeline?.saved
-                  ? 'Robert added it to this profile\'s pipeline.'
-                  : 'Robert recorded the decision; check Discover Grants for confirmation.',
-                duration: 8000,
-              })
-            } catch (err) {
-              toast({
-                id: `robert-rec-accept-failed-${rec.id}`,
-                variant: 'destructive',
-                title: 'Could not add to pipeline.',
-                description: err?.message || 'Try again from Discover Grants.',
-                duration: 8000,
-              })
-            }
-          }}
-        >
-          Yes, Add to Pipeline
-        </Button>
+        {!isResearchLead && (
+          <Button
+            size="sm"
+            onClick={async (e) => {
+              e?.preventDefault?.()
+              try {
+                const result = await apiFetch(
+                  `/api/robert/recommendations/${encodeURIComponent(rec.id)}/accept`,
+                  { method: 'POST' },
+                )
+                toast({
+                  id: `robert-rec-accepted-${rec.id}`,
+                  title: 'Added to pipeline.',
+                  description: result?.pipeline?.saved
+                    ? 'Robert added it to this profile\'s pipeline.'
+                    : 'Robert recorded the decision; check Discover Grants for confirmation.',
+                  duration: 8000,
+                })
+              } catch (err) {
+                toast({
+                  id: `robert-rec-accept-failed-${rec.id}`,
+                  variant: 'destructive',
+                  title: 'Could not add to pipeline.',
+                  description: err?.message || 'Try again from Discover Grants.',
+                  duration: 8000,
+                })
+              }
+            }}
+          >
+            Yes, Add to Pipeline
+          </Button>
+        )}
         <Button
           size="sm"
           variant="ghost"
