@@ -344,19 +344,33 @@ export async function runSubmissionVerificationSweep(db, { limit = 3, now = Date
 
   let rows = []
   try {
+    // Exhausted tasks are excluded IN SQL. Prod 2026-09-05: with LIMIT 3 and
+    // `ORDER BY updated_at ASC`, the three oldest parked tasks (all at 3/3)
+    // filled every slot on every tick and the younger ones were never
+    // re-checked at all — the cap starved the queue it was meant to bound.
     rows = await db.prepare(
       `SELECT * FROM application_tasks
         WHERE status = 'submission_verification_required'
           AND cancelled_at IS NULL
+          AND (SELECT COUNT(*) FROM application_task_events e
+                WHERE e.task_id = application_tasks.id AND e.step = ?) < ?
         ORDER BY updated_at ASC
         LIMIT ?`,
-    ).all(Math.max(1, Math.min(10, Number(limit) || 3)))
+    ).all(RECHECK_STEP, VERIFICATION_MAX_ATTEMPTS, Math.max(1, Math.min(10, Number(limit) || 3)))
     if (!Array.isArray(rows)) rows = []
+    const exhaustedRow = await db.prepare(
+      `SELECT COUNT(*) AS n FROM application_tasks
+        WHERE status = 'submission_verification_required'
+          AND cancelled_at IS NULL
+          AND (SELECT COUNT(*) FROM application_task_events e
+                WHERE e.task_id = application_tasks.id AND e.step = ?) >= ?`,
+    ).get(RECHECK_STEP, VERIFICATION_MAX_ATTEMPTS)
+    out.exhausted = Number(exhaustedRow?.n) || 0
   } catch { return out }
 
   for (const task of rows) {
     const attempts = await priorRecheckAttempts(db, task.id)
-    if (attempts.count >= VERIFICATION_MAX_ATTEMPTS) { out.exhausted += 1; continue }
+    if (attempts.count >= VERIFICATION_MAX_ATTEMPTS) { continue }
     if (attempts.latestMs && now - attempts.latestMs < VERIFICATION_MIN_SPACING_MS) { out.skipped += 1; continue }
 
     out.checked += 1
