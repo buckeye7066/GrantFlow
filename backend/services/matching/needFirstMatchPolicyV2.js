@@ -657,6 +657,20 @@ function profileProvablyNotFarmer(profileContext = {}, profileNorm = null) {
  */
 const CHILD_ONLY_PROGRAM_RX = /\bkatie beckett\b|\b(?:children|kids|youth|minors)\s+(?:under|below|younger than)\s+(?:age\s+)?(?:18|19|21)\b|\bunder (?:age )?18 (?:with|who)\b|\bpediatric\b/i
 
+/**
+ * Adult-learner programs (Tennessee Reconnect, TCAT Reconnect, HOPE
+ * Nontraditional, "independent students 25 or older") exist for adults
+ * returning to school. A first-year 18-year-old with a dual-enrollment
+ * associate degree had three of them in her pipeline (2026-09-05). Age is a
+ * positive fact; silence stays neutral.
+ */
+const ADULT_LEARNER_PROGRAM_RX = /\b(tennessee reconnect|tcat reconnect|reconnect (?:grant|scholarship)|adult learners?|adult students?|non-?traditional students?|nontraditional|returning (?:adult )?students?|(?:age|aged|ages) 2[4-9]\+?(?: and| or)? (?:older|over|up)|2[4-9] (?:years|years of age) (?:and|or) older|independent students? (?:aged|age|who are) 2[4-9])\b/i
+
+function profileProvablyTraditionalAge(profileContext = {}, profileNorm = null) {
+  const age = profileAgeYears(profileContext, profileNorm)
+  return Number.isFinite(age) && age > 0 && age < 24
+}
+
 function profileProvablyAdult(profileContext = {}, profileNorm = null) {
   const age = profileAgeYears(profileContext, profileNorm)
   if (Number.isFinite(age)) return age >= 19
@@ -672,6 +686,9 @@ function positivePopulationMismatches(profileContext, profileNorm, targetingText
   const title = opportunityTitleText(opportunity)
   if (CHILD_ONLY_PROGRAM_RX.test(`${title} ${targetingText}`) && profileProvablyAdult(profileContext, profileNorm)) {
     out.push('Program serves children under 18; the profile states an adult age')
+  }
+  if (ADULT_LEARNER_PROGRAM_RX.test(`${title} ${targetingText}`) && profileProvablyTraditionalAge(profileContext, profileNorm)) {
+    out.push('Adult-learner / nontraditional-student program does not fit a profile whose stated age is under 24')
   }
   if ((MILITARY_TITLE_RX.test(title) || MILITARY_RESTRICTION_RX.test(targetingText)) &&
       !/\b(civilian|everyone|all applicants|general public|and their families)\b/i.test(title) &&

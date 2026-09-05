@@ -65,6 +65,10 @@ describe('resources and benefits are held to the positive population rules', () 
       'Direct scholarships and grants for young people who spent their teen years in foster care: college scholarships, Education & Training Voucher administration, and student support funds.'],
     ['Social Security survivors benefits', 'benefit',
       'Official Social Security survivor-benefits information for eligible surviving spouses, children, and families. This is a benefits lane, not a grant.'],
+    ['Tennessee Reconnect Scholarship', 'DIRECT_GRANT',
+      'Last-dollar scholarship for adult learners returning to earn an associate degree or technical certificate.'],
+    ['Tennessee HOPE Scholarship - Nontraditional', 'DIRECT_GRANT',
+      'HOPE award for nontraditional students age 25 or older who are independent students.'],
   ])('rejects %s for the 18-year-old who lives with family and declares her school', (title, kind, description) => {
     const result = livePolicyFor({ title, opportunity_kind: kind, description })
     expect(result.decision).toBe('REJECT')
