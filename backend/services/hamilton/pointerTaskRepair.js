@@ -213,8 +213,8 @@ export async function repairLegacyPointerApplicationTasks(db, {
               status = 'blocked',
               current_step = 'no_application_surface',
               last_agent_message = ?,
-              auto_submit_enabled = 0,
-              allow_auto_submit = 0,
+              auto_submit_enabled = FALSE,
+              allow_auto_submit = FALSE,
               next_retry_at = NULL,
               audit_summary_json = ?,
               updated_at = ${nowSqlLiteral(db)}
