@@ -27,6 +27,35 @@ const plausibleHit = (url) => ({
 
 const okProbe = async (url) => ({ status: 'ok', finalUrl: url })
 
+describe('attemptRuntimeUrlRescue — a school\'s page about someone else\'s award is not the funder\'s portal', () => {
+  const tsacCtx = () => ({
+    opportunity: { title: 'Tennessee General Assembly Merit Scholarship', sponsor: 'Tennessee Student Assistance Corporation' },
+    portalUrl: 'https://www.collegefortn.org/general-assembly-merit-scholarship/',
+  })
+  const relisterHit = {
+    url: 'https://site.tusculum.edu/financial-aid/',
+    title: 'Financial Aid | Tusculum University',
+    snippet: 'Tennessee General Assembly Merit Scholarship, Tennessee HOPE Scholarship and other state aid for Tusculum students.',
+  }
+  it('refuses the live Tusculum re-listing for a TSAC award (institution_relister), never provisioning a stranger school', async () => {
+    const result = await attemptRuntimeUrlRescue(tsacCtx(), { url: 'https://www.collegefortn.org/general-assembly-merit-scholarship/' }, {
+      searchWebImpl: async () => [relisterHit],
+      checkUrlImpl: okProbe,
+    })
+    expect(result.url).toBeNull()
+    expect(result.reason).toBe('institution_relister')
+    expect(result.rejected_url).toBe('https://site.tusculum.edu/financial-aid/')
+  })
+  it('keeps an institution host the FUNDER\'s own name explains (MTSU award on mtsu.edu)', async () => {
+    const ctx = { opportunity: { title: 'MTSU Guaranteed Scholarship', sponsor: 'Middle Tennessee State University' }, portalUrl: null }
+    const result = await attemptRuntimeUrlRescue(ctx, { url: null }, {
+      searchWebImpl: async () => [{ url: 'https://www.mtsu.edu/financial-aid/guaranteed-scholarship/apply', title: 'MTSU Guaranteed Scholarship — Apply', snippet: 'Apply for the MTSU Guaranteed Scholarship at Middle Tennessee State University.' }],
+      checkUrlImpl: okProbe,
+    })
+    expect(result.url).toBe('https://www.mtsu.edu/financial-aid/guaranteed-scholarship/apply')
+  })
+})
+
 describe('attemptRuntimeUrlRescue', () => {
   it('finds, screens, and returns a live application page', async () => {
     const res = await attemptRuntimeUrlRescue(ctxFor(), {}, {

@@ -46,6 +46,7 @@ import { isAuthorizationActive } from './hamiltonAuthorizationStore.js'
 import { requiresExistingExternalLogin, buildExistingLoginAsk } from './hamiltonExistingAccountPolicy.js'
 import { setMissingInfo } from './applicationTaskStore.js'
 import { findOfficialUrlForOpportunity } from '../urlEnrichment.js'
+import { isPlausibleHomepage, domainOf, registrableDomain } from '../yana/prospectExclusions.js'
 import { isSearchEngineUrl, portalUrlFunderPlausibility } from '../../config/urlRules.js'
 import { classifyNonApplicationSurface } from '../../config/applicationSurfaceHosts.js'
 import { isPointerKind } from '../../config/opportunityKindClasses.js'
@@ -670,6 +671,52 @@ async function resolveDeadline(db, ctx, input) {
  *
  * Exported for tests; `deps` forwards to findOfficialUrlForOpportunity.
  */
+const INSTITUTION_HOST_RX = /(?:^|\.)(?:[a-z0-9-]+\.)?(?:edu|ac\.[a-z]{2})$|(?:^|[.-])(?:university|college|univ|school|academy|institute|seminary)(?:[.-]|$)/i
+
+/**
+ * `{reason}` when `url` sits on an educational-institution host the funder's
+ * name does not explain; null otherwise (non-institution hosts are never
+ * judged here — that is `portalUrlFunderPlausibility`'s job for tenant slugs).
+ */
+export function classifyInstitutionRelister(url, sponsor, pageTitle = '') {
+  const host = domainOf(url)
+  if (!host || !INSTITUTION_HOST_RX.test(host)) return null
+  const funder = String(sponsor ?? '').trim()
+  if (!funder) return null
+  if (hostExplainedBySponsor(host, funder) || isPlausibleHomepage({ url, title: pageTitle }, funder)) return null
+  return { reason: 'institution_relister', host, sponsor: funder, page_title: String(pageTitle ?? '') }
+}
+
+const HOST_EXPLAIN_STOPWORDS = new Set(['of', 'the', 'and', 'for', 'at', 'in', 'on', 'a', 'an', 'inc', 'llc'])
+
+/**
+ * The host's registrable label is explained by the funder's own name: its
+ * initialism (mtsu <- Middle Tennessee State University), a whole word or a
+ * 4+ letter prefix of one (tusculum <- Tusculum University), or a run of its
+ * words joined (clevelandstate <- Cleveland State Community College).
+ */
+export function hostExplainedBySponsor(host, sponsor) {
+  const registrable = registrableDomain(host) || String(host ?? '').toLowerCase()
+  const label = String(registrable).split('.')[0] || ''
+  if (label.length < 2) return false
+  const words = String(sponsor ?? '').toLowerCase().split(/[^a-z0-9]+/).filter(Boolean)
+  if (words.length === 0) return false
+  const significant = words.filter((w) => !HOST_EXPLAIN_STOPWORDS.has(w))
+  const initialisms = new Set([words.map((w) => w[0]).join(''), significant.map((w) => w[0]).join('')])
+  if (initialisms.has(label)) return true
+  for (const word of significant) {
+    if (word.length >= 4 && (word === label || label.startsWith(word) || word.startsWith(label) && label.length >= 4)) return true
+  }
+  for (let i = 0; i < significant.length; i += 1) {
+    let run = ''
+    for (let j = i; j < significant.length; j += 1) {
+      run += significant[j]
+      if (run.length >= 6 && (run === label || label === run.slice(0, label.length) && label.length >= 6)) return true
+    }
+  }
+  return false
+}
+
 export async function attemptRuntimeUrlRescue(ctx, input, deps = {}) {
   const title = String(ctx?.opportunity?.title || '').trim()
   const sponsor = String(ctx?.opportunity?.sponsor || ctx?.opportunity?.funder || '').trim()
@@ -692,6 +739,19 @@ export async function attemptRuntimeUrlRescue(ctx, input, deps = {}) {
   if (current && candidate === current) return { url: null, reason: 'same_dead_end_page' }
   if (sponsor && portalUrlFunderPlausibility(found.url, sponsor) === 'implausible') {
     return { url: null, reason: 'funder_mismatch', rejected_url: found.url }
+  }
+  // A SCHOOL'S page about someone else's award is a re-listing, never the
+  // funder's application page. Live 2026-09-05: the Tennessee General Assembly
+  // Merit Scholarship (sponsor: Tennessee Student Assistance Corporation) was
+  // "rescued" to site.tusculum.edu/financial-aid — a private university's aid
+  // page that mentions the state award — and Hamilton then provisioned a
+  // Tusculum applicant account for a student committed elsewhere. Token
+  // overlap FAVOURS such pages (they name the award). An institution host is
+  // accepted only when the funder's own name explains it (mtsu.edu for
+  // "Middle Tennessee State University"); a non-institution host is untouched.
+  const relister = classifyInstitutionRelister(found.url, sponsor, found.title)
+  if (relister) {
+    return { url: null, reason: relister.reason, rejected_url: found.url }
   }
   // A page can be live, on-topic, and still structurally incapable of being an
   // application surface. Token overlap actively FAVOURS an encyclopedia

@@ -50,6 +50,7 @@ describe('field-of-study restriction', () => {
     ['Media Scholarship', 'Scholarship for students in the College of Media and Entertainment.', ''],
     ['Where Every Note Counts Scholarship Campaign', 'Give to support student scholarships.', 'https://give.mtsu.edu/pages/music-campaign'],
     ['ASPIRE to Teach Emergency Fund', 'Emergency fund for teacher-candidates in the College of Education.', ''],
+    ['ASPIRE to Teach Emergency Fund', 'Emergency fund for students at MTSU.', ''],
   ])('rejects %s for a declared forensic-science major', (title, description, url) => {
     const result = policyFor({ title, opportunity_kind: 'DIRECT_GRANT', description, apply_url: url || null })
     expect(result.decision).toBe('REJECT')
