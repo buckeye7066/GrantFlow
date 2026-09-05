@@ -176,12 +176,17 @@ test('the live bridge reads profileNorm, every section, documents, organization,
     },
     signals: {
       applicantTypes: new Set(['individual', 'disabled']),
-      needs: new Set(),
+      // Structured (flag-derived) needs reach the thesis; the free-text
+      // inference does not, and neither does profileNorm's need bag (it is
+      // the union of both and cannot be told apart downstream).
+      needs: new Set(['medical', 'transportation', 'equipment', 'veterans']),
+      needs_structured: new Set(['medical', 'transportation', 'equipment']),
+      needs_text_inferred: new Set(['veterans']),
       needsDefaulted: false,
       location: { state: 'OH', county: 'Lorain', city: 'Elyria', zip: '44035' },
       states: ['OH', 'WV'],
     },
-    profileNorm: { needCategories: new Set(['medical', 'transportation', 'equipment']) },
+    profileNorm: { needCategories: new Set(['medical', 'transportation', 'equipment', 'farmers']) },
     organization: { name: 'Care Network', organization_type: 'nonprofit', mission: 'Mobility access' },
     documents: [{ title: 'DME prescription', extracted_text: 'Power wheelchair is medically necessary.' }],
   })
@@ -223,7 +228,7 @@ test('type defaults are labeled as defaults and never masquerade as declared nee
   assert.equal(input.need_categories.includes('vehicle_repair'), false)
 })
 
-test('section-derived needs are not mislabeled as route defaults', () => {
+test('a structured focus area is a declaration, not a route default', () => {
   const input = profileContextToThesisInput({
     profile: { id: 'described-org', primary_type: 'nonprofit', display_name: 'Community Services' },
     sections: {
@@ -233,7 +238,24 @@ test('section-derived needs are not mislabeled as route defaults', () => {
   })
   const thesis = buildThesis(input)
 
-  // Before buildThesis scans all section/document prose, the bridge has only
+  // A nonprofit's structured focus_areas IS its declared need (typeDerivedNeeds).
+  assert.equal(input.profile_route.needs_source, 'profile_declared_or_faceted')
+  assert.equal(thesis.needs_defaulted, false)
+  assert.ok(thesis.needs.includes('food'))
+})
+
+test('prose-only needs are not mislabeled as route defaults', () => {
+  const input = profileContextToThesisInput({
+    // An INDIVIDUAL: an org's structured TYPE is itself a declaration
+    // (typeDerivedNeeds), so only a person can reach the bridge undeclared.
+    profile: { id: 'described-person-prose', primary_type: 'individual', display_name: 'Applicant' },
+    sections: {
+      narrative: { primary_goal: 'Need help buying groceries for the family this month.' },
+    },
+  })
+  const thesis = buildThesis(input)
+
+  // Before buildThesis scans the need-declaring prose, the bridge has only
   // the type fallback available. The thesis must replace that provisional
   // provenance once the profile itself establishes a real need.
   assert.equal(input.profile_route.needs_source, 'profile_type_default')

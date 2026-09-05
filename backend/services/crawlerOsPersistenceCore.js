@@ -328,8 +328,21 @@ export function profileContextToThesisInput(ctx = {}) {
   // (`DECLARED_NEED_FIELDS` via `declaredNeedsFrom`) and the profile's
   // structured type/tag derivation; a profile that declares nothing gets its
   // TYPE defaults, labelled as such.
+  // `signals.needs_structured` is buildProfileSignals' provenance-split view:
+  // needs derived from flags, status fields, assistance programs and the
+  // declared funding_needs field, WITHOUT the narrative keyword-bag scan
+  // (`needs_text_inferred`). A fixture that supplies only `signals.needs`
+  // (pre-split shape) is read as-is. Profile TAGS are excluded here on
+  // purpose: on live profiles they are a machine keyword bag ("has",
+  // "disability", "broadband", "workforce") and a "workforce" tag was
+  // selecting the DOL workforce lane for a first-year student.
+  const signalNeedsDefaulted = signals.needsDefaulted === true;
+  const structuredSignalNeeds = signalNeedsDefaulted
+    ? []
+    : asList(signals.needs_structured ?? signals.needs);
   const declaredNeedCategories = [
-    ...declaredNeedsFrom(profile, sections, { includeSectionKeys: false }),
+    ...declaredNeedsFrom({ ...profile, tags: [] }, sections, { includeSectionKeys: false }),
+    ...structuredSignalNeeds,
     ...asList(profile.needs),
     ...asList(profile.need_categories),
     ...asList(ctx.facets?.intent?.primary_need_category),

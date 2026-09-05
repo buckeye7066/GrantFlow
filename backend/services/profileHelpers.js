@@ -3050,9 +3050,16 @@ export function buildProfileSignals({ profile, sections, asOf = null, documents 
   // transportation need; 'rent' ⊂ "current"/"parent" gave nearly everyone a
   // housing need. Phantom needs dilute the need-anchored coverage denominator
   // AND mis-steer discovery queries, so precision here is scoring-critical.
+  // This loop is the ONE whole-profile FREE-TEXT need channel: the keyword bag
+  // is mined from every narrative/notes field, including the denials ("no
+  // medical equipment required", "No military affiliation ... veteran
+  // status"). Its output is kept apart as `textInferredNeeds` so consumers
+  // that must treat needs as DECLARATIONS (the crawl thesis) can read the
+  // flag/field-derived set alone; `needs` stays the union for everyone else.
+  const textInferredNeeds = new Set()
   for (const signal of allSignals) {
     for (const [need, triggers] of Object.entries(NEED_MAP)) {
-      if (triggers.some(t => containsTermWholeWord(signal, t))) needs.add(need)
+      if (triggers.some(t => containsTermWholeWord(signal, t))) textInferredNeeds.add(need)
     }
   }
   if (assistanceSet.has('medicaid') || assistanceSet.has('medicare')) needs.add('healthcare')
@@ -3363,6 +3370,10 @@ export function buildProfileSignals({ profile, sections, asOf = null, documents 
   // concluded a wholly-blank placeholder was servable. `needsDefaulted` records
   // that the set was INFERRED FROM TYPE, never read — "we could not read it" ≠
   // "there is nothing". Nothing about the fallback's behaviour changes.
+  // Structured (flag/field/status-derived) needs, captured BEFORE the free-text
+  // inference is folded in. Exposed as `needs_structured`.
+  const structuredNeeds = new Set(needs)
+  for (const need of textInferredNeeds) needs.add(need)
   let needsDefaulted = false
   if (needs.size === 0) {
     needsDefaulted = true
@@ -3581,6 +3592,12 @@ export function buildProfileSignals({ profile, sections, asOf = null, documents 
     interests: interestSet,
     applicantTypes: applicantTypeSet,
     health: healthSet,
+    // Provenance-split view of `needs` (which stays the union, unchanged):
+    // needs derived from structured flags, status fields, assistance programs
+    // and the declared funding_needs field — never from the narrative keyword
+    // bag. Empty when the fallback defaulted `needs`.
+    needs_structured: needsDefaulted ? new Set() : structuredNeeds,
+    needs_text_inferred: textInferredNeeds,
     // Provenance-split views of `health` (which stays the union, unchanged).
     // Only `health_conditions` is a fair input to "does a disease lane exist?".
     health_conditions: healthConditionSet,

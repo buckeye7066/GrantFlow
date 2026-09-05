@@ -30,6 +30,7 @@ test('profileContextToThesisInput maps real needs separately from generic keywor
     },
   })
 
+  // Tags ('senior') are a keyword bag, not a need declaration, for the thesis.
   assert.deepEqual(input.need_categories.sort(), ['education', 'technology_equipment'])
   assert.ok(input.tags.includes('generic funding'))
   assert.ok(input.tags.includes('scholarship'))
