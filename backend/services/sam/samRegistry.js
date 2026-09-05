@@ -3099,7 +3099,7 @@ export const SAFE_FIX_REGISTRY = Object.freeze([
     id: 'lint.eslint-fix-file',
     label: 'Run eslint --fix on a single file',
     risk_level: 'safe',
-    description: 'Runs eslint with --fix limited to one file when the lint check identified that exact path. Refuses if the file is outside src/ or backend/.',
+    description: 'Runs eslint with --fix limited to one file when the lint check identified that exact path, then runs an INDEPENDENT verify pass and restores the original if that verify is not clean. The single path authority is samSafeFixes.isPathSafeForFix: application source only (src, backend, shared, scripts, qa, docs), and never migrations, backend/db, matchEngine, profileNormalizer, the billing/stripe/application/grant/saved/crawler services, auth middleware, the auth or admin routes, or .env.',
   },
   {
     id: 'queue.recover-stale-jobs',
