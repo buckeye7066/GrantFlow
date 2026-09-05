@@ -53,9 +53,13 @@ describe('buildComparableAwardsBlock', () => {
 
 describe('generateMbaProposal with comparable awards', () => {
   it('feeds awards into the prompt as reference context but keeps them OUT of the evidence pack', async () => {
-    let capturedPrompt = null
+    // Capture EVERY prompt, and assert on the FIRST one. As of 2026-09-04
+    // generateMbaProposal runs the proposal critic after drafting, so more than
+    // one prompt is now issued and a single overwritten `capturedPrompt` would
+    // hold the critic's, not the draft's. This test is about the DRAFT prompt.
+    const prompts = []
     const invokeJson = vi.fn(async ({ prompt }) => {
-      capturedPrompt = prompt
+      prompts.push(prompt)
       return {
         ok: true,
         provider: 'openai',
@@ -78,9 +82,10 @@ describe('generateMbaProposal with comparable awards', () => {
     expect(result.ok).toBe(true)
     expect(result.meta.comparable_award_count).toBe(1)
 
-    // Prompt carries the labeled reference block…
-    expect(capturedPrompt).toContain('COMPARABLE FUNDED AWARDS (REFERENCE ONLY')
-    expect(capturedPrompt).toContain('Rural Health Outreach Project')
+    // The DRAFT prompt (the first call) carries the labeled reference block…
+    const draftPrompt = prompts[0]
+    expect(draftPrompt).toContain('COMPARABLE FUNDED AWARDS (REFERENCE ONLY')
+    expect(draftPrompt).toContain('Rural Health Outreach Project')
 
     // …but the evidence pack (the fabrication guard's ONLY ground truth)
     // contains no trace of the reference awards.

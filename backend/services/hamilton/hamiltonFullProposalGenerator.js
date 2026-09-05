@@ -308,8 +308,50 @@ ${lines.join('\n')}
 `
 }
 
-function buildProposalPrompt({ kind, rubric, evidence, funder, comparableAwards = null }) {
-  const rubricList = rubric.map((s) => `  - ${s.key}: ${s.title}`).join('\n')
+/**
+ * Render the funder's OWN parsed requirements as a compliance matrix the model
+ * must answer item by item. Each entry carries the funder's verbatim quote, so
+ * an alignment claim can be checked against the solicitation text rather than
+ * against a paraphrase. Empty string when the solicitation was never parsed —
+ * the prompt then falls back to the loose `funder` block alone.
+ */
+function buildComplianceMatrixBlock(storedRequirements) {
+  const reqs = (Array.isArray(storedRequirements) ? storedRequirements : [])
+    .filter((r) => r && (r.requirement_text || r.canonical_key))
+    .slice(0, 40)
+  if (reqs.length === 0) return ''
+  const lines = reqs.map((r, i) => {
+    const quote = (r.citations || []).find((c) => c?.quote_text)?.quote_text
+    const bits = [
+      `${i + 1}. [${r.requirement_type || 'requirement'}] ${String(r.requirement_text || r.canonical_key).slice(0, 400)}`,
+    ]
+    if (r.is_mandatory === true || r.is_mandatory === 1) bits.push('   MANDATORY')
+    if (Number.isFinite(Number(r.char_limit)) && Number(r.char_limit) > 0) {
+      bits.push(`   CHARACTER LIMIT: ${Number(r.char_limit)}`)
+    }
+    if (quote) bits.push(`   FUNDER'S WORDS: "${String(quote).slice(0, 300)}"`)
+    return bits.join('\n')
+  })
+  return `
+
+=== THE FUNDER'S OWN STATED REQUIREMENTS (parsed from its solicitation) ===
+These are extracted from the funder's published document, not inferred. You MUST
+address every MANDATORY item, respect every stated CHARACTER LIMIT, and report
+any you cannot satisfy in "evidence_gaps" rather than writing around them.
+${lines.join('\n')}`
+}
+
+function buildProposalPrompt({ kind, rubric, evidence, funder, comparableAwards = null, storedRequirements = null }) {
+  const complianceMatrix = buildComplianceMatrixBlock(storedRequirements)
+  // A funder that names its own required sections outranks our profile-kind
+  // rubric. Union rather than replace: the rubric is the floor, the funder's
+  // stated sections are additions we must not omit.
+  const funderSections = (Array.isArray(storedRequirements) ? storedRequirements : [])
+    .filter((r) => r && String(r.requirement_type || '').toLowerCase() === 'section' && r.canonical_key)
+    .map((r) => ({ key: String(r.canonical_key), title: String(r.requirement_text || r.canonical_key).slice(0, 120) }))
+  const rubricKeys = new Set(rubric.map((s) => s.key))
+  const mergedRubric = [...rubric, ...funderSections.filter((s) => !rubricKeys.has(s.key))]
+  const rubricList = mergedRubric.map((s) => `  - ${s.key}: ${s.title}`).join('\n')
   return `You are ${PERSONA}
 You are drafting a COMPLETE, submission-ready grant proposal for ${kind === 'organization' ? 'an ORGANIZATION' : 'an INDIVIDUAL / STUDENT'} applicant.
 
@@ -327,6 +369,7 @@ ${rubricList}
 
 === FUNDER ===
 ${JSON.stringify(funder, null, 2)}
+${complianceMatrix}
 
 === APPLICANT EVIDENCE ===
 ${JSON.stringify(evidence, null, 2)}
@@ -461,6 +504,31 @@ export async function generateMbaProposal(db, {
   const evidence = buildEvidencePack(profile, kind)
   const funder = buildFunderRequirements(opportunity, grant)
 
+  // The funder's OWN parsed, citation-backed requirements, when its
+  // solicitation has been ingested. Until this was wired, Hamilton drafted
+  // against `buildFunderRequirements` alone — loose prose fields off the
+  // opportunity row — while a real compliance-matrix system
+  // (services/groundedDrafting.js: solicitation_requirements +
+  // requirement_citations, with quote text and character offsets) sat unused
+  // because it was addressable only by a grant_applications id Hamilton never
+  // has. Degrades silently to the loose text when nothing has been parsed.
+  let storedRequirements = []
+  const opportunityIdForRequirements = opportunity?.id || grant?.funding_opportunity_id || null
+  if (db && profile?.id && opportunityIdForRequirements) {
+    try {
+      const { loadLatestRequirementsForOpportunity } = await import('../groundedDrafting.js')
+      const stored = await loadLatestRequirementsForOpportunity(db, {
+        profileId: profile.id,
+        opportunityId: opportunityIdForRequirements,
+      })
+      storedRequirements = Array.isArray(stored?.requirements) ? stored.requirements : []
+    } catch {
+      // A requirements lookup failure must never block a draft — the loose
+      // funder text is still a usable, if weaker, grounding.
+      storedRequirements = []
+    }
+  }
+
   let awards = Array.isArray(comparableAwards) ? comparableAwards : null
   if (awards === null && grant) {
     try {
@@ -472,7 +540,7 @@ export async function generateMbaProposal(db, {
     }
   }
 
-  const prompt = buildProposalPrompt({ kind, rubric, evidence, funder, comparableAwards: awards })
+  const prompt = buildProposalPrompt({ kind, rubric, evidence, funder, comparableAwards: awards, storedRequirements })
 
   const invokeJson = _deps?.invokeJson || invokeJsonWithFallback
   const openaiFactory = _deps?.getOpenAIOptional || getOpenAIOptional
@@ -519,10 +587,39 @@ export async function generateMbaProposal(db, {
   // existing contract keeps out of live portal fields.
   const { proposal: guarded, flags: fabricationFlags } = applyFabricationGuard(normalized, evidence)
 
+  // QUALITY / COMPLIANCE REVIEW.
+  //
+  // A real two-pass critic (compliance against the funder + consistency against
+  // the applicant's own evidence) has existed in services/proposalCritic.js the
+  // whole time and was NEVER called from this path — the only automated review
+  // on an autonomous Hamilton draft was the deterministic fabrication guard
+  // above, which checks identity claims, not whether the proposal answers the
+  // funder. That is the gap between "the prompt says MBA-level" and the draft
+  // actually being it.
+  //
+  // THIS IS A REVIEW, NOT A GATE. Its findings are recorded on the result so a
+  // human (or a later pass) can act on them; a critic failure, a missing
+  // provider, or an unflattering finding NEVER blocks the draft or the
+  // submission. Blocking here would re-create exactly the review-parking the
+  // owner has repeatedly ordered removed.
+  let critique = null
+  if (grant) {
+    try {
+      const { runProposalCritic } = await import('../proposalCritic.js')
+      const proposalText = guarded.sections
+        .map((s) => `## ${s.title}\n${s.content}`)
+        .join('\n\n')
+      critique = await runProposalCritic(db, { grant, proposalText, _deps })
+    } catch (err) {
+      critique = { enabled: true, error: err?.message || String(err), passes: [] }
+    }
+  }
+
   return {
     ok: true,
     ...guarded,
     fabrication_flags: fabricationFlags,
+    critique,
     meta: {
       provider: llm.provider || null,
       model: PROPOSAL_ANTHROPIC_MODEL,
@@ -757,6 +854,7 @@ export const _internal = {
   buildFunderRequirements,
   buildProposalPrompt,
   buildComparableAwardsBlock,
+  buildComplianceMatrixBlock,
   normalizeProposal,
   getProposalStorageDir,
   hasEvidencePlaceholder,

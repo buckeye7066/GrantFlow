@@ -20,10 +20,29 @@
  * This tiny poller closes that gap by driving the same adapter on a timer,
  * exactly like robert/yana/john/sam have their own schedulers.
  *
- * EVERYTHING IS OFF BY DEFAULT.
+ * DEFAULT CHANGED 2026-09-04: this poller now defaults ON.
+ *
+ * It was previously opt-in (an unset HAMILTON_RUN_ON_SCHEDULE meant "never
+ * run"), and it was left unset in both .env.example files and in production.
+ * The consequence was that a profile could be fully authorized for autonomous
+ * end-to-end submission — submit_applications granted, require_human_review
+ * swept clear, hamilton_autopilot and hamilton_auto_submit both true — and
+ * Hamilton would still never act on it, because nothing on any timer ever
+ * re-picked the queue. The owner reported this repeatedly as "the code blocks
+ * him from working autonomously e2e"; this was the mechanism.
+ *
+ * Arming the poller does NOT bypass any consent or evidence gate. Every
+ * downstream check still applies to every task it picks up: the per-grant
+ * authorization record, allow_auto_submit, the require_human_review veto, the
+ * missing_info completeness gate, the SSRF/portal-policy floor, and the
+ * compare-and-swap submission lease. This flag only decides whether those
+ * checks are ever REACHED unattended, not what they decide.
+ *
+ * Set HAMILTON_RUN_ON_SCHEDULE=false to force the old opt-in behaviour.
  *
  * Env contract:
- *   HAMILTON_RUN_ON_SCHEDULE=false           master switch for this poller
+ *   HAMILTON_RUN_ON_SCHEDULE=true            master switch (DEFAULT ON;
+ *                                            set false to disarm the poller)
  *   HAMILTON_ENABLE_BROWSER_AUTOMATION=true  REQUIRED — the scheduler only
  *                                            arms when browser automation is
  *                                            globally enabled, so a disabled
@@ -47,16 +66,28 @@ let timer = null
 let running = false
 let stopped = false
 
-function isTrue(value) {
-  return /^(1|true|yes|on)$/i.test(String(value || '').trim())
+/**
+ * Same default-ON semantics the orchestrator uses for
+ * HAMILTON_ENABLE_BROWSER_AUTOMATION (hamiltonAutomationOrchestrator.js:200):
+ * unset / empty / 'undefined' / 'null' means the default; only an explicit
+ * false/0/off/no disables. Previously this file used an opt-IN isTrue() test,
+ * which is why an unset variable silently disarmed autonomous operation.
+ */
+function envFlagEnabled(raw, defaultOn = true) {
+  const v = String(raw ?? (defaultOn ? 'true' : 'false')).trim().toLowerCase()
+  if (v === '' || v === 'undefined' || v === 'null') return defaultOn
+  return v !== 'false' && v !== '0' && v !== 'off' && v !== 'no'
 }
 
 export function shouldRunOnSchedule() {
-  // Both gates must be on: the operator opted Hamilton into scheduled runs AND
-  // browser automation is globally enabled. The browser-automation gate is the
-  // same authority the orchestrator enforces before opening a browser, so we
-  // never silently arm a poller that the rest of the system would refuse.
-  return isTrue(process.env.HAMILTON_RUN_ON_SCHEDULE) && isBrowserAutomationEnabled()
+  // Both gates must hold: Hamilton is armed for scheduled runs AND browser
+  // automation is globally enabled. The browser-automation gate is the same
+  // authority the orchestrator enforces before opening a browser, so we never
+  // arm a poller that the rest of the system would refuse.
+  //
+  // Both now default ON, so authorized autonomous work actually runs unattended.
+  // Per-grant authorization and every evidence guard still gate each task.
+  return envFlagEnabled(process.env.HAMILTON_RUN_ON_SCHEDULE, true) && isBrowserAutomationEnabled()
 }
 
 export function resolveIntervalMs() {
@@ -236,8 +267,8 @@ async function tick({ db, logger = console } = {}) {
 export function startHamiltonScheduler({ db, logger = console } = {}) {
   stopped = false
   if (timer) return { started: false, reason: 'already_started' }
-  if (!isTrue(process.env.HAMILTON_RUN_ON_SCHEDULE)) {
-    return { started: false, reason: 'HAMILTON_RUN_ON_SCHEDULE!=true' }
+  if (!envFlagEnabled(process.env.HAMILTON_RUN_ON_SCHEDULE, true)) {
+    return { started: false, reason: 'HAMILTON_RUN_ON_SCHEDULE=false' }
   }
   if (!isBrowserAutomationEnabled()) {
     return { started: false, reason: 'HAMILTON_ENABLE_BROWSER_AUTOMATION!=true' }

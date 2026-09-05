@@ -155,6 +155,22 @@ export async function answerUnknownField(field, {
   const options = isSelect ? selectOptionTexts(field) : []
   if (isSelect && options.length === 0) return null
 
+  // The portal's OWN stated limit wins over our historical constants. Those
+  // constants (300 / 4000) were invented here and applied regardless of what
+  // the form actually allowed, so a funder permitting a 10,000-character
+  // narrative received 4,000 and every short field was chopped at 300 —
+  // frequently mid-sentence, which reads as a careless applicant.
+  const declaredLimit = Number.isFinite(Number(field?.maxLength)) && Number(field.maxLength) > 0
+    ? Number(field.maxLength)
+    : null
+  const fallbackLimit = freeText ? 4000 : 300
+  const effectiveLimit = declaredLimit ?? fallbackLimit
+  // Ask the model to WRITE to the budget rather than relying on truncation. A
+  // well-formed shorter answer beats a longer one cut mid-word.
+  const budgetLine = declaredLimit
+    ? `\nLENGTH LIMIT: this field accepts at most ${declaredLimit} characters. Write a complete answer that fits inside it — do not exceed it and do not stop mid-sentence.\n`
+    : ''
+
   const funderLine = (opportunity || grant)
     ? `FUNDING SOURCE: ${String(opportunity?.title || grant?.title || '').slice(0, 160)} — ${String(opportunity?.sponsor || grant?.funder || '').slice(0, 120)}\n`
       + `What the funder looks for: ${String(opportunity?.eligibility_text || opportunity?.description || grant?.eligibility || '').slice(0, 600)}\n`
@@ -165,7 +181,7 @@ ${evidence}
 
 ${funderLine}
 APPLICATION FIELD TO ANSWER: "${label}"${freeText ? ' (a free-text / essay field)' : (isSelect ? ' (a drop-down: the answer MUST be one of the OPTIONS below, verbatim)' : ' (a short answer field)')}
-${isSelect ? `OPTIONS: ${options.map((o) => JSON.stringify(o)).join(', ')}\n` : ''}
+${isSelect ? `OPTIONS: ${options.map((o) => JSON.stringify(o)).join(', ')}\n` : ''}${budgetLine}
 RULES:
 - Answer ONLY with facts present in the APPLICANT PROFILE above. NEVER invent, assume, guess, or embellish. Do not add numbers, dates, names, or achievements that are not in the profile.
 - If the profile does not contain enough to answer this field truthfully, set "answer" to null and say what is missing in "reason".
@@ -209,8 +225,13 @@ RULES:
     if (!isGroundedInProfile(answer, evidence)) return null
   }
   return {
-    value: answer.slice(0, freeText ? 4000 : 300),
+    value: answer.slice(0, effectiveLimit),
     free_text: freeText,
     grounded_in: groundedIn,
+    // Surfaced so a run can be audited for silent truncation: if these differ,
+    // the model overran the portal's stated budget and the answer was cut.
+    char_limit: effectiveLimit,
+    char_limit_source: declaredLimit ? 'portal' : 'default',
+    truncated: answer.length > effectiveLimit,
   }
 }

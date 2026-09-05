@@ -30,9 +30,30 @@ const GRANT = {
 }
 
 describe('proposal critic flag', () => {
-  it('defaults OFF and returns enabled:false without touching an LLM', async () => {
+  // DEFAULT INVERTED 2026-09-04. This previously asserted the critic defaulted
+  // OFF "until proven in prod" — and because it was also reachable only from a
+  // manual endpoint, Hamilton's autonomous drafting path had NO compliance or
+  // quality review at all. The only automated check on a draft was the
+  // deterministic fabrication guard, which scans identity claims, not whether
+  // the proposal answers the funder. That is precisely the gap between a prompt
+  // that says "MBA-level" and a draft that is.
+  it('defaults ON so the autonomous drafting path is actually reviewed', () => {
     delete process.env.PROPOSAL_CRITIC
+    expect(isProposalCriticEnabled()).toBe(true)
+    for (const blank of ['', 'undefined', 'null']) {
+      process.env.PROPOSAL_CRITIC = blank
+      expect(isProposalCriticEnabled()).toBe(true)
+    }
+  })
+
+  it('an explicit false disables it and never touches an LLM', async () => {
+    process.env.PROPOSAL_CRITIC = 'false'
     expect(isProposalCriticEnabled()).toBe(false)
+    for (const off of ['0', 'off', 'no', 'FALSE']) {
+      process.env.PROPOSAL_CRITIC = off
+      expect(isProposalCriticEnabled()).toBe(false)
+    }
+    process.env.PROPOSAL_CRITIC = 'false'
     const invokeJson = vi.fn()
     const result = await runProposalCritic(null, {
       grant: GRANT,
