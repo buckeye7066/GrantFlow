@@ -69,6 +69,8 @@ describe('resources and benefits are held to the positive population rules', () 
       'Last-dollar scholarship for adult learners returning to earn an associate degree or technical certificate.'],
     ['Tennessee HOPE Scholarship - Nontraditional', 'DIRECT_GRANT',
       'HOPE award for nontraditional students age 25 or older who are independent students.'],
+    ['Katie Beckett Waiver', 'benefit',
+      'Discovered from TennCare Employment and Community First CHOICES (ECF CHOICES): Katie Beckett Waiver'],
   ])('rejects %s for the 18-year-old who lives with family and declares her school', (title, kind, description) => {
     const result = livePolicyFor({ title, opportunity_kind: kind, description })
     expect(result.decision).toBe('REJECT')

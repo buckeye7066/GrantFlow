@@ -673,7 +673,7 @@ function profileProvablyTraditionalAge(profileContext = {}, profileNorm = null) 
 
 function profileProvablyAdult(profileContext = {}, profileNorm = null) {
   const age = profileAgeYears(profileContext, profileNorm)
-  if (Number.isFinite(age)) return age >= 19
+  if (Number.isFinite(age)) return age >= 18
   if (profileIsOlderAdult(profileContext, profileNorm)) return true
   const demographics = asObject(profileContext?.sections?.demographics)
   const group = normalizeText(demographics.age_group ?? demographics.age_range ?? '')
