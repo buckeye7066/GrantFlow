@@ -350,7 +350,51 @@ export async function runQualifiedPipelinePromotion(db, options = {}) {
       if (typeof db.withTransaction !== 'function') {
         throw new Error('Live qualified promotion requires transactional database support')
       }
-      const result = await db.withTransaction(attemptPromotion)
+      let result = null
+      try {
+        result = await db.withTransaction(attemptPromotion)
+      } catch (error) {
+        // A REQUIRED invariant failure (the live outcome could not be recorded,
+        // canonical match truth could not be persisted) is not a per-candidate
+        // fault; the run must still fail loudly on it.
+        if (error?.promotionOutcomeSinkFailed || error?.canonicalMatchPersistenceFailed) throw error
+        // ONE candidate's failure must never end the run. On PostgreSQL a
+        // statement that fails inside the transaction poisons it ("current
+        // transaction is aborted, commands ignored until end of transaction
+        // block"), so every later statement in that transaction — including
+        // the outcome record — dies with the same message and the cause is
+        // hidden. Prod 2026-09-05: the first live run died on its 5th
+        // candidate this way and promoted nothing. The transaction has rolled
+        // back; log the cause, record the error OUTSIDE it, move on.
+        const message = String(error?.message || error || 'unknown')
+        log.warn('qualified promotion candidate failed; recorded as error and skipped', {
+          profileId: profile.id,
+          opportunityId: candidate.id,
+          title: String(candidate.title || '').slice(0, 120),
+          error: message.slice(0, 300),
+          stack: String(error?.stack || '').split('\n').slice(1, 4).map((line) => line.trim()).join(' | '),
+        })
+        recordedPayload = {
+          ...pipelineAdmissionFingerprints(context, candidate),
+          admitted: false,
+          reason: `error:transient:${message.slice(0, 120)}`,
+          score: null,
+        }
+        try {
+          await recordOutcome(db, {
+            profileId: profile.id,
+            opportunityId: candidate.id,
+            mode,
+            payload: recordedPayload,
+          })
+        } catch (recordError) {
+          log.warn('candidate error outcome could not be recorded', {
+            profileId: profile.id,
+            opportunityId: candidate.id,
+            error: String(recordError?.message || recordError).slice(0, 200),
+          })
+        }
+      }
       const outcome = classifyOutcome(recordedPayload)
       summary.reasons[outcome] = (summary.reasons[outcome] || 0) + 1
       if (result?.saved || result?.projected) {

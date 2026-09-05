@@ -336,18 +336,36 @@ export function readSectionLocation(sections = {}) {
   const nestedAddr = basic.address && typeof basic.address === 'object' ? basic.address : {}
   let state = firstString(basic.state, nestedLoc.state, nestedAddr.state)
   let city = firstString(basic.city, nestedLoc.city, nestedAddr.city)
-  let zip = firstString(
-    basic.zip, basic.zip_code, basic.postal_code,
-    nestedLoc.zip, nestedLoc.zip_code, nestedLoc.postal_code,
-    nestedAddr.zip, nestedAddr.zip_code, nestedAddr.postal_code,
-  )
-  if ((!state || !city || !zip) && typeof basic.address === 'string') {
-    const m = /([A-Za-z .'-]+?)\s*,\s*([A-Za-z]{2})\s+(\d{5}(?:-\d{4})?)\s*$/.exec(basic.address.trim())
-    if (m) {
-      city = city || m[1].trim()
-      state = state || m[2].toUpperCase()
-      zip = zip || m[3]
-    }
+  // The ZIP is CORROBORATED across the shapes rather than taken from the first
+  // one that answers: a live profile carried a stray flat `zip_code` (a
+  // Minneapolis ZIP pasted from a scholarship form) beside a location object
+  // AND an address line that both said 37312. Majority wins; a tie keeps the
+  // flat value.
+  const zipCandidates = [
+    firstString(basic.zip, basic.zip_code, basic.postal_code),
+    firstString(nestedLoc.zip, nestedLoc.zip_code, nestedLoc.postal_code),
+    firstString(nestedAddr.zip, nestedAddr.zip_code, nestedAddr.postal_code),
+  ]
+  let addressLine = null
+  if (typeof basic.address === 'string') {
+    addressLine = /([A-Za-z .'-]+?)\s*,\s*([A-Za-z]{2})\s+(\d{5}(?:-\d{4})?)\s*$/.exec(basic.address.trim())
+    if (addressLine) zipCandidates.push(addressLine[3])
+  }
+  const zipVotes = new Map()
+  for (const candidate of zipCandidates) {
+    if (!candidate) continue
+    const key = candidate.slice(0, 5)
+    if (!zipVotes.has(key)) zipVotes.set(key, { value: candidate, votes: 0 })
+    zipVotes.get(key).votes += 1
+  }
+  let zip = null
+  for (const entry of zipVotes.values()) {
+    if (!zip || entry.votes > zip.votes) zip = entry
+  }
+  zip = zip ? zip.value : null
+  if (addressLine) {
+    city = city || addressLine[1].trim()
+    state = state || addressLine[2].toUpperCase()
   }
   if (state) state = state.toUpperCase()
   if (state && !US_STATE_CODE_RE.test(state)) state = null

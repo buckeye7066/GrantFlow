@@ -37,6 +37,22 @@ describe('readSectionLocation', () => {
     })).toEqual({ state: 'TN', city: 'Charleston', zip: '37312' })
   })
 
+  it('corroborates the ZIP across shapes: a stray flat zip_code loses to a location object and address line that agree', () => {
+    expect(readSectionLocation({
+      basic_information: {
+        zip_code: '55402',
+        city: 'Cleveland',
+        state: 'TN',
+        location: { city: 'Cleveland', state: 'TN', zip_code: '37312' },
+        address: '3940 Eveningside Dr. NE \nCleveland, TN 37312',
+      },
+    })).toEqual({ state: 'TN', city: 'Cleveland', zip: '37312' })
+    // A one-to-one disagreement keeps the flat value.
+    expect(readSectionLocation({
+      basic_information: { zip_code: '37311', address: '1 Road\nCleveland, TN 37312' },
+    })).toEqual({ state: 'TN', city: 'Cleveland', zip: '37311' })
+  })
+
   it('refuses shapes that are not a US state code or ZIP instead of guessing', () => {
     expect(readSectionLocation({ basic_information: { state: 'Tennessee', zip: 'SW1A 1AA', city: 'London' } }))
       .toEqual({ state: null, city: 'London', zip: null })

@@ -87,9 +87,37 @@ export function rowLifecycleIsMutable(row = {}) {
   return deadline >= new Date().toISOString().slice(0, 10)
 }
 
+const SUCCESSFUL_LINK_STATUSES = new Set(['ok', 'redirect', 'verified'])
+
+function rowIsHidden(row = {}) {
+  const v = row.is_hidden
+  return v === true || v === 1 || v === '1' || v === 't' || v === 'true'
+}
+
+/**
+ * A row that is HIDDEN while carrying a successful link_status and NO
+ * verification marker of any kind has no recorded reason to be hidden. Prod
+ * 2026-09-05: 10,427 active rows (http 200, verified within the window,
+ * verification_error empty, status active, reality verified) sat hidden while
+ * 86% of every profile's match rows pointed at them — and they were
+ * unreachable by construction: the candidate query only re-probes broken /
+ * never-verified / stale rows, and the restore guard only heals a retryable
+ * quarantine, so a fresh successful probe could never have restored them
+ * either. Such a row is treated as RETRYABLE: it is re-probed, and a current
+ * successful probe restores it. An independent quarantine still records
+ * itself (a verification_error marker, a paused/quarantined status) and is
+ * still refused here.
+ */
+export function isUnexplainedHiddenSuccess(row = {}) {
+  if (!rowIsHidden(row)) return false
+  if (!SUCCESSFUL_LINK_STATUSES.has(String(row.link_status || '').toLowerCase())) return false
+  return String(row.verification_error || '').trim() === ''
+}
+
 function isRetryableLinkQuarantine(row = {}) {
   const status = String(row.link_status || 'unverified').toLowerCase()
   if (status === 'broken' || status === 'unverified' || status === 'suspicious') return true
+  if (isUnexplainedHiddenSuccess(row)) return true
   return status === 'skipped' && String(row.verification_error || '').startsWith(SCHEDULED_RETRY_MARKER)
 }
 
@@ -332,7 +360,7 @@ export async function verifyOpportunityLinkNow(db, oppRow, { verifiedBy = 'stop-
     current = await db.prepare(`
       SELECT id, application_url, source_url, opportunity_kind, result_kind,
              opportunity_type, type, status, deadline, deadline_type,
-             link_status, verification_error
+             link_status, verification_error, is_hidden
         FROM funding_opportunities
        WHERE id = ?
     `).get(String(oppRow.id))
@@ -512,13 +540,21 @@ export async function runLinkVerification(
   // remains the hard 30-day mission boundary; this earlier due cutoff provides
   // enough runway for bounded batches, retries, and scheduler jitter.
   const cutoff = new Date(Date.now() - REVERIFY_DUE_AFTER_DAYS * 24 * 60 * 60 * 1000).toISOString()
+  const hiddenTrueSql = db?.dialect === 'postgres' ? 'TRUE' : '1'
+  const hiddenFalseSql = db?.dialect === 'postgres' ? 'FALSE' : '0'
+  // A hidden row with a successful status and no verification marker is a
+  // quarantine nobody recorded; it is re-probed so a current success can
+  // restore it (see isUnexplainedHiddenSuccess).
+  const unexplainedHiddenSuccessSql = `(COALESCE(is_hidden, ${hiddenFalseSql}) = ${hiddenTrueSql}
+              AND LOWER(COALESCE(link_status, '')) IN ('ok', 'redirect', 'verified')
+              AND COALESCE(verification_error, '') = '')`
 
   const rows = await db
     .prepare(
       `
         SELECT id, application_url, source_url, type, opportunity_type,
                opportunity_kind, result_kind, last_verified_at, link_status,
-               verification_error, status, deadline, deadline_type
+               verification_error, status, deadline, deadline_type, is_hidden
         FROM funding_opportunities
         WHERE (application_url IS NOT NULL OR source_url IS NOT NULL)
             AND NOT (
@@ -526,9 +562,12 @@ export async function runLinkVerification(
               AND COALESCE(verification_error, '') LIKE 'retired_after_definitive_recheck:%'
             )
             AND COALESCE(is_active, TRUE) = TRUE
-            AND (link_status = 'broken' OR last_verified_at IS NULL OR last_verified_at < ?)
+            AND (link_status = 'broken' OR last_verified_at IS NULL OR last_verified_at < ?
+                 OR ${unexplainedHiddenSuccessSql})
             AND ${mutableLinkLifecycleSql()}
-          ORDER BY CASE WHEN link_status = 'broken' THEN 0 ELSE 1 END,
+          ORDER BY CASE WHEN link_status = 'broken' THEN 0
+                        WHEN ${unexplainedHiddenSuccessSql} THEN 1
+                        ELSE 2 END,
                    (last_verified_at IS NULL) DESC, last_verified_at ASC
         LIMIT ?
       `,

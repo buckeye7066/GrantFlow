@@ -413,6 +413,37 @@ describe('qualified pipeline promotion', () => {
     db.close()
   })
 
+  it('one candidate whose transaction throws is recorded as an error and the run continues (PostgreSQL aborted-transaction class)', async () => {
+    const db = makeDb()
+    seedProfile(db, 'real')
+    seedCandidate(db, 'real', { id: 'boom' })
+    seedCandidate(db, 'real', { id: 'fine' })
+    let calls = 0
+    const flakyDb = new Proxy(db, {
+      get(target, key) {
+        if (key === 'withTransaction') {
+          return async (fn) => {
+            calls += 1
+            if (calls === 1) throw new Error('current transaction is aborted, commands ignored until end of transaction block')
+            return target.withTransaction(fn)
+          }
+        }
+        const value = Reflect.get(target, key)
+        return typeof value === 'function' ? value.bind(target) : value
+      },
+    })
+
+    const result = await runQualifiedPipelinePromotion(flakyDb, { batch: 10, amountFollowup: false })
+
+    expect(result.attempted).toBe(2)
+    expect(result.promoted).toBe(1)
+    expect(grantsFor(db, 'real').map((g) => g.funding_opportunity_id)).toEqual(['fine'])
+    const boom = db.prepare("SELECT outcome, reason FROM pipeline_promotion_outcomes WHERE opportunity_id = 'boom'").get()
+    expect(boom.outcome).toBe('error')
+    expect(boom.reason).toMatch(/^error:transient:current transaction is aborted/)
+    db.close()
+  })
+
   it('dry-run is REMOVED: naming the old switch fails before any candidate is read', async () => {
     const db = makeDb()
     seedProfile(db, 'real')

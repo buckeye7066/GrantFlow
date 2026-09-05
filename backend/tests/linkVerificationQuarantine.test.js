@@ -388,6 +388,10 @@ describe('startup SQL-only link quarantine', () => {
         status: 'ok',
         hidden: 1,
       })
+      // An INDEPENDENT quarantine records itself. A hidden ok row with no
+      // marker at all is an unexplained hide and IS re-probed (see the
+      // "unexplained hidden success" suite); this fixture carries its reason.
+      db.prepare("UPDATE funding_opportunities SET verification_error = 'independent_quarantine:test' WHERE id = 'independently-hidden'").run()
 
       const staleAt = new Date(Date.now() - 45 * 24 * 60 * 60 * 1000).toISOString()
       const freshAt = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString()
@@ -439,6 +443,7 @@ describe('startup SQL-only link quarantine', () => {
       expect(readRow(db, 'independently-hidden')).toMatchObject({
         link_status: 'ok',
         is_hidden: 1,
+        verification_error: 'independent_quarantine:test',
       })
     } finally {
       fetchSpy.mockRestore()
@@ -469,6 +474,49 @@ describe('startup SQL-only link quarantine', () => {
       expect(readRow(db, 'skipped-direct')).toMatchObject({ is_hidden: 1, is_active: 1 })
       expect(readRow(db, 'directory-resource')).toMatchObject({ is_hidden: 0, is_active: 1 })
       expect(readRow(db, 'proven-hidden')).toMatchObject({ is_hidden: 1, is_active: 1, link_status: 'ok' })
+    } finally {
+      fetchSpy.mockRestore()
+      db.close()
+    }
+  })
+})
+
+describe('unexplained hidden success (prod 2026-09-05: 10,427 rows hidden with current ok proof)', () => {
+  const DAY_MS = 24 * 60 * 60_000
+
+  it('the recurring sweep re-probes a hidden ok row with no marker and restores it; a marked one is left alone', async () => {
+    const db = makeDb()
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue({ status: 200, url: 'https://8.8.8.8/hidden-ok' })
+    try {
+      insertOpportunity(db, { id: 'hidden-ok', url: 'https://8.8.8.8/hidden-ok', status: 'ok', hidden: 1 })
+      db.prepare("UPDATE funding_opportunities SET last_verified_at = ? WHERE id = 'hidden-ok'")
+        .run(new Date(Date.now() - 10 * DAY_MS).toISOString())
+      insertOpportunity(db, { id: 'hidden-marked', url: 'https://8.8.8.8/marked', status: 'ok', hidden: 1 })
+      db.prepare("UPDATE funding_opportunities SET last_verified_at = ?, verification_error = 'stale_reverification_required:2026-08-06' WHERE id = 'hidden-marked'")
+        .run(new Date(Date.now() - 10 * DAY_MS).toISOString())
+
+      const stats = await runLinkVerification(db, { fetchImpl: globalThis.fetch, limit: 10, verifiedBy: 'test-hidden-ok' })
+
+      expect(fetchSpy).toHaveBeenCalledTimes(1)
+      expect(stats.restored).toBe(1)
+      expect(readRow(db, 'hidden-ok')).toMatchObject({ link_status: 'ok', is_hidden: 0, is_active: 1 })
+      expect(readRow(db, 'hidden-marked')).toMatchObject({ link_status: 'ok', is_hidden: 1 })
+    } finally {
+      fetchSpy.mockRestore()
+      db.close()
+    }
+  })
+
+  it('a hidden ok row that FAILS its re-probe is not restored', async () => {
+    const db = makeDb()
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue({ status: 404, url: 'https://8.8.8.8/gone' })
+    try {
+      insertOpportunity(db, { id: 'hidden-gone', url: 'https://8.8.8.8/gone', status: 'ok', hidden: 1 })
+      db.prepare("UPDATE funding_opportunities SET last_verified_at = ? WHERE id = 'hidden-gone'")
+        .run(new Date(Date.now() - 10 * DAY_MS).toISOString())
+      await runLinkVerification(db, { fetchImpl: globalThis.fetch, limit: 10, verifiedBy: 'test-hidden-gone' })
+      expect(readRow(db, 'hidden-gone').is_hidden).toBe(1)
+      expect(readRow(db, 'hidden-gone').link_status).toBe('broken')
     } finally {
       fetchSpy.mockRestore()
       db.close()
