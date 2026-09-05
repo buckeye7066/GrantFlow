@@ -1,0 +1,58 @@
+name: Guard PR 1541 against a moving main branch
+
+on:
+  push:
+    branches: [fix/production-cors-current-main-20260905]
+    paths:
+      - .github/workflows/patch-pr1541-main-race-guard.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout exact branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Add a fail-closed main-advance check before squashing
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path('.github/workflows/apply-container-cors-default-and-finalize.yml')
+          text = path.read_text(encoding='utf-8')
+          old = """          git config user.name \"github-actions[bot]\"
+          git config user.email \"41898282+github-actions[bot]@users.noreply.github.com\"
+          git reset --soft origin/main
+"""
+          new = """          git config user.name \"github-actions[bot]\"
+          git config user.email \"41898282+github-actions[bot]@users.noreply.github.com\"
+          # Never manufacture a squash commit that silently reverts a main
+          # revision which landed while this exact tree was being tested.
+          git fetch origin main
+          if ! git merge-base --is-ancestor origin/main HEAD; then
+            echo 'Current main advanced after this candidate was tested. Refusing to rewrite or merge; rerun on the new base.'
+            exit 1
+          fi
+          git reset --soft origin/main
+"""
+          if text.count(old) != 1:
+              raise SystemExit('Refused: publish block did not match exactly once')
+          path.write_text(text.replace(old, new), encoding='utf-8')
+          PY
+          rm -f .github/workflows/patch-pr1541-main-race-guard.yml
+          git diff --check
+          git add -A
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "ci: fail closed when main advances during verification"
+          git push origin HEAD:fix/production-cors-current-main-20260905
