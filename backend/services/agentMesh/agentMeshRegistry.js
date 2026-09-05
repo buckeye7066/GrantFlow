@@ -5,7 +5,7 @@
  * know every other agent — its human name, charter, entry points, and where
  * its telemetry/lessons live — from ONE registry, instead of each subsystem
  * holding its own partial roster (agentControlTypes.ALL_AGENTS, the adapter
- * registry, crawler-os/agents/*, Amy's scheduler). Those rosters stay the
+ * registry, Amy's scheduler). Those rosters stay the
  * operational authorities for what they gate (start/stop validation, adapter
  * lookup, crawl personas); THIS registry is the mesh's identity choke point:
  * the message store and the lesson store refuse any agent id that is not
@@ -60,7 +60,7 @@ export const AGENT_MESH_REGISTRY = Object.freeze({
     role: 'Funding discovery',
     charter: 'Ingest/discover funding opportunities into the catalog through the canonical gate stack.',
     capabilities: Object.freeze(['opportunity_ingest', 'source_discovery']),
-    entry_points: Object.freeze(['backend/services/agentControl/agentAdapters/robertAgentAdapter.js', 'backend/crawler-os/agents/robert.js']),
+    entry_points: Object.freeze(['backend/services/agentControl/agentAdapters/robertAgentAdapter.js']),
     telemetry: 'robert_runs + agent_activity_events (agent_name=robert)',
     learning_stores: Object.freeze(['robertSourceDiscovery store (env-gated OFF; feeds neither the registry nor the gap queue)']),
     control: 'agent-control adapter (full-cycle order #2)',
@@ -71,7 +71,7 @@ export const AGENT_MESH_REGISTRY = Object.freeze({
     role: 'Client discovery (lead intelligence) — NOT Hamilton',
     charter: 'Qualify prospective-client leads and push plausibility-gated contacts to John.',
     capabilities: Object.freeze(['lead_qualification', 'contact_enrichment']),
-    entry_points: Object.freeze(['backend/services/agentControl/agentAdapters/yanaAgentAdapter.js', 'backend/crawler-os/agents/yana.js']),
+    entry_points: Object.freeze(['backend/services/agentControl/agentAdapters/yanaAgentAdapter.js']),
     telemetry: 'agent_activity_events (agent_name=yana)',
     learning_stores: Object.freeze(['lead store (needs_enrichment lifecycle)']),
     control: 'agent-control adapter (full-cycle order #3)',
@@ -82,7 +82,7 @@ export const AGENT_MESH_REGISTRY = Object.freeze({
     role: 'Outreach drafts (Outlook)',
     charter: 'Draft (never send) outreach email for Yana’s plausibility-gated leads.',
     capabilities: Object.freeze(['outreach_drafting']),
-    entry_points: Object.freeze(['backend/services/agentControl/agentAdapters/johnAgentAdapter.js', 'backend/crawler-os/agents/john.js']),
+    entry_points: Object.freeze(['backend/services/agentControl/agentAdapters/johnAgentAdapter.js']),
     telemetry: 'john_email_drafts + agent_activity_events (agent_name=john)',
     learning_stores: Object.freeze(['john_email_drafts archive (plausibility purges)']),
     control: 'agent-control adapter (full-cycle order #4)',
@@ -93,7 +93,7 @@ export const AGENT_MESH_REGISTRY = Object.freeze({
     role: 'Application autopilot / funding completion',
     charter: 'Advance application tasks (classify portals, file missing-info asks, submit only with human-grade evidence).',
     capabilities: Object.freeze(['application_tasks', 'portal_classification']),
-    entry_points: Object.freeze(['backend/services/agentControl/agentAdapters/hamiltonAgentAdapter.js', 'backend/crawler-os/agents/hamilton.js']),
+    entry_points: Object.freeze(['backend/services/agentControl/agentAdapters/hamiltonAgentAdapter.js']),
     telemetry: 'application_tasks + agent_activity_events (agent_name=hamilton)',
     learning_stores: Object.freeze(['application_missing_info lifecycle']),
     control: 'agent-control adapter (full-cycle order #5)',

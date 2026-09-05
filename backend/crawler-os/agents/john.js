@@ -1,3 +1,19 @@
+// ============================================================================
+// NOT THE LIVE IMPLEMENTATION. Nothing imports this file.
+//
+// The agent that actually runs is backend/services/john/. This module is
+// part of a self-contained crawler-os fleet whose createFleet() (./index.js)
+// has no caller outside backend/tests/ — agentMeshRegistry.js only ever
+// mentions these paths as strings, never imports them.
+//
+// This matters because the behaviour described BELOW is materially weaker than
+// what ships, and a reader who lands here judges the product by it. That is not
+// hypothetical: an audit of this repo reported the live agents as placeholders
+// using descriptions that match THIS file almost verbatim.
+//
+// Read the live implementation before concluding anything about capability.
+// ============================================================================
+
 // crawler-os/agents/john.js
 //
 // John — Outreach Drafting. John turns Yana's QUALIFIED leads into warm,
