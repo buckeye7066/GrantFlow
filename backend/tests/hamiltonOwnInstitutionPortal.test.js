@@ -32,6 +32,12 @@ describe('own-institution scholarship portal routing', () => {
     expect(c.reasons.some((r) => r.rule === 'own_institution.scholarship_portal')).toBe(true)
   })
 
+  it('a scholarship APPLICATION page on the school\'s own domain is kept (it is the funder\'s own surface)', () => {
+    const c = classifyFundingSource({ opportunity: { title: 'MTSU Guaranteed Scholarship', sponsor: 'Middle Tennessee State University', application_url: 'https://www.mtsu.edu/financial-aid/apply' }, profile: committedStudent })
+    expect(c.resolved_url).toBe('https://www.mtsu.edu/financial-aid/apply')
+    expect(c.own_institution_portal).toBeNull()
+  })
+
   it('a row already on the scholarship platform keeps its own URL', () => {
     const c = classifyFundingSource({ opportunity: { title: 'Adams Family Foundation Scholarship in Business', sponsor: 'Middle Tennessee State University', application_url: 'https://mtsu.scholarships.ngwebsolutions.com/Scholarships/Search' }, profile: committedStudent })
     expect(c.resolved_url).toBe('https://mtsu.scholarships.ngwebsolutions.com/Scholarships/Search')

@@ -272,6 +272,21 @@ function readContact(opportunity, grant, key) {
  * row's URL is a generic institution page; null otherwise (silence keeps the
  * row's own URL).
  */
+// A URL on the institution's own domain is re-routed only when it is a
+// GENERIC page (the scholarships overview, a funding page) or the ADMISSIONS
+// application; a page that is itself a scholarship application
+// (/financial-aid/apply, /scholarship-application) is the funder's own
+// surface and is kept.
+const ADMISSIONS_PATH_RX = /(?:^https?:\/\/(?:apply|admissions?)\.[a-z0-9.-]+\.edu(?:\/|$))|\/applynow(?:\/|$)|\/admissions?(?:\/|$)|\/portal\/app_management/i
+const APPLICATION_PATH_RX = /\/(?:apply|application|applications|apply-now|start-application|scholarship-application|general-application)(?:\/|$|\?|\.)/i
+
+export function institutionUrlNeedsRerouting(url) {
+  const value = String(url ?? '')
+  if (!value) return false
+  if (ADMISSIONS_PATH_RX.test(value)) return true
+  return !APPLICATION_PATH_RX.test(value)
+}
+
 export function resolveOwnInstitutionPortal({ opportunity = null, grant = null, profile = null, url = null } = {}) {
   if (!profile) return null
   const sections = profile?.sections && typeof profile.sections === 'object' ? profile.sections : profile
@@ -285,6 +300,9 @@ export function resolveOwnInstitutionPortal({ opportunity = null, grant = null, 
     const sponsored = opportunitySponsoredByInstitution(institution, row)
       || (row.sponsor && resolveInstitutionScholarshipPortal(row.sponsor) === entry)
     const onOwnDomain = url ? urlOnInstitutionDomain(url, entry) : false
+    // The row's own application surface is kept; only generic or admissions
+    // pages are re-routed to the scholarship portal.
+    if (url && !institutionUrlNeedsRerouting(url)) return null
     if (sponsored || onOwnDomain) {
       return { institution: entry.institution, portal_url: entry.portal_url, portal_host: entry.portal_host, platform: entry.platform, login_hint: entry.login_hint, vault_kinds: [...entry.vault_kinds], umbrella: entry.umbrella, replaced_url: url || null }
     }
