@@ -1,4 +1,5 @@
-﻿/**
+﻿import { emitIdentityNeedsReminder } from '../services/hamilton/hamiltonIdentityNeeds.js'
+/**
  * /api/hamilton/automation/*
  *
  * Top-level "Automate with Hamilton" surface. Adds the bulk select-many
@@ -2321,6 +2322,9 @@ router.get('/readiness', async (req, res) => {
     // requireProfileScope above 400s without a profileId, so an admin who is not
     // working inside a profile never reaches this and never gets a digest.
     emitPortalSyncReminders(req.db, { profileId: req.query.profileId }).catch(() => {})
+    // Login-time identity ask (owner order 2026-09-05): one deduped notice
+    // naming the vault kinds the pipeline still needs, deep-linked to the vault.
+    emitIdentityNeedsReminder(req.db, { profileId: req.query.profileId }).catch(() => {})
     return res.json({ ok: true, readiness })
   } catch (err) {
     log.error('hamilton_readiness_failed', { err: err?.message })
