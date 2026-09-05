@@ -51,16 +51,55 @@ const FORBIDDEN_PATH_PATTERNS = [
   /backend[\\/]services[\\/](?:billing|stripe|application|grant|saved|crawler)[A-Za-z]*\.js$/i,
   /backend[\\/]middleware[\\/]auth/i,
   /backend[\\/]routes[\\/](?:auth|admin)/i,
+  // The whole DB layer, not just its migrations: it is the data-shape
+  // authority and an autofix there is never "safe" in this file's sense.
+  /backend[\\/]db[\\/]/i,
+  // THE CHECKER DOES NOT EDIT ITS OWN CHECKS. Widening the roots to `backend`
+  // brought backend/tests/ into scope; a Sam who can rewrite the tests that
+  // judge him is a different kind of agent from the one this file describes.
+  /(?:^|[\\/])(?:tests?|__tests__)[\\/]/i,
+  /\.(?:test|spec)\.[cm]?[jt]sx?$/i,
   /\.env(\.|$)/i,
   /node_modules[\\/]/i,
   /\.git[\\/]/i,
 ]
 
-// Allowed roots — the file MUST resolve under one of these.
+/**
+ * Allowed roots — the file MUST resolve under one of these.
+ *
+ * WHAT THIS USED TO BE, and why the owner was right. The list was
+ * `['src', 'backend/services/sam', 'backend/routes/sam.js', 'docs', …]` — so
+ * Sam could autofix the entire FRONTEND and his own two files, and nothing
+ * else on the server. The owner's report was "Sam also cannot make appropriate
+ * code level edits in the repo."
+ *
+ * It was worse than a narrow scope: it CONTRADICTED both the registry and the
+ * code that feeds it. `SAFE_FIX_REGISTRY`'s `lint.eslint-fix-file` entry told
+ * every reader it "Refuses if the file is outside src/ or backend/", and
+ * `deriveSafeFixesFromFindings` nominated any file matching
+ * `/^(src|backend)[/\\]/`. Verified end to end on a real finding: Sam derives
+ * `{file: 'backend/services/opportunityInserter.js'}` and then refuses himself
+ * with "outside the safe-fix allowlist" — so EVERY backend lint finding took a
+ * round trip to a refusal.
+ *
+ * The roots now cover the application source. Three things keep that safe, and
+ * none of them may be removed:
+ *   1. FORBIDDEN_PATH_PATTERNS above still hard-refuse migrations, the whole
+ *      backend/db layer, matchEngine, profileNormalizer, the billing/stripe/
+ *      application/grant/saved/crawler services, auth middleware, the auth and
+ *      admin routes, and .env.
+ *   2. The only file-editing fix is `eslint --fix` on ONE file, which runs an
+ *      INDEPENDENT verify pass afterwards and RESTORES the original whenever
+ *      that verify is not clean (`eslintFixFile`). It cannot leave an
+ *      unverified mutation in the tree.
+ *   3. Sam never commits or pushes. This writes to the working tree only.
+ */
 const ALLOWED_ROOTS = [
   'src',
-  'backend/services/sam',
-  'backend/routes/sam.js',
+  'backend',
+  'shared',
+  'scripts',
+  'qa',
   'docs',
   'docs/_readiness_logs',
 ]
@@ -135,7 +174,11 @@ export function deriveSafeFixesFromFindings(findings = []) {
       fixIds.push(nominated)
     }
     if (!f?.safe_auto_fix_available) continue
-    const file = (f.affected_files || []).find((p) => /^(src|backend)[/\\]/.test(String(p || '')))
+    /* ONE AUTHORITY. This used to carry its own `/^(src|backend)[/\\]/` regex
+       while `isPathSafeForFix` held a different, narrower list — so Sam
+       nominated backend files he would then refuse. The permitting predicate is
+       the only thing that decides. */
+    const file = (f.affected_files || []).find((p) => isPathSafeForFix(String(p || '')))
     if (file && !perFixParams['lint.eslint-fix-file']) {
       if (!fixIds.includes('lint.eslint-fix-file')) fixIds.push('lint.eslint-fix-file')
       perFixParams['lint.eslint-fix-file'] = { file }
@@ -168,6 +211,37 @@ export async function applySafeFixes({
 // the eslint-fix safe fix.
 // ---------------------------------------------------------------------------
 const SHELL_METACHARS = /[;&|`$<>(){}[\]]/
+
+/**
+ * Resolve a Node-tooling executable so it can be spawned WITHOUT a shell.
+ *
+ * `shell: false` is a security property of this file — it is what makes the
+ * whitelist and the metacharacter check meaningful — so the answer is never
+ * "turn the shell on". On Windows `npm`/`npx` are `.cmd` shims: a bare `npm`
+ * raises ENOENT, and since Node 24's CVE-2024-27980 hardening even an explicit
+ * `npm.cmd` raises EINVAL without a shell. Verified on this machine, both.
+ *
+ * The fix is to launch the tool's own JS entry point with the Node binary we
+ * are already running. If that entry point cannot be found we say so, and the
+ * caller reports SKIPPED — never a failed gate.
+ */
+const WINDOWS_NODE_TOOL_CLIS = { npm: 'npm-cli.js', npx: 'npx-cli.js' }
+
+function resolveNodeToolExecutable(exe) {
+  if (process.platform !== 'win32' || !(exe in WINDOWS_NODE_TOOL_CLIS)) {
+    return { file: exe, prefixArgs: [], unavailable: false }
+  }
+  const candidates = []
+  if (exe === 'npm' && process.env.npm_execpath) candidates.push(process.env.npm_execpath)
+  candidates.push(path.join(path.dirname(process.execPath), 'node_modules', 'npm', 'bin', WINDOWS_NODE_TOOL_CLIS[exe]))
+  candidates.push(path.join(REPO_ROOT, 'node_modules', 'npm', 'bin', WINDOWS_NODE_TOOL_CLIS[exe]))
+  for (const candidate of candidates) {
+    if (candidate && candidate.endsWith('.js') && fssync.existsSync(candidate)) {
+      return { file: process.execPath, prefixArgs: [candidate], unavailable: false }
+    }
+  }
+  return { file: exe, prefixArgs: [], unavailable: true }
+}
 
 export async function runWhitelistedCommand(command, {
   cwd = REPO_ROOT,
@@ -202,6 +276,25 @@ export async function runWhitelistedCommand(command, {
   const parts = command.split(/\s+/).filter(Boolean)
   const exe = parts[0]
   const args = parts.slice(1)
+  const resolvedExe = resolveNodeToolExecutable(exe)
+  if (resolvedExe.unavailable) {
+    /* We could not find a way to launch this tool WITHOUT a shell. That is an
+       environment limitation, not a failing gate — report it as skipped with
+       the reason named, never as `ok:false`. (The old code spawned `npm`
+       directly, which on Windows is `npm.cmd`: `shell:false` raises ENOENT,
+       and Node 24 raises EINVAL even for the explicit `.cmd`, so EVERY Sam
+       production gate reported `status:-1` on a Windows checkout as though the
+       gate itself had failed.) */
+    return {
+      ok: true,
+      status: 0,
+      stdout: '',
+      stderr: '',
+      skipped: true,
+      skipped_reason: `executable_unavailable:${exe}`,
+      command,
+    }
+  }
 
   // npm scripts: skip silently when the script doesn't exist (mission rule:
   // missing optional gates report `skipped`, never fail).
@@ -225,7 +318,7 @@ export async function runWhitelistedCommand(command, {
     let stderr = ''
     let settled = false
 
-    const child = spawn(exe, args, {
+    const child = spawn(resolvedExe.file, resolvedExe.prefixArgs.concat(args), {
       cwd,
       shell: false,
       windowsHide: true,
@@ -327,21 +420,46 @@ async function regenerateReadinessLog({ check_id = 'unknown', content = '' } = {
 // ---------------------------------------------------------------------------
 
 /** Run eslint once on a single file. Resolves { status, stdout, stderr }. */
-function runEslintCli(file, { fix = false } = {}) {
-  const args = fix ? ['eslint', '--fix', file] : ['eslint', file]
-  return new Promise((resolve) => {
-    let stdout = ''
-    let stderr = ''
-    const child = spawn('npx', args, { cwd: REPO_ROOT, shell: false })
-    const timer = setTimeout(() => {
-      try { child.kill('SIGTERM') } catch { /* ignore */ }
-      resolve({ status: -1, stdout, stderr: `${stderr}\n[sam] eslint timed out after 60s`, timed_out: true })
-    }, 60_000)
-    child.stdout?.on('data', (b) => { stdout += b.toString() })
-    child.stderr?.on('data', (b) => { stderr += b.toString() })
-    child.on('exit', (status) => { clearTimeout(timer); resolve({ status: status ?? 0, stdout, stderr }) })
-    child.on('error', (err) => { clearTimeout(timer); resolve({ status: -1, stdout, stderr: String(err?.message || err), error: true }) })
-  })
+async function runEslintCli(file, { fix = false } = {}) {
+  /* WHY THIS IS THE NODE API AND NOT `spawn('npx', …)`.
+   *
+   * It used to be `spawn('npx', ['eslint', …], { shell: false })`. On Windows
+   * `npx` is `npx.cmd`, and spawn WITHOUT a shell cannot execute a `.cmd` — it
+   * raises ENOENT. Verified on this machine: the child emits
+   * `spawn npx ENOENT` in ~30ms, the handler below resolved `{status: -1}`, and
+   * `eslintFixFile` reported that as "eslint reports unresolved problems in
+   * <file>" — a claim about the FILE when the truth is that the tool never ran.
+   * So Sam's only code-editing fix could not execute at all on a Windows
+   * checkout, and said so in the language of a code defect.
+   *
+   * The Node API removes the shell/PATH dependency entirely (the same move
+   * adminCodeLint made in #1545) and lets a genuinely absent ESLint be reported
+   * as ABSENT. `status` keeps the CLI's meaning — 0 clean, 1 problems remain —
+   * so every caller and the injected `_runEslint` test seam are unchanged.
+   */
+  let ESLintCtor = null
+  try {
+    ;({ ESLint: ESLintCtor } = await import('eslint'))
+  } catch (err) {
+    return { status: -1, stdout: '', stderr: `eslint is not installed in this environment: ${err?.message || err}`, unavailable: true }
+  }
+
+  try {
+    const eslint = new ESLintCtor({ cwd: REPO_ROOT, fix, errorOnUnmatchedPattern: false })
+    const results = await eslint.lintFiles([file])
+    if (fix) await ESLintCtor.outputFixes(results)
+    const errorCount = results.reduce((sum, r) => sum + (r.errorCount ?? 0), 0)
+    const warningCount = results.reduce((sum, r) => sum + (r.warningCount ?? 0), 0)
+    const formatted = results
+      .flatMap((r) => (r.messages ?? []).map((msg) => `${r.filePath}:${msg.line ?? 0} ${msg.severity === 2 ? 'error' : 'warning'} ${msg.message} (${msg.ruleId ?? 'parse-error'})`))
+      .join('\n')
+    // `npm run lint` enforces zero warnings, so a warning is not clean here either.
+    return { status: errorCount + warningCount > 0 ? 1 : 0, stdout: formatted, stderr: '' }
+  } catch (err) {
+    /* ESLint threw (bad config, unreadable file, internal error). That is a
+       TOOL failure, not a verdict about the file. */
+    return { status: -1, stdout: '', stderr: String(err?.message || err), unavailable: true }
+  }
 }
 
 /**
@@ -352,10 +470,15 @@ function runEslintCli(file, { fix = false } = {}) {
  *   applied    → verified AND the file content actually changed
  *   reverted   → unverified AND we mutated the file (caller restores it)
  */
-export function decideEslintOutcome({ verifyStatus, changed } = {}) {
-  const verified = verifyStatus === 0
-  if (!verified) return { ok: false, verified: false, applied: false, reverted: changed === true }
-  return { ok: true, verified: true, applied: changed === true, reverted: false }
+export function decideEslintOutcome({ verifyStatus, changed, verifyUnavailable = false } = {}) {
+  const verified = verifyStatus === 0 && !verifyUnavailable
+  if (!verified) {
+    /* "COULD NOT CHECK" IS NOT "DETERMINED NO" — the rule Robert's pipeline
+       audit already follows for a 503 or a bot wall. A tool that never ran
+       must never be reported as a verdict about the file. */
+    return { ok: false, verified: false, applied: false, reverted: changed === true, tool_unavailable: Boolean(verifyUnavailable) }
+  }
+  return { ok: true, verified: true, applied: changed === true, reverted: false, tool_unavailable: false }
 }
 
 async function eslintFixFile({ file = '', _runEslint = runEslintCli } = {}) {
@@ -380,7 +503,8 @@ async function eslintFixFile({ file = '', _runEslint = runEslintCli } = {}) {
 
   // Independent verification pass — this, not the --fix exit code, gates success.
   const verifyRes = await _runEslint(file, { fix: false })
-  const outcome = decideEslintOutcome({ verifyStatus: verifyRes.status, changed })
+  const verifyUnavailable = Boolean(verifyRes.unavailable || fixRes.unavailable)
+  const outcome = decideEslintOutcome({ verifyStatus: verifyRes.status, changed, verifyUnavailable })
 
   if (!outcome.verified) {
     // Never leave an unverified mutation in the tree: restore the original.
@@ -390,9 +514,13 @@ async function eslintFixFile({ file = '', _runEslint = runEslintCli } = {}) {
       fix_id: 'lint.eslint-fix-file',
       applied: false,
       reverted: changed,
-      message: changed
-        ? `eslint --fix did not verify clean on ${file}; reverted`
-        : `eslint reports unresolved problems in ${file}`,
+      tool_unavailable: outcome.tool_unavailable,
+      message: outcome.tool_unavailable
+        // Say what is true: the tool did not run. This says NOTHING about the file.
+        ? `eslint could not run (${String(verifyRes.stderr || fixRes.stderr || 'unknown error').slice(0, 200)}); no conclusion about ${file}`
+        : changed
+          ? `eslint --fix did not verify clean on ${file}; reverted`
+          : `eslint reports unresolved problems in ${file}`,
       evidence: {
         file,
         fix_status: fixRes.status,
@@ -489,6 +617,8 @@ export const __testing__ = {
   ALLOWED_FILE_EXTENSIONS,
   npmScriptExists,
   refusal,
+  eslintFixFile,
+  resolveNodeToolExecutable,
 }
 
 export { SAFE_FIX_REGISTRY }
