@@ -168,11 +168,41 @@ export function buildNextStepsForMatch({
       category: 'application',
       priority: 'high',
       label: 'Start the application workflow',
-      detail: 'Transition this to SCHEMA_READY so we can auto-build the required fields.',
+      detail: 'Check for duplicate applications before qualifying this opportunity.',
+      action: 'transition',
+      meta: { target: 'DEDUPED' },
+    })
+  } else if (state === 'DEDUPED') {
+    steps.push({
+      id: 'qualify_application',
+      category: 'application',
+      priority: 'high',
+      label: 'Qualify the opportunity',
+      detail: 'Confirm this opportunity is qualified before building its required fields.',
+      action: 'transition',
+      meta: { target: 'QUALIFIED' },
+    })
+  } else if (state === 'QUALIFIED') {
+    steps.push({
+      id: 'build_application_schema',
+      category: 'application',
+      priority: 'high',
+      label: 'Build required fields',
+      detail: 'Build the application schema from the qualified opportunity.',
       action: 'transition',
       meta: { target: 'SCHEMA_READY' },
     })
-  } else if (state === 'SCHEMA_READY' || state === 'MAPPED') {
+  } else if (state === 'SCHEMA_READY') {
+    steps.push({
+      id: 'map_requirements',
+      category: 'application',
+      priority: 'high',
+      label: 'Map application requirements',
+      detail: 'Map profile information and documents to the required fields.',
+      action: 'transition',
+      meta: { target: 'MAPPED' },
+    })
+  } else if (state === 'MAPPED') {
     steps.push({
       id: 'resolve_missing',
       category: 'application',
@@ -209,6 +239,7 @@ export function buildNextStepsForMatch({
 
   return { steps, rationale, coverage }
 }
+
 
 /**
  * Produce profile-level guidance (used when the user has zero/few results

@@ -229,6 +229,26 @@ export function isFeatureEnabled(db, flagKey, { userId = null, profileId = null,
 }
 
 /**
+ * Canonical server-side gate for the Shoulders vNext backbone.
+ *
+ * Both mutation routes and read-side guidance must use this helper so an
+ * application row left behind by an earlier rollout cannot advertise actions
+ * that the current user/profile is no longer allowed to invoke.
+ */
+export function isShouldersVnextEnabled(
+  db,
+  { userId = null, profileId = null, isAdmin = false } = {},
+) {
+  const envEnabled = String(process.env.SHOULDERS_VNEXT || '').trim().toLowerCase() === 'true'
+  if (envEnabled) return true
+  try {
+    return isFeatureEnabled(db, 'shoulders.vnext', { userId, profileId, isAdmin })
+  } catch {
+    return false
+  }
+}
+
+/**
  * Get all feature flags (admin only)
  */
 export function getAllFlags(db) {

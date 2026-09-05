@@ -160,7 +160,10 @@ router.get('/profiles/:id/funding-sources', async (req, res) => {
 
     // Every GET is SELECT-only presentation. Match write-back belongs to the
     // versioned background reconciliation/sweep path, never an ordinary read.
-    const loadedRows = await readFundingSourceRows(req.db, profileId)
+    const loadedRows = await readFundingSourceRows(req.db, profileId, {
+      userId: req.ctx?.userId ?? req.user?.userId ?? null,
+      isAdmin: Boolean(req.ctx?.isAdmin),
+    })
     const rows = loadedRows.rows
 
     const mapped = rows.map((row) => {
@@ -234,6 +237,14 @@ router.get('/profiles/:id/funding-sources', async (req, res) => {
         match_confidence: row.match_confidence ?? null,
         match_decision: row.match_decision,
         why: row.match_explanation,
+        // Preserve the state-aware guidance that canonicalizeOpportunityList
+        // derived from this profile's vNext application row. Dropping it in
+        // this final reshape made the sequential transition branches
+        // unreachable on the curated owner-facing endpoint.
+        next_steps: Array.isArray(row.next_steps) ? row.next_steps : [],
+        vnext_application_id: row.vnext_application_id ?? null,
+        vnext_application_state: row.vnext_application_state ?? null,
+        vnext_application_stage: row.vnext_application_stage ?? null,
         // Keep the persisted four-truth receipt attached through the final
         // presentation reshape. qualifiesForDisplay() is intentionally
         // fail-closed for direct funding and cannot infer this proof from a

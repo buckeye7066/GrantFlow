@@ -1,5 +1,5 @@
 import { readFileSync } from 'node:fs'
-import { describe, expect, it } from 'vitest'
+import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { VERIFIED_FOUR_TRUTH_PROOF } from './helpers/fourTruthFixture.js'
 import {
   ACCEPT_SCORE,
@@ -9,8 +9,16 @@ import {
 } from '../config/matchThresholds.js'
 import {
   attachStoredMatchAuthority,
+  mapResultToFrontendShape,
   selectCanonicalDisplayOpportunities,
 } from '../routes/realCrawlers.js'
+
+const originalShouldersVnext = process.env.SHOULDERS_VNEXT
+beforeAll(() => { process.env.SHOULDERS_VNEXT = 'true' })
+afterAll(() => {
+  if (originalShouldersVnext === undefined) delete process.env.SHOULDERS_VNEXT
+  else process.env.SHOULDERS_VNEXT = originalShouldersVnext
+})
 
 const profileContext = {
   profile: {
@@ -51,10 +59,37 @@ function storedMatch(overrides = {}) {
 }
 
 describe('real crawler display authority', () => {
+  it('keeps joined vNext application aliases in the frontend result shape', () => {
+    expect(mapResultToFrontendShape({
+      id: 'stored-match',
+      name: 'Stored result',
+      vnext_application_id: 'app-1',
+      vnext_application_state: 'DEDUPED',
+      vnext_application_stage: 'DEDUPED',
+    })).toMatchObject({
+      vnext_application_id: 'app-1',
+      vnext_application_state: 'DEDUPED',
+      vnext_application_stage: 'DEDUPED',
+    })
+  })
+
   it('reattaches the persisted decision and lifecycle artifact by opportunity id', async () => {
     let boundArgs = null
     const db = {
       prepare(sql) {
+        if (sql.includes('FROM vnext_applications')) {
+          return {
+            all(...args) {
+              expect(args).toEqual([profileContext.profile.id, 'stored-match'])
+              return [{
+                id: 'app-1',
+                opportunity_id: 'stored-match',
+                state: 'DEDUPED',
+                stage: 'DEDUPED',
+              }]
+            },
+          }
+        }
         expect(sql).toContain('JOIN funding_opportunities')
         return {
           all(...args) {
@@ -89,6 +124,11 @@ describe('real crawler display authority', () => {
     expect(attached.matcherVersion).toBe('crawler-os')
     expect(attached.opportunity_kind).toBe('referral')
     expect(attached.link_status).toBe('unverified')
+    expect(attached).toMatchObject({
+      vnext_application_id: 'app-1',
+      vnext_application_state: 'DEDUPED',
+      vnext_application_stage: 'DEDUPED',
+    })
   })
 
   it('preserves verified ACCEPT but withholds unproven direct REVIEW without rescoring', () => {

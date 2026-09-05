@@ -34,6 +34,7 @@ import {
   chooseGrantUrl,
   GRANT_FINGERPRINT_VERSION,
   likelySameGrantOpportunity,
+  opportunityFunder,
 } from '../utils/grantFingerprint.js'
 import { isDismissed as isPipelineDismissed } from './pipelineDismissals.js'
 import { classifyFundingResult, RESULT_BUCKETS } from '../config/fundingResultFilters.js'
@@ -1155,6 +1156,119 @@ function getSourceRank(opp) {
   return 1
 }
 
+function normalizedIdentity(value) {
+  return value === null || value === undefined
+    ? null
+    : String(value).trim().toLowerCase() || null
+}
+
+function identityValues(opportunity) {
+  return new Set([
+    opportunity?.id,
+    opportunity?.opportunity_id,
+    opportunity?.funding_opportunity_id,
+    opportunity?.canonical_opportunity_id,
+  ].map(normalizedIdentity).filter(Boolean))
+}
+
+/**
+ * Display similarity alone is not proof that two rows identify the same
+ * opportunity. Only move an application handoff across rows when a durable
+ * catalog/source identity, stored fingerprint, or the canonical grant identity
+ * contract agrees.
+ */
+function hasCanonicalOpportunityIdentity(left, right) {
+  const leftIds = identityValues(left)
+  const rightIds = identityValues(right)
+  if ([...leftIds].some((id) => rightIds.has(id))) return true
+
+  const leftSourceId = normalizedIdentity(left?.source_id)
+  const rightSourceId = normalizedIdentity(right?.source_id)
+  const leftSource = normalizedIdentity(left?.source)
+  const rightSource = normalizedIdentity(right?.source)
+  if (
+    leftSourceId && rightSourceId && leftSourceId === rightSourceId &&
+    leftSource && rightSource && leftSource === rightSource
+  ) return true
+
+  // `fingerprint` is the funder/url/deadline-aware canonical grant fingerprint.
+  // `opportunity_fingerprint` is a scoring-input hash and intentionally cannot
+  // prove identity across funders.
+  const fingerprintFields = ['fingerprint']
+  for (const field of fingerprintFields) {
+    const leftFingerprint = normalizedIdentity(left?.[field])
+    const rightFingerprint = normalizedIdentity(right?.[field])
+    if (leftFingerprint && rightFingerprint && leftFingerprint === rightFingerprint) return true
+  }
+
+  // A shared application portal is not a durable opportunity identity. Many
+  // funders intentionally use the same hosted intake form or directory URL.
+  // Before the fuzzy identity fallback can transfer profile-scoped guidance,
+  // the named funders must not contradict one another.
+  const leftFunder = normalizedIdentity(opportunityFunder(left))
+  const rightFunder = normalizedIdentity(opportunityFunder(right))
+  if (leftFunder && rightFunder && leftFunder !== rightFunder) return false
+
+  try {
+    return likelySameGrantOpportunity(left, right)
+  } catch {
+    return false
+  }
+}
+
+/**
+ * Deduplication may prefer a higher-trust catalog representative, but an
+ * application can only be copied to that row after canonical identity is
+ * established. Loose title/scope similarity must never attach one funder's
+ * application to another funder's opportunity.
+ */
+function preserveVnextGuidance(winner, duplicate) {
+  if (winner?.vnext_application_id || !duplicate?.vnext_application_id) return winner
+  if (!hasCanonicalOpportunityIdentity(winner, duplicate)) return winner
+  return {
+    ...winner,
+    vnext_application_id: duplicate.vnext_application_id,
+    vnext_application_state: duplicate.vnext_application_state ?? null,
+    vnext_application_stage: duplicate.vnext_application_stage ?? null,
+    ...(Array.isArray(duplicate.next_steps) ? { next_steps: duplicate.next_steps } : {}),
+  }
+}
+
+function selectPreferredDuplicate(existing, candidate) {
+  const existingHasApplication = Boolean(existing?.vnext_application_id)
+  const candidateHasApplication = Boolean(candidate?.vnext_application_id)
+  const sameCanonicalOpportunity = hasCanonicalOpportunityIdentity(existing, candidate)
+
+  if (!sameCanonicalOpportunity && existingHasApplication && candidateHasApplication) {
+    return {
+      shouldDedupe: false,
+      candidatePreferred: false,
+      winner: existing,
+    }
+  }
+
+  // If the display deduper has only a loose match, keep the application-bearing
+  // representative. That preserves the user's workflow without relabeling it as
+  // a different opportunity.
+  if (!sameCanonicalOpportunity && existingHasApplication !== candidateHasApplication) {
+    const candidatePreferred = candidateHasApplication
+    return {
+      shouldDedupe: true,
+      candidatePreferred,
+      winner: candidatePreferred ? candidate : existing,
+    }
+  }
+
+  const candidatePreferred = getSourceRank(candidate) > getSourceRank(existing)
+  const winner = candidatePreferred ? candidate : existing
+  const duplicate = candidatePreferred ? existing : candidate
+  return {
+    shouldDedupe: true,
+    candidatePreferred,
+    winner: preserveVnextGuidance(winner, duplicate),
+  }
+}
+
 /**
  * Build a dedupe key for exact-match elimination.
  * Combines source_id+source (same crawl record re-inserted) and
@@ -1187,7 +1301,8 @@ const MULTI_LISTING_DOMAINS = new Set([
 
 /**
  * Deduplicate a list of opportunity objects for display purposes.
- * Does NOT mutate the DB. Keeps the highest-source-trust record when duplicates collide.
+ * Does NOT mutate the DB. Keeps the highest-source-trust canonical record, but
+ * never hides two unproven rows that each carry a persisted application.
  *
  * Strategy:
  * 1. Exact source_id+source match → same physical record
@@ -1202,14 +1317,17 @@ export function deduplicateOpportunities(opportunities) {
 
   // Phase 1: exact key deduplication
   const seen = new Map() // key → best opportunity
-  for (const opp of opportunities) {
+  for (const [index, opp] of opportunities.entries()) {
     const key = buildDedupeKey(opp)
     if (!seen.has(key)) {
       seen.set(key, opp)
     } else {
       const existing = seen.get(key)
-      if (getSourceRank(opp) > getSourceRank(existing)) {
-        seen.set(key, opp)
+      const preferred = selectPreferredDuplicate(existing, opp)
+      if (preferred.shouldDedupe) {
+        seen.set(key, preferred.winner)
+      } else {
+        seen.set(`${key}|distinct-application:${index}`, opp)
       }
     }
   }
@@ -1221,7 +1339,7 @@ export function deduplicateOpportunities(opportunities) {
 
   for (let i = 0; i < candidates.length; i++) {
     if (dropped.has(i)) continue
-    const oppI = candidates[i]
+    let oppI = candidates[i]
     const normI = normalizeTitleForDedupe(oppI?.title ?? oppI?.program_name ?? '')
     const scopeI = oppI?.state ? String(oppI.state).toLowerCase() : 'national'
 
@@ -1234,11 +1352,15 @@ export function deduplicateOpportunities(opportunities) {
       const normJ = normalizeTitleForDedupe(oppJ?.title ?? oppJ?.program_name ?? '')
       const sim = titleSimilarity(normI, normJ)
       if (sim >= 0.85) {
-        // Keep the higher-trust one; drop the other
-        if (getSourceRank(oppJ) > getSourceRank(oppI)) {
+        const preferred = selectPreferredDuplicate(oppI, oppJ)
+        if (!preferred.shouldDedupe) continue
+        if (preferred.candidatePreferred) {
+          candidates[j] = preferred.winner
           dropped.add(i)
           break // i is already dropped; no need to compare it further
         } else {
+          candidates[i] = preferred.winner
+          oppI = candidates[i]
           dropped.add(j)
         }
       }
@@ -1259,7 +1381,7 @@ export function deduplicateOpportunities(opportunities) {
   const domainDropped = new Set()
   for (let i = 0; i < kept.length; i++) {
     if (domainDropped.has(i)) continue
-    const oppI = kept[i]
+    let oppI = kept[i]
     const domI = dedupeDomainOf(oppI)
     if (!domI || MULTI_LISTING_DOMAINS.has(domI)) { domainKept.push(oppI); continue }
     const normI = normalizeTitleForDedupe(oppI?.title ?? oppI?.program_name ?? '')
@@ -1269,10 +1391,15 @@ export function deduplicateOpportunities(opportunities) {
       if (dedupeDomainOf(oppJ) !== domI) continue
       const normJ = normalizeTitleForDedupe(oppJ?.title ?? oppJ?.program_name ?? '')
       if (titleSimilarity(normI, normJ) >= 0.6) {
-        if (getSourceRank(oppJ) > getSourceRank(oppI)) {
+        const preferred = selectPreferredDuplicate(oppI, oppJ)
+        if (!preferred.shouldDedupe) continue
+        if (preferred.candidatePreferred) {
+          kept[j] = preferred.winner
           domainDropped.add(i)
           break
         }
+        kept[i] = preferred.winner
+        oppI = kept[i]
         domainDropped.add(j)
       }
     }

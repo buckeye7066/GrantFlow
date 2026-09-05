@@ -87,7 +87,17 @@ function pWin({ fit, effort_hours, compliance_hours, time_risk, amount_expected 
   return clamp01(raw)
 }
 
-export async function scoreApplication(db, { applicationId, actor = null, hourly_value = 50, nowMs = null } = {}) {
+export async function scoreApplication(
+  db,
+  {
+    applicationId,
+    actor = null,
+    hourly_value = 50,
+    nowMs = null,
+    deferAudit = false,
+    enrichWebsitePurpose = true,
+  } = {},
+) {
   // Scoped lookup through vnext_applications.opportunity_id so a tampered or
   // stale opportunity id can never be resolved to another profile's data.
   const scoped = await getScopedOpportunityForVnextApplication(db, applicationId)
@@ -106,7 +116,12 @@ export async function scoreApplication(db, { applicationId, actor = null, hourly
     }
   }
 
-  const profileCtx = await loadProfileContext(db, String(app.profile_id))
+  // Standalone recomputation keeps the normal website-purpose enrichment.
+  // Transactional callers explicitly disable it so row/write locks are never
+  // held across a website fetch.
+  const profileCtx = await loadProfileContext(db, String(app.profile_id), {
+    enrichWebsitePurpose,
+  })
   const missing = safeJsonParse(app.missing_requirements, null)
 
   const fit = fitScore(profileCtx, opportunity)
@@ -143,15 +158,22 @@ export async function scoreApplication(db, { applicationId, actor = null, hourly
     )
     .run(jsonForDb(db, breakdown), expected_value, risk_score, String(applicationId))
 
-  await writeAuditEvent(db, {
+  const auditEvent = {
     actor,
     entity_type: 'vnext_application',
     entity_id: String(applicationId),
     action: 'scoring.recomputed',
     before,
     after: breakdown,
-  })
+  }
 
-  return { ok: true, expected_value, risk_score, breakdown }
+  if (!deferAudit) await writeAuditEvent(db, auditEvent)
+
+  return {
+    ok: true,
+    expected_value,
+    risk_score,
+    breakdown,
+    ...(deferAudit ? { deferredAuditEvents: [auditEvent] } : {}),
+  }
 }
-

@@ -310,7 +310,11 @@ async function loadLinkedOrganizationForProfile(db, profileId, organizationId) {
     .get(profileId, profileId, organizationId)
 }
 
-export async function loadProfileContext(db, profileId) {
+export async function loadProfileContext(
+  db,
+  profileId,
+  { enrichWebsitePurpose = true } = {},
+) {
   const profile = await db
     .prepare('SELECT * FROM profiles WHERE id = ? LIMIT 1')
     .get(profileId)
@@ -352,7 +356,10 @@ export async function loadProfileContext(db, profileId) {
   // Website-derived purpose is persisted and reused by the synchronous match
   // engine. Tests stay hermetic; production/profile-crawl loads perform one
   // bounded read per cache window when a public website is present.
-  if (String(process.env.NODE_ENV || '').toLowerCase() !== 'test') {
+  if (
+    enrichWebsitePurpose &&
+    String(process.env.NODE_ENV || '').toLowerCase() !== 'test'
+  ) {
     try {
       const { enrichProfileWebsitePurpose } = await import('./profileWebsitePurposeEnrichment.js')
       await enrichProfileWebsitePurpose(db, { profile, sections, organization })

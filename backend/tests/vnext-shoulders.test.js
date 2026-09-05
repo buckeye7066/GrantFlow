@@ -2,6 +2,7 @@ import request from "supertest"
 import { describe, it, expect, beforeAll, beforeEach } from "vitest"
 import { getAppAndDb, resetDb, TEST_ADMIN_AUTH_HEADER } from "./testServer.js"
 import { scoreApplication } from "../vnext/scoringService.js"
+import { initializeFeatureFlags } from "../services/featureFlagService.js"
 
 describe("vNext Shoulders backbone", () => {
   let app
@@ -71,8 +72,103 @@ describe("vNext Shoulders backbone", () => {
     return { profileId, opportunityId, applicationId: created.body.id }
   }
 
-  it("guard: cannot transition to MAPPED if schema missing (must go through SCHEMA_READY)", async () => {
+  async function transitionThrough(applicationId, states) {
+    for (const targetState of states) {
+      const response = await request(app)
+        .post(`/api/vnext/applications/${applicationId}/transition`)
+        .set(TEST_ADMIN_AUTH_HEADER)
+        .send({ targetState })
+
+      expect(response.status).toBe(200)
+      expect(response.body?.ok).toBe(true)
+    }
+  }
+
+  it("uses the requested authorized profile for every vNext feature gate", async () => {
+    const previousFlag = process.env.SHOULDERS_VNEXT
+    try {
+      delete process.env.SHOULDERS_VNEXT
+      initializeFeatureFlags(db)
+      db.prepare("DELETE FROM feature_flag_overrides WHERE flag_key = ?").run("shoulders.vnext")
+      db.prepare(
+        `
+          INSERT INTO feature_flag_overrides (
+            id, flag_key, user_id, profile_id, enabled, expires_at
+          ) VALUES (?, ?, NULL, ?, 1, NULL)
+        `,
+      ).run("vnext-target-profile-override", "shoulders.vnext", "profile-vnext-target")
+
+      const { profileId, applicationId } = await seedProfileAndOpportunity({
+        profileId: "profile-vnext-target",
+        opportunityId: "opp-vnext-target",
+        withProfileFields: true,
+      })
+
+      const listed = await request(app)
+        .get("/api/vnext/applications")
+        .query({ profile_id: profileId })
+        .set(TEST_ADMIN_AUTH_HEADER)
+      expect(listed.status).toBe(200)
+      expect(listed.body).toEqual(expect.arrayContaining([
+        expect.objectContaining({ id: applicationId, profile_id: profileId }),
+      ]))
+
+      const fetched = await request(app)
+        .get(`/api/vnext/applications/${applicationId}`)
+        .set(TEST_ADMIN_AUTH_HEADER)
+      expect(fetched.status).toBe(200)
+
+      const transitioned = await request(app)
+        .post(`/api/vnext/applications/${applicationId}/transition`)
+        .set(TEST_ADMIN_AUTH_HEADER)
+        .send({ targetState: "DEDUPED" })
+      expect(transitioned.status).toBe(200)
+
+      const packet = await request(app)
+        .get(`/api/vnext/applications/${applicationId}/finish-packet`)
+        .set(TEST_ADMIN_AUTH_HEADER)
+      expect(packet.status).toBe(409)
+      expect(packet.body?.error?.code).not.toBe("FEATURE_DISABLED")
+    } finally {
+      if (previousFlag === undefined) delete process.env.SHOULDERS_VNEXT
+      else process.env.SHOULDERS_VNEXT = previousFlag
+      try {
+        db.prepare("DELETE FROM feature_flag_overrides WHERE id = ?")
+          .run("vnext-target-profile-override")
+      } catch {
+        // Initialization failure is reported by the test body; always restore
+        // the environment for the remaining integration cases.
+      }
+    }
+  })
+
+  it("guard: cannot skip required states before SCHEMA_READY", async () => {
     const { applicationId } = await seedProfileAndOpportunity({ withProfileFields: true })
+
+    await transitionThrough(applicationId, ["DEDUPED"])
+    const response = await request(app)
+      .post(`/api/vnext/applications/${applicationId}/transition`)
+      .set(TEST_ADMIN_AUTH_HEADER)
+      .send({ targetState: "SCHEMA_READY" })
+
+    expect(response.status).toBe(409)
+    expect(response.body?.blockers).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        code: "FORWARD_TRANSITION_SKIP_FORBIDDEN",
+        details: expect.objectContaining({
+          current_state: "DEDUPED",
+          requested_state: "SCHEMA_READY",
+          required_next_state: "QUALIFIED",
+        }),
+      }),
+    ]))
+  })
+
+  it("guard: cannot transition to MAPPED if schema missing (must go through SCHEMA_READY)", async () => {
+    const { applicationId, opportunityId } = await seedProfileAndOpportunity({ withProfileFields: true })
+
+    await transitionThrough(applicationId, ["DEDUPED", "QUALIFIED", "SCHEMA_READY"])
+    db.prepare("UPDATE funding_opportunities SET schema_id = NULL WHERE id = ?").run(opportunityId)
 
     const r = await request(app)
       .post(`/api/vnext/applications/${applicationId}/transition`)
@@ -87,17 +183,7 @@ describe("vNext Shoulders backbone", () => {
   it("guard: cannot transition to MISSING_RESOLVED when required fields are missing", async () => {
     const { applicationId } = await seedProfileAndOpportunity({ withProfileFields: false })
 
-    const s1 = await request(app)
-      .post(`/api/vnext/applications/${applicationId}/transition`)
-      .set(TEST_ADMIN_AUTH_HEADER)
-      .send({ targetState: "SCHEMA_READY" })
-    expect(s1.status).toBe(200)
-
-    const s2 = await request(app)
-      .post(`/api/vnext/applications/${applicationId}/transition`)
-      .set(TEST_ADMIN_AUTH_HEADER)
-      .send({ targetState: "MAPPED" })
-    expect(s2.status).toBe(200)
+    await transitionThrough(applicationId, ["DEDUPED", "QUALIFIED", "SCHEMA_READY", "MAPPED"])
 
     const s3 = await request(app)
       .post(`/api/vnext/applications/${applicationId}/transition`)
@@ -111,17 +197,7 @@ describe("vNext Shoulders backbone", () => {
   it("missingness: with schema + profile facts, required fields map and missing list is empty", async () => {
     const { applicationId, opportunityId } = await seedProfileAndOpportunity({ withProfileFields: true })
 
-    const s1 = await request(app)
-      .post(`/api/vnext/applications/${applicationId}/transition`)
-      .set(TEST_ADMIN_AUTH_HEADER)
-      .send({ targetState: "SCHEMA_READY" })
-    expect(s1.status).toBe(200)
-
-    const s2 = await request(app)
-      .post(`/api/vnext/applications/${applicationId}/transition`)
-      .set(TEST_ADMIN_AUTH_HEADER)
-      .send({ targetState: "MAPPED" })
-    expect(s2.status).toBe(200)
+    await transitionThrough(applicationId, ["DEDUPED", "QUALIFIED", "SCHEMA_READY", "MAPPED"])
 
     const appRow = db.prepare("SELECT missing_requirements FROM vnext_applications WHERE id = ?").get(applicationId)
     expect(appRow).toBeTruthy()
@@ -140,9 +216,7 @@ describe("vNext Shoulders backbone", () => {
     const { applicationId, opportunityId } = await seedProfileAndOpportunity({ withProfileFields: true })
 
     // Move through schema + missing resolved so scoring has stable context.
-    await request(app).post(`/api/vnext/applications/${applicationId}/transition`).set(TEST_ADMIN_AUTH_HEADER).send({ targetState: "SCHEMA_READY" })
-    await request(app).post(`/api/vnext/applications/${applicationId}/transition`).set(TEST_ADMIN_AUTH_HEADER).send({ targetState: "MAPPED" })
-    await request(app).post(`/api/vnext/applications/${applicationId}/transition`).set(TEST_ADMIN_AUTH_HEADER).send({ targetState: "MISSING_RESOLVED" })
+    await transitionThrough(applicationId, ["DEDUPED", "QUALIFIED", "SCHEMA_READY", "MAPPED", "MISSING_RESOLVED"])
 
     // Set deterministic deadline far enough out to keep time_risk stable in this test.
     db.prepare("UPDATE funding_opportunities SET deadline_at = ? WHERE id = ?").run("2030-01-01T00:00:00Z", opportunityId)
@@ -164,6 +238,8 @@ describe("vNext Shoulders backbone", () => {
 
     // Deterministic progression through the state machine.
     const states = [
+      "DEDUPED",
+      "QUALIFIED",
       "SCHEMA_READY",
       "MAPPED",
       "MISSING_RESOLVED",
@@ -171,14 +247,7 @@ describe("vNext Shoulders backbone", () => {
       "REVIEW_READY",
       "BOUNDARY_REACHED",
     ]
-    for (const s of states) {
-      const r = await request(app)
-        .post(`/api/vnext/applications/${applicationId}/transition`)
-        .set(TEST_ADMIN_AUTH_HEADER)
-        .send({ targetState: s })
-      expect(r.status).toBe(200)
-      expect(r.body?.ok).toBe(true)
-    }
+    await transitionThrough(applicationId, states)
 
     const packet = await request(app)
       .get(`/api/vnext/applications/${applicationId}/finish-packet`)
@@ -195,4 +264,3 @@ describe("vNext Shoulders backbone", () => {
     expect(packet.body.remaining_tasks.length).toBeGreaterThanOrEqual(1)
   })
 })
-

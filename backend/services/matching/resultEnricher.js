@@ -62,14 +62,36 @@ export function resolveMissingEligibilityFields(opportunity, decision) {
  */
 function computeNextStepsSafely(rawProfile, profileSections, opportunity, decision, score) {
   try {
+    // Owner-facing match queries project the profile-scoped vNext row onto the
+    // opportunity with collision-safe aliases (`opportunity.state` is already
+    // geography). Rehydrate the application here, at the one guidance choke
+    // point, so every canonical result caller receives state-aware guidance.
+    const application = opportunity?.vnext_application_id
+      ? {
+          id: opportunity.vnext_application_id,
+          state: opportunity.vnext_application_state,
+          stage: opportunity.vnext_application_stage,
+        }
+      : null
     const { steps } = buildNextStepsForMatch({
       profile: rawProfile,
       rawSections: profileSections,
       opportunity,
       matchExplain: decision?.match_explain ?? null,
       score: Number.isFinite(score) ? score : null,
+      application,
     })
-    return Array.isArray(steps) ? steps.slice(0, 4) : []
+    if (!Array.isArray(steps)) return []
+    // FundingResultCard renders the first recommendation. Once an application
+    // exists, its state-aware workflow handoff is therefore the primary step;
+    // merely retaining it somewhere below the four-step cap leaves it invisible.
+    const applicationStep = application
+      ? steps.find((step) => step?.category === 'application')
+      : null
+    if (applicationStep) {
+      return [applicationStep, ...steps.filter((step) => step !== applicationStep)].slice(0, 4)
+    }
+    return steps.slice(0, 4)
   } catch {
     return []
   }

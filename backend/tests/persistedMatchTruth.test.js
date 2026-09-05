@@ -117,7 +117,8 @@ describe('owner-facing persisted match truth', () => {
       'utf8',
     )
 
-    expect(routeSource).toContain('const loadedRows = await readFundingSourceRows(req.db, profileId)')
+    expect(routeSource).toContain('const loadedRows = await readFundingSourceRows(req.db, profileId, {')
+    expect(routeSource).toContain('userId: req.ctx?.userId ?? req.user?.userId ?? null')
     expect(routeSource).toContain('const rows = loadedRows.rows')
     expect(routeSource).toContain('const canonical = canonicalizeOpportunityList(profileContext, mapped, {')
     expect(routeSource).toContain('useStoredDecision: true')

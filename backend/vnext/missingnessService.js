@@ -143,7 +143,15 @@ async function listDocumentStructuredForProfile(db, profileId) {
   }
 }
 
-export async function computeMissingRequirements(db, { applicationId, actor = null } = {}) {
+export async function computeMissingRequirements(
+  db,
+  {
+    applicationId,
+    actor = null,
+    deferAudit = false,
+    enrichWebsitePurpose = true,
+  } = {},
+) {
   // Scoped through vnext_applications so the opportunity must be linked to
   // this application (no cross-profile bleed via tampered ids).
   const scoped = await getScopedOpportunityForVnextApplication(db, applicationId)
@@ -174,7 +182,13 @@ export async function computeMissingRequirements(db, { applicationId, actor = nu
     return { ok: false, error: { code: 'SCHEMA_MISSING', message: 'Schema missing for opportunity' } }
   }
 
-  const profileContext = await loadProfileContext(db, String(app.profile_id))
+  // Standalone recomputation keeps the normal website-purpose enrichment.
+  // Transactional callers explicitly disable it so bounded network I/O never
+  // extends a state-transition lock window; persisted website evidence remains
+  // available in either mode.
+  const profileContext = await loadProfileContext(db, String(app.profile_id), {
+    enrichWebsitePurpose,
+  })
   const documentStructured = await listDocumentStructuredForProfile(db, String(app.profile_id))
 
   const mappedFields = computeMappedFields({
@@ -246,17 +260,17 @@ export async function computeMissingRequirements(db, { applicationId, actor = nu
     if (changed > 0) tasksCreated += changed
   }
 
-  await writeAuditEvent(db, {
+  const auditEvents = [{
     actor,
     entity_type: 'vnext_application',
     entity_id: String(applicationId),
     action: 'missingness.recomputed',
     before,
     after: payload,
-  })
+  }]
 
   if (tasksCreated > 0) {
-    await writeAuditEvent(db, {
+    auditEvents.push({
       actor,
       entity_type: 'vnext_application',
       entity_id: String(applicationId),
@@ -270,6 +284,13 @@ export async function computeMissingRequirements(db, { applicationId, actor = nu
     })
   }
 
-  return { ok: true, missing: payload }
-}
+  if (!deferAudit) {
+    for (const auditEvent of auditEvents) await writeAuditEvent(db, auditEvent)
+  }
 
+  return {
+    ok: true,
+    missing: payload,
+    ...(deferAudit ? { deferredAuditEvents: auditEvents } : {}),
+  }
+}

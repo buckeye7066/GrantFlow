@@ -144,7 +144,7 @@ function firstAcronymAnchor(title) {
   return ''
 }
 
-function opportunityFunder(opportunity = {}) {
+export function opportunityFunder(opportunity = {}) {
   return normalizeSearchText(opportunity.sponsor || opportunity.funder || opportunity.organization || opportunity.agency)
 }
 
