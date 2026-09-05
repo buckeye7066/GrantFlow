@@ -193,6 +193,9 @@ export function evaluateNeedFirstMatchPolicy(args = {}) {
   const opportunity = aliasedArgs?.opportunity ?? {}
   const evaluated = evaluateCorrectedPolicy(aliasedArgs)
   if (evaluated?.resource) {
+    // A resource with a positive population mismatch (survivor-only, 60+,
+    // homeowner-only, homeschool-only, foster-only…) is a REJECT the same as a
+    // direct award; every other resource keeps its REVIEW routing untouched.
     return evaluated?.scoreCap === null ? { ...evaluated, scoreCap: undefined } : evaluated
   }
 

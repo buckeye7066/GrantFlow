@@ -29,6 +29,7 @@ import {
   MAX_ATTENDED_INSTITUTIONS,
 } from '../config/profileInstitutions.js';
 import { deriveProfileFacts, searchTermsFromFacts } from '../config/profileDerivedFacts.js';
+import { declaredNeedsFrom } from './pipelinePrecision.js';
 import { stampMatchConfidenceProvenance } from './matching/matchConfidenceProvenance.js';
 import { syncOpportunityContractProjection } from './opportunityRepository.js';
 import { grantsGovDetailIdFromUrl } from '../../shared/grantsGovProtocol.js';
@@ -314,36 +315,46 @@ export function profileContextToThesisInput(ctx = {}) {
     body: typeof data === 'string' ? data : sectionSignalText(data),
   }));
 
+  // THE NEED LIST IS A DECLARATION, NOT AN INFERENCE (the canonical rule the
+  // crisis-need and pipeline-precision gates already hold). `signals.needs` /
+  // `signals.needCategories` are `buildProfileSignals`' FREE-TEXT inference —
+  // "Unemployed" mints employment, a housing section's `broadband_speed` key
+  // minted broadband, "No military affiliation … veteran status" minted
+  // veterans — and they were passed here as if the owner had typed them.
+  // Measured 2026-09-05 on a live 18-year-old student: 27 thesis needs
+  // including veterans, farmers, startup, infrastructure and broadband, which
+  // selected Operation Homefront, beginning-farmer, NEA and DOL workforce
+  // lanes for her. Declarations come from the structured need fields
+  // (`DECLARED_NEED_FIELDS` via `declaredNeedsFrom`) and the profile's
+  // structured type/tag derivation; a profile that declares nothing gets its
+  // TYPE defaults, labelled as such.
+  // `signals.needs_structured` is buildProfileSignals' provenance-split view:
+  // needs derived from flags, status fields, assistance programs and the
+  // declared funding_needs field, WITHOUT the narrative keyword-bag scan
+  // (`needs_text_inferred`). A fixture that supplies only `signals.needs`
+  // (pre-split shape) is read as-is. Profile TAGS are excluded here on
+  // purpose: on live profiles they are a machine keyword bag ("has",
+  // "disability", "broadband", "workforce") and a "workforce" tag was
+  // selecting the DOL workforce lane for a first-year student.
   const signalNeedsDefaulted = signals.needsDefaulted === true;
-  const explicitNeedCategories = [
-    // loadProfileContext can retain the registry/type fallback in both
-    // signals.needs and signals.needCategories. Once provenance says those
-    // signals were defaulted, neither collection is a user declaration.
-    ...(signalNeedsDefaulted ? [] : asList(signals.needCategories)),
-    ...(signalNeedsDefaulted ? [] : asList(signals.needs)),
+  const structuredSignalNeeds = signalNeedsDefaulted
+    ? []
+    : asList(signals.needs_structured ?? signals.needs);
+  const declaredNeedCategories = [
+    ...declaredNeedsFrom({ ...profile, tags: [] }, sections, { includeSectionKeys: false }),
+    ...structuredSignalNeeds,
     ...asList(profile.needs),
     ...asList(profile.need_categories),
     ...asList(ctx.facets?.intent?.primary_need_category),
   ].filter(Boolean);
-  const inferredNeedCategories = signalNeedsDefaulted
-    ? []
-    : [
-        ...asList(ctx.profileNorm?.needCategories),
-        ...asList(ctx.profileNorm?.needs),
-        // Rolling compatibility for snapshots created before loadProfileContext
-        // standardized on profileNorm. Never prefer this legacy key.
-        ...asList(ctx.normalized?.needCategories),
-      ].filter(Boolean);
+  const explicitNeedCategories = declaredNeedCategories;
   const needsSource = explicitNeedCategories.length > 0
     ? 'profile_declared_or_faceted'
-    : inferredNeedCategories.length > 0
-      ? 'whole_profile_inference'
-      : profileRoute.default_needs.length > 0
-        ? 'profile_type_default'
-        : 'unknown';
+    : profileRoute.default_needs.length > 0
+      ? 'profile_type_default'
+      : 'unknown';
   const needCategories = [
     ...explicitNeedCategories,
-    ...inferredNeedCategories,
     ...(needsSource === 'profile_type_default' ? profileRoute.default_needs : []),
   ];
   const keywordTerms = [

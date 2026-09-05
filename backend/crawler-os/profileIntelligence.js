@@ -241,6 +241,41 @@ function declaredNeedValues(profile) {
   return values.filter((value) => !routedDefaults.has(key(value)));
 }
 
+/**
+ * Negation cues that, appearing earlier in the SAME clause as a keyword, turn
+ * the mention into a denial. Clauses are cut at sentence/list punctuation and
+ * line breaks; a cue in an earlier sentence does not carry over.
+ */
+const NEGATION_CUE_RX = /(?:^|[^a-z])(?:no|not|none|never|without|non|n\/a|nor|neither|does not|do not|did not|doesn't|don't|isn't|aren't|wasn't|not applicable|not a|not an|unknown|declined|denied|no longer)(?=$|[^a-z])/i;
+
+/**
+ * True when `term` occurs as a whole word in `text` in at least one clause that
+ * carries no negation cue before it. `containsTermWholeWord` stays as the
+ * mention test for callers that want mentions (applicant-type hints); this is
+ * the DECLARATION test for needs.
+ */
+function containsAffirmedTermWholeWord(text, term) {
+  const haystack = String(text ?? '');
+  const needle = String(term ?? '').trim();
+  if (!haystack || !needle) return false;
+  const escaped = needle.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/\s+/g, '\\s+');
+  const rx = new RegExp(`(?<![a-z0-9])${escaped}(?![a-z0-9])`, 'gi');
+  let match;
+  while ((match = rx.exec(haystack)) !== null) {
+    const clauseStart = Math.max(
+      haystack.lastIndexOf('.', match.index),
+      haystack.lastIndexOf(';', match.index),
+      haystack.lastIndexOf('\n', match.index),
+      haystack.lastIndexOf('!', match.index),
+      haystack.lastIndexOf('?', match.index),
+    ) + 1;
+    const lead = haystack.slice(clauseStart, match.index);
+    if (!NEGATION_CUE_RX.test(lead)) return true;
+    if (rx.lastIndex === match.index) rx.lastIndex += 1;
+  }
+  return false;
+}
+
 function gatherText(profile) {
   const parts = [];
   const push = (v) => {
@@ -259,6 +294,57 @@ function gatherText(profile) {
   for (const o of profile?.organizations ?? []) { push(o?.name); push(o?.type); push(o?.mission); }
   for (const d of profile?.documents ?? []) { push(d?.name); push(d?.extracted_text); push(d?.summary); }
   if (profile?.school) { push(profile.school.name); push(profile.school.type); }
+  return parts.join(' \n ').toLowerCase();
+}
+
+/**
+ * FACT sections: their text says what the applicant IS, not what they need —
+ * usually via "no …" denials and status words. Every phantom need measured on
+ * live profiles (veterans from a military denial, equipment from "no medical
+ * equipment required", employment from "Unemployed", broadband from a
+ * housing `broadband_speed` field, 2026-09-05) came from one of them, and an
+ * essay can name any hardship in passing. Their structured TRUE flags and the
+ * declared health vocabulary reach the thesis through the typed channels.
+ * Everything else (narrative, financial, goals, programs, a user-titled
+ * "situation" section) is need-declaring prose and is scanned; recall is
+ * preserved by classification, not by starving the scan.
+ */
+const NEED_FACT_SECTIONS = new Set([
+  'basic_information', 'demographics', 'family', 'family_life', 'household',
+  'education', 'university_applications', 'student_portal_plan', 'essays',
+  'employment', 'occupation', 'housing', 'military_service',
+  'medical', 'medical_history', 'health_medical', 'medical_insurance',
+  'government_assistance', 'nonprofit_compliance', 'portal_survey_answers',
+  'automation_preferences', 'tags',
+]);
+
+/**
+ * Figures of speech that carry a need keyword without declaring the need:
+ * "bridge the gap" is not a bridge project (it minted `infrastructure` +
+ * `roads_transportation` for a paramedic student, 2026-09-05).
+ */
+const NEED_IDIOM_RX = /\bbridg(?:e|es|ing) (?:the|a|this|that|these|those|any) (?:gap|gaps|divide|distance)\b|\bbridge between\b|\bbuilding (?:on|upon|a foundation|relationships|trust|skills|confidence|capacity|community)\b|\bcapital (?:letters?|city|of)\b|\benergy (?:and|to|for) (?:study|learn|focus)\b/gi;
+
+function gatherNeedText(profile) {
+  const parts = [];
+  const push = (v) => {
+    const text = valueText(v);
+    if (text) parts.push(text.replace(NEED_IDIOM_RX, ' '));
+  };
+  push(profile?.description); push(profile?.summary); push(profile?.mission);
+  push(declaredNeedValues(profile));
+  // The DECLARED health vocabulary (profileHelpers' provenance-split
+  // conditions + support sets) is a structured, affirmed list, never a denial:
+  // a diagnosis of dementia declares `dementia_support` even though the
+  // `health_medical` section's prose is excluded above.
+  push(profile?.declared_health_terms);
+  for (const s of profile?.sections ?? []) {
+    const key = lc(s?.section_key ?? s?.key ?? s?.title ?? '');
+    if (NEED_FACT_SECTIONS.has(key)) continue;
+    push(s?.body); push(s?.value); push(s?.data);
+  }
+  for (const o of profile?.organizations ?? []) { push(o?.mission); }
+  for (const d of profile?.documents ?? []) { push(d?.summary); }
   return parts.join(' \n ').toLowerCase();
 }
 
@@ -1083,8 +1169,17 @@ function deriveNeeds(profile, blob) {
   // substance_recovery, 'coa' ⊂ "coach"/"coast" → tuition. Phantom needs are
   // doubly harmful on the need-anchored scale: they dilute the coverage
   // denominator for the profile's REAL needs and they spawn junk web queries.
+  // AFFIRMED occurrences only. The blob is the WHOLE profile rendered to text,
+  // including every "notes" field a human or an intake model wrote to say what
+  // the applicant is NOT: "No military affiliation or documentation indicating
+  // veteran status" minted `veterans`, "no medical equipment required" minted
+  // `equipment`, "No small business details provided" fed `startup`, and a
+  // live 18-year-old student's crawl thesis carried 27 needs including
+  // veterans, farmers, broadband and infrastructure — which selected the
+  // Operation Homefront, beginning-farmer, NEA and DOL workforce lanes for
+  // her (2026-09-05). A need mentioned inside its own denial is not a need.
   for (const [canon, kws] of Object.entries(NEED_KEYWORDS)) {
-    if (kws.some((k) => containsTermWholeWord(blob, k))) found.add(canon);
+    if (kws.some((k) => containsAffirmedTermWholeWord(blob, k))) found.add(canon);
   }
   // THE FALLBACK IS A GUESS, AND IT MUST SAY SO.
   //
@@ -1165,7 +1260,9 @@ export function buildThesis(profile = {}) {
   const blob = gatherText(profile);
   const keywordTriggers = [];
   const applicant_types = deriveApplicantTypes(profile, blob, keywordTriggers);
-  const needs = deriveNeeds(profile, blob);
+  // Needs scan NEED-DECLARING text only (see gatherNeedText): the whole-profile
+  // blob is kept for applicant-type hints, where a mention is the signal.
+  const needs = deriveNeeds(profile, gatherNeedText(profile));
   const needsDefaulted = needs?.defaulted === true;
   const resolvedProfileRoute = profile?.profile_route
     ? {

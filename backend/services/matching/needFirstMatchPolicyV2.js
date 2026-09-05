@@ -516,7 +516,162 @@ function matchedPointSummary(dataPointEval = {}) {
 
 function deathSurvivorRestriction(text) {
   return /\b(surviving spouse|widow(?:er)?|orphan benefit|death benefit|gold star)\b/i.test(text) ||
-    (/\bsurvivor benefits?\b/i.test(text) && /\b(social security|ssa|death|deceased)\b/i.test(text))
+    (/\bsurvivor benefits?\b/i.test(text) && /\b(social security|ssa|death|deceased)\b/i.test(text)) ||
+    // "for students whose parent or guardian died as a result of military
+    // service in Iraq or Afghanistan" — the Iraq and Afghanistan Service Grant
+    // class, which reached an 18-year-old whose profile states no such loss.
+    /\b(?:parent|guardian|spouse)s?\b[^.]{0,40}\b(?:died|deceased|killed)\b/i.test(text) ||
+    /\b(?:died|killed)\b[^.]{0,30}\b(?:as a result of|in the line of|while (?:serving|on active duty))\b/i.test(text)
+}
+
+/**
+ * POSITIVE-FACT population rules. Each returns a mismatch string ONLY when the
+ * profile positively states a fact that makes the program impossible for it —
+ * never on silence (G4: missing is neutral). A resource/benefit/directory is
+ * held to the same rules as direct funding: a person facing eviction who is
+ * handed the Eldercare Locator, a survivors-benefit page, or a homeschool
+ * grant is worse served than one handed nothing (the 2026-09-05 student crawl
+ * that stored all four at REVIEW).
+ */
+const OLDER_ADULT_PROGRAM_RX = /\b(older adults?|senior citizens?|elderly|eldercare|aging services|area agency on aging|age(?:d)? (?:60|62|65)\+?(?: and older| or older| and over)?|adults? (?:60|62|65) (?:and|or) older|medicare(?! advantage plan for the disabled))\b/i
+const YOUTH_SENIOR_RX = /\b(high school|graduating|college|university|class of \d{4}) seniors?\b|\bsenior (?:year|thesis|project|design)\b/i
+const HOMEOWNER_PROGRAM_RX = /\b(foreclosure|mortgage (?:assistance|relief|help|payments?|forbearance)|homeowners?(?:'|’)? (?:assistance|relief|grants?|repair)|home ?repair (?:grants?|assistance|loans?)|property tax (?:relief|exemption))\b/i
+const HOMESCHOOL_PROGRAM_RX = /\bhome ?school(?:ing|ers?|ed)?\b/i
+
+function profileAgeYears(profileContext = {}, profileNorm = null) {
+  const explicit = Number(profileNorm?.age)
+  if (Number.isFinite(explicit) && explicit > 0) return explicit
+  const basic = asObject(profileContext?.sections?.basic_information)
+  const demographics = asObject(profileContext?.sections?.demographics)
+  const stated = Number(basic.age ?? demographics.age)
+  if (Number.isFinite(stated) && stated > 0) return stated
+  const dob = Date.parse(String(basic.date_of_birth ?? demographics.date_of_birth ?? ''))
+  if (!Number.isFinite(dob)) return null
+  return Math.floor((Date.now() - dob) / (365.25 * 24 * 60 * 60 * 1000))
+}
+
+function profileIsOlderAdult(profileContext = {}, profileNorm = null) {
+  const type = profileType(profileContext, profileNorm)
+  if (type === 'senior' || type === 'elderly' || type === 'retiree') return true
+  const demographics = asObject(profileContext?.sections?.demographics)
+  const ageGroup = normalizeText(demographics.age_group ?? '')
+  if (/senior|older adult|elder/.test(ageGroup)) return true
+  const age = profileAgeYears(profileContext, profileNorm)
+  return Number.isFinite(age) && age >= 60
+}
+
+/** Age is POSITIVELY known and below the older-adult line. */
+function profileProvablyNotOlderAdult(profileContext = {}, profileNorm = null) {
+  if (profileIsOlderAdult(profileContext, profileNorm)) return false
+  const age = profileAgeYears(profileContext, profileNorm)
+  return Number.isFinite(age) && age < 60
+}
+
+function profileHousingStatus(profileContext = {}) {
+  const housing = asObject(profileContext?.sections?.housing)
+  const basic = asObject(profileContext?.sections?.basic_information)
+  return normalizeText(housing.status ?? housing.housing_status ?? housing.tenure ?? basic.housing_status ?? '')
+}
+
+/** Housing tenure is POSITIVELY stated and is not ownership. */
+function profileProvablyNotHomeowner(profileContext = {}, profileNorm = null) {
+  const housing = asObject(profileContext?.sections?.housing)
+  if (housing.owns_home === true || housing.homeowner === true || housing.is_homeowner === true || profileNorm?.isHomeowner) return false
+  const status = profileHousingStatus(profileContext)
+  if (!status) return false
+  if (/\b(own|owner|owned|mortgage|homeowner)\b/.test(status)) return false
+  return /\b(rent|renting|renter|tenant|with family|with parents|with relatives|family|dorm|campus|student housing|shelter|homeless|transitional|temporary|couch)\b/.test(status)
+}
+
+/** The profile declares a non-homeschool education path (school named, or a college/university/public/community type). */
+function profileProvablyNotHomeschooled(profileContext = {}) {
+  const education = asObject(profileContext?.sections?.education)
+  if (education.homeschool === true || education.homeschooled === true || education.is_homeschooled === true) return false
+  const schools = Array.isArray(education.schools) ? education.schools : (education.schools ? [education.schools] : [])
+  const declared = [
+    education.current_institution, education.school, education.school_name, education.high_school,
+    ...schools.map((school) => [school?.name, school?.type].filter(Boolean).join(' ')),
+  ].filter(Boolean).map((v) => normalizeText(String(v)))
+  if (declared.length === 0) return false
+  if (declared.some((v) => /home ?school/.test(v))) return false
+  return declared.some((v) => /\b(college|university|community college|public|high school|academy|institute|state)\b/.test(v) || v.length > 3)
+}
+
+const MILITARY_TERMS = '(?:veterans?|service ?members?|military (?:families|family|spouses?|dependents?|members?|personnel)|active[- ]duty|national guard|reservists?|gold star)'
+const MILITARY_TITLE_RX = new RegExp(`\\b${MILITARY_TERMS}\\b`, 'i')
+const MILITARY_RESTRICTION_RX = new RegExp(`\\b(?:for|only for|exclusively for|serving|supports?|restricted to|available to)\\s+(?:the\\s+)?(?:u\\.?s\\.?\\s+)?${MILITARY_TERMS}\\b`, 'i')
+const REFUGEE_TERMS = '(?:refugees?|asylees?|asylum seekers?|resettlement|newly arrived|newcomers?)'
+const REFUGEE_TITLE_RX = new RegExp(`\\b${REFUGEE_TERMS}\\b`, 'i')
+const REFUGEE_RESTRICTION_RX = new RegExp(`\\b(?:for|only for|exclusively for|serving|supports?|restricted to|available to)\\s+${REFUGEE_TERMS}\\b`, 'i')
+const FARMER_TERMS = '(?:beginning farmers?|farmers? and ranchers?|agricultural producers?|farm (?:loans?|grants?|operations?)|ranchers?)'
+const FARMER_TITLE_RX = new RegExp(`\\b${FARMER_TERMS}\\b`, 'i')
+const FARMER_RESTRICTION_RX = new RegExp(`\\b(?:for|only for|exclusively for|serving|supports?|restricted to|available to)\\s+${FARMER_TERMS}\\b`, 'i')
+
+function opportunityTitleText(opportunity = {}) {
+  return String(opportunity?.title ?? opportunity?.name ?? '')
+}
+
+/** Military affiliation is POSITIVELY denied across every flag the section carries. */
+function profileProvablyNotMilitary(profileContext = {}, profileNorm = null) {
+  if (profileNorm?.isVeteran || profileNorm?.isMilitary || profileNorm?.isMilitarySpouse) return false
+  const military = asObject(profileContext?.sections?.military_service)
+  const flags = ['veteran', 'is_veteran', 'active_duty', 'is_active_duty', 'military_spouse', 'is_military_spouse',
+    'military_dependent', 'is_military_dependent', 'gold_star_family', 'guard_reserve', 'is_guard_reserve', 'reservist']
+  const stated = flags.filter((flag) => military[flag] === true || military[flag] === false)
+  if (stated.length === 0) return false
+  if (stated.some((flag) => military[flag] === true)) return false
+  const status = normalizeText(military.military_status ?? military.service_status ?? military.status ?? '')
+  return !/veteran|active|guard|reserve|spouse|dependent/.test(status)
+}
+
+/** Citizenship/immigration status is POSITIVELY stated and is not a refugee/asylee status. */
+function profileProvablyNotRefugee(profileContext = {}, profileNorm = null) {
+  if (profileNorm?.isRefugee) return false
+  const demographics = asObject(profileContext?.sections?.demographics)
+  if (demographics.is_refugee === true || demographics.is_asylee === true || demographics.is_refugee_or_immigrant === true) return false
+  const status = normalizeText([demographics.immigrant_status, demographics.citizenship_status, demographics.citizenship].filter(Boolean).join(' '))
+  if (!status) return false
+  return !/refugee|asylee|asylum|resettl|newcomer|parolee/.test(status)
+}
+
+/** The occupation section POSITIVELY denies farming. */
+function profileProvablyNotFarmer(profileContext = {}, profileNorm = null) {
+  if (profileNorm?.isFarmer || profileNorm?.isBusiness) return false
+  const occupation = asObject(profileContext?.sections?.occupation)
+  if (occupation.farmer === true || occupation.rancher === true || occupation.agricultural_producer === true) return false
+  return occupation.farmer === false || occupation.rancher === false || occupation.agricultural_producer === false
+}
+
+function positivePopulationMismatches(profileContext, profileNorm, targetingText, opportunity = {}) {
+  const out = []
+  const title = opportunityTitleText(opportunity)
+  if ((MILITARY_TITLE_RX.test(title) || MILITARY_RESTRICTION_RX.test(targetingText)) &&
+      !/\b(civilian|everyone|all applicants|general public|and their families)\b/i.test(title) &&
+      profileProvablyNotMilitary(profileContext, profileNorm)) {
+    out.push('Military/veteran program does not fit a profile whose military section states no service, spouse, or dependent affiliation')
+  }
+  if ((REFUGEE_TITLE_RX.test(title) || REFUGEE_RESTRICTION_RX.test(targetingText)) &&
+      profileProvablyNotRefugee(profileContext, profileNorm)) {
+    out.push('Refugee/asylee program does not fit a profile that states a non-refugee citizenship or immigration status')
+  }
+  if ((FARMER_TITLE_RX.test(title) || FARMER_RESTRICTION_RX.test(targetingText)) &&
+      profileProvablyNotFarmer(profileContext, profileNorm)) {
+    out.push('Farmer/rancher program does not fit a profile whose occupation section states it does not farm')
+  }
+  // A caregiver keeps an older-adult program ONLY when the program itself
+  // names caregivers; an aging-services locator is for the older adult.
+  const caregiverServed = profileIsCaregiver(profileContext, profileNorm) && /\bcaregivers?\b/i.test(targetingText)
+  if (OLDER_ADULT_PROGRAM_RX.test(targetingText) && !YOUTH_SENIOR_RX.test(targetingText) &&
+      profileProvablyNotOlderAdult(profileContext, profileNorm) && !caregiverServed) {
+    out.push(`Older-adult program (60+) does not fit a profile that states its age as ${profileAgeYears(profileContext, profileNorm)}`)
+  }
+  if (HOMEOWNER_PROGRAM_RX.test(targetingText) && profileProvablyNotHomeowner(profileContext, profileNorm)) {
+    out.push(`Homeowner/mortgage program does not fit a profile whose stated housing status is "${profileHousingStatus(profileContext)}"`)
+  }
+  if (HOMESCHOOL_PROGRAM_RX.test(targetingText) && profileProvablyNotHomeschooled(profileContext)) {
+    out.push('Homeschool program does not fit a profile that declares a school, college, or university education path')
+  }
+  return out
 }
 
 function professionDependentContext(text) {
@@ -542,16 +697,50 @@ export function evaluateNeedFirstMatchPolicy({
   const profileText = profilePurposeText(profileContext, profileNorm)
 
   if (resource) {
+    // A resource is retained separately from direct funding — but it is still
+    // a claim that THIS profile can use it. The exclusive-population rules
+    // below (survivor, older-adult, homeowner, homeschool, foster, caregiver,
+    // child, international, organization-only) apply to it exactly as to a
+    // direct award; only the purpose/institution scoring is skipped.
+    const resourceHard = []
+    if (deathSurvivorRestriction(targetingText) && !profileHasSurvivorSignal(profileContext, profileNorm)) {
+      resourceHard.push('Death-survivor program requires widow, orphan, surviving-spouse, or Gold Star evidence')
+    }
+    if (/\b(foster youth|former foster youth|aged out of foster care|chafee|education and training voucher)\b/i.test(targetingText) &&
+        !profileHasFosterSignal(profileContext, profileNorm)) {
+      resourceHard.push('Foster-youth program requires a current or former foster-youth signal')
+    }
+    if (/\b(child care|childcare|day care|daycare|head start|wic\b|parents? of (?:young )?children)\b/i.test(targetingText) &&
+        !profileHasChildrenOrPregnancy(profileContext, profileNorm)) {
+      resourceHard.push('Child/dependent program requires a child, dependent, or pregnancy signal')
+    }
+    if (/\b(caregiver grant|caregiver support|family caregiver|respite care)\b/i.test(targetingText) &&
+        !profileIsCaregiver(profileContext, profileNorm)) {
+      resourceHard.push('Caregiver-only program requires a caregiver signal')
+    }
+    if (/\b(international students? only|exclusively for international students?|non[- ]?u\.?s\.? citizens? only|foreign students? only)\b/i.test(targetingText) &&
+        !profileHasInternationalSignal(profileContext, profileNorm)) {
+      resourceHard.push('International-student-only program requires an international or immigration-status signal')
+    }
+    resourceHard.push(...positivePopulationMismatches(profileContext, profileNorm, targetingText, opportunity))
+    const resourceTypeKnown = Boolean(profileType(profileContext, profileNorm))
+    if (resourceTypeKnown && !profileIsOrganization(profileContext, profileNorm) &&
+        /\b(?:only|exclusively|restricted to|must be)\b[^.]{0,60}\b(nonprofits?|non-profit organizations?|school districts?|municipalities|local governments?|units? of government|institutions?)\b/i.test(targetingText)) {
+      resourceHard.push('Organization-only funding requires an organization applicant profile')
+    }
+    const resourceHardMismatch = resourceHard.length > 0
     return {
       resource: true,
       purposeAnchor: true,
-      reviewOnly: true,
-      hardMismatch: false,
-      scoreCap: null,
-      decision: 'REVIEW',
-      reasons: ['Resource/directory retained separately from direct funding'],
+      reviewOnly: !resourceHardMismatch,
+      hardMismatch: resourceHardMismatch,
+      scoreCap: resourceHardMismatch ? SCORE_FLOOR : null,
+      decision: resourceHardMismatch ? 'REJECT' : 'REVIEW',
+      reasons: resourceHardMismatch
+        ? [...new Set(resourceHard)]
+        : ['Resource/directory retained separately from direct funding'],
       purposeReasons: ['resource'],
-      hardMismatches: [],
+      hardMismatches: [...new Set(resourceHard)],
       diagnostics: { resource: true },
     }
   }
@@ -601,6 +790,7 @@ export function evaluateNeedFirstMatchPolicy({
   if (deathSurvivorRestriction(targetingText) && !profileHasSurvivorSignal(profileContext, profileNorm)) {
     hardMismatches.push('Death-survivor program requires widow, orphan, surviving-spouse, or Gold Star evidence')
   }
+  hardMismatches.push(...positivePopulationMismatches(profileContext, profileNorm, targetingText, opportunity))
   if (/\b(international students? only|exclusively for international students?|non[- ]?u\.?s\.? citizens? only|foreign students? only)\b/i.test(targetingText) &&
       !profileHasInternationalSignal(profileContext, profileNorm)) {
     hardMismatches.push('International-student-only program requires an international or immigration-status signal')
@@ -724,7 +914,10 @@ export function evaluateNeedFirstMatchPolicy({
 
 export function enforceNeedFirstDecision(current, policy) {
   const base = current && typeof current === 'object' ? current : {}
-  if (!policy || policy.resource) return base
+  if (!policy) return base
+  // A resource is retained at REVIEW by the adapter — unless it positively
+  // excludes this profile, in which case the REJECT below stands.
+  if (policy.resource && !policy.hardMismatch) return base
   if (policy.decision === 'REJECT') {
     return {
       ...base,
