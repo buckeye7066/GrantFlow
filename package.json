@@ -89,7 +89,7 @@
     "smoke:mission": "node ./scripts/smoke-grantflow-mission.mjs",
     "check:profiles": "node ./scripts/check-profiles.mjs",
     "seed:profiles": "node ./scripts/seed-profiles.mjs",
-    "seed:db": "node ./scripts/build-seed-db.mjs",
+    "seed:db": "npm run migrate && node ./scripts/seed-profiles.mjs",
     "seed:demo": "node ./scripts/seed-real-opportunities.mjs",
     "crawl:nationwide": "node ./scripts/nationwide-comprehensive-crawl.mjs",
     "crawl:targeted": "node ./scripts/extended-state-crawler.mjs",

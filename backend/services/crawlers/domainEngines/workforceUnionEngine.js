@@ -30,8 +30,24 @@ export async function runWorkforceUnionEngine(profile, options = {}) {
   try {
     // Narrow the resource list to entries relevant to detected workforce needs and location
     // before handing to normalizeAndFilter, so profile context is actually applied.
+    //
+    // TWO DEFECTS LIVED HERE, and together they zeroed this engine for every
+    // profile that should have benefited from it (a north-star defect: a
+    // declared workforce need is exactly the "declared need" the crawler chain
+    // exists to serve):
+    //  1. `profile.location` is an OBJECT ({ state, is_rural, ... } — see
+    //     geoDesignationEngine/utilitiesHardshipEngine reading .state off it),
+    //     so `userLocation.toLowerCase()` threw a TypeError, the catch below
+    //     logged "Engine failed" and returned 0 of 8 resources on EVERY crawl
+    //     for any profile with a location. Nothing here needs a location
+    //     string, so the derivation is gone rather than patched.
+    //  2. The keyword containment ran BACKWARDS: `kw.includes(token)` asks
+    //     whether the short catalog keyword ("training") contains the user's
+    //     need phrase ("workforce training assistance") — false for all 8
+    //     rows, so a profile that DID declare a workforce need matched
+    //     nothing while a profile with no such need got everything. The
+    //     containment must ask whether the need phrase mentions the keyword.
     const hasWorkforceNeed = workforceNeeds.length > 0;
-    const locationHint = userLocation ? userLocation.toLowerCase() : null;
 
     const filteredResources = DIRECTORY_RESOURCES.filter(resource => {
       // If the user has explicit workforce/employment needs, prefer resources whose
@@ -40,9 +56,16 @@ export async function runWorkforceUnionEngine(profile, options = {}) {
         const needTokens = workforceNeeds
           .map(n => (typeof n === 'string' ? n : n?.category ?? '')
             .toLowerCase());
-        const keywordMatch = resource.keywords.some(kw =>
-          needTokens.some(token => kw.toLowerCase().includes(token))
-        );
+        // Match keywords AND categories: a structured need ({ category:
+        // 'workforce' }) yields the bare token 'workforce', which appears in
+        // the rows' `categories`, not their `keywords` — keywords alone would
+        // still zero the catalog for exactly the profiles that declared the
+        // need in the most explicit way.
+        const resourceTokens = [...resource.keywords, ...(resource.categories ?? [])];
+        const keywordMatch = resourceTokens.some(kw => {
+          const keyword = kw.toLowerCase();
+          return needTokens.some(token => token.includes(keyword) || keyword.includes(token));
+        });
         if (!keywordMatch) return false;
       }
       // Location filtering: if a resource description or title mentions a specific

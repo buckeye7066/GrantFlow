@@ -158,11 +158,80 @@ test('one step throwing must NOT block subsequent steps', async () => {
 
 test('postgres-only steps short-circuit to true on sqlite (no-op)', async () => {
   const { db, exec_log } = makeFakeDb({ dialect: 'sqlite' })
-  await ensureCrawlerJobsTypeCheck(db, { logger: silentLogger })
   await ensureAnyaMatchSuggestions(db, { logger: silentLogger })
   await ensureOrganizationsSoftDeleteColumns(db, { logger: silentLogger })
   await ensureFundingOpportunityVerificationColumns(db, { logger: silentLogger })
   assert.equal(exec_log.length, 0, 'postgres-only steps must not exec any SQL on sqlite')
+  // ensureCrawlerJobsTypeCheck is no longer postgres-only (it repairs the
+  // sqlite CHECK too — see the fresh-DB downgrade test below), but with a
+  // healthy/absent table it must still exec nothing on sqlite.
+  await ensureCrawlerJobsTypeCheck(db, { logger: silentLogger })
+  assert.equal(exec_log.length, 0, 'a missing crawler_jobs table must not trigger a rebuild')
+})
+
+// THE FRESH-SQLITE DOWNGRADE (2026-08-30). migrate.js bootstraps the modern
+// schema.sql, then replays ALL numbered migrations — 017 and 023 REBUILD
+// crawler_jobs with their era's CHECK list, downgrading a fresh DB to 13 job
+// types and making every modern type ('portal_check', 'anya_match_scout',
+// 'live_search', …) fail with a CHECK violation. The migration files are
+// checksum-locked (verifyOrBaselineMigrationLedger), so the boot enforcer is
+// the repair point. This test replays the real downgrade and asserts the
+// enforcer restores the full canonical list without losing data or indexes.
+test('sqlite crawler_jobs CHECK downgraded by 017/023 replay is repaired by the boot enforcer', async () => {
+  let Database
+  try {
+    Database = (await import('better-sqlite3')).default
+  } catch {
+    return
+  }
+  const raw = new Database(':memory:')
+  const repoRoot = path.resolve(path.dirname(new URL(import.meta.url).pathname.replace(/^\/(\w:)/, '$1')), '..', '..')
+  raw.exec(fs.readFileSync(path.join(repoRoot, 'backend/db/schema.sql'), 'utf8'))
+  raw.exec(fs.readFileSync(path.join(repoRoot, 'backend/db/migrations/017_add_health_resources_job_type.sql'), 'utf8'))
+  raw.exec(fs.readFileSync(path.join(repoRoot, 'backend/db/migrations/023_add_item_gift_job_type.sql'), 'utf8'))
+  raw.prepare("INSERT INTO crawler_jobs (id, type, status) VALUES ('pre-existing', 'local', 'queued')").run()
+
+  // The downgrade is real before the enforcer runs.
+  assert.throws(
+    () => raw.prepare("INSERT INTO crawler_jobs (id, type, status) VALUES ('x', 'portal_check', 'queued')").run(),
+    /CHECK constraint failed/,
+    'precondition: the 017/023 replay must actually downgrade the CHECK (else this test is vacuous)',
+  )
+
+  const db = {
+    dialect: 'sqlite',
+    prepare: (sql) => ({
+      async get(...a) { return raw.prepare(sql).get(...a) },
+      async all(...a) { return raw.prepare(sql).all(...a) },
+      async run(...a) { return raw.prepare(sql).run(...a) },
+    }),
+    async exec(sql) { raw.exec(sql) },
+  }
+  const ok = await ensureCrawlerJobsTypeCheck(db, { logger: silentLogger })
+  assert.equal(ok, true)
+
+  for (const t of CRAWLER_JOB_TYPES) {
+    raw.prepare('INSERT INTO crawler_jobs (id, type, status) VALUES (?, ?, ?)').run(`t-${t}`, t, 'queued')
+  }
+  assert.ok(raw.prepare("SELECT id FROM crawler_jobs WHERE id = 'pre-existing'").get(), 'existing rows survive the rebuild')
+  assert.throws(
+    () => raw.prepare("INSERT INTO crawler_jobs (id, type, status) VALUES ('bad', 'not_a_real_type', 'queued')").run(),
+    /CHECK constraint failed/,
+    'the repaired table still REJECTS unknown types (the CHECK was replaced, not removed)',
+  )
+  assert.throws(
+    () => raw.prepare("INSERT INTO crawler_jobs (id, type, status) VALUES ('bad2', 'local', 'bogus_status')").run(),
+    /CHECK constraint failed/,
+    'the status CHECK survives the rebuild untouched',
+  )
+  const indexNames = raw
+    .prepare("SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'crawler_jobs' AND sql IS NOT NULL")
+    .all()
+    .map((r) => r.name)
+  assert.ok(indexNames.includes('idx_crawler_jobs_idempotency'), 'named indexes are recreated after the rebuild')
+
+  // Idempotent: a second run must not rebuild again (no throw, still true).
+  assert.equal(await ensureCrawlerJobsTypeCheck(db, { logger: silentLogger }), true)
 })
 
 test('end-to-end against a fresh sqlite DB: matching_low_coverage_events table is created', async () => {
