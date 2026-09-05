@@ -1,0 +1,366 @@
+name: Bake explicit CORS defaults and finalize PR 1541
+
+on:
+  push:
+    branches: [fix/production-cors-current-main-20260905]
+    paths:
+      - .github/workflows/apply-container-cors-default-and-finalize.yml
+  workflow_dispatch:
+
+permissions:
+  actions: read
+  checks: read
+  contents: write
+  issues: write
+  pull-requests: write
+  statuses: write
+
+concurrency:
+  group: finalize-pr1541
+  cancel-in-progress: true
+
+jobs:
+  configure-verify-and-merge:
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: grantflow_cors_proof
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - name: Checkout exact branch head
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Stop harmlessly when PR 1541 is already merged
+        id: pr
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          merged="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/1541" --jq '.merged')"
+          echo "merged=$merged" >> "$GITHUB_OUTPUT"
+
+      - name: Add an explicit overridable container default
+        if: steps.pr.outputs.merged != 'true'
+        shell: bash
+        env:
+          DEFAULT_CORS_ORIGINS: https://grant-flow-three.vercel.app,https://app.axiombiolabs.org,https://grantflow.axiombiolabs.org
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          import os
+          import re
+
+          path = Path('Dockerfile')
+          text = path.read_text(encoding='utf-8')
+          value = os.environ['DEFAULT_CORS_ORIGINS']
+          line = f'ENV CORS_ORIGIN={value}'
+
+          existing = re.findall(r'^ENV\s+CORS_ORIGIN=.*$', text, flags=re.MULTILINE)
+          if existing:
+              if existing != [line]:
+                  raise SystemExit(f'Refused: unexpected existing CORS defaults: {existing!r}')
+          else:
+              from_positions = [m.start() for m in re.finditer(r'^FROM\s+', text, flags=re.MULTILINE)]
+              if not from_positions:
+                  raise SystemExit('Refused: Dockerfile has no build stage')
+              final_start = from_positions[-1]
+              final = text[final_start:]
+              node_env = re.search(r'^ENV\s+NODE_ENV=production\s*$', final, flags=re.MULTILINE)
+              if node_env:
+                  insert_at = final_start + node_env.end()
+                  text = text[:insert_at] + '\n' + line + text[insert_at:]
+              else:
+                  first_line_end = text.find('\n', final_start)
+                  if first_line_end < 0:
+                      raise SystemExit('Refused: malformed final Dockerfile stage')
+                  text = text[:first_line_end + 1] + line + '\n' + text[first_line_end + 1:]
+              path.write_text(text, encoding='utf-8')
+          PY
+
+          cat > tests/unit/docker-cors-default.test.mjs <<'EOF'
+          import assert from 'node:assert/strict'
+          import test from 'node:test'
+          import { readFile } from 'node:fs/promises'
+
+          const EXPECTED = [
+            'https://grant-flow-three.vercel.app',
+            'https://app.axiombiolabs.org',
+            'https://grantflow.axiombiolabs.org',
+          ]
+
+          test('production container carries an explicit overridable CORS origin list', async () => {
+            const dockerfile = await readFile(new URL('../../Dockerfile', import.meta.url), 'utf8')
+            const matches = [...dockerfile.matchAll(/^ENV\s+CORS_ORIGIN=(.+)$/gm)]
+            assert.equal(matches.length, 1)
+            const origins = matches[0][1].trim().split(',')
+            assert.deepEqual(origins, EXPECTED)
+            assert.equal(origins.includes('*'), false)
+            assert.equal(origins.every((origin) => origin.startsWith('https://')), true)
+          })
+          EOF
+
+          git diff --check
+
+      - name: Prove the product diff remains narrowly scoped
+        if: steps.pr.outputs.merged != 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch origin main
+          changed="$({
+            git diff --name-only origin/main \
+              | grep -Ev '^\.github/workflows/(diagnose-pr1541-unit-lanes(-v3)?|finalize-pr1541(-v2)?|apply-container-cors-default-and-finalize)\.yml$|^diagnostics/pr1541-unit-lanes\.md$' \
+              || true
+          } | sort)"
+          expected="$(printf '%s\n' \
+            .github/workflows/ci.yml \
+            Dockerfile \
+            backend/config/env.js \
+            tests/unit/admin-email.test.mjs \
+            tests/unit/auth-access-check.test.mjs \
+            tests/unit/auth-email-production-503.test.mjs \
+            tests/unit/docker-cors-default.test.mjs \
+            | sort)"
+          if [ "$changed" != "$expected" ]; then
+            printf 'Unexpected product diff.\nExpected:\n%s\nActual:\n%s\n' "$expected" "$changed"
+            exit 1
+          fi
+
+      - name: Setup Node
+        if: steps.pr.outputs.merged != 'true'
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 24.19.0
+          cache: npm
+
+      - name: Install exact dependencies
+        if: steps.pr.outputs.merged != 'true'
+        run: npm ci --include=optional
+
+      - name: Run complete source and release verification
+        if: steps.pr.outputs.merged != 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm run lint
+          npm run typecheck
+          npm run build
+          npm audit --omit=dev --audit-level=high
+          UNIT_TEST_CONCURRENCY=2 npm run unit
+          node scripts/run-vitest-isolated.mjs run --config vitest.suite.config.js
+          npm run release:gates
+
+      - name: Build the exact production image
+        if: steps.pr.outputs.merged != 'true'
+        run: docker build --pull --tag grantflow:cors-proof .
+
+      - name: Prove the image default without passing CORS_ORIGIN at runtime
+        if: steps.pr.outputs.merged != 'true'
+        env:
+          DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/grantflow_cors_proof
+          EXPECTED_ORIGIN: https://grant-flow-three.vercel.app
+          EXPECTED_CORS_ORIGINS: https://grant-flow-three.vercel.app,https://app.axiombiolabs.org,https://grantflow.axiombiolabs.org
+        shell: bash
+        run: |
+          set -euo pipefail
+          image_value="$(docker image inspect grantflow:cors-proof \
+            --format '{{range .Config.Env}}{{println .}}{{end}}' \
+            | awk -F= '$1=="CORS_ORIGIN" {sub(/^CORS_ORIGIN=/, ""); print; exit}')"
+          test "$image_value" = "$EXPECTED_CORS_ORIGINS"
+
+          mkdir -p "$RUNNER_TEMP/grantflow-cors-uploads"
+          docker run --detach --name grantflow-cors-proof --network host \
+            --volume "$RUNNER_TEMP/grantflow-cors-uploads:/data/uploads" \
+            --env NODE_ENV=production \
+            --env PORT=8080 \
+            --env DATABASE_URL="$DATABASE_URL" \
+            --env DB_PROVIDER=postgres \
+            --env DB_DIALECT=postgres \
+            --env MIGRATE_ON_BOOT=true \
+            --env DB_AUTO_MIGRATE=false \
+            --env GRANTFLOW_SKIP_MISSION_GATE=true \
+            --env DISABLE_BACKGROUND_SERVICES=true \
+            --env UPLOADS_DIR=/data/uploads \
+            --env AUTH_JWT_SECRET=grantflow-cors-proof-secret-not-for-production \
+            --env ADMIN_EMAIL=ci-operator@grantflow.app \
+            --env ADMIN_TOKEN=grantflow-cors-proof-admin-token \
+            --env RUNTIME_SECRETS_KEY=7777777777777777777777777777777777777777777777777777777777777777 \
+            grantflow:cors-proof
+
+          cleanup() {
+            docker logs grantflow-cors-proof || true
+            docker rm --force grantflow-cors-proof >/dev/null 2>&1 || true
+          }
+          trap cleanup EXIT
+
+          for _ in $(seq 1 100); do
+            if curl --fail --silent --show-error http://127.0.0.1:8080/healthz >/dev/null; then break; fi
+            sleep 2
+          done
+          curl --fail --silent --show-error http://127.0.0.1:8080/readyz >/dev/null
+
+          headers="$(curl --silent --show-error \
+            --dump-header - --output /dev/null \
+            --header "Origin: $EXPECTED_ORIGIN" \
+            http://127.0.0.1:8080/api/version)"
+          acao="$(printf '%s\n' "$headers" \
+            | awk 'BEGIN{IGNORECASE=1} /^access-control-allow-origin:/ {sub(/^[^:]+:[[:space:]]*/, ""); gsub(/\r/, ""); print; exit}')"
+          test "$acao" = "$EXPECTED_ORIGIN"
+
+          evil_headers="$(curl --silent --show-error \
+            --dump-header - --output /dev/null \
+            --header 'Origin: https://untrusted.invalid' \
+            http://127.0.0.1:8080/api/version)"
+          evil_acao="$(printf '%s\n' "$evil_headers" \
+            | awk 'BEGIN{IGNORECASE=1} /^access-control-allow-origin:/ {sub(/^[^:]+:[[:space:]]*/, ""); gsub(/\r/, ""); print; exit}')"
+          test -z "$evil_acao"
+
+      - name: Remove every one-time diagnostic and finalization file
+        if: steps.pr.outputs.merged != 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -f .github/workflows/diagnose-pr1541-unit-lanes.yml
+          rm -f .github/workflows/diagnose-pr1541-unit-lanes-v3.yml
+          rm -f .github/workflows/finalize-pr1541.yml
+          rm -f .github/workflows/finalize-pr1541-v2.yml
+          rm -f .github/workflows/apply-container-cors-default-and-finalize.yml
+          rm -f diagnostics/pr1541-unit-lanes.md
+          rmdir diagnostics 2>/dev/null || true
+          git add -A
+          git diff --cached --check
+
+      - name: Publish one clean exact-head candidate
+        if: steps.pr.outputs.merged != 'true'
+        id: publish
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git reset --soft origin/main
+          git add -A
+          git diff --cached --check
+          git commit -m "fix: require explicit production CORS origins"
+          git push --force-with-lease origin HEAD:fix/production-cors-current-main-20260905
+          sha="$(git rev-parse HEAD)"
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+
+          final_changed="$(git diff --name-only origin/main...HEAD | sort)"
+          expected="$(printf '%s\n' \
+            .github/workflows/ci.yml \
+            Dockerfile \
+            backend/config/env.js \
+            tests/unit/admin-email.test.mjs \
+            tests/unit/auth-access-check.test.mjs \
+            tests/unit/auth-email-production-503.test.mjs \
+            tests/unit/docker-cors-default.test.mjs \
+            | sort)"
+          test "$final_changed" = "$expected"
+
+      - name: Publish exact-image CORS proof as a binding commit status
+        if: steps.pr.outputs.merged != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          FINAL_SHA: ${{ steps.publish.outputs.sha }}
+          RUN_URL: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        shell: bash
+        run: |
+          gh api --method POST \
+            "repos/${GITHUB_REPOSITORY}/statuses/${FINAL_SHA}" \
+            -f state=success \
+            -f context='production-cors-runtime-proof' \
+            -f description='Exact production image boots with explicit allowed origins and rejects an untrusted origin' \
+            -f target_url="$RUN_URL" >/dev/null
+
+      - name: Wait for all exact-head repository and preview checks
+        if: steps.pr.outputs.merged != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          FINAL_SHA: ${{ steps.publish.outputs.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          deadline=$((SECONDS + 4800))
+          required_patterns=(
+            '^test-suite$'
+            '^test$'
+            'Windows build compatibility'
+            '^postgres-migrations$'
+            '^browser-smoke$'
+            '^production-image$'
+            'CodeQL|Analyze'
+            'Android'
+            'iOS'
+            'Release language'
+          )
+          while [ "$SECONDS" -lt "$deadline" ]; do
+            gh api --paginate "repos/${GITHUB_REPOSITORY}/commits/${FINAL_SHA}/check-runs?per_page=100" \
+              --jq '.check_runs[] | [.name,.status,(.conclusion // "")] | @tsv' \
+              | sort -u > /tmp/checks.tsv
+            gh api "repos/${GITHUB_REPOSITORY}/commits/${FINAL_SHA}/status" \
+              --jq '.statuses[] | [.context,.state] | @tsv' \
+              | sort -u > /tmp/statuses.tsv
+
+            present=1
+            for pattern in "${required_patterns[@]}"; do
+              if ! awk -F '\t' '{print $1}' /tmp/checks.tsv | grep -Eqi "$pattern"; then present=0; fi
+            done
+            pending="$(awk -F '\t' '$2!="completed" {n++} END{print n+0}' /tmp/checks.tsv)"
+            bad="$(awk -F '\t' '$2=="completed" && $3 !~ /^(success|neutral|skipped)$/ {n++} END{print n+0}' /tmp/checks.tsv)"
+            status_pending="$(awk -F '\t' '$2=="pending" {n++} END{print n+0}' /tmp/statuses.tsv)"
+            status_bad="$(awk -F '\t' '$2~/^(error|failure)$/ {n++} END{print n+0}' /tmp/statuses.tsv)"
+            cors_ok=0
+            vercel_ok=0
+            railway_ok=0
+            awk -F '\t' '$1=="production-cors-runtime-proof" && $2=="success" {f=1} END{exit !f}' /tmp/statuses.tsv && cors_ok=1 || true
+            awk -F '\t' 'tolower($1)~/vercel/ && $2=="success" {f=1} END{exit !f}' /tmp/statuses.tsv && vercel_ok=1 || true
+            awk -F '\t' 'tolower($1)~/railway/ && $2=="success" {f=1} END{exit !f}' /tmp/statuses.tsv && railway_ok=1 || true
+
+            if [ "$bad" -gt 0 ] || [ "$status_bad" -gt 0 ]; then
+              cat /tmp/checks.tsv
+              cat /tmp/statuses.tsv
+              exit 1
+            fi
+            if [ "$present" = 1 ] && [ "$pending" = 0 ] && [ "$status_pending" = 0 ] && \
+               [ "$cors_ok" = 1 ] && [ "$vercel_ok" = 1 ] && [ "$railway_ok" = 1 ]; then
+              exit 0
+            fi
+            sleep 30
+          done
+          echo 'Timed out waiting for the complete exact-head check set.'
+          cat /tmp/checks.tsv || true
+          cat /tmp/statuses.tsv || true
+          exit 1
+
+      - name: Merge the exact verified PR head
+        if: steps.pr.outputs.merged != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          FINAL_SHA: ${{ steps.publish.outputs.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          response="$(gh api --method PUT \
+            "repos/${GITHUB_REPOSITORY}/pulls/1541/merge" \
+            -f merge_method=squash \
+            -f sha="$FINAL_SHA" \
+            -f commit_title='fix: require explicit production CORS origins' \
+            -f commit_message='Fail closed when deployed runtimes omit an explicit non-wildcard origin. The production container carries an explicit, versioned, overridable origin list, and the exact image proof rejects untrusted origins.')"
+          printf '%s\n' "$response" | jq -e '.merged == true'
+          echo "Merged PR #1541 as $(printf '%s\n' "$response" | jq -r '.sha')" >> "$GITHUB_STEP_SUMMARY"
