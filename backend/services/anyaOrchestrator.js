@@ -4,6 +4,7 @@ import { createCircuitBreaker } from '../utils/circuitBreaker.js'
 import { createOpenAIClient, summarizeOpenAIError } from '../utils/openaiClient.js'
 import { invokeTextWithFallback as invokeProviderTextWithFallback } from '../utils/aiProviders.js'
 import { getProfileContext, runProfileContext } from '../db/scopedQuery.js'
+import { buildAnyaContext } from './anyaContextBuilder.js'
 import path from 'path'
 import { promises as fs } from 'fs'
 import { createLogger } from '../utils/logger.js'
@@ -12,6 +13,7 @@ import {
   loadAnyaProfileSnapshot,
   serializeAnyaApplicationContext,
   ANYA_PROFILE_CONTEXT_MAX_CHARS,
+  ANYA_WORKING_CONTEXT_MAX_CHARS,
   ANYA_PROFILE_TOOL_MAX_CHARS,
 } from './anyaProfileVisibility.js'
 import { isAnyaRunCancelRequested, setAnyaRunProgress } from './anyaRuns.js'
@@ -1386,11 +1388,46 @@ export async function generateAssistantResponse(db, user, sessionId, { content, 
     isAdmin,
     chatToolMetadata.map((tool) => tool.name),
   )
+  /* WORKING CONTEXT — the thing that lets Anya help with a profile rather than
+     only describe it.
+     `loadAnyaProfileSnapshot` above already gives her a redacted view of the
+     profile's FIELDS. What it cannot tell her is what is MISSING and why that
+     matters, what the pipeline is doing, whether a submission half-failed, or
+     what she and this profile discussed last week. anyaContextBuilder.js builds
+     exactly that — profile gaps ranked by which missing sections unlock the
+     most matches, results/pipeline snapshots, submission warnings, and
+     profile-scoped memory — in 715 lines that had ZERO importers anywhere in
+     the repo. It was written, tested by nothing, and never called.
+
+     It goes in the USER-role application context, NOT the system prompt its own
+     docstring suggests. The static-authority split above is a prompt-injection
+     defence: profile text must never arrive where system instructions live.
+     Bounded and fail-soft — Anya answering with less context is far better than
+     Anya not answering. */
+  let profileWorkingContext = null
+  if (db && activeProfileId) {
+    try {
+      const built = await buildAnyaContext(db, user, {
+        profileId: activeProfileId,
+        currentPage: resolvedPage,
+        pageContext,
+      })
+      if (typeof built === 'string' && built.trim()) {
+        profileWorkingContext = built.slice(0, ANYA_WORKING_CONTEXT_MAX_CHARS)
+      }
+    } catch (workingContextErr) {
+      console.warn('[anya] working context unavailable:', workingContextErr?.message)
+    }
+  }
+
   const applicationContext = {
     current_user: {
       display_name: String(userName || 'there').slice(0, 200),
       is_admin: isAdmin,
     },
+    // Gaps, pipeline state, submission warnings and remembered history for the
+    // active profile. Null when there is no active profile or the build failed.
+    profile_working_context: profileWorkingContext,
     preferred_language: preferredLanguage,
     active_profile: profileContext,
     accessible_profiles: profileRoster,
