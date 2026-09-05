@@ -53,6 +53,13 @@ class MockAdapter extends BaseAgentAdapter {
     super({ name })
     this.behaviour = behaviour
     this.startCallCount = 0
+    // Per-run tallies. node:test runs suites concurrently and several tests
+    // kick an orchestrator run WITHOUT awaiting it, while setAdapter()/
+    // resetRegistry() swap the registry between tests — so a still-running
+    // full_cycle from a neighbouring test resolves ITS adapters to THIS test's
+    // mocks and inflates startCallCount. Any assertion about "how many times
+    // did my run start this agent" must be scoped to the run id.
+    this.startCallsByRun = new Map()
     this.stopCallCount = 0
     this.lastSignal = null
   }
@@ -61,6 +68,7 @@ class MockAdapter extends BaseAgentAdapter {
 
   async start({ controlRunId, signal, options } = {}) {
     this.startCallCount += 1
+    if (controlRunId) this.startCallsByRun.set(controlRunId, (this.startCallsByRun.get(controlRunId) || 0) + 1)
     this.lastSignal = signal
     if (typeof this.behaviour.start === 'function') {
       return this.behaviour.start({ controlRunId, signal, options })
@@ -87,6 +95,8 @@ class MockAdapter extends BaseAgentAdapter {
   }
 
   async stop() { this.stopCallCount += 1; return { ok: true, partial: false } }
+
+  startCallsFor(controlRunId) { return this.startCallsByRun.get(controlRunId) || 0 }
 }
 
 function makeDb() {
@@ -677,10 +687,26 @@ describe('Agent Control Center — executeRun is idempotent on re-entry', () => 
       executeRun({ db, runId: run.id }),
       executeRun({ db, runId: run.id }),
     ])
-    await new Promise((r) => setTimeout(r, 160))
+    // Wait for the run to actually FINISH rather than for a fixed 160ms. The
+    // three phases sleep 120ms each in the mock, so on any host slower than
+    // the one this was written on the run was still mid-phase when the
+    // assertion fired and the test failed with 2 !== 3 — a race in the test,
+    // not a duplicate-phase defect in the orchestrator. (Reproduced on a clean
+    // origin/main worktree: 25 pass / 1 fail, this test.)
+    const TERMINAL = new Set(['completed', 'failed', 'cancelled', 'stopped', 'emergency_stopped'])
+    const deadline = Date.now() + 10_000
+    let finalRun = await getRun(db, run.id)
+    while (!TERMINAL.has(String(finalRun?.status)) && Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, 25))
+      finalRun = await getRun(db, run.id)
+    }
+    assert.ok(TERMINAL.has(String(finalRun?.status)), `run never reached a terminal status (was ${finalRun?.status})`)
+
+    // Settle any work the terminal write raced, then assert the real invariant:
     // sam_only deliberately runs preflight, main, and postflight. Re-entry must
     // not add a fourth invocation of any phase.
-    assert.equal(mocks.sam.startCallCount, 3)
+    await new Promise((r) => setTimeout(r, 100))
+    assert.equal(mocks.sam.startCallsFor(run.id), 3)
   })
 
   it('re-invoking executeRun on a finished run does not re-run steps', async () => {
