@@ -109,11 +109,23 @@ export function resolveOpportunityLinkProofState({
   const currentSuccess = hasCurrentSuccessfulLinkProof(currentRow, nowMs)
 
   if (targetChanged) {
+    // If we have a fresh successful verdict across a target change, accept it
+    // and unhide the row. Prefer the stricter target-equality path when it
+    // matches, but do not quarantine a proven success solely because
+    // final_url is missing or normalized differently.
     if (incomingCurrentSuccess && successProofMatchesNewTarget(incoming, currentRow, beforeRow)) {
       return {
         action: 'update',
         reason: 'changed_target_with_fresh_success',
-        updates: { ...proofFields(incoming), is_hidden: Boolean(currentRow.is_hidden) },
+        updates: { ...proofFields(incoming), is_hidden: false },
+      }
+    }
+
+    if (incomingCurrentSuccess) {
+      return {
+        action: 'update',
+        reason: 'changed_target_with_fresh_success',
+        updates: { ...proofFields(incoming), is_hidden: false },
       }
     }
 
@@ -154,7 +166,7 @@ export function resolveOpportunityLinkProofState({
       return {
         action: 'update',
         reason: 'fresh_success',
-        updates: { ...proofFields(incoming), is_hidden: Boolean(currentRow.is_hidden) },
+        updates: { ...proofFields(incoming), is_hidden: false },
       }
     }
     return {
