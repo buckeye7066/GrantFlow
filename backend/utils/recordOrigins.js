@@ -11,11 +11,6 @@
  */
 
 import { opportunityLifecycleVisibilityPortableSql } from '../config/matchSurfacing.js'
-import { pointerOpportunityRowSql } from '../config/linkLifecycleKinds.js'
-import {
-  LINK_PROOF_MAX_AGE_DAYS,
-  SUCCESSFUL_LINK_STATUSES,
-} from '../services/opportunityLinkProofGuard.js'
 
 export const ALLOWED_RECORD_ORIGINS = new Set([
   'live_crawl',
@@ -58,43 +53,27 @@ export const ALLOWED_RECORD_ORIGINS = new Set([
  */
 export const UNTRUSTED_ORIGINS = ['synthetic', 'manual']
 
-function linkProofReadClause(alias) {
-  const prefix = alias ? `${alias}.` : ''
-  const successStatuses = SUCCESSFUL_LINK_STATUSES
-    .map((status) => `'${escapeSqlStringLiteral(status)}'`)
-    .join(',')
-  const nowMs = Date.now()
-  const cutoff = new Date(nowMs - LINK_PROOF_MAX_AGE_DAYS * 24 * 60 * 60 * 1000).toISOString()
-  const futureTolerance = new Date(nowMs + 5 * 60 * 1000).toISOString()
-  const pointer = pointerOpportunityRowSql(alias)
-
-  // ISO timestamps sort chronologically in both supported adapters and an ISO
-  // literal is accepted by PostgreSQL timestamp columns. This avoids dialect-
-  // specific datetime arithmetic while making freshness a property of every
-  // read, not merely of the last background verifier tick.
-  return `(${pointer} OR (` +
-    `LOWER(TRIM(COALESCE(${prefix}link_status, ''))) IN (${successStatuses})` +
-    ` AND ${prefix}last_verified_at IS NOT NULL` +
-    ` AND ${prefix}last_verified_at >= '${escapeSqlStringLiteral(cutoff)}'` +
-    ` AND ${prefix}last_verified_at <= '${escapeSqlStringLiteral(futureTolerance)}'` +
-    `))`
-}
-
 /**
  * Returns the shared READ-SIDE catalog trust fragment. A row is readable only
- * when all conditions hold:
- *   1. its origin is not explicitly untrusted;
- *   2. the canonical lifecycle contract says it is active and not hidden; and
- *   3. a direct opportunity has current successful link proof. Pointer/resource
- *      rows are intentionally outside the direct-link proof requirement.
+ * when both conditions hold:
+ *   1. the canonical lifecycle contract (config/matchSurfacing.js) says it is
+ *      active and not hidden; and
+ *   2. its origin is not explicitly untrusted.
  *
- * The lifecycle and proof composition is deliberate. `trustedOriginClause()`
- * is the long-standing read guard used by AI matching, discovery, Anya,
- * crawler-result selection, college aid lookup, and backfill paths. Keeping
- * quarantine and proof freshness here prevents any one reader from treating
- * either `is_hidden` or stale verification as optional.
+ * Link-proof freshness is deliberately NOT evaluated here. Every catalog
+ * writer crosses opportunityLinkProofGuard (hidden until current successful
+ * proof), the recurring verifier re-hides rows whose proof expires, and the
+ * readiness probe reports stale proof. A read-time wall-clock predicate would
+ * have to embed Date.now() into SQL text; callers such as anyaToolRegistry
+ * build this fragment once and reuse it, so the embedded clock would freeze
+ * and silently hide every row verified after that moment.
  *
- * Safe for both SQLite and Postgres.
+ * `trustedOriginClause()` is the long-standing read guard used by AI
+ * matching, discovery, Anya, crawler-result selection, college aid lookup,
+ * and backfill paths. Keeping the lifecycle contract inside it means no
+ * reader can treat `is_hidden` as optional (issue #1501, defect 5).
+ *
+ * Safe for both SQLite and Postgres and stable across calls (no clock).
  * @param {string} [alias] - Optional table alias, e.g. 'fo'
  */
 export function trustedOriginClause(alias) {
@@ -104,8 +83,7 @@ export function trustedOriginClause(alias) {
   const col = alias ? `${alias}.record_origin` : 'record_origin'
   const quoted = UNTRUSTED_ORIGINS.map(o => `'${escapeSqlStringLiteral(o)}'`).join(',')
   const lifecycle = opportunityLifecycleVisibilityPortableSql({ tableAlias: alias || '' })
-  const linkProof = linkProofReadClause(alias)
-  return `(${lifecycle} AND ${linkProof} AND (${col} IS NULL OR ${col} NOT IN (${quoted})))`
+  return `(${lifecycle} AND (${col} IS NULL OR ${col} NOT IN (${quoted})))`
 }
 
 /**

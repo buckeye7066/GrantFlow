@@ -5,7 +5,7 @@ import {
 } from './linkVerificationService.js'
 import {
   linkLifecycleKindSql,
-  pointerOpportunityRowSql,
+  linkLifecycleOpportunitySql,
 } from '../config/linkLifecycleKinds.js'
 import { findOfficialUrlForOpportunity } from './urlEnrichment.js'
 
@@ -20,7 +20,6 @@ const nowIso = () => new Date().toISOString()
 const bools = (db) => db?.dialect === 'postgres'
   ? { yes: true, no: false }
   : { yes: 1, no: 0 }
-const directOpportunitySql = (alias = '') => `NOT (${pointerOpportunityRowSql(alias)})`
 
 export function osmElementUrl(sourceId) {
   const match = String(sourceId || '').trim().match(/^(node|way|relation):(\d+)$/i)
@@ -346,7 +345,7 @@ export async function brokenDirectSummary(db) {
       SUM(CASE WHEN link_status='skipped' AND status='paused'
                     AND verification_error LIKE ? THEN 1 ELSE 0 END) scheduled_retry
       FROM funding_opportunities
-     WHERE ${directOpportunitySql()}
+     WHERE ${linkLifecycleOpportunitySql()}
   `).get(`${RETIRED_MARKER}%`, `${SCHEDULED_RETRY_MARKER}%`)
   return {
     visible: Number(row?.visible || 0),
@@ -392,7 +391,7 @@ export async function scheduleRetryableBrokenRows(db, options = {}) {
          WHERE link_status='broken' AND verified_by LIKE ?
          GROUP BY opportunity_id
       ) attempts ON attempts.opportunity_id = fo.id
-     WHERE ${directOpportunitySql('fo')}
+     WHERE ${linkLifecycleOpportunitySql('fo')}
        AND fo.link_status='broken' AND fo.status='paused'
        AND COALESCE(fo.is_hidden,TRUE)=TRUE
        AND COALESCE(fo.is_active,FALSE)=FALSE
@@ -471,7 +470,7 @@ export async function repairBrokenDirectBatch(db, options = {}) {
   await db.prepare(`
     UPDATE funding_opportunities
        SET is_hidden=?, is_active=?
-     WHERE ${directOpportunitySql()}
+     WHERE ${linkLifecycleOpportunitySql()}
        AND link_status='broken' AND ${mutableLinkLifecycleSql()}
   `).run(yes, no)
 
@@ -482,7 +481,7 @@ export async function repairBrokenDirectBatch(db, options = {}) {
            apply_guidelines_url, source_url, evidence_url, final_url,
            status, last_verified_at
       FROM funding_opportunities
-     WHERE ${directOpportunitySql()}
+     WHERE ${linkLifecycleOpportunitySql()}
        AND link_status='broken'
        AND ${mutableLinkLifecycleSql()}
        AND (

@@ -127,22 +127,55 @@ describe('last_verified_at honesty — source capture', () => {
 
   it('persistRun never overwrites a prior REAL verification with a scrape time', async () => {
     const db = makeDb()
-    // Pretend the verifier already target-verified this row.
+    // Pretend the verifier already target-verified this row's CURRENT target
+    // (the same apply_url the recrawl will write) inside the 30-day window.
+    const verifiedAt = new Date(Date.now() - 3 * 24 * 60 * 60 * 1000).toISOString()
     db.prepare(
       `INSERT INTO funding_opportunities
          (id, title, record_origin, canonical_opportunity_key, fingerprint,
-          last_verified_at, verified_by, verification_method, link_status)
+          application_url, evidence_url,
+          last_verified_at, verified_by, verification_method, link_status, final_url)
        VALUES ('os-1', 'Rural Facilities Grant', 'live_crawl', 'ck-1', 'ck-1',
-               '2026-07-10T00:00:00.000Z', 'recurring-verifier', 'head', 'ok')`,
-    ).run()
+               'https://grants.example-agency.gov/apply/1', 'https://grants.example-agency.gov/1',
+               ?, 'recurring-verifier', 'head', 'ok', 'https://grants.example-agency.gov/apply/1')`,
+    ).run(verifiedAt)
 
     // Re-crawl the same canonical opp (fetched_at is an OLD scrape time).
     await persistRun(db, makeMemStore({ catalog: [osOpp()] }), {})
 
-    const row = db.prepare('SELECT last_verified_at, link_status FROM funding_opportunities WHERE id = ?').get('os-1')
-    // The genuine verification timestamp survives (source capture omits the column).
-    expect(row.last_verified_at).toBe('2026-07-10T00:00:00.000Z')
+    const row = db.prepare('SELECT last_verified_at, link_status, is_hidden FROM funding_opportunities WHERE id = ?').get('os-1')
+    // The genuine verification timestamp survives (source capture omits the
+    // column and the same-target recrawl preserves current proof).
+    expect(row.last_verified_at).toBe(verifiedAt)
     expect(row.link_status).toBe('ok')
+    expect(row.is_hidden).toBe(0)
+  })
+
+  it('persistRun keeps an EXPIRED real verification timestamp for audit but demotes the stale success', async () => {
+    const db = makeDb()
+    const staleAt = '2026-07-10T00:00:00.000Z'
+    db.prepare(
+      `INSERT INTO funding_opportunities
+         (id, title, record_origin, canonical_opportunity_key, fingerprint,
+          application_url, evidence_url,
+          last_verified_at, verified_by, verification_method, link_status, final_url)
+       VALUES ('os-1', 'Rural Facilities Grant', 'live_crawl', 'ck-1', 'ck-1',
+               'https://grants.example-agency.gov/apply/1', 'https://grants.example-agency.gov/1',
+               ?, 'recurring-verifier', 'head', 'ok', 'https://grants.example-agency.gov/apply/1')`,
+    ).run(staleAt)
+
+    await persistRun(db, makeMemStore({ catalog: [osOpp()] }), {})
+
+    const row = db.prepare(
+      'SELECT last_verified_at, link_status, verification_error, is_hidden FROM funding_opportunities WHERE id = ?',
+    ).get('os-1')
+    // Never the 2020 scrape time, never NULL: the audit timestamp is retained...
+    expect(row.last_verified_at).toBe(staleAt)
+    // ...but a 30-day-stale success is not current proof, so the row is made
+    // retryable and hidden until the verifier re-probes the target.
+    expect(row.link_status).toBe('unverified')
+    expect(row.verification_error).toBe('stale_verification_proof_requires_recheck')
+    expect(row.is_hidden).toBe(1)
   })
 })
 

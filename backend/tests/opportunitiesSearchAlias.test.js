@@ -16,6 +16,15 @@ import request from "supertest"
 import { describe, it, expect, beforeAll, beforeEach } from "vitest"
 import { getAppAndDb, resetDb, TEST_ADMIN_AUTH_HEADER } from "./testServer.js"
 
+// Issue #1501: the admin API creates fail-closed (hidden) direct rows until link
+// proof exists, so the fixture asserts the proof it is entitled to assert.
+const VERIFIED_PROOF = () => ({
+  link_status: "ok",
+  last_verified_at: new Date().toISOString(),
+  verification_method: "head",
+  verified_by: "search-alias-integration-test",
+})
+
 describe("the public opportunity search cannot silently do nothing", () => {
   let app
   let db
@@ -39,6 +48,7 @@ describe("the public opportunity search cannot silently do nothing", () => {
         description: "A real-looking opportunity used by the public search integration test.",
         application_url: `https://${host}/apply`,
         source_url: `https://${host}/program`,
+        ...VERIFIED_PROOF(),
         is_national: true,
         opportunity_type: "grant",
         requires_match: false,

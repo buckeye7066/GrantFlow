@@ -215,8 +215,8 @@ router.post('/comprehensive-match', async (req, res) => {
   try {
     const { profile, profile_id } = req.body
     
-    const visibleCatalogSql = opportunityLifecycleVisibilitySql({ dialect: req.db?.dialect })
-    const visibleCatalogAliasSql = opportunityLifecycleVisibilitySql({ tableAlias: 'fo', dialect: req.db?.dialect })
+    const safeVisibleCatalogSql = opportunityLifecycleVisibilitySql({ dialect: req.db?.dialect })
+    const safeVisibleCatalogAliasSql = opportunityLifecycleVisibilitySql({ tableAlias: 'fo', dialect: req.db?.dialect })
 
     // Profile isolation: only global catalog + this profile's own crawl results
     const profileIdForIsolation = profile_id || profile?.id || null
@@ -231,7 +231,7 @@ router.post('/comprehensive-match', async (req, res) => {
 
     const opportunities = await req.db.prepare(`
       SELECT * FROM funding_opportunities
-      WHERE ${visibleCatalogSql}
+      WHERE ${safeVisibleCatalogSql}
       AND ${trustedOriginClause()} AND ${trustedSourceClause()}
       ${isolationClause}
       ORDER BY created_at DESC
@@ -248,7 +248,7 @@ router.post('/comprehensive-match', async (req, res) => {
       const recall = await augmentCandidatesWithSemanticRecall(req.db, {
         keywordRows: opportunities,
         queryText: buildProfileEmbeddingText(profile),
-        whereSql: `${visibleCatalogAliasSql} AND ${trustedOriginClause('fo')} AND ${trustedSourceClause('fo')} ${isolationClause}`,
+        whereSql: `${safeVisibleCatalogAliasSql} AND ${trustedOriginClause('fo')} AND ${trustedSourceClause('fo')} ${isolationClause}`,
         whereParams: isolationParams,
       })
       candidateRows = recall.rows
@@ -329,7 +329,7 @@ router.post('/ecf-service-search', async (req, res) => {
   try {
     const { profile, profile_id } = req.body
 
-    const visibleEcfSql = opportunityLifecycleVisibilitySql({ dialect: req.db?.dialect })
+    const safeVisibleEcfSql = opportunityLifecycleVisibilitySql({ dialect: req.db?.dialect })
 
     // Profile isolation
     const isolationId = profile_id || profile?.id || null
@@ -350,7 +350,7 @@ router.post('/ecf-service-search', async (req, res) => {
 
     const services = await req.db.prepare(`
       SELECT * FROM funding_opportunities
-      WHERE ${visibleEcfSql}
+      WHERE ${safeVisibleEcfSql}
         AND ${trustedOriginClause()} AND ${trustedSourceClause()}
         ${isolationClause}
         ${stateClause}
@@ -413,8 +413,8 @@ router.post('/match', async (req, res) => {
     
     const isPostgresMatch = req.db?.dialect === 'postgres'
     const activeMatch = isPostgresMatch ? 'TRUE' : '1'
-    const visibleMatchSql = opportunityLifecycleVisibilitySql({ dialect: req.db?.dialect })
-    const visibleMatchAliasSql = opportunityLifecycleVisibilitySql({ tableAlias: 'fo', dialect: req.db?.dialect })
+    const safeVisibleMatchSql = opportunityLifecycleVisibilitySql({ dialect: req.db?.dialect })
+    const safeVisibleMatchAliasSql = opportunityLifecycleVisibilitySql({ tableAlias: 'fo', dialect: req.db?.dialect })
 
     // Profile isolation: only global catalog + this profile's own crawl results
     const profileIdForIsolation = profile_id || profile?.id || null
@@ -424,7 +424,7 @@ router.post('/match', async (req, res) => {
 
     let query = `
       SELECT * FROM funding_opportunities 
-      WHERE ${visibleMatchSql}
+      WHERE ${safeVisibleMatchSql}
       AND ${trustedOriginClause()} AND ${trustedSourceClause()}
       AND (is_national = ${activeMatch} OR state = ? OR state IS NULL)
       ${isolationClause}
@@ -450,7 +450,7 @@ router.post('/match', async (req, res) => {
       const recall = await augmentCandidatesWithSemanticRecall(req.db, {
         keywordRows: opportunities,
         queryText: buildProfileEmbeddingText(profile),
-        whereSql: `${visibleMatchAliasSql}
+        whereSql: `${safeVisibleMatchAliasSql}
           AND ${trustedOriginClause('fo')} AND ${trustedSourceClause('fo')}
           AND (fo.is_national = ${activeMatch} OR fo.state = ? OR fo.state IS NULL)
           ${isolationClause}

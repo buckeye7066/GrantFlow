@@ -55,9 +55,9 @@ async function countRealNational(db) {
   const activeVal = isPg ? 'TRUE' : '1'
   const hasOrigin = await hasColumn(db, 'funding_opportunities', 'record_origin')
   // Build a minimal, bootstrap-safe origin clause for the ensure path:
-  // count national rows regardless of link-proof freshness or quarantine.
-  // This deliberately diverges from trustedOriginClause(), which enforces
-  // lifecycle visibility and current successful link proof for general reads.
+  // count national rows regardless of lifecycle quarantine. Freshly seeded
+  // direct rows are hidden until the verifier proves them, so the general
+  // trustedOriginClause() (lifecycle + origin) would count 0 and re-seed forever.
   const originClause = hasOrigin
     ? (() => {
         const quoted = UNTRUSTED_ORIGINS.map((o) => `'${String(o).replace(/'/g, "''")}'`).join(',')

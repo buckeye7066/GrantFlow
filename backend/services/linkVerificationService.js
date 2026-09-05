@@ -429,7 +429,7 @@ export async function quarantineUnverifiedDirectOpportunities(db) {
   // Mission health defines a visible direct row as every non-pointer catalog
   // row, including legacy/unknown kind spellings. Quarantine must use the same
   // denominator or malformed-but-visible rows can keep /readyz red forever.
-  const visibleDirectPredicate = `NOT (${pointerOpportunityRowSql()})`
+  const visibleDirectPredicate = linkLifecycleOpportunitySql()
   const freshnessCutoff = new Date(
     Date.now() - REVERIFY_AFTER_DAYS * 24 * 60 * 60 * 1000,
   ).toISOString()

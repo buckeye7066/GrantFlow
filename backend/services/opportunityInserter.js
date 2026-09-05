@@ -1294,20 +1294,23 @@ export async function upsertFundingOpportunity(db, opportunity, opts = {}) {
   const verificationFreshCutoff = new Date(
     Date.now() - REVERIFY_AFTER_DAYS_CONST * 24 * 60 * 60 * 1000,
   ).toISOString()
-  const incomingHasCurrentProofSql = `(
+  const safeIncomingHasCurrentProofSql = `(
     LOWER(TRIM(COALESCE(excluded.link_status, ''))) IN ('ok', 'redirect', 'verified')
     AND excluded.last_verified_at IS NOT NULL
     AND excluded.last_verified_at >= @verification_fresh_cutoff
   )`
-  const existingHasCurrentProofSql = `(
+  const safeExistingHasCurrentProofSql = `(
     LOWER(TRIM(COALESCE(funding_opportunities.link_status, ''))) IN ('ok', 'redirect', 'verified')
     AND funding_opportunities.last_verified_at IS NOT NULL
     AND funding_opportunities.last_verified_at >= @verification_fresh_cutoff
   )`
-  const effectiveTargetChangedSql = `(
+  const safeEffectiveTargetChangedSql = `(
     COALESCE(NULLIF(TRIM(excluded.application_url), ''), NULLIF(TRIM(excluded.source_url), ''), NULLIF(TRIM(excluded.evidence_url), ''), '') <>
     COALESCE(NULLIF(TRIM(funding_opportunities.application_url), ''), NULLIF(TRIM(funding_opportunities.source_url), ''), NULLIF(TRIM(funding_opportunities.evidence_url), ''), '')
   )`
+
+  // Compile-time pointer predicate over the incoming row; no request input.
+  const safeExcludedPointerRowSql = pointerOpportunityRowSql('excluded')
 
   const insert = db.prepare(`
     INSERT INTO funding_opportunities (
@@ -1490,35 +1493,35 @@ export async function upsertFundingOpportunity(db, opportunity, opts = {}) {
       verification_status = COALESCE(excluded.verification_status, funding_opportunities.verification_status),
       record_origin = COALESCE(excluded.record_origin, funding_opportunities.record_origin),
       last_verified_at = CASE
-        WHEN ${incomingHasCurrentProofSql} THEN excluded.last_verified_at
-        WHEN ${effectiveTargetChangedSql} THEN NULL
+        WHEN ${safeIncomingHasCurrentProofSql} THEN excluded.last_verified_at
+        WHEN ${safeEffectiveTargetChangedSql} THEN NULL
         ELSE funding_opportunities.last_verified_at
       END,
       link_status = CASE
-        WHEN ${incomingHasCurrentProofSql} THEN excluded.link_status
-        WHEN ${effectiveTargetChangedSql} THEN 'unverified'
-        WHEN NOT (${existingHasCurrentProofSql}) THEN 'unverified'
+        WHEN ${safeIncomingHasCurrentProofSql} THEN excluded.link_status
+        WHEN ${safeEffectiveTargetChangedSql} THEN 'unverified'
+        WHEN NOT (${safeExistingHasCurrentProofSql}) THEN 'unverified'
         ELSE funding_opportunities.link_status
       END,
       link_status_code = CASE
-        WHEN ${incomingHasCurrentProofSql} THEN excluded.link_status_code
-        WHEN ${effectiveTargetChangedSql} THEN NULL
+        WHEN ${safeIncomingHasCurrentProofSql} THEN excluded.link_status_code
+        WHEN ${safeEffectiveTargetChangedSql} THEN NULL
         ELSE funding_opportunities.link_status_code
       END,
       verification_method = CASE
-        WHEN ${incomingHasCurrentProofSql} THEN excluded.verification_method
-        WHEN ${effectiveTargetChangedSql} THEN NULL
+        WHEN ${safeIncomingHasCurrentProofSql} THEN excluded.verification_method
+        WHEN ${safeEffectiveTargetChangedSql} THEN NULL
         ELSE funding_opportunities.verification_method
       END,
       verified_by = CASE
-        WHEN ${incomingHasCurrentProofSql} THEN excluded.verified_by
-        WHEN ${effectiveTargetChangedSql} THEN NULL
+        WHEN ${safeIncomingHasCurrentProofSql} THEN excluded.verified_by
+        WHEN ${safeEffectiveTargetChangedSql} THEN NULL
         ELSE funding_opportunities.verified_by
       END,
       verification_error = CASE
-        WHEN ${incomingHasCurrentProofSql} THEN excluded.verification_error
-        WHEN ${effectiveTargetChangedSql} THEN 'url_changed_requires_reverification'
-        WHEN NOT (${existingHasCurrentProofSql}) THEN 'stale_verification_proof_requires_recheck'
+        WHEN ${safeIncomingHasCurrentProofSql} THEN excluded.verification_error
+        WHEN ${safeEffectiveTargetChangedSql} THEN 'url_changed_requires_reverification'
+        WHEN NOT (${safeExistingHasCurrentProofSql}) THEN 'stale_verification_proof_requires_recheck'
         ELSE funding_opportunities.verification_error
       END,
       discovered_at = COALESCE(funding_opportunities.discovered_at, excluded.discovered_at),
@@ -1527,13 +1530,13 @@ export async function upsertFundingOpportunity(db, opportunity, opts = {}) {
       reality_status = COALESCE(excluded.reality_status, funding_opportunities.reality_status),
       reality_reasons = COALESCE(excluded.reality_reasons, funding_opportunities.reality_reasons),
       final_url = CASE
-        WHEN ${incomingHasCurrentProofSql} THEN COALESCE(excluded.final_url, funding_opportunities.final_url)
-        WHEN ${effectiveTargetChangedSql} THEN NULL
+        WHEN ${safeIncomingHasCurrentProofSql} THEN COALESCE(excluded.final_url, funding_opportunities.final_url)
+        WHEN ${safeEffectiveTargetChangedSql} THEN NULL
         ELSE funding_opportunities.final_url
       END,
       http_status = CASE
-        WHEN ${incomingHasCurrentProofSql} THEN COALESCE(excluded.http_status, funding_opportunities.http_status)
-        WHEN ${effectiveTargetChangedSql} THEN NULL
+        WHEN ${safeIncomingHasCurrentProofSql} THEN COALESCE(excluded.http_status, funding_opportunities.http_status)
+        WHEN ${safeEffectiveTargetChangedSql} THEN NULL
         ELSE funding_opportunities.http_status
       END,
       match_reasons = COALESCE(excluded.match_reasons, funding_opportunities.match_reasons),
@@ -1541,16 +1544,16 @@ export async function upsertFundingOpportunity(db, opportunity, opts = {}) {
       decision_review_days = COALESCE(excluded.decision_review_days, funding_opportunities.decision_review_days),
       reporting_requirements = COALESCE(excluded.reporting_requirements, funding_opportunities.reporting_requirements),
       is_hidden = CASE
-        WHEN ${incomingHasCurrentProofSql} AND (
+        WHEN ${safeIncomingHasCurrentProofSql} AND (
           COALESCE(funding_opportunities.is_hidden, FALSE) = FALSE
           OR LOWER(TRIM(COALESCE(funding_opportunities.link_status, 'unverified'))) IN ('broken', 'unverified', 'suspicious', 'skipped')
           OR COALESCE(funding_opportunities.verification_error, '') LIKE 'stale_reverification_required:%'
           OR COALESCE(funding_opportunities.verification_error, '') LIKE 'retry_scheduled_after_bounded_recheck:%'
         ) THEN FALSE
-        WHEN NOT (${incomingHasCurrentProofSql})
-          AND NOT (${pointerOpportunityRowSql('excluded')})
+        WHEN NOT (${safeIncomingHasCurrentProofSql})
+          AND NOT (${safeExcludedPointerRowSql})
           AND (
-            ${effectiveTargetChangedSql}
+            ${safeEffectiveTargetChangedSql}
             OR LOWER(TRIM(COALESCE(funding_opportunities.link_status, 'unverified'))) NOT IN ('ok', 'redirect', 'verified')
             OR funding_opportunities.last_verified_at IS NULL
             OR funding_opportunities.last_verified_at < @verification_fresh_cutoff
@@ -1558,23 +1561,23 @@ export async function upsertFundingOpportunity(db, opportunity, opts = {}) {
         ELSE funding_opportunities.is_hidden
       END,
       is_active = CASE
-        WHEN ${incomingHasCurrentProofSql} AND NOT (${pointerOpportunityRowSql('excluded')}) AND (
+        WHEN ${safeIncomingHasCurrentProofSql} AND NOT (${safeExcludedPointerRowSql}) AND (
           LOWER(TRIM(COALESCE(funding_opportunities.link_status, 'unverified'))) IN ('broken', 'unverified', 'suspicious', 'skipped')
           OR COALESCE(funding_opportunities.verification_error, '') LIKE 'stale_reverification_required:%'
           OR COALESCE(funding_opportunities.verification_error, '') LIKE 'retry_scheduled_after_bounded_recheck:%'
         ) THEN TRUE
-        WHEN NOT (${incomingHasCurrentProofSql})
-          AND NOT (${pointerOpportunityRowSql('excluded')})
+        WHEN NOT (${safeIncomingHasCurrentProofSql})
+          AND NOT (${safeExcludedPointerRowSql})
           AND (
-            ${effectiveTargetChangedSql}
-            OR NOT (${existingHasCurrentProofSql})
+            ${safeEffectiveTargetChangedSql}
+            OR NOT (${safeExistingHasCurrentProofSql})
           )
           AND LOWER(TRIM(COALESCE(funding_opportunities.link_status, 'unverified'))) = 'broken'
         THEN TRUE
         ELSE funding_opportunities.is_active
       END,
       status = CASE
-        WHEN ${incomingHasCurrentProofSql} AND NOT (${pointerOpportunityRowSql('excluded')}) AND funding_opportunities.status = 'paused' AND (
+        WHEN ${safeIncomingHasCurrentProofSql} AND NOT (${safeExcludedPointerRowSql}) AND funding_opportunities.status = 'paused' AND (
           LOWER(TRIM(COALESCE(funding_opportunities.link_status, 'unverified'))) IN ('broken', 'unverified', 'suspicious', 'skipped')
           OR COALESCE(funding_opportunities.verification_error, '') LIKE 'stale_reverification_required:%'
           OR COALESCE(funding_opportunities.verification_error, '') LIKE 'retry_scheduled_after_bounded_recheck:%'

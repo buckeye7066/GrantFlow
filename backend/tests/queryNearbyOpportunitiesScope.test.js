@@ -30,6 +30,7 @@ function seed(db) {
       state TEXT,
       is_national INTEGER DEFAULT 0,
       is_active INTEGER DEFAULT 1,
+      is_hidden INTEGER DEFAULT 0,
       opportunity_type TEXT,
       type TEXT,
       deadline_type TEXT,

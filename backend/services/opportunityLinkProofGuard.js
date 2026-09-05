@@ -21,7 +21,10 @@ function timestampMs(row = {}) {
 }
 
 export function effectiveLinkVerificationTarget(row = {}) {
-  return text(row.application_url) || text(row.source_url) || null
+  // Same application-first fallback chain as opportunityInserter: an evidence-
+  // only row is still a direct row whose only target is its evidence page, so
+  // changing that page is a target change and cannot inherit the old proof.
+  return text(row.application_url) || text(row.source_url) || text(row.evidence_url) || null
 }
 
 export function hasCurrentSuccessfulLinkProof(row = {}, nowMs = Date.now()) {
@@ -241,13 +244,13 @@ export async function enforceOpportunityLinkProofAfterWrite(
     // an id-only write would erase that newer verdict and re-hide the row.
     const observedColumns = [
       'opportunity_kind', 'result_kind', 'opportunity_type', 'type',
-      'application_url', 'source_url',
+      'application_url', 'source_url', 'evidence_url',
       'last_verified_at', 'link_status', 'link_status_code',
       'verification_method', 'verified_by', 'verification_error',
       'final_url', 'http_status', 'is_hidden',
-    ]
+    ].filter((column) => column !== 'evidence_url' || Object.prototype.hasOwnProperty.call(currentRow, 'evidence_url'))
     const isPostgres = db?.dialect === 'postgres'
-    const compareSql = observedColumns.map((column) => isPostgres
+    const safeCompareSql = observedColumns.map((column) => isPostgres
       ? `${column} IS NOT DISTINCT FROM ?`
       : `(${column} = ? OR (${column} IS NULL AND ? IS NULL))`)
     const compareValues = observedColumns.flatMap((column) => isPostgres
@@ -265,7 +268,7 @@ export async function enforceOpportunityLinkProofAfterWrite(
              http_status = ?,
              is_hidden = ?
        WHERE id = ?
-         AND ${compareSql.join('\n         AND ')}
+         AND ${safeCompareSql.join('\n         AND ')}
     `).run(
       u.last_verified_at ?? null,
       u.link_status ?? 'unverified',
