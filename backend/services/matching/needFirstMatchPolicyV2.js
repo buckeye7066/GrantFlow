@@ -514,8 +514,14 @@ function matchedPointSummary(dataPointEval = {}) {
   return { matched, kinds, needCredit, declaredProgramCredit }
 }
 
+// "young people who spent their teen years in foster care", "youth from
+// foster care", "foster care alumni" — the Foster Care to Success class,
+// stored at REVIEW 67 for a student whose family section states no foster
+// history (2026-09-05).
+const FOSTER_PROGRAM_RX = /\b(foster youth|former foster youth|aged out of foster care|chafee|education and training voucher|foster care (?:alumni|to success)|(?:youth|young people|young adults|students?|children|teens?)[^.]{0,30}\b(?:from|in|out of) foster care|(?:were|are|have been|spent[^.]{0,20}) in foster care)\b/i
+
 function deathSurvivorRestriction(text) {
-  return /\b(surviving spouse|widow(?:er)?|orphan benefit|death benefit|gold star)\b/i.test(text) ||
+  return /\b(surviving spouses?|surviving (?:children|child|families|family members?|dependents?)|widow(?:er)?s?|orphan benefit|death benefit|gold star)\b/i.test(text) ||
     (/\bsurvivor benefits?\b/i.test(text) && /\b(social security|ssa|death|deceased)\b/i.test(text)) ||
     // "for students whose parent or guardian died as a result of military
     // service in Iraq or Afghanistan" — the Iraq and Afghanistan Service Grant
@@ -642,9 +648,48 @@ function profileProvablyNotFarmer(profileContext = {}, profileNorm = null) {
   return occupation.farmer === false || occupation.rancher === false || occupation.agricultural_producer === false
 }
 
+/**
+ * Programs whose NAME is the eligibility statement: a Katie Beckett waiver
+ * serves children under 18 with disabilities, full stop. A disabled 62+ senior
+ * was handed "Katie Beckett Program" at ACCEPT 89 (2026-09-05) because the
+ * enumerated TennCare sub-page carried no eligibility text for the engine to
+ * read. The profile's age is a positive fact; silence on age stays neutral.
+ */
+const CHILD_ONLY_PROGRAM_RX = /\bkatie beckett\b|\b(?:children|kids|youth|minors)\s+(?:under|below|younger than)\s+(?:age\s+)?(?:18|19|21)\b|\bunder (?:age )?18 (?:with|who)\b|\bpediatric\b/i
+
+/**
+ * Adult-learner programs (Tennessee Reconnect, TCAT Reconnect, HOPE
+ * Nontraditional, "independent students 25 or older") exist for adults
+ * returning to school. A first-year 18-year-old with a dual-enrollment
+ * associate degree had three of them in her pipeline (2026-09-05). Age is a
+ * positive fact; silence stays neutral.
+ */
+const ADULT_LEARNER_PROGRAM_RX = /\b(tennessee reconnect|tcat reconnect|reconnect (?:grant|scholarship)|adult learners?|adult students?|non-?traditional students?|nontraditional|returning (?:adult )?students?|(?:age|aged|ages) 2[4-9]\+?(?: and| or)? (?:older|over|up)|2[4-9] (?:years|years of age) (?:and|or) older|independent students? (?:aged|age|who are) 2[4-9])\b/i
+
+function profileProvablyTraditionalAge(profileContext = {}, profileNorm = null) {
+  const age = profileAgeYears(profileContext, profileNorm)
+  return Number.isFinite(age) && age > 0 && age < 24
+}
+
+function profileProvablyAdult(profileContext = {}, profileNorm = null) {
+  const age = profileAgeYears(profileContext, profileNorm)
+  if (Number.isFinite(age)) return age >= 18
+  if (profileIsOlderAdult(profileContext, profileNorm)) return true
+  const demographics = asObject(profileContext?.sections?.demographics)
+  const group = normalizeText(demographics.age_group ?? demographics.age_range ?? '')
+  if (!group) return false
+  return /senior|older adult|elder|retire|adult|6[0-9]\s*\+|[2-9][0-9]\s*(?:-|to)\s*[2-9][0-9]/.test(group) && !/youth|child|teen|minor|under 18/.test(group)
+}
+
 function positivePopulationMismatches(profileContext, profileNorm, targetingText, opportunity = {}) {
   const out = []
   const title = opportunityTitleText(opportunity)
+  if (CHILD_ONLY_PROGRAM_RX.test(`${title} ${targetingText}`) && profileProvablyAdult(profileContext, profileNorm)) {
+    out.push('Program serves children under 18; the profile states an adult age')
+  }
+  if (ADULT_LEARNER_PROGRAM_RX.test(`${title} ${targetingText}`) && profileProvablyTraditionalAge(profileContext, profileNorm)) {
+    out.push('Adult-learner / nontraditional-student program does not fit a profile whose stated age is under 24')
+  }
   if ((MILITARY_TITLE_RX.test(title) || MILITARY_RESTRICTION_RX.test(targetingText)) &&
       !/\b(civilian|everyone|all applicants|general public|and their families)\b/i.test(title) &&
       profileProvablyNotMilitary(profileContext, profileNorm)) {
@@ -706,7 +751,7 @@ export function evaluateNeedFirstMatchPolicy({
     if (deathSurvivorRestriction(targetingText) && !profileHasSurvivorSignal(profileContext, profileNorm)) {
       resourceHard.push('Death-survivor program requires widow, orphan, surviving-spouse, or Gold Star evidence')
     }
-    if (/\b(foster youth|former foster youth|aged out of foster care|chafee|education and training voucher)\b/i.test(targetingText) &&
+    if (FOSTER_PROGRAM_RX.test(targetingText) &&
         !profileHasFosterSignal(profileContext, profileNorm)) {
       resourceHard.push('Foster-youth program requires a current or former foster-youth signal')
     }
@@ -795,7 +840,7 @@ export function evaluateNeedFirstMatchPolicy({
       !profileHasInternationalSignal(profileContext, profileNorm)) {
     hardMismatches.push('International-student-only program requires an international or immigration-status signal')
   }
-  if (/\b(foster youth|former foster youth|aged out of foster care|chafee|education and training voucher)\b/i.test(targetingText) &&
+  if (FOSTER_PROGRAM_RX.test(targetingText) &&
       !profileHasFosterSignal(profileContext, profileNorm)) {
     hardMismatches.push('Foster-youth program requires a current or former foster-youth signal')
   }

@@ -60,6 +60,17 @@ describe('resources and benefits are held to the positive population rules', () 
       'Free counseling for homeowners facing foreclosure or struggling with mortgage payments.'],
     ['HSLDA Compassion Grants (homeschool families)', 'DIRECT_GRANT',
       'Grants for homeschooling families facing financial hardship.'],
+    // Live phrasings from the 2026-09-05 crawl that the first rule set missed.
+    ['Scholarships and grants for youth from foster care', 'DIRECT_GRANT',
+      'Direct scholarships and grants for young people who spent their teen years in foster care: college scholarships, Education & Training Voucher administration, and student support funds.'],
+    ['Social Security survivors benefits', 'benefit',
+      'Official Social Security survivor-benefits information for eligible surviving spouses, children, and families. This is a benefits lane, not a grant.'],
+    ['Tennessee Reconnect Scholarship', 'DIRECT_GRANT',
+      'Last-dollar scholarship for adult learners returning to earn an associate degree or technical certificate.'],
+    ['Tennessee HOPE Scholarship - Nontraditional', 'DIRECT_GRANT',
+      'HOPE award for nontraditional students age 25 or older who are independent students.'],
+    ['Katie Beckett Waiver', 'benefit',
+      'Discovered from TennCare Employment and Community First CHOICES (ECF CHOICES): Katie Beckett Waiver'],
   ])('rejects %s for the 18-year-old who lives with family and declares her school', (title, kind, description) => {
     const result = livePolicyFor({ title, opportunity_kind: kind, description })
     expect(result.decision).toBe('REJECT')
@@ -93,6 +104,29 @@ describe('resources and benefits are held to the positive population rules', () 
       expect(result.decision).not.toBe('REJECT')
       expect(result.hardMismatch).toBe(false)
     }
+  })
+
+  it('a child-only program (Katie Beckett) is rejected for a 62+ senior and kept for a 15-year-old', () => {
+    const seniorContext = {
+      profile: { id: 'live_tn_senior', primary_type: 'individual' },
+      sections: { demographics: { age_group: 'Senior 62+', disability_status: 'Has disability' }, family_life: { caregiver: false } },
+    }
+    const senior = livePolicyFor(
+      { title: 'Katie Beckett Program', opportunity_kind: 'benefit', description: 'Discovered from TennCare Employment and Community First CHOICES (ECF CHOICES): Katie Beckett Program' },
+      [], seniorContext, { ...studentNorm, isStudent: false, entityType: 'individual' },
+    )
+    expect(senior.decision).toBe('REJECT')
+    expect(senior.hardMismatch).toBe(true)
+
+    const childContext = {
+      profile: { id: 'live_tn_child', primary_type: 'individual' },
+      sections: { basic_information: { date_of_birth: '2011-03-02' }, family_life: {} },
+    }
+    const child = livePolicyFor(
+      { title: 'Katie Beckett Program', opportunity_kind: 'benefit', description: 'Medicaid for children under 18 with disabilities.' },
+      [], childContext, { ...studentNorm, isStudent: false, entityType: 'individual' },
+    )
+    expect(child.decision).not.toBe('REJECT')
   })
 
   it('a senior keeps the aging locator; a high-school "senior" scholarship is not an older-adult program', () => {

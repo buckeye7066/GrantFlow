@@ -69,8 +69,15 @@ test('a biotech lab (generic nonprofit, coarse org needs) is excluded from EVERY
       `${id} exclusion must name mission_not_declared (got: ${d.reasons.join(',')})`,
     );
   }
-  // The gate suppresses nothing else: the lab keeps a broad plan.
-  assert.ok(p.selected_source_ids.length > 10, 'the plan is still broad');
+  // The gate suppresses nothing else: the lab keeps every lane it can use.
+  // Measured 2026-09-05 after the org identity lanes (DOJ, SAMHSA, HUD
+  // homeless, refugee, NEA, IMLS, tribal, farm credit, EPA water, NIH/CDC
+  // without a research_funding need) joined the table: grants.gov, SBIR,
+  // SAM, Federal Register, ProPublica 990, SBA, USA.gov, USDA RD ×2, COF.
+  assert.ok(p.selected_source_ids.length >= 8, `the plan is still broad (${p.selected_source_ids.join(',')})`);
+  for (const id of ['grants_gov', 'sbir_gov', 'sba_grants', 'propublica_990', 'cof_locator']) {
+    assert.equal(decisionOf(p, id).selected, true, `${id} stays open for a research org`);
+  }
 });
 
 test('a congregation keeps the sacred-places lanes through its DISTINCTIVE church identity — and still never gets the pet charities', () => {
