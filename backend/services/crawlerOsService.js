@@ -931,6 +931,19 @@ export async function runProfileDiscoveryLive({ db = getDb(), profileId, fetcher
     /* match-decision integrity is also re-asserted by the boot invariant net */
   }
 
+  // ROBERT SEARCHES THE PREPOPULATED ITEM LIST WITHOUT BEING ASKED (owner
+  // directive 2026-09-05): derive the profile's needs plan (program vehicle,
+  // venture items, ...) and run the item search for its open needs, persisting
+  // the answer beside the plan. Best-effort and bounded; never fails the crawl.
+  try {
+    if (!dryRun && String(ctx?.profile?.created_by ?? '') !== 'agent:amy') {
+      const { runNeedsPlanAutoSearch } = await import('./needs/needsPlanAutoSearch.js');
+      await runNeedsPlanAutoSearch(db, { profileId, profileContext: ctx, trigger: 'post_crawl' });
+    }
+  } catch {
+    /* the automatic item search must never fail the crawl */
+  }
+
   return { run, persisted, thesis, opportunities };
 }
 

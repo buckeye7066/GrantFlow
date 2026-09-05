@@ -234,6 +234,103 @@ const ORG_NEED_DEFINITIONS = Object.freeze({
     is_capital: false,
     is_operational: true,
   },
+  // ── PREPOPULATED ITEM NEEDS (owner directive 2026-09-05) ────────────────
+  // "A nonprofit needing a 15-passenger van; an army vet in West Virginia
+  // starting a food truck needs licenses, a truck, product, etc." These are the
+  // concrete PURCHASABLE things a profile of that shape needs, so Robert can
+  // start searching for them without anyone typing them.
+  program_vehicle: {
+    code: 'program_vehicle',
+    label: 'Program vehicle (15-passenger van / minibus)',
+    description:
+      'A passenger van or minibus to transport clients, youth, seniors or volunteers for the organization\'s own programs — outreach, meal delivery, field trips, worship or shuttle service.',
+    synonyms: ['15-passenger van', '15 passenger van', 'passenger van', 'minibus', 'church van', 'ministry van', 'program van', 'shuttle van', 'transport van', 'wheelchair accessible van'],
+    related_entity_types: ['nonprofit', 'church', 'ministry', 'school', 'government'],
+    disallowed_entity_types: ['individual'],
+    funding_categories: [FUNDING_CATEGORY.GRANT, FUNDING_CATEGORY.IN_KIND ?? FUNDING_CATEGORY.GRANT],
+    example_search_terms: ['15 passenger van grant nonprofit', 'vehicle grant nonprofit transportation program', 'church van donation program', 'minibus grant youth program'],
+    scoring_hint: 'programs_that_transport_people',
+    is_capital: true,
+    is_operational: false,
+  },
+  mobile_food_unit: {
+    code: 'mobile_food_unit',
+    label: 'Food truck / mobile food unit',
+    description: 'The truck or trailer itself — purchase, build-out or lease of a mobile food unit.',
+    synonyms: ['food truck', 'food trailer', 'mobile food unit', 'mobile kitchen', 'concession trailer', 'catering truck'],
+    related_entity_types: ['business', 'individual'],
+    disallowed_entity_types: [],
+    funding_categories: [FUNDING_CATEGORY.GRANT, FUNDING_CATEGORY.LOAN],
+    example_search_terms: ['food truck startup grant', 'food truck small business loan program', 'veteran food truck business grant', 'mobile food vendor startup funding'],
+    scoring_hint: 'food_truck_startups',
+    is_capital: true,
+    is_operational: false,
+  },
+  commissary_kitchen: {
+    code: 'commissary_kitchen',
+    label: 'Commissary / commercial kitchen access',
+    description: 'The licensed commissary or commercial kitchen a mobile food business must operate from.',
+    synonyms: ['commissary kitchen', 'commercial kitchen', 'shared kitchen', 'kitchen incubator', 'commissary'],
+    related_entity_types: ['business', 'individual'],
+    disallowed_entity_types: [],
+    funding_categories: [FUNDING_CATEGORY.GRANT, FUNDING_CATEGORY.LOAN],
+    example_search_terms: ['commissary kitchen grant small food business', 'kitchen incubator program food entrepreneurs', 'shared commercial kitchen assistance'],
+    scoring_hint: 'food_businesses',
+    is_capital: false,
+    is_operational: true,
+  },
+  mobile_vendor_permits: {
+    code: 'mobile_vendor_permits',
+    label: 'Mobile food vendor licences & health permits',
+    description: 'Health department permit, mobile food vendor licence, food handler / manager certification, fire inspection and the business licence a mobile food business needs before its first sale.',
+    synonyms: ['mobile food vendor license', 'mobile food vendor permit', 'health permit', 'food service permit', 'food handler certificate', 'servsafe', 'food manager certification', 'vendor permit'],
+    related_entity_types: ['business', 'individual'],
+    disallowed_entity_types: [],
+    funding_categories: [FUNDING_CATEGORY.GRANT, FUNDING_CATEGORY.OFTEN_NOT_FUNDABLE],
+    example_search_terms: ['food vendor permit fee assistance', 'small business license fee grant food truck', 'servsafe certification scholarship', 'mobile food vendor licensing assistance program'],
+    scoring_hint: 'startup_and_early_stage_orgs',
+    is_capital: false,
+    is_operational: true,
+  },
+  commercial_kitchen_equipment: {
+    code: 'commercial_kitchen_equipment',
+    label: 'Commercial kitchen equipment',
+    description: 'Fryers, griddles, refrigeration, generators, fire suppression, sinks and serving equipment for a food business.',
+    synonyms: ['commercial kitchen equipment', 'restaurant equipment', 'fryer', 'griddle', 'commercial refrigerator', 'generator', 'fire suppression system', 'food truck equipment'],
+    related_entity_types: ['business', 'individual', 'nonprofit'],
+    disallowed_entity_types: [],
+    funding_categories: [FUNDING_CATEGORY.GRANT, FUNDING_CATEGORY.LOAN],
+    example_search_terms: ['restaurant equipment grant small business', 'food truck equipment financing program', 'commercial kitchen equipment grant'],
+    scoring_hint: 'food_businesses',
+    is_capital: true,
+    is_operational: false,
+  },
+  inventory_product: {
+    code: 'inventory_product',
+    label: 'Initial inventory / product',
+    description: 'The first stock of ingredients, product or merchandise a new business needs before revenue starts.',
+    synonyms: ['initial inventory', 'starting inventory', 'product inventory', 'ingredients', 'merchandise', 'stock', 'supplies to sell'],
+    related_entity_types: ['business', 'individual'],
+    disallowed_entity_types: [],
+    funding_categories: [FUNDING_CATEGORY.GRANT, FUNDING_CATEGORY.LOAN],
+    example_search_terms: ['small business inventory grant startup', 'startup inventory financing program', 'microgrant new business inventory'],
+    scoring_hint: 'startup_and_early_stage_orgs',
+    is_capital: false,
+    is_operational: true,
+  },
+  pos_system: {
+    code: 'pos_system',
+    label: 'Point-of-sale system',
+    description: 'Card reader / POS tablet and payment processing setup for a retail or food business.',
+    synonyms: ['point of sale', 'pos system', 'card reader', 'payment processing', 'square reader', 'pos tablet'],
+    related_entity_types: ['business', 'individual'],
+    disallowed_entity_types: [],
+    funding_categories: [FUNDING_CATEGORY.GRANT, FUNDING_CATEGORY.IN_KIND ?? FUNDING_CATEGORY.GRANT],
+    example_search_terms: ['small business technology grant point of sale', 'free pos system program small business', 'startup technology grant retail'],
+    scoring_hint: 'startup_and_early_stage_orgs',
+    is_capital: true,
+    is_operational: false,
+  },
   data_infrastructure: {
     code: 'data_infrastructure',
     label: 'IT & research data infrastructure',
@@ -302,6 +399,7 @@ const MISSION_BLUEPRINT = Object.freeze([
   'capital_campaign',
   'donor_support_private',
   'community_outreach',
+  'program_vehicle',
 ])
 
 const PUBLIC_BLUEPRINT = Object.freeze([
@@ -362,6 +460,24 @@ const BUSINESS_BLUEPRINT = Object.freeze([
  * lab that reports no clinical testing and holds no scheduled compounds should
  * not be told it needs CLIA or a DEA licence.
  */
+/**
+ * VENTURE — a business, or a PERSON who declares a business venture in the
+ * structured `small_business_details` / `occupation` fields (the West Virginia
+ * veteran starting a food truck). The food-truck items are CONDITIONAL on the
+ * declared venture naming mobile food (see CONDITIONAL_NEEDS), so a consulting
+ * startup is never offered a commissary kitchen.
+ */
+const VENTURE_BLUEPRINT = Object.freeze([
+  ...BUSINESS_BLUEPRINT,
+  'inventory_product',
+  'pos_system',
+  'mobile_food_unit',
+  'commissary_kitchen',
+  'mobile_vendor_permits',
+  'commercial_kitchen_equipment',
+])
+export { VENTURE_BLUEPRINT }
+
 const RESEARCH_LAB_BLUEPRINT = Object.freeze([
   'operating_licensing',
   'federal_registration',
@@ -395,7 +511,7 @@ const NEED_BLUEPRINTS = Object.freeze({
     'facilities_repair', 'safety_upgrades', 'technology', 'utilities_support', 'disaster_recovery',
   ]),
   food_pantry: Object.freeze([
-    'food_programs', 'equipment', 'vehicles', 'facility_space', 'staffing_salary',
+    'food_programs', 'equipment', 'vehicles', 'program_vehicle', 'facility_space', 'staffing_salary',
     'working_capital', 'utilities_support', 'technology', 'business_insurance', 'donor_support_private',
   ]),
   library: Object.freeze([
@@ -404,7 +520,7 @@ const NEED_BLUEPRINTS = Object.freeze({
   ]),
   church: Object.freeze([
     'facilities_repair', 'facility_space', 'utilities_support', 'accessibility_upgrades', 'safety_upgrades',
-    'vehicles', 'technology', 'program_operations', 'food_programs', 'denomination_support',
+    'vehicles', 'program_vehicle', 'technology', 'program_operations', 'food_programs', 'denomination_support',
     'donor_support_private', 'business_insurance',
   ]),
 })
@@ -415,7 +531,7 @@ const GROUP_BLUEPRINTS = Object.freeze([
   { key: 'public', types: PUBLIC_ORG_TYPES, needs: PUBLIC_BLUEPRINT },
   { key: 'education', types: EDUCATION_ORG_TYPES, needs: EDUCATION_BLUEPRINT },
   { key: 'mission', types: MISSION_ORG_TYPES, needs: MISSION_BLUEPRINT },
-  { key: 'business', types: BUSINESS_TYPES, needs: BUSINESS_BLUEPRINT },
+  { key: 'business', types: BUSINESS_TYPES, needs: VENTURE_BLUEPRINT },
   { key: 'legacy_org', types: LEGACY_ORG_TYPES, needs: ORG_BASELINE },
 ])
 
@@ -426,7 +542,33 @@ export { NEED_BLUEPRINTS, GROUP_BLUEPRINTS, ORG_BASELINE }
  * "you got the research-lab list because your profile type is research_lab"
  * rather than presenting an unexplained list.
  */
-export function resolveBlueprint(rawProfileType) {
+/**
+ * A PERSON declares a business venture through STRUCTURED fields only —
+ * `small_business_details` (business_name / naics_code / business_type /
+ * industry / business_stage / planned_business) or `occupation.small_business_owner`.
+ * Prose (`notes`, narrative) is never read: the West Virginia veteran who
+ * "wants to start a food truck" declares it by naming the business, not by
+ * mentioning trucks in an essay.
+ */
+const VENTURE_TEXT_FIELDS = Object.freeze(['business_name', 'naics_code', 'business_type', 'industry', 'business_stage', 'planned_business', 'venture_type', 'business_description'])
+const NON_VENTURE_VALUES = new Set(['', 'none', 'n/a', 'na', 'no', 'unknown', 'not applicable', '-', 'false'])
+
+export function declaresVenture(sections = {}) {
+  const sbd = sections?.small_business_details
+  const occ = sections?.occupation
+  const details = sbd && typeof sbd === 'object' && !Array.isArray(sbd) ? sbd : {}
+  const occupation = occ && typeof occ === 'object' && !Array.isArray(occ) ? occ : {}
+  for (const field of VENTURE_TEXT_FIELDS) {
+    const value = details[field]
+    if (typeof value === 'string' && !NON_VENTURE_VALUES.has(value.trim().toLowerCase())) return { declared: true, field: `small_business_details.${field}`, value: value.trim() }
+    if (typeof value === 'number' && Number.isFinite(value) && value > 0) return { declared: true, field: `small_business_details.${field}`, value: String(value) }
+  }
+  if (details.startup === true || details.planning_to_start === true) return { declared: true, field: 'small_business_details.startup', value: true }
+  if (occupation.small_business_owner === true) return { declared: true, field: 'occupation.small_business_owner', value: true }
+  return { declared: false, field: null, value: null }
+}
+
+export function resolveBlueprint(rawProfileType, sections = null) {
   const type = canonicalizeProfileTypeId(rawProfileType) || String(rawProfileType ?? '').trim().toLowerCase()
   if (!type) return { key: null, source: 'none', codes: [], profile_type: null }
 
@@ -441,9 +583,15 @@ export function resolveBlueprint(rawProfileType) {
   if (isOrganizationProfileType(type)) {
     return { key: 'org_baseline', source: 'org_baseline', codes: [...ORG_BASELINE], profile_type: type }
   }
-  // Person profiles deliberately get NO org blueprint. Their needs come from
-  // `config/profileItemNeeds.js`, which reads person-shaped fields. Returning an
-  // empty list here (rather than a wrong one) is the honest answer.
+  // A PERSON who declares a venture gets the venture list — the owner's
+  // "army vet in West Virginia starting a food truck" (2026-09-05).
+  const venture = sections ? declaresVenture(sections) : { declared: false }
+  if (venture.declared) {
+    return { key: 'venture', source: 'declared_venture', codes: [...VENTURE_BLUEPRINT], profile_type: type, evidence: venture.field }
+  }
+  // Person profiles otherwise deliberately get NO org blueprint. Their needs
+  // come from `config/profileItemNeeds.js`, which reads person-shaped fields.
+  // Returning an empty list here (rather than a wrong one) is the honest answer.
   return { key: null, source: 'not_an_organization', codes: [], profile_type: type }
 }
 
@@ -454,6 +602,10 @@ export function resolveBlueprint(rawProfileType) {
 // Distinct from suppression. Suppression means "you already have it".
 // Conditional means "this need may not apply to you at all". Both are reported
 // separately so neither can masquerade as the other.
+
+/** Structured signals that a venture is MOBILE FOOD (NAICS 722330 = mobile food services). */
+const MOBILE_FOOD_SIGNALS = Object.freeze(['food truck', 'food trailer', 'mobile food', 'mobile kitchen', 'concession trailer', 'catering truck', 'mobile vending', '722330'])
+export { MOBILE_FOOD_SIGNALS }
 
 const CONDITIONAL_NEEDS = Object.freeze({
   clinical_lab_certification: {
@@ -470,6 +622,16 @@ const CONDITIONAL_NEEDS = Object.freeze({
     reason: 'Only applies to congregations affiliated with a denomination.',
     signals: ['denomination', 'diocese', 'synod', 'presbytery', 'conference', 'convention', 'district', 'archdiocese'],
   },
+  program_vehicle: {
+    reason: 'Only applies to organizations whose programs transport people or deliver goods.',
+    signals: ['transport', 'transportation', 'passenger van', 'church van', 'ministry van', 'shuttle', 'deliver', 'delivery', 'pickup', 'pick-up', 'field trip', 'youth group', 'youth ministry', 'youth program', 'outreach', 'meals on wheels', 'mobile ministry', 'bus ministry', 'senior center', 'day program'],
+  },
+  mobile_food_unit: { reason: 'Only applies to a declared mobile food venture.', signals: MOBILE_FOOD_SIGNALS },
+  commissary_kitchen: { reason: 'Only applies to a declared mobile food venture.', signals: MOBILE_FOOD_SIGNALS },
+  mobile_vendor_permits: { reason: 'Only applies to a declared mobile food venture.', signals: MOBILE_FOOD_SIGNALS },
+  commercial_kitchen_equipment: { reason: 'Only applies to a declared food venture.', signals: [...MOBILE_FOOD_SIGNALS, 'restaurant', 'cafe', 'bakery', 'catering', 'soup kitchen', 'community kitchen'] },
+  inventory_product: { reason: 'Only applies to a venture that sells product.', signals: [...MOBILE_FOOD_SIGNALS, 'retail', 'store', 'shop', 'boutique', 'merchandise', 'product', 'inventory', 'restaurant', 'catering', 'bakery', 'e-commerce', 'ecommerce', 'wholesale'] },
+  pos_system: { reason: 'Only applies to a venture that sells to customers.', signals: [...MOBILE_FOOD_SIGNALS, 'retail', 'store', 'shop', 'boutique', 'restaurant', 'catering', 'bakery', 'salon', 'point of sale', 'customers'] },
 })
 
 export { CONDITIONAL_NEEDS }
@@ -523,6 +685,26 @@ const SATISFACTION_RULES = Object.freeze({
   ],
   data_infrastructure: [
     { kind: 'list_any', section: 'organization_details', field: 'equipment_owned', keywords: ['lims', 'eln', 'server', 'storage array', 'data center', 'hpc cluster'] },
+  ],
+  program_vehicle: [
+    { kind: 'list_any', section: 'organization_details', field: 'equipment_owned', keywords: ['passenger van', ' van', 'minibus', 'bus', 'shuttle'] },
+  ],
+  mobile_food_unit: [
+    { kind: 'list_any', section: 'organization_details', field: 'equipment_owned', keywords: ['food truck', 'food trailer', 'concession trailer'] },
+    { kind: 'list_any', section: 'small_business_details', field: 'equipment_owned', keywords: ['food truck', 'food trailer', 'concession trailer'] },
+  ],
+  mobile_vendor_permits: [
+    { kind: 'list_any', section: 'organization_details', field: 'licenses_held', keywords: ['vendor', 'health permit', 'food service', 'servsafe', 'food handler'] },
+    { kind: 'list_any', section: 'small_business_details', field: 'licenses_held', keywords: ['vendor', 'health permit', 'food service', 'servsafe', 'food handler'] },
+    { kind: 'list_any', section: 'small_business_details', field: 'certifications', keywords: ['servsafe', 'food handler', 'food manager', 'health permit', 'vendor'] },
+  ],
+  commercial_kitchen_equipment: [
+    { kind: 'list_any', section: 'organization_details', field: 'equipment_owned', keywords: ['fryer', 'griddle', 'refrigerat', 'kitchen equipment', 'generator'] },
+    { kind: 'list_any', section: 'small_business_details', field: 'equipment_owned', keywords: ['fryer', 'griddle', 'refrigerat', 'kitchen equipment', 'generator'] },
+  ],
+  pos_system: [
+    { kind: 'list_any', section: 'organization_details', field: 'equipment_owned', keywords: ['pos', 'point of sale', 'square', 'card reader'] },
+    { kind: 'list_any', section: 'small_business_details', field: 'equipment_owned', keywords: ['pos', 'point of sale', 'square', 'card reader'] },
   ],
   business_licensing: [
     { kind: 'list_any', section: 'organization_details', field: 'licenses_held', keywords: ['business licen', 'operating permit', 'state licen'] },
@@ -844,7 +1026,7 @@ export function collectUserNeeds(sections) {
  */
 export function deriveOrgNeeds({ profile = {}, sections = {} } = {}) {
   const primaryType = profile?.primary_type ?? null
-  const blueprint = resolveBlueprint(primaryType)
+  const blueprint = resolveBlueprint(primaryType, sections)
 
   const open = []
   const suppressed = []
@@ -910,7 +1092,7 @@ export function deriveOrgNeeds({ profile = {}, sections = {} } = {}) {
   return {
     taxonomy_version: ORG_NEEDS_TAXONOMY_VERSION,
     profile_type: blueprint.profile_type,
-    blueprint: { key: blueprint.key, source: blueprint.source },
+    blueprint: { key: blueprint.key, source: blueprint.source, ...(blueprint.evidence ? { evidence: blueprint.evidence } : {}) },
     candidate_count: candidates.length,
     open,
     suppressed,

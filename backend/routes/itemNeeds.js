@@ -31,6 +31,7 @@ import { loadProfileContext } from '../services/profileHelpers.js'
 import { deriveProfileItemNeeds, parseDeclaredItemList } from '../config/profileItemNeeds.js'
 import { resolvePlanClasses, resolveCoverageConditionClasses, annotateItemsWithCoverage } from '../config/planCoverage.js'
 import { searchItemNeeds, ITEM_SEARCH_MAX_ITEMS } from '../services/itemNeedSearch.js'
+import { readNeedsPlanAutoSearch } from '../services/needs/needsPlanAutoSearch.js'
 import { searchGreenHomeNoCostPrograms } from '../services/greenHomeNoCostSearch.js'
 import { deriveOrgNeeds } from '../services/needs/orgNeedsTaxonomy.js'
 import { probeSearchProviderHealth } from '../services/searchProviderHealth.js'
@@ -162,12 +163,17 @@ router.get('/:profileId/needs-plan', ensureAuth, standardRateLimiter, async (req
     if (!ctx.profile) return res.status(404).json({ error: 'Profile not found' })
 
     const plan = deriveOrgNeeds({ profile: ctx.profile, sections: ctx.sections ?? {} })
+    // Robert's last AUTOMATIC search of this plan (runs after every live crawl
+    // of the profile — needsPlanAutoSearch.js), so the list arrives with
+    // funding sources already found rather than as an empty checklist.
+    const lastAutoSearch = await readNeedsPlanAutoSearch(req.db, profileId)
     return res.json({
       success: true,
       profile_id: profileId,
       display_name: ctx.profile.display_name ?? null,
       primary_type: ctx.profile.primary_type ?? null,
       ...plan,
+      last_auto_search: lastAutoSearch,
       // Named so the UI can point the owner at the exact boxes that control
       // suppression instead of leaving a vanished need unexplained.
       evidence_fields: [
