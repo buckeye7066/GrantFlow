@@ -7,6 +7,12 @@
  */
 
 export const ANYA_PROFILE_CONTEXT_MAX_CHARS = 30000
+
+/* The working-context block (gaps, pipeline, submission warnings, remembered
+   history) rides alongside the profile snapshot in the same user-role message,
+   so it gets its own smaller budget rather than competing for that one. Anya
+   answering with a truncated gap list beats Anya not answering. */
+export const ANYA_WORKING_CONTEXT_MAX_CHARS = 12000
 export const ANYA_PROFILE_TOOL_MAX_CHARS = 60000
 export const ANYA_APPLICATION_CONTEXT_MAX_CHARS = 45000
 
@@ -176,6 +182,14 @@ export function serializeAnyaApplicationContext(applicationContext = {}, {
   return stringify({
     current_user: applicationContext?.current_user ?? null,
     preferred_language: applicationContext?.preferred_language ?? 'en',
+    /* This tier rebuilds the object from an EXPLICIT key list rather than a
+       spread, so anything not named here is dropped in silence. The working
+       context is kept, and kept deliberately: this is the tier where the
+       profile's SECTIONS have just been emptied, which is precisely when
+       knowing what is missing and what the pipeline is doing matters most. It
+       is also the smallest block here (12k cap against the profile's 30k), so
+       it is not what blew the budget. */
+    profile_working_context: applicationContext?.profile_working_context ?? null,
     active_profile: inventoryOnly,
     accessible_profiles: Array.isArray(applicationContext?.accessible_profiles)
       ? applicationContext.accessible_profiles.slice(0, 20)
