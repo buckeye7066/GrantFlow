@@ -18,7 +18,10 @@ const POPULATION_LANES = [
 function studentThesis(overrides = {}) {
   return {
     applicant_types: ['student', 'individual'],
-    needs: ['education', 'scholarship', 'tuition', 'medical', 'disability', 'programs', 'employment', 'housing', 'childcare', 'agriculture', 'arts_education', 'survivor_benefits', 'aging', 'curriculum'],
+    // COARSE needs only: a population-SPECIFIC need (caregiving, childcare,
+    // agriculture, survivor_benefits, aging) is itself a declaration and
+    // legitimately opens its lane — see POPULATION_NEED_IMPLICATIONS.
+    needs: ['education', 'scholarship', 'tuition', 'medical', 'programs', 'employment', 'housing', 'emergency', 'legal', 'food'],
     location: { state: 'TN', states: ['TN'] },
     declared_health_terms: ['disability'],
     declared_populations: [],
@@ -58,6 +61,14 @@ test('a declared population opens exactly its lanes', () => {
   const medic = plan(studentThesis({ declared_populations: ['health_professions_student'] }));
   assert.equal(decision(medic, 'hrsa_health_workforce').selected, true);
   assert.equal(decision(medic, 'teach_grant').selected, false);
+});
+
+test('a population-specific declared NEED opens its lane (caregiving -> ECF CHOICES; childcare -> CCDF)', () => {
+  const caregiving = plan(studentThesis({ needs: ['medical', 'caregiving'] }));
+  assert.equal(decision(caregiving, 'tn_ecf_choices').selected, true);
+  assert.equal(decision(caregiving, 'ccdf_childcare').selected, false);
+  const childcare = plan(studentThesis({ needs: ['education', 'childcare'] }));
+  assert.equal(decision(childcare, 'ccdf_childcare').selected, true);
 });
 
 test('MISSING is neutral: a thesis without declared_populations is not gated', () => {

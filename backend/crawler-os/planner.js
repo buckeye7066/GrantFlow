@@ -114,6 +114,28 @@ const ORG_APPLICANT_TYPES = new Set([
   'college', 'higher_education_institution', 'library', 'organization', 'farm',
 ]);
 
+/**
+ * A POPULATION-SPECIFIC declared need is itself a declaration of the
+ * population: a household that declares `caregiving` is a caregiver household
+ * for the ECF CHOICES / caregiver-support lanes; `childcare` declares a parent
+ * of young children; `agriculture` a farmer. Coarse needs (education, medical,
+ * employment, programs) imply nothing — that coarse-token admission is the
+ * defect this gate closes.
+ */
+const POPULATION_NEED_IMPLICATIONS = Object.freeze({
+  caregiver: ['caregiving'],
+  kinship_caregiver: ['kinship_care'],
+  disabled: ['disability', 'assistive_technology'],
+  older_adult: ['aging', 'senior'],
+  military_family: ['veterans', 'military_transition', 'military_spouse_support', 'active_duty_support'],
+  survivor: ['survivor_benefits'],
+  farmer: ['agriculture'],
+  job_seeker: ['workforce', 'job_training'],
+  parent_of_young_children: ['childcare'],
+  foster_youth: ['foster_care'],
+  refugee: ['refugee_services'],
+});
+
 function servesDeclaredPopulation(source, thesis) {
   const wanted = Array.isArray(source?.populations) ? source.populations : [];
   if (wanted.length === 0) return true;
@@ -122,6 +144,10 @@ function servesDeclaredPopulation(source, thesis) {
   if (applicantTypes.includes('*')) return true;
   if (applicantTypes.some((t) => ORG_APPLICANT_TYPES.has(String(t)))) return true;
   const declared = new Set(thesis.declared_populations.map((v) => String(v)));
+  const needs = new Set((Array.isArray(thesis?.needs) ? thesis.needs : []).map((n) => String(n ?? '').toLowerCase()));
+  for (const [population, impliedBy] of Object.entries(POPULATION_NEED_IMPLICATIONS)) {
+    if (impliedBy.some((need) => needs.has(need))) declared.add(population);
+  }
   return wanted.some((population) => declared.has(String(population)));
 }
 

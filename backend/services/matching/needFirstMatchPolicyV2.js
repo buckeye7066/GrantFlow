@@ -666,6 +666,107 @@ const CHILD_ONLY_PROGRAM_RX = /\bkatie beckett\b|\b(?:children|kids|youth|minors
  */
 const ADULT_LEARNER_PROGRAM_RX = /\b(tennessee reconnect|tcat reconnect|reconnect (?:grant|scholarship)|adult learners?|adult students?|non-?traditional students?|nontraditional|returning (?:adult )?students?|(?:age|aged|ages) 2[4-9]\+?(?: and| or)? (?:older|over|up)|2[4-9] (?:years|years of age) (?:and|or) older|independent students? (?:aged|age|who are) 2[4-9])\b/i
 
+/**
+ * FIELD-OF-STUDY restriction. A departmental scholarship names its discipline
+ * in its title ("Nancy J. Fann Business Education Scholarship", "Tommy T.
+ * Martin Chair of Insurance Scholarship", "Media Scholarship", a music
+ * campaign, "ASPIRE to Teach"); a student who DECLARES a major in another
+ * discipline cannot hold it. A forensic-science student's ready set carried
+ * seven of these at ACCEPT 73-81 with "Institution match: College of Business"
+ * (2026-09-05). Silence is neutral: no declared major, no rule; a title that
+ * names no discipline, no rule.
+ */
+const DISCIPLINE_LEXICON = Object.freeze({
+  business: /\b(business|accounting|finance|financial services|insurance|actuarial|marketing|economics|entrepreneurship|mba|management|real estate|supply chain|hospitality management)\b/i,
+  education: /\b(teacher|teachers|teaching|teach|educators?|education majors?|early childhood|special education|elementary education|secondary education)\b/i,
+  music: /\b(music|musicians?|band|choir|choral|orchestra|vocal|instrumental|note counts)\b/i,
+  arts: /\b(fine arts?|studio art|visual arts?|theatre|theater|dance|graphic design|fashion design|interior design|film|photography)\b/i,
+  media: /\b(media|journalism|communications?|broadcasting|public relations|advertising)\b/i,
+  health: /\b(nursing|nurses?|pre-?med|medical|medicine|health sciences?|dental|dentistry|pharmacy|physical therapy|occupational therapy|respiratory|paramedic|ems|emergency medical|allied health|radiology|sonography)\b/i,
+  engineering: /\b(engineering|engineers?)\b/i,
+  computing: /\b(computer science|software|information technology|cybersecurity|data science|computing|informatics)\b/i,
+  agriculture: /\b(agriculture|agricultural|agribusiness|animal science|horticulture|agronomy|equine)\b/i,
+  law: /\b(law school|legal studies|pre-?law|paralegal)\b/i,
+  science: /\b(science|sciences|biology|chemistry|physics|forensic|forensics|criminal justice|criminology|stem|mathematics|math|geology|astronomy|biochemistry)\b/i,
+  aviation: /\b(aviation|aerospace|pilot)\b/i,
+  social_work: /\b(social work|counseling|psychology|human services)\b/i,
+  architecture: /\b(architecture|construction management|urban planning)\b/i,
+})
+// A declared major implies the broader disciplines it belongs to.
+const DISCIPLINE_IMPLICATIONS = Object.freeze({
+  science: ['science'],
+  health: ['health', 'science'],
+  engineering: ['engineering', 'science'],
+  computing: ['computing', 'science'],
+})
+const DISCIPLINE_RESTRICTION_RX = /\b(?:majoring in|majors? in|students? (?:in|of) the|college of|school of|department of|enrolled in the|pursuing a (?:degree|major) in|for (?:[a-z-]+ )?(?:majors|students))\b/i
+
+function disciplinesIn(text) {
+  const out = new Set()
+  const haystack = String(text ?? '')
+  if (!haystack) return out
+  for (const [key, rx] of Object.entries(DISCIPLINE_LEXICON)) {
+    if (rx.test(haystack)) out.add(key)
+  }
+  return out
+}
+
+function profileDeclaredMajorText(profileContext = {}, profileNorm = null) {
+  const education = asObject(profileContext?.sections?.education)
+  const portal = asObject(profileContext?.sections?.student_portal_plan)
+  const parts = [
+    education.intended_major, education.major, education.field_of_study, education.program,
+    portal.major, portal.intended_major,
+    profileNorm?.education?.intendedMajor, profileNorm?.education?.major,
+  ].filter((v) => typeof v === 'string' && v.trim())
+  return parts.join(' ')
+}
+
+const STUDENT_AID_TITLE_RX = /\b(scholarships?|fellowships?|tuition|book awards?|student awards?|stipends?|assistantships?)\b/i
+
+function disciplineMismatch(profileContext, profileNorm, targetingText, opportunity = {}) {
+  // Only STUDENT AID carries a departmental restriction; a housing-counseling
+  // page that says "counseling" is not a social-work scholarship.
+  if (!STUDENT_AID_TITLE_RX.test(opportunityTitleText(opportunity)) && !DISCIPLINE_RESTRICTION_RX.test(targetingText)) return null
+  const majorText = profileDeclaredMajorText(profileContext, profileNorm)
+  if (!majorText) return null
+  const declared = new Set()
+  for (const key of disciplinesIn(majorText)) {
+    for (const implied of DISCIPLINE_IMPLICATIONS[key] ?? [key]) declared.add(implied)
+  }
+  if (declared.size === 0) return null
+  const title = opportunityTitleText(opportunity)
+  const url = String(opportunity?.apply_url ?? opportunity?.application_url ?? opportunity?.source_url ?? opportunity?.url ?? '')
+  // The TITLE (and the URL slug) must name the discipline; prose alone is
+  // not a restriction unless it carries a restriction phrase.
+  const titled = disciplinesIn(`${title} ${url.replace(/[-_/]+/g, ' ')}`)
+  const restricted = DISCIPLINE_RESTRICTION_RX.test(targetingText) ? disciplinesIn(targetingText) : new Set()
+  const wanted = new Set([...titled, ...restricted])
+  if (wanted.size === 0) return null
+  for (const key of wanted) if (declared.has(key)) return null
+  return `Field-of-study restriction (${[...wanted].join('/')}) does not fit the declared major "${majorText.trim()}"`
+}
+
+/**
+ * K-12 programs (education savings accounts, school-choice vouchers, private
+ * school tuition) for a student who is provably POST-SECONDARY (enrolled at a
+ * college/university or holding an associate degree or higher). A college
+ * freshman held the Education Freedom Scholarship Act at ACCEPT 73 (2026-09-05).
+ */
+const K12_PROGRAM_RX = /\b(k-?12|education savings? accounts?|education freedom scholarship|school choice|private school tuition|elementary school|middle school|high school students? only|grades? (?:k|[1-9]|1[0-2])\b)/i
+const POST_SECONDARY_INSTITUTION_RX = /\b(university|college|community college|institute of technology|technical college|state tech)\b/i
+const POST_SECONDARY_LEVEL_RX = /\b(associate|bachelor|master|doctor|phd|graduate)\b/i
+
+function profileProvablyPostSecondary(profileContext = {}, profileNorm = null) {
+  if (profileNorm?.isCollegeStudent === true) return true
+  const education = asObject(profileContext?.sections?.education)
+  if (POST_SECONDARY_INSTITUTION_RX.test(String(education.current_institution ?? ''))) return true
+  if (POST_SECONDARY_LEVEL_RX.test(String(education.highest_level ?? ''))) return true
+  const applications = asObject(profileContext?.sections?.university_applications)
+  const list = Array.isArray(applications.applications) ? applications.applications : []
+  return list.some((a) => /committed|enrolled|accepted/i.test(String(a?.status ?? '')))
+}
+
 function profileProvablyTraditionalAge(profileContext = {}, profileNorm = null) {
   const age = profileAgeYears(profileContext, profileNorm)
   return Number.isFinite(age) && age > 0 && age < 24
@@ -689,6 +790,11 @@ function positivePopulationMismatches(profileContext, profileNorm, targetingText
   }
   if (ADULT_LEARNER_PROGRAM_RX.test(`${title} ${targetingText}`) && profileProvablyTraditionalAge(profileContext, profileNorm)) {
     out.push('Adult-learner / nontraditional-student program does not fit a profile whose stated age is under 24')
+  }
+  const discipline = disciplineMismatch(profileContext, profileNorm, targetingText, opportunity)
+  if (discipline) out.push(discipline)
+  if (K12_PROGRAM_RX.test(`${title} ${targetingText}`) && profileProvablyPostSecondary(profileContext, profileNorm)) {
+    out.push('K-12 program does not fit a profile that is provably enrolled in post-secondary education')
   }
   if ((MILITARY_TITLE_RX.test(title) || MILITARY_RESTRICTION_RX.test(targetingText)) &&
       !/\b(civilian|everyone|all applicants|general public|and their families)\b/i.test(title) &&

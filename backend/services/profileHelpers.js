@@ -1002,6 +1002,62 @@ export function hasTextValue(value) {
   return typeof value === 'string' && value.trim().length > 0 && !SENTINEL_TEXT_RX.test(value)
 }
 
+/**
+ * OWNING-SECTION CONTRADICTION (owner finding 2026-09-05). A live student
+ * profile carried `demographics.disability_status = "Has disability"` and
+ * `government_assistance.ssdi_recipient_self = true`, while her medical
+ * sections positively stated no disability (`disabilities: []`,
+ * `disability_type: []`, "no chronic illnesses or disabilities noted") and
+ * the assistance notes said the SSDI was a DEPENDENT-child benefit that had
+ * ENDED. She is not disabled; she is the child of an SSDI recipient. The
+ * reader took the demographic flag at face value and sent her down the SSA
+ * disability, TennCare waiver, vocational-rehab and Katie Beckett lanes.
+ * 3 of 51 production profiles carry this exact contradiction.
+ *
+ * Rule: the section that OWNS a fact (medical for disability) outranks a
+ * summary flag elsewhere. A disability claim stands only when no owning
+ * section positively denies it; a denial is an explicit empty list plus
+ * denying prose, never silence.
+ */
+function medicalSectionsAffirmDisability(sections = {}) {
+  const hm = asObjectLoose(sections?.health_medical)
+  const med = asObjectLoose(sections?.medical)
+  const mh = asObjectLoose(sections?.medical_history)
+  if (Array.isArray(med.disabilities) && med.disabilities.length > 0) return true
+  if (Array.isArray(hm.disability_type) && hm.disability_type.length > 0) return true
+  if ([hm.wheelchair_user, hm.visual_impairment, hm.hearing_impairment, hm.tbi_survivor, hm.chronic_illness, hm.mental_health_condition].some((v) => v === true)) return true
+  if (hasTextValue(mh.primary_condition)) return true
+  if (Array.isArray(mh.secondary_conditions) && mh.secondary_conditions.length > 0) return true
+  if (Array.isArray(mh.dme_needed) && mh.dme_needed.length > 0) return true
+  if (hasTextValue(hm.support_needs_level) && /high|critical|moderate/i.test(String(hm.support_needs_level))) return true
+  return false
+}
+
+function medicalSectionsDenyDisability(sections = {}) {
+  const hm = asObjectLoose(sections?.health_medical)
+  const med = asObjectLoose(sections?.medical)
+  const mh = asObjectLoose(sections?.medical_history)
+  const emptyLists = (Array.isArray(med.disabilities) && med.disabilities.length === 0)
+    || (Array.isArray(hm.disability_type) && hm.disability_type.length === 0)
+  const prose = [mh.notes, hm.notes, med.notes].map((v) => String(v ?? '').toLowerCase()).join(' ')
+  const denies = /no (?:chronic illnesses or )?disabilit|no confirmed medical conditions|no disabilities noted|no (?:known )?disabilit/.test(prose)
+  return emptyLists && (denies || (Array.isArray(med.disabilities) && Array.isArray(hm.disability_type)))
+}
+
+/** SSDI named as a DEPENDENT-child benefit (or one that ended) is not the applicant's own disability benefit. */
+function ssdiIsDependentOrEnded(sections = {}) {
+  const gov = asObjectLoose(sections?.government_assistance)
+  const med = asObjectLoose(sections?.medical)
+  const text = [gov.other_programs, gov.assistance_notes, med.notes].map((v) => String(v ?? '').toLowerCase()).join(' ')
+  return /ssdi[^.]{0,60}(?:dependent|as dependent|child benefit|ended|aged out)|(?:dependent|child)[^.]{0,40}ssdi/.test(text)
+}
+
+function asObjectLoose(value) {
+  if (!value) return {}
+  if (typeof value === 'string') { try { const parsed = JSON.parse(value); return parsed && typeof parsed === 'object' ? parsed : {} } catch { return {} } }
+  return typeof value === 'object' && !Array.isArray(value) ? value : {}
+}
+
 function normalizeString(value) {
   if (typeof value !== 'string') return ''
   const normalized = value.trim().toLowerCase()
@@ -1359,6 +1415,8 @@ export function buildProfileSignals({ profile, sections, asOf = null, documents 
   // thing that distinguishes them, and it is known at the write site — so record it
   // here rather than trying to re-derive intent downstream from a bare string.
   const healthConditionSet = new Set()  // diagnoses: conditions[], medical_history, disease flags
+  // Positive flags the owning section contradicts (see medicalSectionsDenyDisability).
+  const dataConflicts = []
   const healthSupportSet = new Set()    // support needs / disability descriptors / support flags
   const familySet = new Set()
   const occupationSet = new Set()
@@ -1761,7 +1819,11 @@ export function buildProfileSignals({ profile, sections, asOf = null, documents 
       transportation: ['transportation', 'vehicle', 'car', 'bus', 'gas money'],
       childcare: ['childcare', 'daycare', 'child care', 'after school'],
       disability: ['disability', 'wheelchair', 'adaptive', 'assistive'],
-      business: ['business', 'startup', 'equipment', 'inventory'],
+      // 'equipment'/'inventory' minted a BUSINESS need for a church whose
+      // funding_needs named facility equipment (2026-09-05); they are the
+      // equipment need, not a business identity.
+      business: ['business', 'startup', 'small business', 'inventory'],
+      equipment: ['equipment'],
       legal: ['legal', 'attorney', 'court'],
     }
     // Whole-word only: 'rent' ⊂ "parent", 'car' ⊂ "care", 'bus' ⊂ "business"
@@ -1791,7 +1853,12 @@ export function buildProfileSignals({ profile, sections, asOf = null, documents 
       if (/medicaid/i.test(norm)) { assistanceSet.add('medicaid') }
       if (/medicare/i.test(norm)) { assistanceSet.add('medicare') }
       if (/ssi(?!d)/i.test(norm)) { assistanceSet.add('ssi_recipient'); needs.add('disability') }
-      if (/ssdi/i.test(norm)) { assistanceSet.add('ssdi_recipient'); needs.add('disability') }
+      if (/ssdi/i.test(norm)) {
+        if (ssdiIsDependentOrEnded(sections)) {
+          dataConflicts.push({ field: 'medical.assistance_programs', value: 'SSDI', reason: 'notes say the SSDI is a dependent-child benefit or has ended' })
+          assistanceSet.add('ssdi_household')
+        } else { assistanceSet.add('ssdi_recipient'); needs.add('disability') }
+      }
       if (/section.?8|housing.?voucher/i.test(norm)) { assistanceSet.add('section8_housing'); needs.add('housing') }
       if (/wic/i.test(norm)) { assistanceSet.add('wic'); needs.add('food') }
       if (/liheap|energy.?assist/i.test(norm)) { assistanceSet.add('liheap'); needs.add('utilities') }
@@ -2067,11 +2134,16 @@ export function buildProfileSignals({ profile, sections, asOf = null, documents 
   // Disability status (high-level descriptor) — supplements health_medical section
   if (hasTextValue(demographicsSection.disability_status)) {
     const ds = normalizeString(demographicsSection.disability_status)
-    if (ds && ds !== 'none' && ds !== 'unknown') {
-      healthSet.add('disability')
-      registerKeyword(ds)
-      registerKeyword('disability')
-      needs.add('disability')
+    if (ds && ds !== 'none' && ds !== 'unknown' && !/^(?:no|not disabled|no disability|does not have a disability)$/.test(ds)) {
+      // The medical sections OWN this fact (see medicalSectionsDenyDisability).
+      if (!medicalSectionsAffirmDisability(sections) && medicalSectionsDenyDisability(sections)) {
+        dataConflicts.push({ field: 'demographics.disability_status', value: demographicsSection.disability_status, reason: 'medical sections positively state no disability' })
+      } else {
+        healthSet.add('disability')
+        registerKeyword(ds)
+        registerKeyword('disability')
+        needs.add('disability')
+      }
     }
   }
   // Veteran status (high-level descriptor) — supplements military_service section
@@ -3639,6 +3711,8 @@ export function buildProfileSignals({ profile, sections, asOf = null, documents 
     // and the declared funding_needs field — never from the narrative keyword
     // bag. Empty when the fallback defaulted `needs`.
     needs_structured: needsDefaulted ? new Set() : structuredNeeds,
+    // Summary flags the OWNING section contradicted; surfaced, not asserted.
+    data_conflicts: dataConflicts,
     needs_text_inferred: textInferredNeeds,
     // Provenance-split views of `health` (which stays the union, unchanged).
     // Only `health_conditions` is a fair input to "does a disease lane exist?".

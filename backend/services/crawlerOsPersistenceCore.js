@@ -362,6 +362,10 @@ export function declaredPopulationsFrom({ sections = {}, signals = {}, needs = [
   if ((Number.isFinite(age) && age >= 60) || /\b(senior|older adult|elder(?:ly)?|retire[ed]*|6[0-9]\s*\+|[6-9][0-9]\s*(?:and|or) (?:older|over|up))\b/i.test(ageGroup)
       || has(signals.applicantTypes, 'senior') || has(signals.demographics, 'senior', 'older_adult', 'elderly')) out.add('older_adult')
   if (familyLife.caregiver === true || family.caregiver === true || has(signals.family, 'caregiver') || has(signals.applicantTypes, 'caregiver')) out.add('caregiver')
+  // Disability is owned by the medical sections (profileHelpers reconciles a
+  // contradicted summary flag); the provenance-split health sets carry it.
+  if (has(signals.health_conditions, 'disability') || has(signals.health_support, 'disability') || has(signals.health, 'disability')
+      || has(signals.applicantTypes, 'disabled', 'disabled_adult')) out.add('disabled')
   if (familyLife.kinship_caregiver === true || familyLife.raising_grandchildren === true || familyLife.grandparent_caregiver === true
       || family.raising_grandchildren === true || has(signals.family, 'kinship', 'kinship_caregiver', 'grandfamily', 'grandparent_caregiver')) out.add('kinship_caregiver')
   if (occupation.artist === true || POPULATION_ORG_TERMS_RX.test(String([occupation.job_title, occupation.industry, employment.career_goal].filter(Boolean).join(' ')))

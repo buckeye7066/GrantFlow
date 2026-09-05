@@ -408,6 +408,7 @@ export const SOURCES = Object.freeze([
     // ECONNRESETs automated fetchers; the adapter degrades honestly
     // (FETCH_ERROR), never fabricates.
     source_id: 'tn_ecf_choices',
+    populations: ['disabled', 'caregiver'],
     name: 'TennCare Employment and Community First CHOICES (ECF CHOICES)',
     source_type: 'html',
     trust_tier: TRUST_TIER.OFFICIAL_HTML,
@@ -429,6 +430,7 @@ export const SOURCES = Object.freeze([
     // state's ECF-CHOICES-equivalent. An honest DIRECTORY, so a waiver-family
     // profile outside TN still reaches its own state's program.
     source_id: 'state_hcbs_waivers',
+    populations: ['disabled', 'older_adult', 'caregiver'],
     name: 'Medicaid Home & Community-Based Services (HCBS) waivers by state',
     source_type: 'html',
     trust_tier: TRUST_TIER.OFFICIAL_HTML,
@@ -451,6 +453,7 @@ export const SOURCES = Object.freeze([
     // candidates survive a failed fetch with their honest kind as
     // link_unverified (≠ dead) while the run records fetch_error.
     source_id: 'ssa_disability',
+    populations: ['disabled'],
     name: 'Social Security disability benefits (SSDI / SSI)',
     source_type: 'directory',
     trust_tier: TRUST_TIER.OFFICIAL_HTML,
@@ -496,6 +499,7 @@ export const SOURCES = Object.freeze([
     // assistive technology, job training, and employment support. Reachable only
     // by the state agency locator, so individuals never find them via grant search.
     source_id: 'state_vocational_rehab',
+    populations: ['disabled'],
     name: 'State Vocational Rehabilitation agencies',
     source_type: 'html',
     trust_tier: TRUST_TIER.OFFICIAL_HTML,
