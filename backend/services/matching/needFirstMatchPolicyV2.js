@@ -722,7 +722,7 @@ function profileDeclaredMajorText(profileContext = {}, profileNorm = null) {
   return parts.join(' ')
 }
 
-const STUDENT_AID_TITLE_RX = /\b(scholarships?|fellowships?|tuition|book awards?|student awards?|stipends?|assistantships?)\b/i
+const STUDENT_AID_TITLE_RX = /\b(scholarships?|fellowships?|tuition|book awards?|student awards?|stipends?|assistantships?|emergency funds?|awards?)\b/i
 
 function disciplineMismatch(profileContext, profileNorm, targetingText, opportunity = {}) {
   // Only STUDENT AID carries a departmental restriction; a housing-counseling
