@@ -124,6 +124,9 @@ export const TASK_BLOCKED_STATUSES = Object.freeze([
   'blocked_terms_or_policy',
 ])
 
+/** Closed states a deliberate re-run may re-open when no submission proof exists. */
+export const REOPENABLE_CLOSED_STATUSES = Object.freeze(['completed', 'failed'])
+
 export const TASK_TERMINAL_STATUSES = Object.freeze([
   'submitted',
   'failed',
@@ -649,6 +652,18 @@ export async function ensureApplicationTask(db, {
   // this guard for every task at once, which would turn a safety net into a
   // rubber stamp. See routes/hamilton.js for the single call site that sets it.
   confirmedNewCycle = false,
+  // RE-OPEN A TASK CLOSED WITHOUT PROOF (owner order 2026-09-05). A task that
+  // ended `completed` as a research lead ("found no application form", a
+  // listing decomposition) or `failed` is not a finished APPLICATION — no
+  // portal confirmation exists. Yet the status was terminal for every re-run:
+  // updateApplicationTask's unlessCancelled guard refused the launch
+  // transition and the run ended "task moved to protected state completed"
+  // (prod 2026-09-05: five of six re-selected MTSU/TSAC rows). When a person
+  // deliberately re-selects or retries such a task, re-open it at the
+  // pathway's initial status; a task with VERIFIED external submission proof
+  // is never re-opened, and `submitted`/`cancelled` are untouched. Off for
+  // autonomous scheduler runs so a nightly sweep cannot churn closed leads.
+  reopenClosed = false,
 } = {}) {
   if (!profileId) throw new Error('profileId required')
   if (!opportunityId && !grantId) throw new Error('opportunityId or grantId required')
@@ -717,11 +732,30 @@ export async function ensureApplicationTask(db, {
       }
     }
     if (existing) {
+      let reopenedFrom = null
+      if (reopenClosed && REOPENABLE_CLOSED_STATUSES.includes(existing.status)) {
+        // The predicate scans evidence only for a submitted-shaped status; a
+        // `completed` row that DOES carry a confirmation (run reference,
+        // receipt, confirmation document) must still be recognized, so the
+        // evidence scan runs as if the row were submitted. Evidence decides.
+        // An UNREADABLE proof store is not "no proof": fail closed and leave
+        // the task shut rather than re-open over evidence that could not be read.
+        let proof = null
+        try { proof = await assessTaskSubmissionProof(db, { ...rowToTask(existing), status: 'submitted' }) } catch { proof = null }
+        if (proof && proof.verified_external !== true) reopenedFrom = existing.status
+      }
       // Re-bump the automation metadata when the user re-selects the
       // same source from a different stage so the task picks up the
       // latest classification + selected-from-stage.
       const patch = []
       const params = []
+      if (reopenedFrom) {
+        patch.push('status = ?'); params.push(initialStatus)
+        patch.push('next_retry_at = NULL')
+        patch.push('completed_at = NULL')
+        patch.push('last_agent_message = ?')
+        params.push(`Re-opened for a new Hamilton run (the earlier close as "${reopenedFrom}" held no portal confirmation).`)
+      }
       if (automationType && automationType !== 'unknown' && existing.automation_type !== automationType) {
         patch.push('automation_type = ?'); params.push(automationType)
       }
@@ -738,9 +772,10 @@ export async function ensureApplicationTask(db, {
       // A new denial is always safe. A new grant is not: once a task is at an
       // irreversible/verification boundary or terminal state, a re-POSTed
       // batch must not revive submission intent behind that durable state.
-      const submitIntentCanBeGranted = !SUBMISSION_UNCERTAIN_STATUSES.includes(existing.status)
-        && !TASK_TERMINAL_STATUSES.includes(existing.status)
-        && existing.status !== 'completed'
+      const submitIntentCanBeGranted = Boolean(reopenedFrom)
+        || (!SUBMISSION_UNCERTAIN_STATUSES.includes(existing.status)
+          && !TASK_TERMINAL_STATUSES.includes(existing.status)
+          && existing.status !== 'completed')
       if (
         allowAutoSubmit !== undefined
         && (!allowAutoSubmit || submitIntentCanBeGranted)
@@ -756,6 +791,18 @@ export async function ensureApplicationTask(db, {
         params.push(existing.id)
         const safeNowSql = nowSqlLiteral(db)
         await db.prepare(`UPDATE application_tasks SET ${patch.join(', ')}, updated_at = ${safeNowSql} WHERE id = ?`).run(...params)
+        if (reopenedFrom) {
+          await appendTaskEvent(db, {
+            taskId: existing.id,
+            eventType: 'note',
+            status: initialStatus,
+            step: 'reopened',
+            message: `Re-opened for a new Hamilton run: the earlier "${reopenedFrom}" close held no portal confirmation, so it was not a finished application.`,
+            actorUserId: userId,
+            actorRole: 'agent',
+            details: { previous_status: reopenedFrom, reopened_to: initialStatus },
+          }).catch(() => {})
+        }
         const refreshed = await db.prepare('SELECT * FROM application_tasks WHERE id = ?').get(existing.id)
         return rowToTask(refreshed)
       }
