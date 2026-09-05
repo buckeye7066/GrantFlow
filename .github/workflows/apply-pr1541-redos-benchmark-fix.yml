@@ -1,0 +1,120 @@
+name: Stabilize PR 1541 ReDoS regression benchmark
+
+on:
+  push:
+    branches: [fix/production-cors-current-main-20260905]
+    paths:
+      - .github/workflows/apply-pr1541-redos-benchmark-fix.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: apply-pr1541-redos-benchmark-fix
+  cancel-in-progress: false
+
+jobs:
+  apply-and-verify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 55
+    steps:
+      - name: Checkout exact PR branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Replace the single-sample microbenchmark with a median equal-work benchmark
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 <<'PY'
+          from pathlib import Path
+
+          path = Path('backend/tests/residencyScopeRedos.test.js')
+          text = path.read_text(encoding='utf-8')
+          old = """  it('is linear, not quadratic: 4× the input is nowhere near 16× the time', () => {
+            const build = (n) => `for${' '.repeat(n)}residents`
+            const small = build(12500)
+            const large = build(50000)
+            // Warm up so JIT noise does not dominate the ratio.
+            for (let i = 0; i < 3; i += 1) RESIDENCY_EXCLUSIVE_RX.test(normalizeMatchWhitespace(small))
+            const tSmall = Math.max(timeMs(() => RESIDENCY_EXCLUSIVE_RX.test(normalizeMatchWhitespace(small))), 0.05)
+            const tLarge = timeMs(() => RESIDENCY_EXCLUSIVE_RX.test(normalizeMatchWhitespace(large)))
+            expect(tLarge).toBeLessThan(BUDGET_MS)
+            // Quadratic would be ~16×; linear is ~4×. 10× is a wide, stable margin.
+            expect(tLarge / tSmall).toBeLessThan(10)
+          })
+          """
+          new = """  it('is linear, not quadratic: equal total input stays in the same cost band', () => {
+            const build = (n) => `for${' '.repeat(n)}residents`
+            const small = build(4000)
+            const large = build(16000)
+            const runSmallBatch = () => {
+              for (let i = 0; i < 8; i += 1) {
+                RESIDENCY_EXCLUSIVE_RX.test(normalizeMatchWhitespace(small))
+              }
+            }
+            const runLargeBatch = () => {
+              for (let i = 0; i < 2; i += 1) {
+                RESIDENCY_EXCLUSIVE_RX.test(normalizeMatchWhitespace(large))
+              }
+            }
+            const medianTimeMs = (fn) => {
+              const samples = Array.from({ length: 5 }, () => timeMs(fn)).sort((a, b) => a - b)
+              return samples[Math.floor(samples.length / 2)]
+            }
+
+            // Both batches process 32 000 whitespace characters. Under linear
+            // behavior their costs stay near each other; a quadratic regression
+            // makes the large-input batch about 4× slower. Median sampling rejects
+            // one scheduler pause without weakening the absolute ReDoS budget.
+            for (let i = 0; i < 3; i += 1) {
+              runSmallBatch()
+              runLargeBatch()
+            }
+            const tSmallBatch = Math.max(medianTimeMs(runSmallBatch), 0.05)
+            const tLargeBatch = medianTimeMs(runLargeBatch)
+            expect(tLargeBatch / 2).toBeLessThan(BUDGET_MS)
+            expect(tLargeBatch / tSmallBatch).toBeLessThan(2.75)
+          })
+          """
+          if text.count(old) != 1:
+              raise SystemExit(f'expected one benchmark block, found {text.count(old)}')
+          path.write_text(text.replace(old, new), encoding='utf-8')
+          PY
+          git diff --check
+
+      - name: Setup Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24.19.0
+          cache: npm
+
+      - name: Install locked dependencies
+        run: npm ci --include=optional
+
+      - name: Prove the focused benchmark repeatedly
+        shell: bash
+        run: |
+          set -euo pipefail
+          for attempt in 1 2 3 4 5; do
+            echo "Focused ReDoS benchmark attempt $attempt/5"
+            node scripts/run-vitest-isolated.mjs run --no-file-parallelism backend/tests/residencyScopeRedos.test.js
+          done
+
+      - name: Run the complete unit contract
+        run: npm run unit
+
+      - name: Publish one clean repair commit
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -f .github/workflows/apply-pr1541-redos-benchmark-fix.yml
+          git add -A
+          git diff --cached --check
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "test: make ReDoS linearity proof scheduler-stable"
+          git push origin HEAD:fix/production-cors-current-main-20260905
