@@ -326,6 +326,52 @@ describe('strict production pipeline reconciliation', () => {
     expect(after).toMatchObject({ scanned: 1, valid: 1, invalid: 0, failed: 0, truncated: false })
   })
 
+  it('keeps an unrestricted scholarship the applicant-type gate PASSES — pass means pass, never applicant_type:pass', async () => {
+    // Prod 2026-09-02: the QUALIFIES proof demanded the single reason
+    // `explicit_applicant_types_match`, so a row with NO applicant restriction
+    // (decision `pass`, reason null) was tombstoned as `applicant_type:pass` —
+    // 172 live rows (Tennessee Promise, Gates, TN Reconnect, Federal SEOG…).
+    const { sqlite, db } = await seed()
+    const url = 'https://www.tn.gov/collegepays/money-for-college/tennessee-promise/apply'
+    sqlite.prepare(`
+      INSERT INTO funding_opportunities (
+        id, title, sponsor, description, entity_types_allowed,
+        need_types_supported, categories, opportunity_kind, source,
+        record_origin, source_url, application_url, state, is_national, is_active,
+        link_status, last_verified_at
+      ) VALUES ('fo-unrestricted', 'Tennessee Promise', 'Tennessee Student Assistance Corporation',
+        'Last-dollar scholarship for Tennessee students. Apply through the official program.', '[]',
+        '["education"]', '["education"]', 'direct', 'test_lane', 'live_crawl', ?, ?, 'TN', 0, 1, 'ok', CURRENT_TIMESTAMP)
+    `).run(url, url)
+    sqlite.prepare(`
+      INSERT INTO grants (
+        id, profile_id, funding_opportunity_id, title, funder, status,
+        application_url, url, match_score, match_decision, eligibility_status,
+        ineligibility_reasons, matcher_version
+      ) VALUES ('g-unrestricted', ?, 'fo-unrestricted', 'Tennessee Promise', 'Tennessee Student Assistance Corporation',
+        'saved', ?, ?, 90, 'ACCEPT', 'eligible', '[]', 'crawler-os')
+    `).run(PROFILE_ID, url, url)
+    sqlite.prepare(`
+      INSERT INTO profile_opportunity_matches (
+        profile_id, opportunity_id, match_score, match_decision,
+        match_explanation, matcher_version, updated_at, computed_at
+      ) VALUES (?, 'fo-unrestricted', 90, 'accept', 'fixture', 'crawler-os', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+    `).run(PROFILE_ID)
+
+    const result = await runStrictPipelineReconciliation(db)
+
+    expect(result.failed).toBe(0)
+    expect(result.kept).toBe(2)
+    expect(Object.keys(result.byReason).some((tag) => tag.includes('applicant_type:pass'))).toBe(false)
+    const kept = sqlite.prepare('SELECT id FROM grants ORDER BY id').all().map((row) => row.id)
+    expect(kept).toEqual(['g-good', 'g-submitted', 'g-unrestricted'])
+    const tombstoned = sqlite.prepare(
+      'SELECT opportunity_id, reason FROM pipeline_dismissals WHERE profile_id = ?',
+    ).all(PROFILE_ID)
+    expect(tombstoned.map((row) => row.opportunity_id)).not.toContain('fo-unrestricted')
+    expect(tombstoned.some((row) => String(row.reason).includes('applicant_type:pass'))).toBe(false)
+  })
+
   it('cancels active tasks whose grant disappeared in an earlier partial reconciliation', async () => {
     const { sqlite, db } = await seed()
     sqlite.prepare("DELETE FROM grants WHERE id = 'g-good'").run()

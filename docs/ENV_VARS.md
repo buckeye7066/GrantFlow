@@ -339,7 +339,6 @@ requirements remain in `docs/ENVIRONMENT.md`.
 | `ENFORCE_PROFILE_DISCOVERY_LINK` | Yes | Yes | Backend/Node |
 | `ENFORCE_PROFILE_RESULT_FLOOR` | Yes | Yes | Backend/Node |
 | `ENFORCE_PROFILE_SCOPED_PIPELINE` | Yes | Yes | Backend/Node |
-| `ENFORCE_QUALIFIED_PROMOTION` | Yes | Yes | Backend/Node |
 | `ENFORCE_RELEVANCE_FLOOR` | Yes | Yes | Backend/Node |
 | `ENFORCE_SOURCE_URL_SELF_REPAIR` | Yes | Yes | Backend/Node |
 | `ENFORCE_STAGE_OF_LIFE_SCOPE` | Yes | Yes | Backend/Node |
@@ -3958,14 +3957,6 @@ requirements remain in `docs/ENVIRONMENT.md`.
 - **Code references**:
   - `backend/startup/enforceInvariants.js:L879–L893` (process.env)
   - `backend/tests/enforceInvariants.test.js:L738–L774` (process.env)
-
-### `ENFORCE_QUALIFIED_PROMOTION`
-
-- **Templates**:
-  - `.env.example:361` = ``
-  - `backend/.env.example:332` = ``
-- **Code references**:
-  - `backend/services/pipelinePromotion.js:L264` (process.env)
 
 ### `ENFORCE_RELEVANCE_FLOOR`
 

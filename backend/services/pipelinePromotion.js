@@ -35,11 +35,6 @@ const SCHEDULE_MARKER_KEY = 'qualified_pipeline_promotion_last_run'
 const SCHEDULE_LOCK_NAME = 'qualified-pipeline-promotion'
 export const PROJECTION_KEY = 'promotion_projection'
 
-function envBool(value, fallback = false) {
-  if (value === undefined || value === null || value === '') return fallback
-  return ['1', 'true', 'yes', 'on'].includes(String(value).trim().toLowerCase())
-}
-
 function changesOf(result) {
   return Number(result?.changes ?? result?.rowCount ?? 0) || 0
 }
@@ -99,9 +94,9 @@ async function recordOutcome(db, { profileId, opportunityId, mode, payload }) {
     payload.policy_version,
     String(payload.opportunity_updated_at ?? ''),
   ]
-  const conflictGuard = mode === 'dry_run'
-    ? " WHERE pipeline_promotion_outcomes.mode = 'dry_run'"
-    : " WHERE NOT (pipeline_promotion_outcomes.mode = 'live' AND pipeline_promotion_outcomes.outcome = 'promoted')"
+  // Every run is live. A row that already records a live promotion is terminal
+  // and must never be downgraded by a later re-attempt.
+  const conflictGuard = " WHERE NOT (pipeline_promotion_outcomes.mode = 'live' AND pipeline_promotion_outcomes.outcome = 'promoted')"
   await db.prepare(
     `INSERT INTO pipeline_promotion_outcomes
        (profile_id, opportunity_id, mode, outcome, reason, score, attempted_at, attempts,
@@ -260,20 +255,47 @@ export async function getPromotionOutcomeSummary(db, profileId) {
   return summary
 }
 
+/**
+ * Dry-run / report-only promotion is REMOVED OUTRIGHT (owner order 2026-08-13:
+ * "I don't want dry runs, I want work"). Removed means an invocation NAMING the
+ * old switch FAILS — never silently proceeds, never a confirmation gate. The
+ * concrete defect this retires: production ran with the rollout switch unset
+ * for the entire life of this job, so the nightly "promotion" projected rows
+ * into system_kv and admitted nothing while the strict four-gate sweeps kept
+ * removing pipeline rows — every profile pipeline drained to zero (2026-09-05).
+ */
+export function assertNoPromotionDryRunOption(options = {}, env = process.env) {
+  if (options && typeof options === 'object' && 'enabled' in options) {
+    const err = new Error(
+      'pipeline promotion option "enabled" is removed: promotion always runs live (owner order 2026-08-13, no dry runs)',
+    )
+    err.status = 400
+    err.code = 'promotion_dry_run_removed'
+    throw err
+  }
+  if (env && env.ENFORCE_QUALIFIED_PROMOTION !== undefined) {
+    const err = new Error(
+      'ENFORCE_QUALIFIED_PROMOTION is removed: promotion always runs live, unset the variable (owner order 2026-08-13, no dry runs)',
+    )
+    err.status = 400
+    err.code = 'promotion_dry_run_removed'
+    throw err
+  }
+}
+
 export async function runQualifiedPipelinePromotion(db, options = {}) {
-  const enabled = options.enabled ?? envBool(process.env.ENFORCE_QUALIFIED_PROMOTION, false)
-  const mode = enabled ? 'live' : 'dry_run'
+  assertNoPromotionDryRunOption(options)
+  const mode = 'live'
   const batch = Math.max(1, Number.parseInt(options.batch ?? process.env.PROMOTION_BATCH ?? '100', 10) || 100)
   const timeBudgetMs = Math.max(1000, Number.parseInt(options.timeBudgetMs ?? process.env.PROMOTION_TIME_BUDGET_MS ?? '30000', 10) || 30000)
   const amountBudget = Math.max(1, Number.parseInt(options.amountBudget ?? process.env.PROMOTION_AMOUNT_BUDGET ?? '10', 10) || 10)
   const startedAt = new Date().toISOString()
   const startedMs = Date.now()
 
-  let deletedDryRun = 0
-  if (enabled) {
-    deletedDryRun = changesOf(await db.prepare("DELETE FROM pipeline_promotion_outcomes WHERE mode = 'dry_run'").run())
-    log.info('qualified promotion enabled; cleared dry-run outcomes', { deletedDryRun })
-  }
+  // Legacy report-only rows from before dry-run was removed are not evidence of
+  // anything; clear them so the candidate query never treats them as terminal.
+  const deletedDryRun = changesOf(await db.prepare("DELETE FROM pipeline_promotion_outcomes WHERE mode = 'dry_run'").run())
+  if (deletedDryRun) log.info('cleared legacy dry-run promotion outcomes', { deletedDryRun })
 
   const profiles = await loadRealProfiles(db)
   const cursor = await kvGet(db, CURSOR_KEY).catch(() => null)
@@ -309,13 +331,12 @@ export async function runQualifiedPipelinePromotion(db, options = {}) {
       const attemptPromotion = async (writeDb) => {
         const sink = {
           mode,
-          required: mode === 'live',
+          required: true,
           failClosedTombstone: true,
           freshRescoreRequired: true,
           quiet: true,
           record: async (payload) => {
             recordedPayload = payload
-            if (mode === 'dry_run') return
             await recordOutcome(writeDb, {
               profileId: profile.id,
               opportunityId: candidate.id,
@@ -326,12 +347,10 @@ export async function runQualifiedPipelinePromotion(db, options = {}) {
         }
         return saveToProfilePipeline(writeDb, candidate, profile.id, context, null, null, sink)
       }
-      if (mode === 'live' && typeof db.withTransaction !== 'function') {
+      if (typeof db.withTransaction !== 'function') {
         throw new Error('Live qualified promotion requires transactional database support')
       }
-      const result = mode === 'live'
-        ? await db.withTransaction(attemptPromotion)
-        : await attemptPromotion(db)
+      const result = await db.withTransaction(attemptPromotion)
       const outcome = classifyOutcome(recordedPayload)
       summary.reasons[outcome] = (summary.reasons[outcome] || 0) + 1
       if (result?.saved || result?.projected) {
@@ -351,13 +370,10 @@ export async function runQualifiedPipelinePromotion(db, options = {}) {
 
   if (lastProfileId) await kvSet(db, CURSOR_KEY, lastProfileId)
 
-  if (mode === 'dry_run') {
-    await kvSet(db, PROJECTION_KEY, {
-      projected_rows: promoted,
-      projected_null_amounts: projectedNullAmounts,
-      started_at: startedAt,
-    })
-  } else if (promotedGrantIds.length) {
+  // The report-only projection is gone; leave no stale projection behind for
+  // Sam's registry to mistake for a live result.
+  try { await db.prepare('DELETE FROM system_kv WHERE key = ?').run(PROJECTION_KEY) } catch { /* system_kv absent in minimal fixtures */ }
+  if (promotedGrantIds.length) {
     await enforceGrantCatalogLink(db, { grantIds: promotedGrantIds, limit: amountBudget })
     if (options.amountFollowup !== false) {
       await enforceAmountEnrichment(db, {

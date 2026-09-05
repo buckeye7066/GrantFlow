@@ -250,7 +250,17 @@ function positiveApplicantProof(subject, facts) {
     profile: facts?.profile,
     sections: facts?.sections,
   })
-  const pass = verdict?.decision === 'pass' && verdict?.reason === 'explicit_applicant_types_match'
+  // A `pass` verdict IS the positive proof. The canonical applicant-type gate
+  // returns `pass` only when the opportunity's explicit applicant types include
+  // this profile's type OR the row carries no applicant restriction that
+  // excludes it; `review` and `mismatch` are the two failing decisions.
+  // Requiring the single reason `explicit_applicant_types_match` on top of
+  // `pass` turned every unrestricted scholarship into a QUALIFIES failure and
+  // the 2026-09-02 strict migrations tombstoned 172 live pipeline rows with the
+  // self-contradicting reason `applicant_type:pass` (one live student profile
+  // alone lost 66: Tennessee Promise, Gates, TN Reconnect, Federal SEOG…).
+  // Pass means pass.
+  const pass = verdict?.decision === 'pass'
   return {
     pass,
     reason: pass ? null : `applicant_type:${verdict?.reason || verdict?.decision || 'not_positively_verified'}`,

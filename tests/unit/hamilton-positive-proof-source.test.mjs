@@ -73,9 +73,16 @@ test('Hamilton policy recomputes ACCEPT and then evaluates every positive gate',
   )
   assert.match(policySource, /if \(liveDecision !== 'accept'\)/)
   assert.match(policySource, /evaluateHamiltonPositiveGates\(subject, facts/)
-  assert.match(
+  // Pass means pass. The canonical applicant-type gate returns `pass` only when
+  // the row's explicit applicant types include this profile OR nothing on the
+  // row excludes it; `review`/`mismatch` are the failing decisions. Requiring
+  // the single reason `explicit_applicant_types_match` on top of `pass`
+  // tombstoned 172 live pipeline rows as `applicant_type:pass` (2026-09-02).
+  assert.match(policySource, /^  const pass = verdict\?\.decision === 'pass'$/m)
+  assert.doesNotMatch(
     policySource,
-    /verdict\?\.decision === 'pass'[\s\S]{0,200}?explicit_applicant_types_match/,
+    /verdict\?\.decision === 'pass' && verdict\?\.reason === 'explicit_applicant_types_match'/,
+    'a pass verdict must never be demoted by its reason string',
   )
   assert.match(policySource, /warnings: \['live_engine_endorsed'\]/)
   assert.match(policySource, /real:link_reverification_required/)

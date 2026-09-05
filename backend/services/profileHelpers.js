@@ -310,6 +310,51 @@ async function loadLinkedOrganizationForProfile(db, profileId, organizationId) {
     .get(profileId, profileId, organizationId)
 }
 
+const US_STATE_CODE_RE = /^[A-Z]{2}$/
+const US_ZIP_RE = /^\d{5}(?:-\d{4})?$/
+
+function firstString(...values) {
+  for (const v of values) {
+    if (typeof v === 'string' && v.trim()) return v.trim()
+    if (typeof v === 'number' && Number.isFinite(v)) return String(v)
+  }
+  return null
+}
+
+/**
+ * Structured location facts from the basic_information section (flat keys, a
+ * nested `location` / `address` object). A free-text address line such as
+ * "3940 Eveningside Dr. NE
+Cleveland, TN 37312" yields its trailing
+ * "City, ST ZIP" only for the parts no structured value supplies.
+ */
+export function readSectionLocation(sections = {}) {
+  const basic = sections?.basic_information && typeof sections.basic_information === 'object'
+    ? sections.basic_information
+    : {}
+  const nestedLoc = basic.location && typeof basic.location === 'object' ? basic.location : {}
+  const nestedAddr = basic.address && typeof basic.address === 'object' ? basic.address : {}
+  let state = firstString(basic.state, nestedLoc.state, nestedAddr.state)
+  let city = firstString(basic.city, nestedLoc.city, nestedAddr.city)
+  let zip = firstString(
+    basic.zip, basic.zip_code, basic.postal_code,
+    nestedLoc.zip, nestedLoc.zip_code, nestedLoc.postal_code,
+    nestedAddr.zip, nestedAddr.zip_code, nestedAddr.postal_code,
+  )
+  if ((!state || !city || !zip) && typeof basic.address === 'string') {
+    const m = /([A-Za-z .'-]+?)\s*,\s*([A-Za-z]{2})\s+(\d{5}(?:-\d{4})?)\s*$/.exec(basic.address.trim())
+    if (m) {
+      city = city || m[1].trim()
+      state = state || m[2].toUpperCase()
+      zip = zip || m[3]
+    }
+  }
+  if (state) state = state.toUpperCase()
+  if (state && !US_STATE_CODE_RE.test(state)) state = null
+  if (zip && !US_ZIP_RE.test(zip)) zip = null
+  return { state, city, zip }
+}
+
 export async function loadProfileContext(
   db,
   profileId,
@@ -402,6 +447,12 @@ export async function loadProfileContext(
     }
   }
 
+  // The profiles table carries NO state/city/zip columns; the applicant's
+  // address lives in profile_sections.basic_information (flat `state`/`city`,
+  // a nested `location`/`address` object, or a free-text address line). Read
+  // it here so a Cleveland, TN 37312 profile is not logged as `zip=? state=?
+  // city=?` and every state-keyed crawler lane misses it by construction.
+  const sectionLocation = readSectionLocation(sections)
   const mergedProfile = {
     ...profile,
     primary_type: effectivePrimaryType ?? profile.primary_type,
@@ -410,10 +461,10 @@ export async function loadProfileContext(
     interests,
     // Provide fallbacks for location extraction
     // The profiles table column is "zip" but extraction functions check postal_code/zip_code — normalize here.
-    postal_code: profile.postal_code || profile.zip_code || profile.zip || organization?.zip || organization?.postal_code || null,
-    zip_code: profile.zip_code || profile.zip || profile.postal_code || null,
-    state: profile.state || organization?.state || null,
-    city: profile.city || organization?.city || null,
+    postal_code: profile.postal_code || profile.zip_code || profile.zip || sectionLocation.zip || organization?.zip || organization?.postal_code || null,
+    zip_code: profile.zip_code || profile.zip || profile.postal_code || sectionLocation.zip || null,
+    state: profile.state || sectionLocation.state || organization?.state || null,
+    city: profile.city || sectionLocation.city || organization?.city || null,
   }
   
   // If this is a student who has COMMITTED to a college, their funding location
@@ -676,16 +727,18 @@ export async function buildProfileContext(db, profileId, options = {}) {
     console.warn('[buildProfileContext] Failed to load documents:', error?.message)
   }
 
-  // Build merged profile with location fallbacks
+  // Build merged profile with location fallbacks (section-declared address
+  // first — the profiles table has no location columns).
+  const sectionLocation = readSectionLocation(sections)
   const mergedProfile = {
     ...profile,
     primary_type: effectivePrimaryType ?? profile.primary_type,
     applicant_type: profile.applicant_type ?? effectivePrimaryType ?? profile.primary_type,
     tags,
     interests,
-    postal_code: profile.postal_code || organization?.zip || organization?.postal_code || null,
-    state: profile.state || organization?.state || null,
-    city: profile.city || organization?.city || null,
+    postal_code: profile.postal_code || sectionLocation.zip || organization?.zip || organization?.postal_code || null,
+    state: profile.state || sectionLocation.state || organization?.state || null,
+    city: profile.city || sectionLocation.city || organization?.city || null,
   }
 
   // Build signals (keywords, demographics, location, etc.)

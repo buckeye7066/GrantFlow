@@ -13,8 +13,7 @@ vi.mock('../services/matchEngine.js', async () => {
 import {
   __testables,
   getPromotionOutcomeSummary,
-  runQualifiedPipelinePromotion,
-} from '../services/pipelinePromotion.js'
+  runQualifiedPipelinePromotion, assertNoPromotionDryRunOption } from '../services/pipelinePromotion.js'
 import { recordDismissal } from '../services/pipelineDismissals.js'
 import { grantFingerprintFromOpportunity } from '../utils/grantFingerprint.js'
 
@@ -170,7 +169,7 @@ describe('qualified pipeline promotion', () => {
       END`)
 
     await expect(runQualifiedPipelinePromotion(db, {
-      enabled: true,
+      
       batch: 1,
       amountFollowup: false,
     })).rejects.toThrow('injected outcome sink failure')
@@ -185,7 +184,7 @@ describe('qualified pipeline promotion', () => {
     seedCandidate(db, 'real', { id: 'low', storedScore: 1, storedDecision: 'LOW' })
     seedCandidate(db, 'real', { id: 'reject', storedScore: 99, storedDecision: 'REJECT' })
 
-    const result = await runQualifiedPipelinePromotion(db, { enabled: true, batch: 10, amountFollowup: false })
+    const result = await runQualifiedPipelinePromotion(db, { batch: 10, amountFollowup: false })
 
     expect(result.promoted).toBe(2)
     expect(grantsFor(db, 'real')).toHaveLength(2)
@@ -199,7 +198,7 @@ describe('qualified pipeline promotion', () => {
     seedProfile(db, 'real')
     seedCandidate(db, 'real', { id: 'fresh-reject', storedScore: 99, storedDecision: 'ACCEPT', liveDecision: 'REJECT' })
 
-    await runQualifiedPipelinePromotion(db, { enabled: true, batch: 10, amountFollowup: false })
+    await runQualifiedPipelinePromotion(db, { batch: 10, amountFollowup: false })
 
     expect(grantsFor(db, 'real')).toHaveLength(0)
     expect(db.prepare('SELECT outcome, reason FROM pipeline_promotion_outcomes').get()).toEqual({ outcome: 'live_reject', reason: 'live_reject' })
@@ -223,7 +222,7 @@ describe('qualified pipeline promotion', () => {
     })
 
     await runQualifiedPipelinePromotion(db, {
-      enabled: true,
+      
       batch: 1,
       amountFollowup: false,
     })
@@ -262,7 +261,7 @@ describe('qualified pipeline promotion', () => {
     seedCandidate(db, 'real', { id: 'reality-rejected', reality_status: 'rejected' })
 
     const result = await runQualifiedPipelinePromotion(db, {
-      enabled: true,
+      
       batch: 20,
       amountFollowup: false,
     })
@@ -282,7 +281,7 @@ describe('qualified pipeline promotion', () => {
     seedCandidate(db, 'real', { id: 'control' })
     await recordDismissal(db, { profileId: 'real', opportunity: tombstoned, reason: 'user_deleted' })
 
-    await runQualifiedPipelinePromotion(db, { enabled: true, batch: 10, amountFollowup: false })
+    await runQualifiedPipelinePromotion(db, { batch: 10, amountFollowup: false })
     expect(grantsFor(db, 'real').map((g) => g.funding_opportunity_id)).toEqual(['control'])
     expect(db.prepare("SELECT outcome FROM pipeline_promotion_outcomes WHERE opportunity_id = 'dismissed'").get().outcome).toBe('tombstoned')
 
@@ -299,7 +298,7 @@ describe('qualified pipeline promotion', () => {
         return db.withTransaction(() => fn(failingDb))
       },
     }
-    await runQualifiedPipelinePromotion(failingDb, { enabled: true, batch: 10, amountFollowup: false })
+    await runQualifiedPipelinePromotion(failingDb, { batch: 10, amountFollowup: false })
     expect(grantsFor(db, 'real').some((g) => g.funding_opportunity_id === 'lookup-error')).toBe(false)
     expect(db.prepare("SELECT outcome, reason FROM pipeline_promotion_outcomes WHERE opportunity_id = 'lookup-error'").get())
       .toEqual({ outcome: 'error', reason: 'error:transient' })
@@ -315,7 +314,7 @@ describe('qualified pipeline promotion', () => {
     seedProfile(db, 'conflicting', {}, { synthetic: false, allow_sam_cleanup: true })
     for (const id of ['real', 'created-by', 'tag-only', 'flag-only', 'conflicting']) seedCandidate(db, id, { id: `candidate-${id}` })
 
-    const result = await runQualifiedPipelinePromotion(db, { enabled: true, batch: 20, amountFollowup: false })
+    const result = await runQualifiedPipelinePromotion(db, { batch: 20, amountFollowup: false })
 
     expect(result.promoted).toBe(1)
     expect(grantsFor(db, 'real')).toHaveLength(1)
@@ -333,7 +332,7 @@ describe('qualified pipeline promotion', () => {
       VALUES ('existing', 'real', NULL, ?, ?, 'discovered', ?, ?, ?)`)
       .run(duplicate.title, duplicate.sponsor, duplicate.application_url, duplicate.application_url, grantFingerprintFromOpportunity(duplicate))
 
-    const result = await runQualifiedPipelinePromotion(db, { enabled: true, batch: 10, amountFollowup: false })
+    const result = await runQualifiedPipelinePromotion(db, { batch: 10, amountFollowup: false })
     const independentlyRemaining = db.prepare(`SELECT COUNT(*) AS n
       FROM profile_opportunity_matches m
       LEFT JOIN pipeline_promotion_outcomes po
@@ -378,7 +377,7 @@ describe('qualified pipeline promotion', () => {
     const db = makeDb()
     seedProfile(db, 'real')
     const candidate = seedCandidate(db, 'real', { id: 'sticky-promoted' })
-    await runQualifiedPipelinePromotion(db, { enabled: true, batch: 1, amountFollowup: false })
+    await runQualifiedPipelinePromotion(db, { batch: 1, amountFollowup: false })
     const promotedGrant = grantsFor(db, 'real')[0]
     expect(db.prepare("SELECT outcome FROM pipeline_promotion_outcomes WHERE opportunity_id='sticky-promoted'").get().outcome)
       .toBe('promoted')
@@ -389,7 +388,7 @@ describe('qualified pipeline promotion', () => {
       VALUES ('concurrent-winner', 'real', NULL, ?, ?, 'discovered', ?, ?, ?)`)
       .run(candidate.title, candidate.sponsor, candidate.application_url, candidate.application_url, grantFingerprintFromOpportunity(candidate))
 
-    await runQualifiedPipelinePromotion(db, { enabled: true, batch: 1, amountFollowup: false })
+    await runQualifiedPipelinePromotion(db, { batch: 1, amountFollowup: false })
 
     expect(db.prepare("SELECT outcome, reason FROM pipeline_promotion_outcomes WHERE opportunity_id='sticky-promoted'").get())
       .toEqual({ outcome: 'promoted', reason: 'accepted' })
@@ -403,7 +402,7 @@ describe('qualified pipeline promotion', () => {
     seedCandidate(db, 'real', { id: 'locator', kind: 'DIRECTORY' })
     seedCandidate(db, 'real', { id: 'denied', source: 'fake_source', storedScore: 99, liveScore: 99 })
 
-    await runQualifiedPipelinePromotion(db, { enabled: true, batch: 10, amountFollowup: false })
+    await runQualifiedPipelinePromotion(db, { batch: 10, amountFollowup: false })
     db.prepare("UPDATE pipeline_promotion_outcomes SET outcome='promoted', reason='accepted' WHERE opportunity_id='locator'").run()
     const summary = await getPromotionOutcomeSummary(db, 'real')
 
@@ -414,31 +413,47 @@ describe('qualified pipeline promotion', () => {
     db.close()
   })
 
-  it('does not let a disabled replica leave dry rows after live enablement', async () => {
+  it('dry-run is REMOVED: naming the old switch fails before any candidate is read', async () => {
     const db = makeDb()
     seedProfile(db, 'real')
-    seedCandidate(db, 'real', { id: 'enabled-first' })
-    await runQualifiedPipelinePromotion(db, { enabled: true, batch: 10, amountFollowup: false })
+    seedCandidate(db, 'real', { id: 'never-read' })
+    // Even enabled:true is refused — the option no longer exists, and silently
+    // accepting it would let a caller believe a "disabled" mode still exists.
+    await expect(runQualifiedPipelinePromotion(db, { enabled: true, batch: 10, amountFollowup: false }))
+      .rejects.toThrowError(/removed/)
+    await expect(runQualifiedPipelinePromotion(db, { enabled: false, batch: 10, amountFollowup: false }))
+      .rejects.toThrowError(/removed/)
+    expect(() => assertNoPromotionDryRunOption({}, { ENFORCE_QUALIFIED_PROMOTION: '1' })).toThrowError(/removed/)
+    expect(() => assertNoPromotionDryRunOption({}, { ENFORCE_QUALIFIED_PROMOTION: '' })).toThrowError(/removed/)
+    expect(() => assertNoPromotionDryRunOption({ batch: 5 }, {})).not.toThrow()
+    let status = null
+    try { assertNoPromotionDryRunOption({ enabled: false }) } catch (e) { status = e.status }
+    expect(status).toBe(400)
+    expect(grantsFor(db, 'real')).toHaveLength(0)
+    expect(db.prepare('SELECT COUNT(*) AS n FROM pipeline_promotion_outcomes').get().n).toBe(0)
+    db.close()
+  })
+
+  it('every run is live: legacy dry-run rows are cleared and no projection is left behind', async () => {
+    const db = makeDb()
+    seedProfile(db, 'real')
     seedCandidate(db, 'real', { id: 'late-dry' })
-
-    const dry = await runQualifiedPipelinePromotion(db, { enabled: false, batch: 10, amountFollowup: false })
-    expect(dry.mode).toBe('dry_run')
-    expect(grantsFor(db, 'real')).toHaveLength(1)
-    expect(db.prepare("SELECT COUNT(*) AS n FROM pipeline_promotion_outcomes WHERE mode='dry_run'").get().n).toBe(0)
-    expect(db.prepare("SELECT outcome FROM pipeline_promotion_outcomes WHERE opportunity_id='enabled-first'").get().outcome)
-      .toBe('promoted')
-    expect(JSON.parse(db.prepare("SELECT value FROM system_kv WHERE key='promotion_projection'").get().value))
-      .toMatchObject({ projected_rows: 1, projected_null_amounts: 1 })
-
     db.prepare(`INSERT INTO pipeline_promotion_outcomes
       (profile_id, opportunity_id, mode, outcome, reason, score, attempted_at, attempts,
        profile_facts_hash, policy_version, opportunity_updated_at)
       VALUES ('real', 'late-dry', 'dry_run', 'promoted', 'accepted', 90, ?, 1, 'legacy', 'legacy', '2026-07-01')`)
       .run(new Date().toISOString())
-    const live = await runQualifiedPipelinePromotion(db, { enabled: true, batch: 10, amountFollowup: false })
+    db.prepare("INSERT INTO system_kv (key, value, updated_at) VALUES ('promotion_projection', '{\"projected_rows\":1}', ?)")
+      .run(new Date().toISOString())
+
+    const live = await runQualifiedPipelinePromotion(db, { batch: 10, amountFollowup: false })
+    expect(live.mode).toBe('live')
     expect(live.deletedDryRun).toBe(1)
-    expect(grantsFor(db, 'real')).toHaveLength(2)
+    expect(grantsFor(db, 'real')).toHaveLength(1)
     expect(db.prepare("SELECT COUNT(*) AS n FROM pipeline_promotion_outcomes WHERE mode='dry_run'").get().n).toBe(0)
+    expect(db.prepare("SELECT outcome FROM pipeline_promotion_outcomes WHERE opportunity_id='late-dry'").get().outcome)
+      .toBe('promoted')
+    expect(db.prepare("SELECT value FROM system_kv WHERE key='promotion_projection'").get()).toBeUndefined()
     db.close()
   })
 
@@ -469,11 +484,11 @@ describe('qualified pipeline promotion', () => {
     const db = makeDb()
     seedProfile(db, 'real')
     seedCandidate(db, 'real', { id: 'drift', liveDecision: 'REJECT' })
-    await runQualifiedPipelinePromotion(db, { enabled: true, batch: 10, amountFollowup: false })
+    await runQualifiedPipelinePromotion(db, { batch: 10, amountFollowup: false })
     expect(grantsFor(db, 'real')).toHaveLength(0)
 
     db.prepare("UPDATE funding_opportunities SET test_decision='ACCEPT', live_score=90, updated_at='2026-07-22' WHERE id='drift'").run()
-    await runQualifiedPipelinePromotion(db, { enabled: true, batch: 10, amountFollowup: false })
+    await runQualifiedPipelinePromotion(db, { batch: 10, amountFollowup: false })
     expect(grantsFor(db, 'real')).toHaveLength(1)
     expect(db.prepare("SELECT outcome FROM pipeline_promotion_outcomes WHERE opportunity_id='drift'").get().outcome).toBe('promoted')
     db.close()
