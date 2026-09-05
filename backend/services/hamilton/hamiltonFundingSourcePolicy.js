@@ -257,8 +257,9 @@ function positiveApplicantProof(subject, facts) {
   // Requiring the single reason `explicit_applicant_types_match` on top of
   // `pass` turned every unrestricted scholarship into a QUALIFIES failure and
   // the 2026-09-02 strict migrations tombstoned 172 live pipeline rows with the
-  // self-contradicting reason `applicant_type:pass` (Anastasia alone lost 66:
-  // Tennessee Promise, Gates, TN Reconnect, Federal SEOG…). Pass means pass.
+  // self-contradicting reason `applicant_type:pass` (one live student profile
+  // alone lost 66: Tennessee Promise, Gates, TN Reconnect, Federal SEOG…).
+  // Pass means pass.
   const pass = verdict?.decision === 'pass'
   return {
     pass,
