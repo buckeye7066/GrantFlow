@@ -16,6 +16,7 @@ import {
   scoreOpportunity as calculateMatchScore,
 } from '../services/matchEngine.js';
 import { trustedOriginClause, trustedSourceClause } from '../utils/recordOrigins.js';
+import { opportunityLifecycleVisibilitySql } from '../config/matchSurfacing.js';
 // Semantic recall (SEMANTIC_RECALL=1, default OFF): a RECALL BOOSTER that may
 // only ADD candidate rows into the keyword scan before canonical scoring.
 // It never accepts, rejects, filters, or re-ranks past the deterministic
@@ -214,8 +215,8 @@ router.post('/comprehensive-match', async (req, res) => {
   try {
     const { profile, profile_id } = req.body
     
-    const isPostgres = req.db?.dialect === 'postgres'
-    const activeVal = isPostgres ? 'TRUE' : '1'
+    const safeVisibleCatalogSql = opportunityLifecycleVisibilitySql({ dialect: req.db?.dialect })
+    const safeVisibleCatalogAliasSql = opportunityLifecycleVisibilitySql({ tableAlias: 'fo', dialect: req.db?.dialect })
 
     // Profile isolation: only global catalog + this profile's own crawl results
     const profileIdForIsolation = profile_id || profile?.id || null
@@ -230,7 +231,7 @@ router.post('/comprehensive-match', async (req, res) => {
 
     const opportunities = await req.db.prepare(`
       SELECT * FROM funding_opportunities
-      WHERE is_active = ${activeVal}
+      WHERE ${safeVisibleCatalogSql}
       AND ${trustedOriginClause()} AND ${trustedSourceClause()}
       ${isolationClause}
       ORDER BY created_at DESC
@@ -247,7 +248,7 @@ router.post('/comprehensive-match', async (req, res) => {
       const recall = await augmentCandidatesWithSemanticRecall(req.db, {
         keywordRows: opportunities,
         queryText: buildProfileEmbeddingText(profile),
-        whereSql: `fo.is_active = ${activeVal} AND ${trustedOriginClause('fo')} AND ${trustedSourceClause('fo')} ${isolationClause}`,
+        whereSql: `${safeVisibleCatalogAliasSql} AND ${trustedOriginClause('fo')} AND ${trustedSourceClause('fo')} ${isolationClause}`,
         whereParams: isolationParams,
       })
       candidateRows = recall.rows
@@ -328,8 +329,7 @@ router.post('/ecf-service-search', async (req, res) => {
   try {
     const { profile, profile_id } = req.body
 
-    const isPostgresEcf = req.db?.dialect === 'postgres'
-    const activeEcf = isPostgresEcf ? 'TRUE' : '1'
+    const safeVisibleEcfSql = opportunityLifecycleVisibilitySql({ dialect: req.db?.dialect })
 
     // Profile isolation
     const isolationId = profile_id || profile?.id || null
@@ -350,7 +350,7 @@ router.post('/ecf-service-search', async (req, res) => {
 
     const services = await req.db.prepare(`
       SELECT * FROM funding_opportunities
-      WHERE is_active = ${activeEcf}
+      WHERE ${safeVisibleEcfSql}
         AND ${trustedOriginClause()} AND ${trustedSourceClause()}
         ${isolationClause}
         ${stateClause}
@@ -413,6 +413,8 @@ router.post('/match', async (req, res) => {
     
     const isPostgresMatch = req.db?.dialect === 'postgres'
     const activeMatch = isPostgresMatch ? 'TRUE' : '1'
+    const safeVisibleMatchSql = opportunityLifecycleVisibilitySql({ dialect: req.db?.dialect })
+    const safeVisibleMatchAliasSql = opportunityLifecycleVisibilitySql({ tableAlias: 'fo', dialect: req.db?.dialect })
 
     // Profile isolation: only global catalog + this profile's own crawl results
     const profileIdForIsolation = profile_id || profile?.id || null
@@ -422,7 +424,7 @@ router.post('/match', async (req, res) => {
 
     let query = `
       SELECT * FROM funding_opportunities 
-      WHERE is_active = ${activeMatch}
+      WHERE ${safeVisibleMatchSql}
       AND ${trustedOriginClause()} AND ${trustedSourceClause()}
       AND (is_national = ${activeMatch} OR state = ? OR state IS NULL)
       ${isolationClause}
@@ -448,7 +450,7 @@ router.post('/match', async (req, res) => {
       const recall = await augmentCandidatesWithSemanticRecall(req.db, {
         keywordRows: opportunities,
         queryText: buildProfileEmbeddingText(profile),
-        whereSql: `fo.is_active = ${activeMatch}
+        whereSql: `${safeVisibleMatchAliasSql}
           AND ${trustedOriginClause('fo')} AND ${trustedSourceClause('fo')}
           AND (fo.is_national = ${activeMatch} OR fo.state = ? OR fo.state IS NULL)
           ${isolationClause}

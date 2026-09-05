@@ -141,6 +141,7 @@ function createDb() {
       notes TEXT,
       is_loan INTEGER DEFAULT 0,
       is_active INTEGER DEFAULT 1,
+      is_hidden INTEGER DEFAULT 0,
       last_crawled DATETIME,
       contact_info TEXT DEFAULT NULL,
       funding_domain TEXT,
@@ -158,6 +159,11 @@ function createDb() {
       refund_potential INTEGER DEFAULT 0,
       eligibility_signals TEXT DEFAULT '[]',
       verification_status TEXT,
+      -- Pointer/direct classification (migration 068). The ingest choke point's
+      -- ON CONFLICT clause reads excluded.result_kind, so the fixture must carry it.
+      result_kind TEXT,
+      -- Lifecycle columns the proof-restoring ON CONFLICT clause reads (schema.sql).
+      status TEXT DEFAULT 'active',
       -- Award-calendar columns (schema.sql; added by the calendar PRs). The
       -- ingest choke point writes them, so the fixture must carry them or every
       -- insert throws SQLITE_ERROR "no column named expected_decision_date".

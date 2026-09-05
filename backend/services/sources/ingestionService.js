@@ -16,6 +16,7 @@ import {
   persistEvidence,
 } from '../provenanceAudit.js';
 import { createLogger } from '../../utils/logger.js'
+import { syncOpportunityContractProjection } from '../opportunityRepository.js'
 
 function isActiveFlag(value) {
   return value === 1 || value === true || value === '1' || value === 'true';
@@ -35,14 +36,24 @@ const log = createLogger('ingestionService')
  * BEGIN/COMMIT precisely so it "works for both sync and async callbacks".
  *
  * FALLBACK: some callers (unit tests, one-off scripts) hand in a RAW
- * better-sqlite3 handle that has no `withTransaction`. Its statements are
- * synchronous, so awaiting them is a harmless no-op and the loop is already
- * correct — we simply run without the wrapping transaction rather than
- * throwing, which is exactly the guarantee such a caller already had.
+ * better-sqlite3 handle that has no `withTransaction`. Use an explicit manual
+ * transaction there too: running without one would violate the atomic
+ * business-write + proof-guard contract whenever the guard fails.
  */
 async function runInTransaction(db, fn) {
   if (typeof db?.withTransaction === 'function') return db.withTransaction(fn);
-  return fn(db);
+  if (typeof db?.exec !== 'function') {
+    throw new Error('Ingestion requires a transaction-capable database')
+  }
+  db.exec('BEGIN IMMEDIATE')
+  try {
+    const result = await fn(db)
+    db.exec('COMMIT')
+    return result
+  } catch (error) {
+    try { db.exec('ROLLBACK') } catch { /* preserve the original failure */ }
+    throw error
+  }
 }
 
 /**
@@ -76,7 +87,7 @@ export async function ingestOpportunities(db, opportunities, sourceName) {
   // a PARTIAL unique index (WHERE source/source_id IS NOT NULL), which does not satisfy
   // ON CONFLICT inference in SQLite/Postgres.
   // Instead we do deterministic insert-or-update using a preflight existence check.
-  const insertStmt = db.prepare(`
+  const insertSql = `
     INSERT INTO funding_opportunities (
       id, source, source_id, title, sponsor, description,
       application_url, source_url, deadline, deadline_type,
@@ -98,9 +109,9 @@ export async function ingestOpportunities(db, opportunities, sourceName) {
       ?, ?, ?, ?,
       CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
     )
-  `);
+  `;
 
-  const updateStmt = db.prepare(`
+  const updateSql = `
     UPDATE funding_opportunities
     SET
       title = ?,
@@ -131,12 +142,10 @@ export async function ingestOpportunities(db, opportunities, sourceName) {
       reality_reasons = COALESCE(?, reality_reasons),
       updated_at = CURRENT_TIMESTAMP
     WHERE source = ? AND source_id = ?
-  `);
+  `;
   
   // Check if record exists to determine if it's insert or update
-  const checkExists = db.prepare(
-    'SELECT id FROM funding_opportunities WHERE source = ? AND source_id = ?'
-  );
+  const checkExistsSql = 'SELECT * FROM funding_opportunities WHERE source = ? AND source_id = ?';
   
   // Best-effort rejection logger — mirrors opportunityInserter so every gate
   // that drops a row is observable via /api/admin/rejections. Never throws.
@@ -277,8 +286,17 @@ export async function ingestOpportunities(db, opportunities, sourceName) {
   // header notes better-sqlite3's native wrapper "rejects async callbacks with
   // 'Transaction function cannot return a promise'" while the manual
   // BEGIN/COMMIT path "works for both sync and async callbacks".
-  const ingest = () => runInTransaction(db, async () => {
+  const ingest = () => runInTransaction(db, async (tx) => {
+    // Prepared statements retain the connection that prepared them. In
+    // Postgres, preparing these through the outer pool would let the business
+    // write escape `tx`, so a later proof-guard failure could not roll it back.
+    // Bind every statement in the atomic write + guard unit to the transaction.
+    const insertStmt = tx.prepare(insertSql)
+    const updateStmt = tx.prepare(updateSql)
+    const checkExists = tx.prepare(checkExistsSql)
+
     for (const opp of validated) {
+      let businessWriteCompleted = false
       try {
         // Check if exists before upsert to track insert vs update
         // Validate input parameters before SQL execution
@@ -318,7 +336,7 @@ export async function ingestOpportunities(db, opportunities, sourceName) {
             opp.source,
             opp.source_id,
           );
-          updated++;
+          businessWriteCompleted = true
         } else {
           await insertStmt.run(
             opp.id,
@@ -351,13 +369,30 @@ export async function ingestOpportunities(db, opportunities, sourceName) {
             opp.reality_status ?? null,
             opp.reality_reasons ?? null,
           );
-          inserted++;
+          businessWriteCompleted = true
         }
+        // Every active catalog writer must cross the same post-write proof
+        // gate. This government/real-crawler ingest path previously bypassed
+        // the repository hook and briefly exposed default-visible unverified
+        // rows until the periodic quarantine sweep.
+        await syncOpportunityContractProjection(tx, existing?.id ?? opp.id, opp, {
+          beforeRow: existing ?? null,
+          changedBy: `ingestion:${sourceName}`,
+          changeType: existing ? 'updated' : 'created',
+        });
+        if (existing) updated++
+        else inserted++
       } catch (error) {
         errors++;
         const errorMsg = `Error ingesting ${opp.source_id}: ${error.message}`;
         console.error(`[ingestion] ${errorMsg}`);
         errorMessages.push(errorMsg);
+
+        // The business write and its proof projection are one fail-closed
+        // operation. Any unexpected guard/projection failure must escape the
+        // callback so withTransaction rolls back the write; continuing would
+        // commit a default-visible direct opportunity without proof.
+        if (businessWriteCompleted) throw error
         
         // Stop if too many errors
         if (errors > 10) {
@@ -386,6 +421,7 @@ export async function ingestOpportunities(db, opportunities, sourceName) {
     // (best-effort, outside the write transaction so it can never block or
     // roll back the ingest). The id resolves to the row stored above because
     // the upsert keys on (source, source_id).
+    const checkPersisted = db.prepare(checkExistsSql)
     for (const opp of validated) {
       try {
         // Awaited for the same reason as the ingest loop: on Postgres this is a
@@ -393,7 +429,7 @@ export async function ingestOpportunities(db, opportunities, sourceName) {
         // was written against `opp.id` — an id the (unreachable) insert never
         // stored. That is orphan provenance on the one table whose entire job is
         // to preserve provenance.
-        const existing = await checkExists.get(opp.source, opp.source_id);
+        const existing = await checkPersisted.get(opp.source, opp.source_id);
         const oppId = existing?.id ?? opp.id;
         if (oppId) {
           await persistEvidence(db, oppId, opp);

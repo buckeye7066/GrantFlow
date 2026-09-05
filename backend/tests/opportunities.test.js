@@ -2,6 +2,16 @@ import request from "supertest"
 import { describe, it, expect, beforeAll, beforeEach } from "vitest"
 import { getAppAndDb, resetDb, TEST_ADMIN_AUTH_HEADER } from "./testServer.js"
 
+// Issue #1501: every catalog writer is fail-closed. A direct row created through
+// the admin API without link proof is HIDDEN until the verifier proves its target,
+// so these integration fixtures assert the proof they are entitled to assert.
+const VERIFIED_PROOF = () => ({
+  link_status: "ok",
+  last_verified_at: new Date().toISOString(),
+  verification_method: "head",
+  verified_by: "opportunities-integration-test",
+})
+
 describe("opportunities", () => {
   let app
   let db
@@ -30,6 +40,7 @@ describe("opportunities", () => {
       description: "A real-looking opportunity used by the opportunities API integration test.",
       application_url: "https://foundation-a.org/apply",
       source_url: "https://foundation-a.org/program",
+      ...VERIFIED_PROOF(),
       is_national: true,
       opportunity_type: "grant",
       requires_match: false,
@@ -44,6 +55,7 @@ describe("opportunities", () => {
       description: "A second real-looking opportunity used by the opportunities API integration test.",
       application_url: "https://foundation-b.org/apply",
       source_url: "https://foundation-b.org/program",
+      ...VERIFIED_PROOF(),
       is_national: false,
       state: "OH",
       opportunity_type: "grant",
@@ -76,6 +88,7 @@ describe("opportunities", () => {
       description: "Funds neighborhood preparedness and resilience work.",
       application_url: "https://resilience-foundation.org/apply",
       source_url: "https://resilience-foundation.org/program",
+      ...VERIFIED_PROOF(),
       is_national: true,
       opportunity_type: "grant",
       requires_match: false,
@@ -128,6 +141,7 @@ describe("opportunities", () => {
         description: "Source opportunity used as the lookup target for the /similar route.",
         application_url: "https://foundation-base.org/apply",
         source_url: "https://foundation-base.org/program",
+        ...VERIFIED_PROOF(),
         is_national: true,
         opportunity_type: "grant",
         requires_match: false,
@@ -145,6 +159,7 @@ describe("opportunities", () => {
         description: "Peer opportunity that shares categories + sponsor with the base.",
         application_url: "https://foundation-peer.org/apply",
         source_url: "https://foundation-peer.org/program",
+        ...VERIFIED_PROOF(),
         is_national: true,
         opportunity_type: "grant",
         requires_match: false,
@@ -168,6 +183,7 @@ describe("opportunities", () => {
         description: "Source FO that the grants row will reference.",
         application_url: "https://foundation-resolve.org/apply",
         source_url: "https://foundation-resolve.org/program",
+        ...VERIFIED_PROOF(),
         is_national: true,
         opportunity_type: "grant",
         requires_match: false,
@@ -186,6 +202,7 @@ describe("opportunities", () => {
         description: "Peer FO that shares the senior category + sponsor.",
         application_url: "https://foundation-grants-peer.org/apply",
         source_url: "https://foundation-grants-peer.org/program",
+        ...VERIFIED_PROOF(),
         is_national: true,
         opportunity_type: "grant",
         requires_match: false,
@@ -269,6 +286,7 @@ describe("opportunities", () => {
         description: "UUID-shaped row for the id-gate test.",
         application_url: "https://foundation-c.org/apply",
         source_url: "https://foundation-c.org/program",
+        ...VERIFIED_PROOF(),
         is_national: true,
         opportunity_type: "grant",
         requires_match: false,

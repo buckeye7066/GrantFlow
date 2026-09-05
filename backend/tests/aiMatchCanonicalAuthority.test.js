@@ -39,6 +39,7 @@ function makeDb() {
       keywords TEXT DEFAULT '[]', amount_max INTEGER, deadline TEXT,
       deadline_type TEXT, application_url TEXT, opportunity_kind TEXT,
       is_national INTEGER DEFAULT 0, state TEXT, is_active INTEGER DEFAULT 1,
+      is_hidden INTEGER DEFAULT 0,
       record_origin TEXT, source TEXT, profile_id TEXT
     );
     INSERT INTO profiles (id, display_name) VALUES ('org-1', 'Housing Applicant');

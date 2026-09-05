@@ -182,16 +182,30 @@ export function isOpportunityLifecycleVisible(row) {
   return opportunityLifecycleVisibility(row).visible
 }
 
+function lifecycleAliasPrefix(tableAlias, helperName) {
+  const alias = String(tableAlias || '').trim()
+  if (alias && !/^[A-Za-z_][A-Za-z0-9_]*$/.test(alias)) {
+    throw new Error(`${helperName}: invalid table alias`)
+  }
+  return alias ? `${alias}.` : ''
+}
+
+/**
+ * Dialect-neutral SQL twin of opportunityLifecycleVisibility. SQL boolean
+ * literals are accepted by both Postgres and SQLite, making this form safe for
+ * shared helpers that do not know the adapter dialect at string-build time.
+ */
+export function opportunityLifecycleVisibilityPortableSql({ tableAlias = '' } = {}) {
+  const prefix = lifecycleAliasPrefix(tableAlias, 'opportunityLifecycleVisibilityPortableSql')
+  return `(COALESCE(${prefix}is_active, TRUE) = TRUE AND COALESCE(${prefix}is_hidden, FALSE) = FALSE)`
+}
+
 /**
  * SQL twin of opportunityLifecycleVisibility for persisted catalog rows.
  * Aliases are code-owned identifiers, never request input.
  */
 export function opportunityLifecycleVisibilitySql({ tableAlias = '', dialect = 'sqlite' } = {}) {
-  const alias = String(tableAlias || '').trim()
-  if (alias && !/^[A-Za-z_][A-Za-z0-9_]*$/.test(alias)) {
-    throw new Error('opportunityLifecycleVisibilitySql: invalid table alias')
-  }
-  const prefix = alias ? `${alias}.` : ''
+  const prefix = lifecycleAliasPrefix(tableAlias, 'opportunityLifecycleVisibilitySql')
   const trueValue = dialect === 'postgres' ? 'TRUE' : '1'
   const falseValue = dialect === 'postgres' ? 'FALSE' : '0'
   return `(COALESCE(${prefix}is_active, ${trueValue}) = ${trueValue} AND COALESCE(${prefix}is_hidden, ${falseValue}) = ${falseValue})`
@@ -236,6 +250,7 @@ export default {
   DIRECTORY_MIN_SCORE,
   opportunityLifecycleVisibility,
   isOpportunityLifecycleVisible,
+  opportunityLifecycleVisibilityPortableSql,
   opportunityLifecycleVisibilitySql,
   qualifiesForDisplay,
 }

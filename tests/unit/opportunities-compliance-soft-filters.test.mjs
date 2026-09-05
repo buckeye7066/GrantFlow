@@ -22,10 +22,16 @@ test('grant_only does not exclude matching-funds grants (but still excludes loan
   const { proc, port, adminToken } = await startBackend({ rootDir: repoRoot })
   try {
     const base = `http://127.0.0.1:${port}`
+    const verifiedAt = new Date().toISOString()
+
+    // These rows intentionally carry current successful link proof so this test
+    // isolates the compliance filter instead of being satisfied or defeated by
+    // the independent fail-closed direct-link visibility gate.
 
     // 1) Create a match-required grant (should remain visible in grant_only).
     // Title must not match placeholder patterns (/^(test|sample|...)/i) and
     // application_url is required, otherwise filterActionableOpportunities strips it.
+    const matchUrl = 'https://example.test/match-grant'
     const matchOpp = await apiFetch(`${base}/api/opportunities`, {
       method: 'POST',
       token: adminToken,
@@ -33,7 +39,7 @@ test('grant_only does not exclude matching-funds grants (but still excludes loan
         title: 'Community Resilience Matching Grant Program',
         sponsor: 'Unit Test Sponsor',
         source: 'unit_test',
-        application_url: 'https://example.test/match-grant',
+        application_url: matchUrl,
         opportunity_type: 'grant',
         requires_match: true,
         match_percentage: 25,
@@ -42,13 +48,20 @@ test('grant_only does not exclude matching-funds grants (but still excludes loan
         state: 'nationwide',
         deadline: '2030-01-13',
         deadline_type: 'fixed',
+        link_status: 'verified',
+        last_verified_at: verifiedAt,
+        final_url: matchUrl,
+        verification_method: 'unit_test_fixture',
+        verified_by: 'unit_test_fixture',
       },
     })
     assert.equal(matchOpp.res.status, 201)
     const matchId = matchOpp.json?.id
     assert.ok(matchId)
 
-    // 2) Create a loan (should be excluded in grant_only).
+    // 2) Create a loan (should be excluded in grant_only). Give it the same
+    // valid link-proof posture so its absence can only come from compliance.
+    const loanUrl = 'https://example.test/loan-program'
     const loanOpp = await apiFetch(`${base}/api/opportunities`, {
       method: 'POST',
       token: adminToken,
@@ -56,13 +69,18 @@ test('grant_only does not exclude matching-funds grants (but still excludes loan
         title: 'Small Business Revolving Loan Program',
         sponsor: 'Unit Test Sponsor',
         source: 'unit_test',
-        application_url: 'https://example.test/loan-program',
+        application_url: loanUrl,
         opportunity_type: 'loan',
         is_active: true,
         is_national: true,
         state: 'nationwide',
         deadline: '2030-01-13',
         deadline_type: 'fixed',
+        link_status: 'verified',
+        last_verified_at: verifiedAt,
+        final_url: loanUrl,
+        verification_method: 'unit_test_fixture',
+        verified_by: 'unit_test_fixture',
       },
     })
     assert.equal(loanOpp.res.status, 201)
@@ -82,4 +100,3 @@ test('grant_only does not exclude matching-funds grants (but still excludes loan
     await stopProcess(proc)
   }
 })
-

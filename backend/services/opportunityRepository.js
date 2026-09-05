@@ -17,6 +17,7 @@ import {
   parseOpportunityJson,
 } from './opportunityContract.js'
 import { emitOpportunityChangeNotifications } from './notificationService.js'
+import { enforceOpportunityLinkProofAfterWrite } from './opportunityLinkProofGuard.js'
 
 const CONTRACT_COLUMNS = Object.freeze([
   'purpose',
@@ -153,11 +154,22 @@ async function appendOpportunityChange(db, opportunityId, entry) {
  * Synchronize the additive normalized columns after the established inserter
  * writes the legacy catalog row. Missing migration columns degrade cleanly
  * during rolling deploys and schema.sql-only unit fixtures.
+ *
+ * The link-proof guard deliberately runs BEFORE the additive contract work.
+ * This function is the common post-write hook for opportunityInserter, Crawler
+ * OS persistence, and the admin opportunity routes, so URL/proof safety cannot
+ * drift between otherwise-independent writers.
  */
 export async function syncOpportunityContractProjection(db, opportunityId, input = {}, options = {}) {
   if (!db || !opportunityId) return { supported: false, changed: false }
   const beforeRow = options.beforeRow ?? null
   const normalized = normalizeContractWrite(input)
+
+  await enforceOpportunityLinkProofAfterWrite(db, opportunityId, {
+    beforeRow,
+    input,
+    nowMs: options.nowMs ?? Date.now(),
+  })
 
   try {
     await db.prepare(

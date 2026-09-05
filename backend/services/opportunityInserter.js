@@ -7,7 +7,12 @@ import { validateOpportunity, deduplicateByUrl } from './opportunityValidator.js
 import { reviewOpportunity } from './reviewerAgent.js'
 import { normalizeUrlForDedupe } from '../routes/opportunityHelpers.js'
 import { normalizeOpportunityState } from '../utils/stateNormalization.js'
-import { checkUrl as verifyUrlLiveness, recordVerificationEvent } from './linkVerificationService.js'
+import {
+  checkUrl as verifyUrlLiveness,
+  recordVerificationEvent,
+  REVERIFY_AFTER_DAYS_CONST,
+} from './linkVerificationService.js'
+import { isPointerOpportunityRow, pointerOpportunityRowSql } from '../config/linkLifecycleKinds.js'
 import { headForVerification } from './shared/httpClient.js'
 import { assessReality } from './opportunityRealityGate.js'
 import { enrichOpportunityVerification } from './verification/index.js'
@@ -130,8 +135,20 @@ function serializeRealityReasons(value) {
   return JSON.stringify(value)
 }
 
+const SUCCESSFUL_LINK_STATUSES = Object.freeze(['ok', 'redirect', 'verified'])
+
+function hasCurrentSuccessfulLinkProof(opportunity, nowMs = Date.now()) {
+  const status = String(opportunity?.link_status || '').trim().toLowerCase()
+  if (!SUCCESSFUL_LINK_STATUSES.includes(status)) return false
+  const verifiedAtMs = Date.parse(String(opportunity?.last_verified_at || ''))
+  if (!Number.isFinite(verifiedAtMs)) return false
+  const maxAgeMs = REVERIFY_AFTER_DAYS_CONST * 24 * 60 * 60 * 1000
+  return verifiedAtMs >= nowMs - maxAgeMs
+}
+
 function applyVerificationGate(opportunity) {
-  const now = new Date().toISOString()
+  const nowMs = Date.now()
+  const now = new Date(nowMs).toISOString()
   const out = { ...opportunity }
 
   if (!out.discovered_at) {
@@ -153,6 +170,15 @@ function applyVerificationGate(opportunity) {
     out.verification_method = null
     out.verified_by = out.verified_by ?? null
     out.verification_error = null
+  } else if (
+    SUCCESSFUL_LINK_STATUSES.includes(String(out.link_status || '').trim().toLowerCase())
+    && !hasCurrentSuccessfulLinkProof(out, nowMs)
+  ) {
+    // A successful status with expired/missing timestamp is historical evidence,
+    // not current visibility proof. Keep the timestamp for audit, but make the
+    // row retryable so the verifier can restore it after a fresh successful probe.
+    out.link_status = 'unverified'
+    out.verification_error = 'stale_verification_proof_requires_recheck'
   }
 
   return out
@@ -545,7 +571,10 @@ export async function upsertFundingOpportunity(db, opportunity, opts = {}) {
     if (repair) applicationUrl = repair.officialUrl
   }
 
-  const candidateUrl = sourceUrl ?? applicationUrl ?? evidenceUrl ?? null
+  // Probe the same application-first target that the central proof guard will
+  // authorize. A reachable source/information page is not evidence that a
+  // distinct application endpoint works.
+  const candidateUrl = applicationUrl ?? sourceUrl ?? evidenceUrl ?? null
   if (!candidateUrl || !isValidHttpUrl(candidateUrl)) {
     const urlReason = !candidateUrl ? 'missing_application_url' : 'dead_application_url'
     // Persist a reconstructable candidate snapshot in raw_meta: a row rejected
@@ -801,6 +830,85 @@ export async function upsertFundingOpportunity(db, opportunity, opts = {}) {
       })(),
     }
 
+    // The ordinary sequential recrawl reaches this branch before the INSERT
+    // ... ON CONFLICT writer below. Apply the identical proof-transfer rule
+    // here: metadata-only recrawls preserve proof, while a changed effective
+    // target cannot inherit the previous URL's verdict.
+    const effectiveTarget = (row) =>
+      String(row?.application_url || row?.source_url || row?.evidence_url || '').trim()
+    const targetChanged = effectiveTarget({
+      application_url: record.application_url,
+      source_url: record.source_url ?? existing.source_url,
+      evidence_url: record.evidence_url ?? existing.evidence_url,
+    }) !== effectiveTarget(existing)
+    const incomingHasCurrentProof = hasCurrentSuccessfulLinkProof(record)
+    const existingHasCurrentProof = hasCurrentSuccessfulLinkProof(existing)
+    const effectivePointerRow = isPointerOpportunityRow({
+      ...existing,
+      ...opportunity,
+      ...record,
+    })
+
+    if (!incomingHasCurrentProof && targetChanged) {
+      record.last_verified_at = null
+      record.link_status = 'unverified'
+      record.link_status_code = null
+      record.verification_method = null
+      record.verified_by = null
+      record.verification_error = 'url_changed_requires_reverification'
+      record.final_url = null
+      record.http_status = null
+      record.is_hidden = toDbBoolean(db, !effectivePointerRow)
+      // Reactivate previously deactivated broken rows so the verifier can re-probe them.
+      if (!effectivePointerRow && String(existing.link_status || '').trim().toLowerCase() === 'broken') {
+        record.is_active = toDbBoolean(db, true)
+        record.status = existing.status === 'paused' ? 'active' : existing.status
+      }
+    } else if (!incomingHasCurrentProof && existingHasCurrentProof) {
+      record.last_verified_at = existing.last_verified_at
+      record.link_status = existing.link_status
+      record.link_status_code = existing.link_status_code
+      record.verification_method = existing.verification_method
+      record.verified_by = existing.verified_by
+      record.verification_error = existing.verification_error
+      record.final_url = existing.final_url
+      record.http_status = existing.http_status
+      record.is_hidden = existing.is_hidden
+    } else if (!incomingHasCurrentProof) {
+      // Historical success is useful audit evidence, but it is not permission
+      // to keep surfacing a direct row after the freshness window expires.
+      // Make the row retryable by the recurring verifier and fail closed until
+      // that verifier obtains fresh proof.
+      record.last_verified_at = existing.last_verified_at
+      record.link_status = 'unverified'
+      record.link_status_code = existing.link_status_code
+      record.verification_method = existing.verification_method
+      record.verified_by = existing.verified_by
+      record.verification_error = 'stale_verification_proof_requires_recheck'
+      record.final_url = existing.final_url
+      record.http_status = existing.http_status
+      record.is_hidden = toDbBoolean(db, !effectivePointerRow)
+      // Reactivate previously deactivated broken rows so the verifier can re-probe them.
+      if (!effectivePointerRow && String(existing.link_status || '').trim().toLowerCase() === 'broken') {
+        record.is_active = toDbBoolean(db, true)
+        record.status = existing.status === 'paused' ? 'active' : existing.status
+      }
+    } else {
+      const priorStatus = String(existing.link_status || 'unverified').trim().toLowerCase()
+      const priorError = String(existing.verification_error || '')
+      const retryableQuarantine = ['broken', 'unverified', 'suspicious', 'skipped'].includes(priorStatus) ||
+        priorError.startsWith('stale_reverification_required:') ||
+        priorError.startsWith('retry_scheduled_after_bounded_recheck:')
+      record.is_hidden = toDbBoolean(
+        db,
+        effectivePointerRow ? Boolean(existing.is_hidden) : Boolean(existing.is_hidden) && !retryableQuarantine,
+      )
+      if (!effectivePointerRow && retryableQuarantine) {
+        record.is_active = toDbBoolean(db, true)
+        record.status = existing.status === 'paused' ? 'active' : existing.status
+      }
+    }
+
     // For live_crawl: allow clearing nullable fields when source no longer has them (avoids stale data).
     const fromLiveCrawl = recordOrigin === 'live_crawl'
 
@@ -865,19 +973,19 @@ export async function upsertFundingOpportunity(db, opportunity, opts = {}) {
         keywords = COALESCE(?, keywords),
         opportunity_type = COALESCE(?, opportunity_type),
         type = COALESCE(?, type),
-        last_verified_at = COALESCE(?, last_verified_at),
-        link_status = COALESCE(?, link_status),
-        link_status_code = COALESCE(?, link_status_code),
-        verification_method = COALESCE(?, verification_method),
-        verified_by = COALESCE(?, verified_by),
-        verification_error = COALESCE(?, verification_error),
+        last_verified_at = ?,
+        link_status = ?,
+        link_status_code = ?,
+        verification_method = ?,
+        verified_by = ?,
+        verification_error = ?,
         discovered_at = COALESCE(discovered_at, ?),
         opportunity_kind = COALESCE(?, opportunity_kind),
         source_trust_tier = COALESCE(?, source_trust_tier),
         reality_status = COALESCE(?, reality_status),
         reality_reasons = COALESCE(?, reality_reasons),
-        final_url = COALESCE(?, final_url),
-        http_status = COALESCE(?, http_status),
+        final_url = ?,
+        http_status = ?,
         profile_id = COALESCE(?, profile_id),
         requires_501c3 = COALESCE(?, requires_501c3),
         requires_match = COALESCE(?, requires_match),
@@ -887,6 +995,9 @@ export async function upsertFundingOpportunity(db, opportunity, opts = {}) {
         expected_decision_date = COALESCE(?, expected_decision_date),
         decision_review_days = COALESCE(?, decision_review_days),
         reporting_requirements = COALESCE(?, reporting_requirements),
+        is_hidden = ?,
+        is_active = COALESCE(?, is_active),
+        status = COALESCE(?, status),
         updated_at = CURRENT_TIMESTAMP,
         last_crawled = CURRENT_TIMESTAMP
       WHERE id = ?
@@ -917,19 +1028,19 @@ export async function upsertFundingOpportunity(db, opportunity, opts = {}) {
         keywords = COALESCE(?, keywords),
         opportunity_type = COALESCE(?, opportunity_type),
         type = COALESCE(?, type),
-        last_verified_at = COALESCE(?, last_verified_at),
-        link_status = COALESCE(?, link_status),
-        link_status_code = COALESCE(?, link_status_code),
-        verification_method = COALESCE(?, verification_method),
-        verified_by = COALESCE(?, verified_by),
-        verification_error = COALESCE(?, verification_error),
+        last_verified_at = ?,
+        link_status = ?,
+        link_status_code = ?,
+        verification_method = ?,
+        verified_by = ?,
+        verification_error = ?,
         discovered_at = COALESCE(discovered_at, ?),
         opportunity_kind = COALESCE(?, opportunity_kind),
         source_trust_tier = COALESCE(?, source_trust_tier),
         reality_status = COALESCE(?, reality_status),
         reality_reasons = COALESCE(?, reality_reasons),
-        final_url = COALESCE(?, final_url),
-        http_status = COALESCE(?, http_status),
+        final_url = ?,
+        http_status = ?,
         profile_id = COALESCE(?, profile_id),
         requires_501c3 = COALESCE(?, requires_501c3),
         requires_match = COALESCE(?, requires_match),
@@ -939,6 +1050,9 @@ export async function upsertFundingOpportunity(db, opportunity, opts = {}) {
         expected_decision_date = COALESCE(?, expected_decision_date),
         decision_review_days = COALESCE(?, decision_review_days),
         reporting_requirements = COALESCE(?, reporting_requirements),
+        is_hidden = ?,
+        is_active = COALESCE(?, is_active),
+        status = COALESCE(?, status),
         updated_at = CURRENT_TIMESTAMP,
         last_crawled = CURRENT_TIMESTAMP
       WHERE id = ?
@@ -991,6 +1105,9 @@ export async function upsertFundingOpportunity(db, opportunity, opts = {}) {
       record.expected_decision_date,
       record.decision_review_days,
       record.reporting_requirements,
+      record.is_hidden,
+      record.is_active ?? null,
+      record.status ?? null,
       existing.id,
     )
 
@@ -1167,6 +1284,33 @@ export async function upsertFundingOpportunity(db, opportunity, opts = {}) {
   record.decision_review_days = normalizeDecisionReviewDays(opportunity.decision_review_days)
   const reportingRequirements = normalizeReportingRequirements(opportunity.reporting_requirements)
   record.reporting_requirements = reportingRequirements ? JSON.stringify(reportingRequirements) : null
+  // Mission readiness requires every visible direct row to carry current proof.
+  // Pointers remain visible without per-award verification; direct rows enter
+  // hidden quarantine until a current successful probe exists.
+  record.is_hidden = toDbBoolean(
+    db,
+    !isPointerOpportunityRow(record) && !hasCurrentSuccessfulLinkProof(record),
+  )
+  const verificationFreshCutoff = new Date(
+    Date.now() - REVERIFY_AFTER_DAYS_CONST * 24 * 60 * 60 * 1000,
+  ).toISOString()
+  const safeIncomingHasCurrentProofSql = `(
+    LOWER(TRIM(COALESCE(excluded.link_status, ''))) IN ('ok', 'redirect', 'verified')
+    AND excluded.last_verified_at IS NOT NULL
+    AND excluded.last_verified_at >= @verification_fresh_cutoff
+  )`
+  const safeExistingHasCurrentProofSql = `(
+    LOWER(TRIM(COALESCE(funding_opportunities.link_status, ''))) IN ('ok', 'redirect', 'verified')
+    AND funding_opportunities.last_verified_at IS NOT NULL
+    AND funding_opportunities.last_verified_at >= @verification_fresh_cutoff
+  )`
+  const safeEffectiveTargetChangedSql = `(
+    COALESCE(NULLIF(TRIM(excluded.application_url), ''), NULLIF(TRIM(excluded.source_url), ''), NULLIF(TRIM(excluded.evidence_url), ''), '') <>
+    COALESCE(NULLIF(TRIM(funding_opportunities.application_url), ''), NULLIF(TRIM(funding_opportunities.source_url), ''), NULLIF(TRIM(funding_opportunities.evidence_url), ''), '')
+  )`
+
+  // Compile-time pointer predicate over the incoming row; no request input.
+  const safeExcludedPointerRowSql = pointerOpportunityRowSql('excluded')
 
   const insert = db.prepare(`
     INSERT INTO funding_opportunities (
@@ -1218,6 +1362,7 @@ export async function upsertFundingOpportunity(db, opportunity, opts = {}) {
       notes,
       canonical_opportunity_key,
       is_active,
+      is_hidden,
       last_crawled,
       funding_domain,
       funding_subdomain,
@@ -1285,6 +1430,7 @@ export async function upsertFundingOpportunity(db, opportunity, opts = {}) {
       @notes,
       @canonical_opportunity_key,
       @is_active,
+      @is_hidden,
       CURRENT_TIMESTAMP,
       @funding_domain,
       @funding_subdomain,
@@ -1346,23 +1492,98 @@ export async function upsertFundingOpportunity(db, opportunity, opts = {}) {
       eligibility_signals = COALESCE(excluded.eligibility_signals, funding_opportunities.eligibility_signals),
       verification_status = COALESCE(excluded.verification_status, funding_opportunities.verification_status),
       record_origin = COALESCE(excluded.record_origin, funding_opportunities.record_origin),
-      last_verified_at = COALESCE(excluded.last_verified_at, funding_opportunities.last_verified_at),
-      link_status = COALESCE(excluded.link_status, funding_opportunities.link_status),
-      link_status_code = COALESCE(excluded.link_status_code, funding_opportunities.link_status_code),
-      verification_method = COALESCE(excluded.verification_method, funding_opportunities.verification_method),
-      verified_by = COALESCE(excluded.verified_by, funding_opportunities.verified_by),
-      verification_error = COALESCE(excluded.verification_error, funding_opportunities.verification_error),
+      last_verified_at = CASE
+        WHEN ${safeIncomingHasCurrentProofSql} THEN excluded.last_verified_at
+        WHEN ${safeEffectiveTargetChangedSql} THEN NULL
+        ELSE funding_opportunities.last_verified_at
+      END,
+      link_status = CASE
+        WHEN ${safeIncomingHasCurrentProofSql} THEN excluded.link_status
+        WHEN ${safeEffectiveTargetChangedSql} THEN 'unverified'
+        WHEN NOT (${safeExistingHasCurrentProofSql}) THEN 'unverified'
+        ELSE funding_opportunities.link_status
+      END,
+      link_status_code = CASE
+        WHEN ${safeIncomingHasCurrentProofSql} THEN excluded.link_status_code
+        WHEN ${safeEffectiveTargetChangedSql} THEN NULL
+        ELSE funding_opportunities.link_status_code
+      END,
+      verification_method = CASE
+        WHEN ${safeIncomingHasCurrentProofSql} THEN excluded.verification_method
+        WHEN ${safeEffectiveTargetChangedSql} THEN NULL
+        ELSE funding_opportunities.verification_method
+      END,
+      verified_by = CASE
+        WHEN ${safeIncomingHasCurrentProofSql} THEN excluded.verified_by
+        WHEN ${safeEffectiveTargetChangedSql} THEN NULL
+        ELSE funding_opportunities.verified_by
+      END,
+      verification_error = CASE
+        WHEN ${safeIncomingHasCurrentProofSql} THEN excluded.verification_error
+        WHEN ${safeEffectiveTargetChangedSql} THEN 'url_changed_requires_reverification'
+        WHEN NOT (${safeExistingHasCurrentProofSql}) THEN 'stale_verification_proof_requires_recheck'
+        ELSE funding_opportunities.verification_error
+      END,
       discovered_at = COALESCE(funding_opportunities.discovered_at, excluded.discovered_at),
       opportunity_kind = COALESCE(excluded.opportunity_kind, funding_opportunities.opportunity_kind),
       source_trust_tier = COALESCE(excluded.source_trust_tier, funding_opportunities.source_trust_tier),
       reality_status = COALESCE(excluded.reality_status, funding_opportunities.reality_status),
       reality_reasons = COALESCE(excluded.reality_reasons, funding_opportunities.reality_reasons),
-      final_url = COALESCE(excluded.final_url, funding_opportunities.final_url),
-      http_status = COALESCE(excluded.http_status, funding_opportunities.http_status),
+      final_url = CASE
+        WHEN ${safeIncomingHasCurrentProofSql} THEN COALESCE(excluded.final_url, funding_opportunities.final_url)
+        WHEN ${safeEffectiveTargetChangedSql} THEN NULL
+        ELSE funding_opportunities.final_url
+      END,
+      http_status = CASE
+        WHEN ${safeIncomingHasCurrentProofSql} THEN COALESCE(excluded.http_status, funding_opportunities.http_status)
+        WHEN ${safeEffectiveTargetChangedSql} THEN NULL
+        ELSE funding_opportunities.http_status
+      END,
       match_reasons = COALESCE(excluded.match_reasons, funding_opportunities.match_reasons),
       expected_decision_date = COALESCE(excluded.expected_decision_date, funding_opportunities.expected_decision_date),
       decision_review_days = COALESCE(excluded.decision_review_days, funding_opportunities.decision_review_days),
       reporting_requirements = COALESCE(excluded.reporting_requirements, funding_opportunities.reporting_requirements),
+      is_hidden = CASE
+        WHEN ${safeIncomingHasCurrentProofSql} AND (
+          COALESCE(funding_opportunities.is_hidden, FALSE) = FALSE
+          OR LOWER(TRIM(COALESCE(funding_opportunities.link_status, 'unverified'))) IN ('broken', 'unverified', 'suspicious', 'skipped')
+          OR COALESCE(funding_opportunities.verification_error, '') LIKE 'stale_reverification_required:%'
+          OR COALESCE(funding_opportunities.verification_error, '') LIKE 'retry_scheduled_after_bounded_recheck:%'
+        ) THEN FALSE
+        WHEN NOT (${safeIncomingHasCurrentProofSql})
+          AND NOT (${safeExcludedPointerRowSql})
+          AND (
+            ${safeEffectiveTargetChangedSql}
+            OR LOWER(TRIM(COALESCE(funding_opportunities.link_status, 'unverified'))) NOT IN ('ok', 'redirect', 'verified')
+            OR funding_opportunities.last_verified_at IS NULL
+            OR funding_opportunities.last_verified_at < @verification_fresh_cutoff
+          ) THEN TRUE
+        ELSE funding_opportunities.is_hidden
+      END,
+      is_active = CASE
+        WHEN ${safeIncomingHasCurrentProofSql} AND NOT (${safeExcludedPointerRowSql}) AND (
+          LOWER(TRIM(COALESCE(funding_opportunities.link_status, 'unverified'))) IN ('broken', 'unverified', 'suspicious', 'skipped')
+          OR COALESCE(funding_opportunities.verification_error, '') LIKE 'stale_reverification_required:%'
+          OR COALESCE(funding_opportunities.verification_error, '') LIKE 'retry_scheduled_after_bounded_recheck:%'
+        ) THEN TRUE
+        WHEN NOT (${safeIncomingHasCurrentProofSql})
+          AND NOT (${safeExcludedPointerRowSql})
+          AND (
+            ${safeEffectiveTargetChangedSql}
+            OR NOT (${safeExistingHasCurrentProofSql})
+          )
+          AND LOWER(TRIM(COALESCE(funding_opportunities.link_status, 'unverified'))) = 'broken'
+        THEN TRUE
+        ELSE funding_opportunities.is_active
+      END,
+      status = CASE
+        WHEN ${safeIncomingHasCurrentProofSql} AND NOT (${safeExcludedPointerRowSql}) AND funding_opportunities.status = 'paused' AND (
+          LOWER(TRIM(COALESCE(funding_opportunities.link_status, 'unverified'))) IN ('broken', 'unverified', 'suspicious', 'skipped')
+          OR COALESCE(funding_opportunities.verification_error, '') LIKE 'stale_reverification_required:%'
+          OR COALESCE(funding_opportunities.verification_error, '') LIKE 'retry_scheduled_after_bounded_recheck:%'
+        ) THEN 'active'
+        ELSE funding_opportunities.status
+      END,
       updated_at = CURRENT_TIMESTAMP,
       last_crawled = CURRENT_TIMESTAMP
   `)
@@ -1416,6 +1637,8 @@ export async function upsertFundingOpportunity(db, opportunity, opts = {}) {
     notes: record.notes,
     canonical_opportunity_key: record.canonical_opportunity_key ?? null,
     is_active: toDbBoolean(db, true),
+    is_hidden: record.is_hidden,
+    verification_fresh_cutoff: verificationFreshCutoff,
     funding_domain: record.funding_domain,
     funding_subdomain: record.funding_subdomain,
     source_category: record.source_category,

@@ -10,6 +10,8 @@
  *   That's it — read-side queries automatically include it because they use a blocklist.
  */
 
+import { opportunityLifecycleVisibilityPortableSql } from '../config/matchSurfacing.js'
+
 export const ALLOWED_RECORD_ORIGINS = new Set([
   'live_crawl',
   'curated_verified',
@@ -52,17 +54,36 @@ export const ALLOWED_RECORD_ORIGINS = new Set([
 export const UNTRUSTED_ORIGINS = ['synthetic', 'manual']
 
 /**
- * Returns a SQL fragment: (record_origin IS NULL OR record_origin NOT IN ('synthetic','manual'))
- * Safe for both SQLite and Postgres.
- * @param {string} [alias] - Optional table alias, e.g. 'fo' → 'fo.record_origin'
+ * Returns the shared READ-SIDE catalog trust fragment. A row is readable only
+ * when both conditions hold:
+ *   1. the canonical lifecycle contract (config/matchSurfacing.js) says it is
+ *      active and not hidden; and
+ *   2. its origin is not explicitly untrusted.
+ *
+ * Link-proof freshness is deliberately NOT evaluated here. Every catalog
+ * writer crosses opportunityLinkProofGuard (hidden until current successful
+ * proof), the recurring verifier re-hides rows whose proof expires, and the
+ * readiness probe reports stale proof. A read-time wall-clock predicate would
+ * have to embed Date.now() into SQL text; callers such as anyaToolRegistry
+ * build this fragment once and reuse it, so the embedded clock would freeze
+ * and silently hide every row verified after that moment.
+ *
+ * `trustedOriginClause()` is the long-standing read guard used by AI
+ * matching, discovery, Anya, crawler-result selection, college aid lookup,
+ * and backfill paths. Keeping the lifecycle contract inside it means no
+ * reader can treat `is_hidden` as optional (issue #1501, defect 5).
+ *
+ * Safe for both SQLite and Postgres and stable across calls (no clock).
+ * @param {string} [alias] - Optional table alias, e.g. 'fo'
  */
 export function trustedOriginClause(alias) {
   if (alias !== undefined && !/^[A-Za-z_][A-Za-z0-9_]*$/.test(alias)) {
-  throw new Error(`trustedOriginClause: invalid alias '${alias}'`)
-}
-const col = alias ? `${alias}.record_origin` : 'record_origin'
+    throw new Error(`trustedOriginClause: invalid alias '${alias}'`)
+  }
+  const col = alias ? `${alias}.record_origin` : 'record_origin'
   const quoted = UNTRUSTED_ORIGINS.map(o => `'${escapeSqlStringLiteral(o)}'`).join(',')
-  return `(${col} IS NULL OR ${col} NOT IN (${quoted}))`
+  const lifecycle = opportunityLifecycleVisibilityPortableSql({ tableAlias: alias || '' })
+  return `(${lifecycle} AND (${col} IS NULL OR ${col} NOT IN (${quoted})))`
 }
 
 /**
@@ -79,7 +100,7 @@ export const UNTRUSTED_SOURCES = ['synthetic', 'template', 'fake']
 
 /**
  * Returns a SQL fragment for the `source` column blocklist.
- * e.g. (source IS NULL OR source NOT IN ('synthetic','template','comprehensive_crawler','fake'))
+ * e.g. (source IS NULL OR source NOT IN ('synthetic','template','fake'))
  * @param {string} [alias] - Optional table alias, e.g. 'fo' → 'fo.source'
  */
 export function trustedSourceClause(alias) {

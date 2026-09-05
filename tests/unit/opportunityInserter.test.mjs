@@ -47,6 +47,7 @@ function createDb() {
       verification_error TEXT,
       -- Reality gate phase 1.2: kind + source trust tier (migration 068).
       opportunity_kind TEXT,
+      result_kind TEXT,
       source_trust_tier TEXT,
       -- RC-8: persisted reality verdict (migration 077).
       reality_status TEXT,
@@ -61,6 +62,8 @@ function createDb() {
       notes TEXT,
       is_loan INTEGER DEFAULT 0,
       is_active INTEGER DEFAULT 1,
+      is_hidden INTEGER DEFAULT 0,
+      status TEXT DEFAULT 'active',
       last_crawled DATETIME,
       contact_info TEXT DEFAULT NULL,
       funding_domain TEXT,
@@ -124,7 +127,7 @@ test('opportunityInserter: inserts live crawl and updates existing row', async (
 
   const row1 = db
     .prepare(
-      `SELECT description, evidence_url, last_verified_at, discovered_at, link_status
+      `SELECT description, evidence_url, last_verified_at, discovered_at, link_status, is_hidden
        FROM funding_opportunities
        WHERE source = ? AND source_id = ?`,
     )
@@ -140,6 +143,7 @@ test('opportunityInserter: inserts live crawl and updates existing row', async (
   )
   assert.ok(row1.discovered_at, 'discovered_at must be set on insert')
   assert.equal(row1.link_status, 'unverified')
+  assert.equal(row1.is_hidden, 1, 'unverified direct rows must fail closed from visible results')
 
   const updated = await upsertFundingOpportunity(db, {
     title: 'Example Opportunity',
@@ -156,6 +160,139 @@ test('opportunityInserter: inserts live crawl and updates existing row', async (
     .prepare(`SELECT description FROM funding_opportunities WHERE source = ? AND source_id = ?`)
     .get('unit_test', 'opp-1')
   assert.equal(row2.description, 'v2')
+})
+
+test('opportunityInserter: same-target recrawl preserves proof; unverified target change quarantines', async () => {
+  const db = createDb()
+  const verifiedAt = new Date().toISOString()
+
+  await upsertFundingOpportunity(db, {
+    title: 'Verified Live Opp',
+    sponsor: 'Agency',
+    source: 'unit_test',
+    source_id: 'verified-recrawl-1',
+    source_url: 'https://www.grants.gov/original',
+    application_url: 'https://www.grants.gov/original',
+    record_origin: 'live_crawl',
+    last_verified_at: verifiedAt,
+    link_status: 'ok',
+    link_status_code: 200,
+    verification_method: 'head',
+    verified_by: 'unit-test',
+  })
+
+  const sameTarget = await upsertFundingOpportunity(db, {
+    title: 'Verified Live Opp',
+    sponsor: 'Agency',
+    source: 'unit_test',
+    source_id: 'verified-recrawl-1',
+    source_url: 'https://www.grants.gov/original',
+    application_url: 'https://www.grants.gov/original',
+    record_origin: 'live_crawl',
+    description: 'fresh crawler metadata without a duplicate network probe',
+  })
+  assert.equal(sameTarget.updated, true)
+  assert.deepEqual(
+    db.prepare(`SELECT link_status, last_verified_at, verification_method, is_hidden
+                  FROM funding_opportunities WHERE source_id = ?`).get('verified-recrawl-1'),
+    { link_status: 'ok', last_verified_at: verifiedAt, verification_method: 'head', is_hidden: 0 },
+    'same-target metadata refresh must not erase current link proof',
+  )
+
+  const changedTarget = await upsertFundingOpportunity(db, {
+    title: 'Verified Live Opp',
+    sponsor: 'Agency',
+    source: 'unit_test',
+    source_id: 'verified-recrawl-1',
+    source_url: 'https://www.grants.gov/replacement',
+    application_url: 'https://www.grants.gov/replacement',
+    record_origin: 'live_crawl',
+  })
+  assert.equal(changedTarget.updated, true)
+  assert.deepEqual(
+    db.prepare(`SELECT application_url, link_status, last_verified_at, verification_method,
+                       verification_error, is_hidden
+                  FROM funding_opportunities WHERE source_id = ?`).get('verified-recrawl-1'),
+    {
+      application_url: 'https://www.grants.gov/replacement',
+      link_status: 'unverified',
+      last_verified_at: null,
+      verification_method: null,
+      verification_error: 'url_changed_requires_reverification',
+      is_hidden: 1,
+    },
+    'a changed target cannot inherit proof from the previous URL',
+  )
+})
+
+test('opportunityInserter: an expired same-target proof is quarantined for retry', async () => {
+  const db = createDb()
+  const expiredAt = new Date(Date.now() - 45 * 24 * 60 * 60 * 1000).toISOString()
+  await upsertFundingOpportunity(db, {
+    title: 'Expired Proof Opp', sponsor: 'Agency', source: 'unit_test', source_id: 'expired-proof-1',
+    application_url: 'https://www.grants.gov/apply', record_origin: 'live_crawl',
+  })
+  db.prepare(`UPDATE funding_opportunities
+                 SET link_status = 'ok', last_verified_at = ?, verification_method = 'head',
+                     verification_error = NULL, is_hidden = 0
+               WHERE source_id = 'expired-proof-1'`).run(expiredAt)
+
+  await upsertFundingOpportunity(db, {
+    title: 'Expired Proof Opp', sponsor: 'Agency', source: 'unit_test', source_id: 'expired-proof-1',
+    application_url: 'https://www.grants.gov/apply', record_origin: 'live_crawl', description: 'metadata refresh',
+  })
+
+  assert.deepEqual(
+    db.prepare(`SELECT link_status, last_verified_at, verification_error, is_hidden
+                  FROM funding_opportunities WHERE source_id = 'expired-proof-1'`).get(),
+    { link_status: 'unverified', last_verified_at: expiredAt,
+      verification_error: 'stale_verification_proof_requires_recheck', is_hidden: 1 },
+  )
+})
+
+test('opportunityInserter: fresh proof restores a hard-quarantined row', async () => {
+  const db = createDb()
+  await upsertFundingOpportunity(db, {
+    title: 'Recovered Opp', sponsor: 'Agency', source: 'unit_test', source_id: 'recovered-1',
+    application_url: 'https://www.grants.gov/apply', record_origin: 'live_crawl',
+  })
+  db.prepare(`UPDATE funding_opportunities
+                 SET link_status = 'broken', is_hidden = 1, is_active = 0, status = 'paused'
+               WHERE source_id = 'recovered-1'`).run()
+
+  await upsertFundingOpportunity(db, {
+    title: 'Recovered Opp', sponsor: 'Agency', source: 'unit_test', source_id: 'recovered-1',
+    application_url: 'https://www.grants.gov/apply', record_origin: 'live_crawl',
+    link_status: 'ok', last_verified_at: new Date().toISOString(), verification_method: 'head',
+  })
+
+  assert.deepEqual(
+    db.prepare(`SELECT link_status, is_hidden, is_active, status
+                  FROM funding_opportunities WHERE source_id = 'recovered-1'`).get(),
+    { link_status: 'ok', is_hidden: 0, is_active: 1, status: 'active' },
+  )
+})
+
+test('opportunityInserter: evidence-only target changes cannot inherit proof', async () => {
+  const db = createDb()
+  const verifiedAt = new Date().toISOString()
+  await upsertFundingOpportunity(db, {
+    title: 'Evidence-only Opp', sponsor: 'Agency', source: 'unit_test', source_id: 'evidence-only-1',
+    evidence_url: 'https://www.grants.gov/original', record_origin: 'live_crawl',
+    link_status: 'ok', last_verified_at: verifiedAt, verification_method: 'head',
+  })
+
+  await upsertFundingOpportunity(db, {
+    title: 'Evidence-only Opp', sponsor: 'Agency', source: 'unit_test', source_id: 'evidence-only-1',
+    evidence_url: 'https://www.grants.gov/replacement', record_origin: 'live_crawl',
+  })
+
+  assert.deepEqual(
+    db.prepare(`SELECT evidence_url, link_status, last_verified_at, final_url, is_hidden
+                  FROM funding_opportunities WHERE source_id = 'evidence-only-1'`).get(),
+    { evidence_url: 'https://www.grants.gov/replacement', link_status: 'unverified',
+      last_verified_at: null, final_url: null, is_hidden: 1 },
+  )
 })
 
 test('opportunityInserter: baseline cannot downgrade verified record', async () => {
@@ -231,7 +368,7 @@ test('opportunityInserter: caller-supplied last_verified_at is stripped without 
 test('opportunityInserter: caller-supplied verification proof is honored', async () => {
   const db = createDb()
 
-  const verifiedAt = '2026-04-15T12:34:56Z'
+  const verifiedAt = new Date().toISOString()
   await upsertFundingOpportunity(db, {
     title: 'Truly Verified Opp',
     sponsor: 'Agency',
@@ -302,12 +439,13 @@ test('opportunityInserter: deduplicates referral lookup permutations at ingest',
 
   assert.equal(first.inserted, true)
   assert.equal(second.updated, true)
-  const rows = db.prepare('SELECT source_id, opportunity_type, type, application_url FROM funding_opportunities').all()
+  const rows = db.prepare('SELECT source_id, opportunity_type, type, application_url, is_hidden FROM funding_opportunities').all()
   assert.equal(rows.length, 1)
   assert.equal(rows[0].source_id, 'communityactionpartnership.com/find-a-cap')
   assert.equal(rows[0].opportunity_type, 'referral')
   assert.equal(rows[0].type, 'DIRECTORY')
   assert.equal(rows[0].application_url, 'https://communityactionpartnership.com/find-a-cap/')
+  assert.equal(rows[0].is_hidden, 0, 'pointer resources remain visible without per-award proof')
 })
 
 test('opportunityInserter: normalizes state values at ingest and drops invalid country placeholders', async () => {
