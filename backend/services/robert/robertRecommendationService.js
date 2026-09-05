@@ -132,7 +132,21 @@ export async function createRecommendationIfHelpful({
       return { created: false, reason: 'previously_declined', recommendation: existing }
     }
     if ([RECOMMENDATION_STATUS.PENDING, RECOMMENDATION_STATUS.DELIVERED, RECOMMENDATION_STATUS.VIEWED].includes(existing.recommendation_status)) {
-      return { created: false, reason: 'duplicate_active', recommendation: existing }
+      // If the active row is a RESEARCH LEAD (REVIEW decision + classification),
+      // supersede it so a verified ACCEPT recommendation can land. This prevents
+      // an earlier pointer from permanently blocking a later direct recommendation.
+      const isActiveResearchLead =
+        String(existing.match_decision || '').toUpperCase() === MATCH_DECISION.REVIEW &&
+        Array.isArray(existing.match_reasons) &&
+        existing.match_reasons.includes(RESEARCH_LEAD_CLASSIFICATION)
+      if (isActiveResearchLead) {
+        await updateRecommendationStatus(db, existing.id, {
+          recommendation_status: RECOMMENDATION_STATUS.SUPERSEDED,
+        })
+        // fall through to insert a fresh ACCEPT recommendation
+      } else {
+        return { created: false, reason: 'duplicate_active', recommendation: existing }
+      }
     }
     if (existing.recommendation_status === RECOMMENDATION_STATUS.ACCEPTED) {
       return { created: false, reason: 'previously_accepted', recommendation: existing }
