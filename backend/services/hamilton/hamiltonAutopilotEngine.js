@@ -803,6 +803,36 @@ async function readVisibleTextSnippet(page) {
   return t ? t.slice(0, 240) : null
 }
 
+// Multi-factor prompts that carry NO otp-named input (Microsoft push
+// approval, number matching, Duo push).
+const MFA_PROMPT_TEXT_RX = /approve (?:the )?sign[- ]?in request|open your authenticator app|enter the number shown|we(?:'| ha)ve sent a (?:notification|text|code)|verify your identity|two[- ]step verification|multi[- ]?factor authentication|enter (?:the|your) (?:verification )?code|duo push|check your phone/i
+
+// After a sign-in submit, an identity provider's single-page app swaps steps
+// with an animation and follow-up requests: the lightbox goes BLANK, then the
+// next step (password, MFA prompt, "Stay signed in?", the SAML hop) paints.
+// `networkidle` resolves in that blank moment (prod screenshot 2026-09-06
+// 18:42Z: an empty MTSU-branded Microsoft lightbox), so a DOM read there
+// still saw the password box and called it a rejected password. Wait for the
+// page to SETTLE: the password box gone, a failure sentence, an MFA prompt,
+// or a navigation off the sign-in URL — bounded.
+async function waitForSignInSettle(page, { timeoutMs = 12000, startUrl = null } = {}) {
+  const t0 = Date.now()
+  let last = 'timeout'
+  while (Date.now() - t0 < timeoutMs) {
+    const url = (() => { try { return page.url() } catch { return null } })()
+    if (startUrl && url && url !== startUrl) { last = 'navigated'; break }
+    const pass = await visiblePasswordField(page)
+    if (!pass) { last = 'password_gone'; break }
+    const said = await readLoginFailureText(page)
+    if (said) { last = 'failure_text'; break }
+    const { bodyText } = await readBotWallSignals(page)
+    if (MFA_PROMPT_TEXT_RX.test(bodyText || '')) { last = 'mfa_prompt'; break }
+    if (typeof page.waitForTimeout === 'function') await page.waitForTimeout(400).catch(() => {})
+    else await new Promise((r) => setTimeout(r, 400))
+  }
+  return last
+}
+
 // A password box that is in the DOM but NOT shown is not a password step.
 // Microsoft keeps its hidden inputs across steps; reading the DOM alone
 // turned every post-password page (MFA prompt, "Stay signed in?") into
@@ -912,6 +942,18 @@ async function attemptLoginDetailed(page, credential) {
           passField = await page.waitForSelector('input[type="password"]:not([disabled])', { timeout: 10000, state: 'visible' }).catch(() => null)
         }
       } catch { passField = null }
+      if (!passField) {
+        // Poll for a VISIBLE box: the username step's hidden input can satisfy
+        // a selector wait without ever being shown.
+        const t0 = Date.now()
+        while (!passField && Date.now() - t0 < 10000) {
+          passField = await visiblePasswordField(page)
+          if (passField) break
+          if (await readLoginFailureText(page)) break
+          if (typeof page.waitForTimeout === 'function') await page.waitForTimeout(400).catch(() => {})
+          else await new Promise((r) => setTimeout(r, 400))
+        }
+      }
       if (!passField) passField = await page.$('input[type="password"]:not([disabled])').catch(() => null)
       if (passField && typeof passField.isVisible === 'function' && !(await passField.isVisible().catch(() => true))) passField = null
       if (!passField) {
@@ -935,6 +977,8 @@ async function attemptLoginDetailed(page, credential) {
     if (!clicked) await passField.press('Enter').catch(() => {})
 
     await page.waitForLoadState('networkidle', { timeout: 15000 }).catch(() => {})
+    const settled = await waitForSignInSettle(page, { startUrl: (() => { try { return page.url() } catch { return null } })() })
+    await page.waitForLoadState('networkidle', { timeout: 8000 }).catch(() => {})
     // Microsoft's "Stay signed in?" interstitial: answer Yes so the SAML hop
     // completes and the session cookie persists for the run.
     const kmsi = await page.$('#idSIButton9, input[type="submit"][value="Yes"], button:has-text("Yes")').catch(() => null)
@@ -948,7 +992,7 @@ async function attemptLoginDetailed(page, credential) {
     const stillPassword = await visiblePasswordField(page)
     if (stillPassword) {
       const said = await readLoginFailureText(page)
-      return { ok: false, reason: 'password_rejected', url: urlNow(), said, text: said ? null : await readVisibleTextSnippet(page) }
+      return { ok: false, reason: 'password_rejected', url: urlNow(), said, text: said ? null : await readVisibleTextSnippet(page), settled }
     }
     // Still on a sign-in surface (a username-first IdP bounced back to its
     // first step, a rejected password re-rendering the form) is NOT a login.
@@ -959,7 +1003,7 @@ async function attemptLoginDetailed(page, credential) {
       const said = await readLoginFailureText(page)
       return { ok: false, reason: 'still_login_surface', url: urlNow(), said, text: said ? null : await readVisibleTextSnippet(page) }
     }
-    return { ok: true, reason: null, url: urlNow(), said: null }
+    return { ok: true, reason: null, url: urlNow(), said: null, settled }
   } catch (err) {
     return { ok: false, reason: 'exception', url: urlNow(), said: String(err?.message || err).split('\n')[0].slice(0, 160) }
   }
@@ -1031,9 +1075,6 @@ const SSO_ENTRY_TEXT_RX = /^(?:students?(?:\s+(?:portal|sign[\s-]?in|log[\s-]?in
 const SSO_ENTRY_REFUSE_RX = /admin|staff|faculty|employee|reviewer|committee|donor|alumni|parent|counselor|advisor|recommender|register|create\s+(?:an?\s+)?account|sign\s*up|forgot/i
 // Username-first inputs an IdP page shows before any password.
 const IDP_USERNAME_SELECTOR = 'input[type="email"]:not([disabled]), input[name="loginfmt"], input[autocomplete="username"]:not([disabled]), input[name*="user" i]:not([disabled]):not([type="hidden"]), input[id*="user" i]:not([disabled]):not([type="hidden"]), input[name="identifier"]'
-// Multi-factor prompts that carry NO otp-named input (Microsoft push
-// approval, number matching, Duo push).
-const MFA_PROMPT_TEXT_RX = /approve (?:the )?sign[- ]?in request|open your authenticator app|enter the number shown|we(?:'| ha)ve sent a (?:notification|text|code)|verify your identity|two[- ]step verification|multi[- ]?factor authentication|enter (?:the|your) (?:verification )?code|duo push|check your phone/i
 
 function hostOfUrl(url) {
   try { return new URL(String(url)).hostname.toLowerCase() } catch { return '' }
