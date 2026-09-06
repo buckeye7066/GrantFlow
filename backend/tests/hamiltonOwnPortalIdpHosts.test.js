@@ -192,3 +192,37 @@ describe('a sign-in that is still swapping steps is waited for, not called a rej
     expect(v.settled).toBe('password_gone')
   })
 })
+
+describe('"Trying to sign you in" is progress, not a wall; identifiers never travel in snippets', () => {
+  const { attemptLoginDetailed, maskIdentifiers, detectIdpLoginSurface } = _internal
+  const cred = ssoCredentialFromVault({
+    ownPortal: classifyFundingSource({ opportunity: dreamRow, profile: mtsuStudent }).own_institution_portal,
+    identityValues: { sso_username: 'jd2x', sso_password: 'pw-1' },
+  })
+  const ONE_STEP = '<html><body><form><input type="email" name="loginfmt" /><input type="password" name="passwd" /><input type="submit" id="idSIButton9" value="Sign in" /></form></body></html>'
+
+  it('a provider working page that keeps hidden inputs, then lands on the portal, is a completed login', async () => {
+    let phase = 0
+    const page = fakePage(ONE_STEP, {
+      url: MS_URL,
+      onSubmit: (doc) => {
+        phase = 1
+        doc.body.innerHTML = '<form><input type="email" name="loginfmt" data-hidden="1" /><input type="password" name="passwd" data-hidden="1" /></form><p>Trying to sign you in</p><button>Cancel</button>'
+        setTimeout(() => { phase = 2; doc.body.innerHTML = '<h1>Scholarship Manager</h1><p>Welcome back.</p>' }, 1200)
+      },
+    })
+    page.waitForTimeout = async (ms) => { await new Promise((r) => setTimeout(r, ms)) }
+    const v = await attemptLoginDetailed(page, cred)
+    expect(phase).toBe(2)
+    expect(v.ok).toBe(true)
+  })
+
+  it('a working page with only HIDDEN username input is not a sign-in surface', async () => {
+    const page = fakePage('<html><body><form><input type="email" name="loginfmt" data-hidden="1" /></form><p>Trying to sign you in</p></body></html>', { url: MS_URL, onSubmit: () => {} })
+    expect(await detectIdpLoginSurface(page, MS_URL)).toBe(false)
+  })
+
+  it('maskIdentifiers removes e-mail and phone tokens from a snippet', () => {
+    expect(maskIdentifiers('jd2x@mtmail.mtsu.edu Enter password 615-898-5345 Forgot my password')).toBe('[email] Enter password [phone] Forgot my password')
+  })
+})
