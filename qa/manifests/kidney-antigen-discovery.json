@@ -4,18 +4,20 @@
   "repo": "buckeye7066/kidney-antigen-discovery",
   "local_path": "~/kidney-antigen-discovery",
   "runtime_type": "web",
-  "start_command": "cd backend && uvicorn app.main:app --host 127.0.0.1 --port 8000 & cd frontend && npm run dev -- --hostname 127.0.0.1 --port 3000",
+  "start_command": "cd backend && python eva_start.py --install --port 45105 & cd frontend && npm run dev -- --hostname 127.0.0.1 --port 45205",
   "stop_command": "taskkill-by-port",
-  "readiness_probe": { "type": "http", "path": "/", "port": 3000, "timeout_ms": 60000 },
-  "base_url": "http://127.0.0.1:3000",
+  "$readiness_comment": "Use the checkout-local Python bootstrap, not global Uvicorn. A bounded first-run install may precede backend readiness; then warm the Next frontend. The backend-health journey uses the browser adapter and verifies the actual frontend-to-backend proxy instead of declaring a CLI command that the web adapter never executed.",
+  "readiness_probe": { "type": "http", "path": "/api/readyz", "port": 45105, "timeout_ms": 300000, "warm_paths": ["/"] },
+  "base_url": "http://127.0.0.1:45205",
   "test_target": "disposable-local-instance",
-  "required_env": ["KAD_DB_PATH", "KAD_UPLOAD_DIR", "KAD_OUTPUT_DIR", "KAD_UPLOAD_TTL_HOURS", "KAD_LOG_LEVEL"],
+  "required_env": ["KAD_DB_PATH", "KAD_UPLOAD_DIR", "KAD_OUTPUT_DIR", "KAD_UPLOAD_TTL_HOURS", "KAD_LOG_LEVEL", "BACKEND_URL"],
   "launch_env": {
     "KAD_DB_PATH": ".eva-tmp/kidney-antigen-discovery/runs.db",
     "KAD_UPLOAD_DIR": ".eva-tmp/kidney-antigen-discovery/uploads",
     "KAD_OUTPUT_DIR": ".eva-tmp/kidney-antigen-discovery/outputs",
     "KAD_UPLOAD_TTL_HOURS": "24",
-    "KAD_LOG_LEVEL": "INFO"
+    "KAD_LOG_LEVEL": "INFO",
+    "BACKEND_URL": "http://127.0.0.1:45105"
   },
   "seed_command": "python -m app.tests.synthetic_data ../example_data/synthetic (regenerate the artificial demo dataset; cwd backend)",
   "reset_command": "rm -rf .eva-tmp/kidney-antigen-discovery/runs.db",
@@ -32,8 +34,8 @@
   ],
   "allowlist": {
     "hosts": ["localhost", "127.0.0.1"],
-    "ports": [3000, 8000],
-    "routes": ["/", "/upload", "/runs", "/api/health", "/api/presets"],
+    "ports": [45205, 45105],
+    "routes": ["/", "/upload", "/runs", "/api/health", "/api/readyz", "/api/presets"],
     "file_roots": [".eva-tmp/kidney-antigen-discovery"],
     "processes": ["node", "npm", "python", "python.exe", "uvicorn"]
   },
@@ -79,15 +81,19 @@
     },
     {
       "id": "backend-health",
-      "name": "FastAPI backend is reachable and self-identifies",
+      "name": "Frontend proxy reaches the ready research-only FastAPI backend",
       "severity": "high",
-      "command": "node",
-      "args": ["-e", "fetch('http://localhost:8000/').then(r=>{if(!r.ok)process.exit(1);return r.text()}).then(t=>{process.stdout.write(t)}).catch(()=>process.exit(1))"],
-      "expect_exit_code": 0,
-      "expect_stdout_matches": "Kidney Antigen Discovery",
-      "timeout_ms": 20000,
-      "user_impact": "If the FastAPI backend is down, the frontend proxy has nothing to call and no analysis can run.",
-      "candidate_files": ["backend/app/main.py", "backend/app/api/routes.py"]
+      "steps": [
+        { "action": "goto", "url": "/api/readyz" },
+        { "action": "waitForSelector", "selector": "body" }
+      ],
+      "assert": [
+        { "type": "text_visible", "selector": "body", "value": "Kidney Antigen Discovery Pipeline" },
+        { "type": "text_visible", "selector": "body", "value": "research_only" },
+        { "type": "text_visible", "selector": "body", "value": "writable" }
+      ],
+      "user_impact": "If the FastAPI backend or frontend proxy is down, no analysis can run.",
+      "candidate_files": ["backend/eva_start.py", "backend/app/main.py", "backend/app/api/routes.py", "frontend/next.config.js"]
     }
   ]
 }
