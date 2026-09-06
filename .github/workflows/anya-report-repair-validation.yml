@@ -5,32 +5,41 @@ on:
   workflow_dispatch:
 permissions:
   contents: read
+  actions: read
 jobs:
   validate:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
         with:
+          ref: 95cf5ee0aae646ba6ef15891dfcadcbbd00cdd91
           persist-credentials: false
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '24'
-      - name: Capture report-scoped public sources for the repair workspace
+      - name: Capture exact repair source
+        run: git archive --format=tar.gz --output="$RUNNER_TEMP/GrantFlow-pr1579.tar.gz" HEAD
+      - name: Extract failed-test evidence from existing CI run
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          mkdir -p "$RUNNER_TEMP/report-sources/GrantFlow"
-          git archive HEAD | tar -x -C "$RUNNER_TEMP/report-sources/GrantFlow"
-          for repo in incognito livehealth genemap-discovery kidney-antigen-discovery app-store-publisher local-ai-factory sermonsmith mind-over-math are-we-mice-or-are-we-men family-stewardship-navigator; do
-            git clone --depth=1 "https://github.com/buckeye7066/$repo.git" "$RUNNER_TEMP/report-sources/$repo"
-            git -C "$RUNNER_TEMP/report-sources/$repo" rev-parse HEAD > "$RUNNER_TEMP/report-sources/$repo/REPAIR_BASE_SHA"
-            rm -rf "$RUNNER_TEMP/report-sources/$repo/.git"
-          done
-          tar -czf "$RUNNER_TEMP/portfolio-source.tar.gz" -C "$RUNNER_TEMP/report-sources" .
+          gh api /repos/buckeye7066/GrantFlow/actions/jobs/101517948691/logs > "$RUNNER_TEMP/backend-ci.log"
+          python3 - <<'PY'
+          import os, pathlib, re
+          root = pathlib.Path(os.environ['RUNNER_TEMP'])
+          lines = (root / 'backend-ci.log').read_text(errors='replace').splitlines()
+          indices = [i for i, line in enumerate(lines) if re.search(r'\bnot ok\b|AssertionError|ERR_ASSERTION', line)]
+          selected = set()
+          for i in indices:
+              selected.update(range(max(0, i - 8), min(len(lines), i + 38)))
+          excerpt = '\n'.join(f'{i+1}: {lines[i]}' for i in sorted(selected))
+          if not excerpt:
+              excerpt = 'No TAP assertion located.\n' + '\n'.join(lines[-100:])
+          (root / 'failure-evidence.txt').write_text(excerpt)
+          print(excerpt[:50000])
+          PY
       - uses: actions/upload-artifact@v4
         with:
-          name: anya-repair-source
-          path: ${{ runner.temp }}/portfolio-source.tar.gz
+          name: anya-repair-evidence
+          path: |
+            ${{ runner.temp }}/failure-evidence.txt
+            ${{ runner.temp }}/GrantFlow-pr1579.tar.gz
           retention-days: 1
-      - name: EVA runner regression suite
-        working-directory: tools/eva-edge-runner
-        run: npm test
