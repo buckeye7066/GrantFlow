@@ -356,6 +356,17 @@ export default function FoundationSearch() {
         }),
       })
 
+      // A GRANTMAKER is a funder lead, not an award: the server searched the
+      // funder's own programs for this profile instead of adding the 990 row.
+      if (result?.status === "funder_lead") {
+        const found = Number(result?.search?.found ?? 0)
+        const top = [...(result?.search?.funding_matches ?? []), ...(result?.search?.research_leads ?? [])].slice(0, 3).map((r) => r.title).filter(Boolean)
+        toast({
+          title: found > 0 ? `${result.funder?.name ?? "Funder"}: ${found} program${found === 1 ? "" : "s"} found` : `${result.funder?.name ?? "Funder"} is a grantmaker, not an award`,
+          description: `${result.message}${top.length ? ` Top: ${top.join("; ")}.` : ""}`,
+        })
+        return
+      }
       // Only mark as "in pipeline" once we confirm a successful, persisted result.
       const persisted = Boolean(result?.id || result?.grant?.id || result?.already_exists)
       if (!persisted) {

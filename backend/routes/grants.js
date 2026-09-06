@@ -19,6 +19,7 @@ import { scheduleGrantApplicationApproach } from '../services/grantApplicationAp
 import { evaluatePipelineSource } from '../config/pipelineAllowedSources.js'
 import { upsertFundingOpportunity } from '../services/opportunityInserter.js'
 import { loadProfileContext, mergeOpportunitySignals } from '../services/profileHelpers.js'
+import { classifyFunderLead } from '../services/funderLead.js'
 import { decorateOpportunityFreshness, saveToProfilePipeline } from '../services/opportunityMatcher.js'
 import { computeMatchDecision } from '../services/matchEngine.js'
 import {
@@ -1684,6 +1685,48 @@ router.post('/from-opportunity', async (req, res, next) => {
       })
     }
     
+    // FUNDER LEAD (owner 2026-09-05: "these sources error when I try to add
+    // them"). A ProPublica 990 grantmaker (community foundation, private
+    // foundation, charitable trust) is not something a person applies to: no
+    // application URL, no need vocabulary, DIRECTORY kind — the canonical
+    // admission gate refused it as NEED_COVERAGE and the page showed a bare
+    // error. The refusal stands; the click now does the WORK the lead implies:
+    // the item-need search (display-only, every catalog hit adjudicated by the
+    // canonical engine, every web lead gated on funding intent) is run for the
+    // funder's own scholarship / grant programs and the results are returned
+    // so the page can offer THOSE for the pipeline.
+    const funderLead = !opportunity_id && opportunity_data ? classifyFunderLead(opportunity_data) : null
+    if (funderLead && normalizedProfileId) {
+      let search = null
+      try {
+        const { searchItemNeed } = await import('../services/itemNeedSearch.js')
+        search = await searchItemNeed(req.db, { profileId: normalizedProfileId, item: `${funderLead.name} scholarship grant`, maxResults: 10, timeoutMs: 15000 })
+      } catch (err) {
+        search = { error: err?.message || String(err), found: 0, results: [], funding_matches: [], research_leads: [] }
+      }
+      const pick = (rows) => (Array.isArray(rows) ? rows : []).slice(0, 5).map((r) => ({ title: r.title ?? null, url: r.url ?? null, source: r.source ?? r.lane ?? null, decision: r.decision ?? null, match_score: r.match_score ?? null }))
+      const found = Number(search?.found ?? 0)
+      return res.status(200).json({
+        ok: true,
+        status: 'funder_lead',
+        not_added_to_pipeline: true,
+        funder: funderLead,
+        search: {
+          found,
+          awardable_count: search?.awardable_count ?? 0,
+          direct_funding_count: search?.direct_funding_count ?? 0,
+          research_lead_count: search?.research_lead_count ?? 0,
+          funding_matches: pick(search?.funding_matches),
+          research_leads: pick(search?.research_leads),
+          error: search?.error ?? null,
+        },
+        message: found > 0
+          ? `${funderLead.name} is a grantmaker, not an award you apply to. GrantFlow searched its programs for this profile and found ${found} — add those from the results.`
+          : `${funderLead.name} is a grantmaker, not an award you apply to. GrantFlow searched for its scholarship or grant programs for this profile and found none it can stand behind${search?.error ? ` (search error: ${search.error})` : ''}.`,
+        requestId,
+      })
+    }
+
     // Try to get opportunity from database first
     let opportunity = null;
     let resolvedOpportunityId = null;  // Track the actual opportunity ID to use
