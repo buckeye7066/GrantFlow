@@ -1219,7 +1219,10 @@ describe('enforceInvariants — runner', () => {
     // + pipeline_precision (2026-08-22, owner order 2026-08-21).
     // + mission_lane_match_scope (2026-08-22, the four-profile measurement).
     // + shared_listing_application_targets (2026-08-23, Coolidge/Live Más).
-    expect(summary.ran).toBe(66)
+    // + engine_version_matcher_lane (2026-09-06): a pair whose matcher_version
+    //   holds an ENGINE semver instead of a surfacing lane is invisible to every
+    //   read path; 142 prod pairs (38 ACCEPT) were stranded that way.
+    expect(summary.ran).toBe(67)
     expect(summary.failed).toBe(0)
     expect(summary.steps.map((s) => s.name)).toEqual([
       'sticky_deletes',
@@ -1309,6 +1312,7 @@ describe('enforceInvariants — runner', () => {
       // Linker residue: refresh gate-only stubs lacking scoring_policy_version
       // without rebranding matcher_version (item 43).
       'stale_match_explain_refresh',
+      'engine_version_matcher_lane',
       'stage_of_life_match_scope',
       'field_of_study_match_scope',
       'no_dangling_matches',

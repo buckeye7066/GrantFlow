@@ -25,7 +25,7 @@ import { canonicalizeOpportunityList, isFiniteNumberLike } from '../services/mat
 import { loadVnextGuidanceByOpportunity } from '../services/matching/vnextApplicationGuidance.js'
 import { recordLowCoverageEvent } from '../services/matching/professionalDevelopmentPolicy.js'
 import { assembleFundingResults } from '../services/zeroResultLadder.js'
-import { SURFACED_MATCHER_VERSIONS_SQL, qualifiesForDisplay } from '../config/matchSurfacing.js'
+import { SURFACED_MATCHER_VERSIONS_SQL, qualifiesForDisplay, pointerDisplayRefusal } from '../config/matchSurfacing.js'
 import {
   enrichSuccessStep,
   loadSuccessStepCompletion,
@@ -560,7 +560,23 @@ router.get('/profile/:profileId/opportunities', async (req, res, next) => {
       // ── Score floor ─────────────────────────────────────────────────────
       // Directories always survive (mission rule). Everything else must clear
       // the requested min_score (default = DISCOVERY_MIN_SCORE_FLOOR / REVIEW).
-      let qualified = mapped.filter((o) => qualifiesForDisplay(o, osMin))
+      // A pointer refused by the four gates is COUNTED, never silently dropped
+      // (the standing rule in services/pipelinePrecision.js). Owner report
+      // 2026-09-06: 8 of this profile's 18 surfaced pointers were unproven.
+      const pointerRefusals = {}
+      let qualified = mapped.filter((o) => {
+        const kept = qualifiesForDisplay(o, osMin)
+        if (!kept) {
+          const refusal = pointerDisplayRefusal(o, osMin)
+          if (refusal) {
+            for (const leg of refusal.failed) {
+              const key = `${refusal.reason}:${leg}`
+              pointerRefusals[key] = (pointerRefusals[key] ?? 0) + 1
+            }
+          }
+        }
+        return kept
+      })
 
       // ── Zero-result recovery ladder (mission rule) ──────────────────────
       // Zero results is a FAILURE state, not an acceptable outcome. When the
@@ -762,6 +778,7 @@ router.get('/profile/:profileId/opportunities', async (req, res, next) => {
           annotated_already_in_pipeline: pipelineMode === 'annotate' ? pipelineExcludedCount || undefined : undefined,
           dropped_reasons: canonical.dropped && Object.keys(canonical.dropped).length > 0 ? canonical.dropped : undefined,
           unsurfaced_above_floor_nofit: unsurfacedAboveFloorNoFit.length || undefined,
+          pointer_gate_refusals: Object.keys(pointerRefusals).length > 0 ? pointerRefusals : undefined,
           relaxation_applied: relaxation ? true : undefined,
         },
         coverage_summary: {

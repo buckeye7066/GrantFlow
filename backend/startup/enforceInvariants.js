@@ -10490,6 +10490,108 @@ export async function enforceStaleMatchExplainRefresh(db) {
 }
 
 /**
+ * INVARIANT: `matcher_version` NAMES A SURFACING LANE, NEVER AN ENGINE VERSION
+ * (2026-09-06, the "0 opportunities you can apply to" class).
+ *
+ * `SURFACED_MATCHER_VERSIONS` is an ALLOWLIST, so a value it does not name is
+ * a pair no read path will ever return. `opportunityMatcher.persistFreshCanonicalDecision`
+ * wrote `decision.matcherVersion` — the canonical engine's own semver, '4.1.2'
+ * — into that column, so a promotion-time rescore silently UNPUBLISHED the very
+ * pair it had just re-proved. Measured on prod 2026-09-06: **142 pairs across 6
+ * profiles** stranded in the '4.1.2' lane, **38 of them ACCEPT**, invisible
+ * since that writer went live on 2026-09-05 14:29 — which is why one student's
+ * Discover page listed 18 directories and zero applyable awards while 19 engine
+ * ACCEPTs sat in her match store.
+ *
+ * The writer is fixed; this is the net, because the strand is permanent by
+ * design (nothing re-reads a row no read path can see — the migration-135 rule).
+ *
+ * THE PREDICATE IS DELIBERATELY NARROW. It re-stamps ONLY a value shaped like a
+ * bare semver (`4.1.2`), which is an ENGINE version and can never be a lane. It
+ * is NOT "anything not on the allowlist" — some lanes are unsurfaced on purpose,
+ * and a blanket repair would publish them. Candidate values are read as DISTINCT
+ * first and adjudicated in JS, so the rule stays dialect-neutral (Postgres `~`
+ * and SQLite `GLOB` are not interchangeable) and each UPDATE keys on an exact
+ * literal. Idempotent: a re-stamped row no longer matches.
+ */
+const ENGINE_VERSION_MATCHER_RX = /^\d+\.\d+\.\d+$/
+
+export async function enforceEngineVersionMatcherLane(db) {
+  return runInvariant('engine_version_matcher_lane', async () => {
+    let CANONICAL_RESCORE_MATCHER_VERSION
+    try {
+      ;({ CANONICAL_RESCORE_MATCHER_VERSION } = await import('../config/matchSurfacing.js'))
+    } catch (err) {
+      log.warn('engine_version_matcher_lane: registry unavailable (non-fatal)', { error: String(err?.message || err) })
+      return { scanned: 0, repaired: 0, enforced: true, skipped: 'deps' }
+    }
+
+    let rows = []
+    try {
+      rows = await db.prepare(
+        `SELECT matcher_version, COUNT(*) AS n
+           FROM profile_opportunity_matches
+          WHERE matcher_version IS NOT NULL AND matcher_version <> ''
+          GROUP BY matcher_version`,
+      ).all()
+    } catch (err) {
+      log.warn('engine_version_matcher_lane: match store unreadable — sweep skipped, NOT green', { error: String(err?.message || err) })
+      return { scanned: 0, repaired: 0, enforced: true, skipped: 'schema' }
+    }
+
+    const stranded = (rows || []).filter((row) => ENGINE_VERSION_MATCHER_RX.test(String(row.matcher_version ?? '')))
+    const scanned = stranded.reduce((sum, row) => sum + Number(row.n ?? 0), 0)
+    if (stranded.length === 0) return { scanned: 0, repaired: 0, enforced: true }
+
+    // The SAME writer also stripped `four_truth_proof` from these rows' explain
+    // (the canonical engine never writes it; crawler-os's wrapper does), and a
+    // proof cannot be re-manufactured here without re-running the crawler-os
+    // builder with the opportunity and thesis. Re-stamping the lane therefore
+    // makes the row READABLE again but does not by itself make an ACCEPT
+    // recommendable — that returns when the profile's next crawler-os run
+    // re-scores the pair. COUNT AND REPORT IT rather than let the residue be
+    // silent; `acceptsAwaitingProof` is the honest size of what is still owed.
+    let acceptsAwaitingProof = 0
+    try {
+      const row = await db.prepare(
+        `SELECT COUNT(*) AS n FROM profile_opportunity_matches
+          WHERE LOWER(COALESCE(match_decision, '')) = 'accept'
+            AND COALESCE(match_explain_json, '') NOT LIKE '%four_truth_proof%'`,
+      ).get()
+      acceptsAwaitingProof = Number(row?.n ?? 0)
+    } catch {
+      acceptsAwaitingProof = 0
+    }
+
+    let repaired = 0
+    for (const row of stranded) {
+      try {
+        const res = await db.prepare(
+          `UPDATE profile_opportunity_matches SET matcher_version = ? WHERE matcher_version = ?`,
+        ).run(CANONICAL_RESCORE_MATCHER_VERSION, String(row.matcher_version))
+        repaired += Number(res?.changes ?? res?.rowCount ?? 0)
+      } catch (err) {
+        log.warn('engine_version_matcher_lane: re-stamp failed (non-fatal)', {
+          matcherVersion: row.matcher_version, error: String(err?.message || err),
+        })
+      }
+    }
+    if (repaired > 0) {
+      log.info('re-stamped engine-version match rows into the canonical rescore lane', {
+        repaired, lanes: stranded.map((row) => row.matcher_version), acceptsAwaitingProof,
+      })
+    }
+    return {
+      scanned,
+      repaired,
+      acceptsAwaitingProof,
+      lanes: stranded.map((row) => String(row.matcher_version)),
+      enforced: true,
+    }
+  })
+}
+
+/**
  * INVARIANT: A FUNDER THE CATALOG HOLDS HAS ITS DEMONSTRATED GIVING READ
  * (the funder-behavior graph, 2026-08-05).
  *
@@ -11120,6 +11222,10 @@ export async function runEnforceInvariants(db, { logger = log } = {}) {
   // Linker / recall residue: refresh gate-only stubs that lack
   // scoring_policy_version WITHOUT rebranding matcher_version (item 43).
   steps.push(await enforceStaleMatchExplainRefresh(db))
+  // A pair whose `matcher_version` holds an ENGINE version instead of a lane is
+  // invisible to every read path (the allowlist). Re-stamp BEFORE the scope /
+  // census / integrity steps below, so they measure the store as it will be READ.
+  steps.push(await enforceEngineVersionMatcherLane(db))
   // ACADEMIC-STAGE scope net: remove surfaced awards the profile's derived stage
   // provably cannot receive (graduate/professional, postdoctoral, adult
   // reentry). Runs immediately AFTER the recall gates so anything they added

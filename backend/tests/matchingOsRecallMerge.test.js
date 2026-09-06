@@ -112,10 +112,20 @@ function seedStudent(db) {
       `INSERT INTO funding_opportunities (id, title, sponsor, source, source_id, source_url, application_url, opportunity_kind, type, opportunity_type, is_national, is_active, categories, keywords)
        VALUES (?, ?, 'Gov', ?, ?, 'https://example.gov/', 'https://example.gov/', ?, 'DIRECTORY', 'directory', 1, 1, '["directory"]', '["scholarship","education"]')`,
     ).run(id, title, source, id, kind)
+    // A POINTER carries the four gates in their pointer sense
+    // (crawler-os/pointerTruthPolicy.js) — tied to this profile geographically,
+    // serving a recorded need, scored against its data points. This suite is
+    // about the OS/catalog MERGE, so it states that evidence explicitly rather
+    // than relying on the exemption the pointer arm used to grant.
     db.prepare(
-      `INSERT INTO profile_opportunity_matches (profile_id, opportunity_id, match_score, match_decision, match_explanation, match_reasons, matcher_version)
-       VALUES ('student-1', ?, ?, 'REVIEW', 'Directory pointer', '[]', 'crawler-os')`,
-    ).run(id, score)
+      `INSERT INTO profile_opportunity_matches (profile_id, opportunity_id, match_score, match_decision, match_explanation, match_reasons, match_explain_json, matcher_version)
+       VALUES ('student-1', ?, ?, 'REVIEW', 'Directory pointer', '[]', ?, 'crawler-os')`,
+    ).run(id, score, JSON.stringify({
+      matched_location: 'state',
+      matched_profile_type: true,
+      matched_needs: ['education'],
+      matched_profile_facts: ['Profile signal: geo:state'],
+    }))
   }
 
   for (let i = 1; i <= 6; i += 1) {

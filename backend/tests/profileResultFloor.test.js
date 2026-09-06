@@ -58,7 +58,19 @@ const read = (rel) => readFileSync(path.join(HERE, '..', rel), 'utf8')
 
 /** A row the engine ACCEPTed — surfaces regardless of the display floor. */
 const award = (over = {}) => withVerifiedFourTruth({ match_score: 40, match_decision: 'ACCEPT', title: 'Emergency Housing Grant', opportunity_kind: 'direct_grant', ...over })
-const locator = (over = {}) => ({ match_score: 40, match_decision: 'REVIEW', title: 'Local assistance programs near you', opportunity_kind: 'directory', is_directory: true, ...over })
+/**
+ * A locator the engine PROVED against this profile. A pointer faces the same
+ * four gates in their pointer sense (crawler-os/pointerTruthPolicy.js), so a
+ * fixture about the RESULT COUNT states that evidence rather than relying on
+ * the exemption the pointer arm used to grant.
+ */
+const POINTER_MATCH_EVIDENCE = Object.freeze({
+  matched_location: 'state',
+  matched_profile_type: true,
+  matched_needs: ['housing'],
+  matched_profile_facts: ['Profile signal: geo:state'],
+})
+const locator = (over = {}) => ({ match_score: 40, match_decision: 'REVIEW', title: 'Local assistance programs near you', opportunity_kind: 'directory', is_directory: true, url: 'https://example.gov/locator', match_explain: POINTER_MATCH_EVIDENCE, ...over })
 
 // ───────────────────────────── 1. THE COUNT ─────────────────────────────────
 
