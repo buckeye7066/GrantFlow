@@ -118,6 +118,7 @@ import { attemptCaptchaSolve, isCaptchaSolverConfigured } from './hamiltonCaptch
 import { answerUnknownField } from './hamiltonFieldAnswerer.js'
 import { loadIdentityValuesForFill } from './hamiltonProfileIdentityVault.js'
 import { emitIdentityRequest } from './hamiltonIdentityRequest.js'
+import { resolveOwnPortalCoverage } from './hamiltonOwnPortalCoverage.js'
 import { listIdentitySecrets } from './hamiltonProfileIdentityVault.js'
 import { resolveOwnPortalAccess, ssoCredentialFromVault } from './hamiltonOwnPortalAccess.js'
 import { makeHamiltonGraphTokenProvider } from './hamiltonGraphToken.js'
@@ -2686,6 +2687,47 @@ async function runAutopilotPathway(db, {
   // recovery never tries to register an account on a school SSO.
   let knownAuthWallKind = null
   const ownPortal = classification?.own_institution_portal || null
+  // COVERED-BY-GENERAL-APPLICATION SHORT-CIRCUIT (2026-09-06). A scholarship
+  // whose school General Application is VERIFIED submitted, and which that
+  // application genuinely governs (by the scholarship's OWN pre-reroute url),
+  // is DONE: MTSU's portal states scholarships cannot be applied to
+  // individually. Resolve it as covered BEFORE any SSO login, so it never
+  // parks — run after run — on Microsoft's Authenticator MFA wall chasing a
+  // login that cannot and need not happen (Anastasia's DREAM Scholarship, 14
+  // blocked retries). Never sweeps a FAFSA/state award or a program with its
+  // own application system: those own urls are not governed, and silence is
+  // never coverage.
+  if (ownPortal) {
+    const coverage = await resolveOwnPortalCoverage(db, { profileId: task.profile_id, ownPortal }).catch(() => null)
+    if (coverage?.covered) {
+      const coveredAt = new Date().toISOString()
+      if (grant?.id) {
+        try {
+          const nowFn = db?.dialect === 'postgres' ? 'now()' : 'CURRENT_TIMESTAMP'
+          const dateExpr = db?.dialect === 'postgres' ? 'CURRENT_DATE' : "date('now')"
+          await db.prepare(
+            `UPDATE grants SET status = 'submitted', submitted_date = COALESCE(submitted_date, ${dateExpr}), updated_at = ${nowFn}
+              WHERE id = ? AND LOWER(COALESCE(status, '')) NOT IN ('submitted', 'awarded', 'declined', 'archived')`,
+          ).run(String(grant.id))
+        } catch { /* grants table may be absent in test fixtures */ }
+      }
+      await appendTaskEvent(db, {
+        taskId: task.id, eventType: 'general_application_coverage', status: 'completed',
+        step: 'own_portal_general_application_covered', message: coverage.message,
+        actorUserId: userId, actorRole: 'agent',
+        details: { portal_host: ownPortal.portal_host, own_url: ownPortal.replaced_url || null, evidence: coverage.evidence, autopilot_run_id: run.id },
+      }).catch(() => {})
+      await persistTerminalOrFail(db, { task, run, userId, label: 'own_portal_coverage_run' }, () => updateAutopilotRun(db, run.id, {
+        status: 'completed',
+        result: { ...(engineResult || {}), own_portal_general_application_covered: true, portal_host: ownPortal.portal_host },
+        blockerKind: null, blockerDetail: null, finishedAt: coveredAt,
+      }))
+      await persistTerminalOrFail(db, { task, run, userId, label: 'own_portal_coverage_task' }, () => updateApplicationTask(db, task.id, {
+        unlessCancelled: true, status: 'completed', completedAt: coveredAt, lastAgentMessage: coverage.message,
+      }))
+      return { task: await reload(db, task.id), classification, autopilot_run: run.id, autopilot_result: { status: 'completed', own_portal_general_application_covered: true } }
+    }
+  }
   if (ownPortal && !loginCredential && !storageState) {
     let vaultKinds = []
     try { vaultKinds = (await listIdentitySecrets(db, task.profile_id)) ?? [] } catch { vaultKinds = [] }
