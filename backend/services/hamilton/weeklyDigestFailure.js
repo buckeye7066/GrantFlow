@@ -5,9 +5,17 @@ const CODES = new Set([
   'JOHN_OUTLOOK_DRAFT_FAILED', 'JOHN_OUTLOOK_MISSING_RECIPIENT',
   'DIGEST_DRAFT_UNVERIFIED', 'DIGEST_SEND_FAILED', 'DIGEST_PARTIAL_SEND',
 ])
+/**
+ * @param {unknown} profileId
+ * @param {unknown} mode
+ * @param {unknown} [error]
+ */
 export function weeklyDigestFailure(profileId, mode, error = {}) {
-  const code = CODES.has(error?.code) ? error.code : 'DIGEST_DELIVERY_FAILED'
-  const candidate = Number(error?.status)
+  const details = error !== null && typeof error === 'object' ? error : {}
+  const rawCode = 'code' in details ? details.code : undefined
+  const code = typeof rawCode === 'string' && CODES.has(rawCode) ? rawCode : 'DIGEST_DELIVERY_FAILED'
+  const rawStatus = 'status' in details ? details.status : undefined
+  const candidate = typeof rawStatus === 'number' || typeof rawStatus === 'string' ? Number(rawStatus) : NaN
   const status = Number.isInteger(candidate) && candidate >= 400 && candidate <= 599 ? candidate : null
   let nextAction = 'Inspect the application log for this profile and delivery mode; verify mailbox state before retrying only the failed profile.'
   if (status === 401 || code === 'JOHN_OUTLOOK_NOT_CONFIGURED' || code === 'JOHN_OUTLOOK_TOKEN_FAILED') {
