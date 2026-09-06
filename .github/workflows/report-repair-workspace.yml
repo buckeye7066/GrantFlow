@@ -1,0 +1,22 @@
+name: Report repair workspace
+on:
+  push:
+    branches: ['fix/2026-09-06-report-repairs']
+    paths: ['.github/workflows/report-repair-workspace.yml']
+permissions:
+  contents: read
+jobs:
+  workspace:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Archive tracked source only (no git credentials or runtime environment)
+        run: git archive --format=tar.gz --output=report-repair-source.tar.gz HEAD
+      - uses: actions/upload-artifact@v4
+        with:
+          name: report-repair-source
+          path: report-repair-source.tar.gz
+          retention-days: 1
