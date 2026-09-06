@@ -2520,6 +2520,17 @@ export async function runAutopilot({
             trace.push({ step: 'login_reached_2fa', detail: { url: (() => { try { return page.url() } catch { return null } })() } })
             gate = afterLogin
           } else {
+            // Leave a picture of the page the sign-in died on, beside the
+            // confirmation captures (durable dir), so the failure can be SEEN
+            // — five rounds of prod verdicts on 2026-09-06 were words about a
+            // page nobody could look at.
+            let loginShot = null
+            try {
+              if (!fs.existsSync(screenshotsRoot)) fs.mkdirSync(screenshotsRoot, { recursive: true })
+              loginShot = path.join(screenshotsRoot, `login_failure_${Date.now()}.png`)
+              await page.screenshot({ path: loginShot, fullPage: true, timeout: 8000 })
+            } catch { loginShot = null }
+            if (loginShot) trace.push({ step: 'login_failure_screenshot', detail: { path: loginShot } })
             // Login fill failed (couldn't find/submit form) — fall through to the
             // normal hard-stop so the user is told login is required.
             const why = loginVerdict.reason === 'origin_refused' ? 'the sign-in page is on a host the saved login is not scoped to'
@@ -2536,7 +2547,7 @@ export async function runAutopilot({
             return {
               status: 'blocked', blocker_kind: 'login',
               blocker_detail: `Saved login could not be completed automatically: ${why}${host ? ` (at ${host})` : ''}.${said}`,
-              login_failure: { reason: loginVerdict.reason || null, url: loginVerdict.url || null, said: loginVerdict.said || null, text: loginVerdict.text || null },
+              login_failure: { reason: loginVerdict.reason || null, url: loginVerdict.url || null, said: loginVerdict.said || null, text: loginVerdict.text || null, screenshot_path: loginShot },
               filled_fields: filled, pages_visited: pagesVisited, trace, logged_in: loggedIn,
             }
           }
