@@ -782,9 +782,105 @@ function profileProvablyAdult(profileContext = {}, profileNorm = null) {
   return /senior|older adult|elder|retire|adult|6[0-9]\s*\+|[2-9][0-9]\s*(?:-|to)\s*[2-9][0-9]/.test(group) && !/youth|child|teen|minor|under 18/.test(group)
 }
 
+
+/**
+ * ACADEMIC THRESHOLDS (owner 2026-09-05, the MTSU scholarship list). A funder
+ * that states a minimum test score or GPA has made a positive claim; a profile
+ * that declares its scores has made one too. Compare them. Live case: a student
+ * with ACT 28 / SAT 1230 / GPA 3.84 carried the Buchanan Fellowship ("ACT
+ * composite score of 30 or higher, or SAT score of 1360 or higher") and the TN
+ * General Assembly Merit Scholarship ("minimum 3.75 GPA AND 29 ACT or a minimum
+ * 1330 SAT") in her pipeline, and Hamilton was drafting the Buchanan
+ * application while the funder's own page ruled her out.
+ *
+ * Rules (MISSING = NEUTRAL on both sides):
+ * - The LOWEST stated threshold of each kind is the bar (a page listing OR
+ *   alternatives — "27 ACT and 3.3 GPA OR 25 ACT and 3.5 GPA" — is satisfied by
+ *   its most lenient clause).
+ * - Tests: the bar is met when ANY declared score meets its stated minimum
+ *   (ACT vs ACT, SAT vs SAT). A stated test the profile never declared cannot
+ *   satisfy or fail. A test mismatch needs at least one comparable pair.
+ * - GPA: only 4.0-scale values on both sides are compared.
+ * - "ACT 21 or GPA 3.0" (a direct test-OR-GPA disjunction) is met when either
+ *   side is; "3.75 GPA AND 29 ACT or 1330 SAT" is not such a disjunction.
+ * - Renewal language ("to renew", "maintain a 2.5 GPA") is not an entry bar.
+ */
+const ACT_MIN_RX = /\b(?:act(?:\s+composite)?(?:\s+score)?\s+(?:of\s+)?(?:at\s+least\s+)?(\d{2})\b|(\d{2})\s*(?:\+|or\s+(?:higher|above|better))?\s+(?:or\s+higher\s+)?act\b)/gi
+const SAT_MIN_RX = /\b(?:sat(?:\s+(?:total|composite))?(?:\s+score)?\s+(?:of\s+)?(?:at\s+least\s+)?(\d{3,4})\b|\(?(\d{3,4})(?:\s*[-–]\s*\d{3,4})?\s+sat\b)/gi
+const GPA_MIN_RX = /\b(?:(?:gpa|grade[- ]point[- ]average)(?:\s+of)?(?:\s+at\s+least)?\s+(\d\.\d{1,2})\b|(\d\.\d{1,2})\s+(?:(?:minimum|cumulative|college|high[- ]school|unweighted|weighted|overall)\s+){0,3}(?:gpa|grade[- ]point[- ]average)\b)/gi
+const RENEWAL_CONTEXT_RX = /\b(?:to\s+renew|renewal|renewable\s+(?:with|if|provided)|maintain(?:ing|s)?\s+(?:a|an)?\s*(?:minimum\s+)?(?:\d\.\d{1,2}|cumulative))/i
+const TEST_OR_GPA_RX = /\b(?:act|sat)\b(?:(?!\band\b)[^.;]){0,25}\bor\b(?:(?!\band\b)[^.;]){0,20}\bgpa\b|\bgpa\b(?:(?!\band\b)[^.;]){0,25}\bor\b(?:(?!\band\b)[^.;]){0,20}\b(?:act|sat)\b/i
+
+function numericScore(value, min, max) {
+  const cleaned = String(value ?? '').replace(/[^0-9.]/g, '')
+  if (!cleaned) return null
+  const n = Number(cleaned)
+  return Number.isFinite(n) && n >= min && n <= max ? n : null
+}
+
+/** The profile's DECLARED scores (structured fields only; never prose). */
+export function profileDeclaredScores(profileContext = {}) {
+  const education = asObject(profileContext?.sections?.education)
+  const basic = asObject(profileContext?.sections?.basic_information)
+  const academic = asObject(basic.academic_status)
+  const pick = (kind, min, max) => {
+    const values = [education[kind], academic[kind], basic[kind]].map((v) => numericScore(v, min, max)).filter((v) => v !== null)
+    return values.length > 0 ? Math.max(...values) : null
+  }
+  return { act: pick('act_score', 1, 36), sat: pick('sat_score', 400, 1600), gpa: pick('gpa', 0.1, 4) }
+}
+
+function lowestStated(text, rx, min, max) {
+  let lowest = null
+  rx.lastIndex = 0
+  for (const m of String(text).matchAll(rx)) {
+    const n = numericScore(m[1] ?? m[2], min, max)
+    if (n !== null && (lowest === null || n < lowest)) lowest = n
+  }
+  return lowest
+}
+
+/** The opportunity's STATED entry minimums (renewal sentences excluded). */
+export function statedScoreMinimums(text = '') {
+  const entry = String(text).split(/(?<=[.;])\s+/).filter((sentence) => !RENEWAL_CONTEXT_RX.test(sentence)).join(' ')
+  return {
+    act: lowestStated(entry, ACT_MIN_RX, 1, 36),
+    sat: lowestStated(entry, SAT_MIN_RX, 400, 1600),
+    gpa: lowestStated(entry, GPA_MIN_RX, 0.1, 4),
+    testOrGpa: TEST_OR_GPA_RX.test(entry),
+  }
+}
+
+function academicThresholdMismatch(profileContext, targetingText, opportunity = {}) {
+  const declared = profileDeclaredScores(profileContext)
+  if (declared.act === null && declared.sat === null && declared.gpa === null) return null
+  const stated = statedScoreMinimums(`${opportunityTitleText(opportunity)} ${targetingText}`)
+  const testPairs = [['ACT', stated.act, declared.act], ['SAT', stated.sat, declared.sat]].filter(([, s, d]) => s !== null && d !== null)
+  const testMet = testPairs.some(([, s, d]) => d >= s)
+  const testFailed = testPairs.length > 0 && !testMet
+  const gpaComparable = stated.gpa !== null && declared.gpa !== null
+  const gpaFailed = gpaComparable && declared.gpa < stated.gpa
+  const gpaMet = gpaComparable && declared.gpa >= stated.gpa
+  if (stated.testOrGpa) {
+    if (testFailed && gpaFailed) {
+      return `Stated minimums (${testPairs.map(([k, s]) => `${k} ${s}`).join(' / ')} or GPA ${stated.gpa}) exceed the profile's declared scores (${testPairs.map(([k, , d]) => `${k} ${d}`).join(' / ')}, GPA ${declared.gpa})`
+    }
+    if ((testFailed && gpaMet) || (gpaFailed && testMet)) return null
+  }
+  if (testFailed) {
+    return `Stated minimum ${testPairs.map(([k, s]) => `${k} ${s}`).join(' or ')} exceeds the profile's declared ${testPairs.map(([k, , d]) => `${k} ${d}`).join(' / ')}`
+  }
+  if (gpaFailed) {
+    return `Stated minimum GPA ${stated.gpa} exceeds the profile's declared GPA ${declared.gpa}`
+  }
+  return null
+}
+
 function positivePopulationMismatches(profileContext, profileNorm, targetingText, opportunity = {}) {
   const out = []
   const title = opportunityTitleText(opportunity)
+  const academic = academicThresholdMismatch(profileContext, targetingText, opportunity)
+  if (academic) out.push(academic)
   if (CHILD_ONLY_PROGRAM_RX.test(`${title} ${targetingText}`) && profileProvablyAdult(profileContext, profileNorm)) {
     out.push('Program serves children under 18; the profile states an adult age')
   }
@@ -828,6 +924,39 @@ function positivePopulationMismatches(profileContext, profileNorm, targetingText
 function professionDependentContext(text) {
   return /\b(children?|dependents?|spouses?|famil(?:y|ies)|sons?|daughters?|grandchildren)\s+(?:of|for)\b/i.test(text) ||
     /\b(?:child|dependent|spouse|family)\s+of\s+(?:a|an)?\s{0,10}(?:nurse|emt|paramedic|teacher|veteran|first responder)\b/i.test(text)
+}
+
+/**
+ * The POSITIVE-FACT hard mismatches alone (owner 2026-09-05): the rules where
+ * the funder states an exclusive population, discipline, stage, or academic
+ * bar AND the profile states the contradicting fact. Consumed by the pipeline
+ * QUALIFIES gate so a row the engine would hard-reject converges out of a
+ * pipeline it was admitted to before the rule existed. Purpose/need scoring
+ * (a "no declared need" REJECT) is deliberately NOT here — silence is neutral.
+ */
+export function positiveFactMismatches({ profileContext = {}, profileNorm = null, opportunity = {} } = {}) {
+  const targetingText = opportunityTargetingText(opportunity)
+  const out = []
+  if (/\b(child care|childcare|day care|daycare|head start|wic\b|parents? of (?:young )?children)\b/i.test(targetingText) &&
+      !profileHasChildrenOrPregnancy(profileContext, profileNorm)) {
+    out.push('Child/dependent program requires a child, dependent, or pregnancy signal')
+  }
+  if (/\b(caregiver grant|caregiver support|family caregiver|respite care)\b/i.test(targetingText) &&
+      !profileIsCaregiver(profileContext, profileNorm)) {
+    out.push('Caregiver-only program requires a caregiver signal')
+  }
+  if (deathSurvivorRestriction(targetingText) && !profileHasSurvivorSignal(profileContext, profileNorm)) {
+    out.push('Death-survivor program requires widow, orphan, surviving-spouse, or Gold Star evidence')
+  }
+  if (/\b(international students? only|exclusively for international students?|non[- ]?u\.?s\.? citizens? only|foreign students? only)\b/i.test(targetingText) &&
+      !profileHasInternationalSignal(profileContext, profileNorm)) {
+    out.push('International-student-only program requires an international or immigration-status signal')
+  }
+  if (FOSTER_PROGRAM_RX.test(targetingText) && !profileHasFosterSignal(profileContext, profileNorm)) {
+    out.push('Foster-youth program requires a current or former foster-youth signal')
+  }
+  out.push(...positivePopulationMismatches(profileContext, profileNorm, targetingText, opportunity))
+  return [...new Set(out)]
 }
 
 export function evaluateNeedFirstMatchPolicy({
