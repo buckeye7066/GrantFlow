@@ -817,6 +817,14 @@ async function attemptLogin(page, credential) {
       if (userField) break
     }
     let passField = await page.$('input[type="password"]:not([disabled])').catch(() => null)
+    // Microsoft renders the password box in the DOM on the USERNAME step,
+    // hidden (live login.microsoftonline.com, 2026-09-06): filling it there
+    // times out and the run reads "still a password box" as a failed login.
+    // A hidden password box is the username-first shape.
+    if (passField && typeof passField.isVisible === 'function') {
+      const visible = await passField.isVisible().catch(() => true)
+      if (!visible) passField = null
+    }
     if (!userField) return false
     // USERNAME-FIRST identity providers (Microsoft, Okta, Google) show the
     // password only after the username is submitted. Type it, advance, then
@@ -835,6 +843,7 @@ async function attemptLogin(page, credential) {
         }
       } catch { passField = null }
       if (!passField) passField = await page.$('input[type="password"]:not([disabled])').catch(() => null)
+      if (passField && typeof passField.isVisible === 'function' && !(await passField.isVisible().catch(() => true))) passField = null
       if (!passField) return false
     } else {
       await userField.fill(String(username), { timeout: 5000 }).catch(() => {})

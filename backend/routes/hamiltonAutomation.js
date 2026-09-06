@@ -948,16 +948,43 @@ router.post('/tasks/:taskId/retry', async (req, res) => {
       actorRole: req.ctx?.isAdmin === true ? 'admin' : 'user',
       details: { retry_count: retryCount },
     })
-    runAutomationInBackground('retry_single', () => automateSingleSource(req.db, {
-      profile,
-      profileId: ctx.task.profile_id,
-      userId: getAuthUserId(ctx.user),
-      source: {
-        opportunity_id: ctx.task.opportunity_id,
-        grant_id: ctx.task.grant_id,
-        current_stage: ctx.task.current_pipeline_stage || ctx.task.selected_from_stage,
-      },
-    }))
+    // A retry the policy REFUSES (the source is a pointer, the profile no
+    // longer qualifies, the pipeline row is protected) used to leave no trace:
+    // the 202 said "queued", the orchestrator returned {skipped} into a
+    // background promise, and a terminal task was left untouched — four of
+    // nine manual retries on 2026-09-06 vanished exactly this way. The refusal
+    // is written onto the task so the owner reads WHY nothing ran.
+    const retryActorUserId = getAuthUserId(ctx.user)
+    const retryActorRole = req.ctx?.isAdmin === true ? 'admin' : 'user'
+    runAutomationInBackground('retry_single', async () => {
+      const result = await automateSingleSource(req.db, {
+        profile,
+        profileId: ctx.task.profile_id,
+        userId: retryActorUserId,
+        source: {
+          opportunity_id: ctx.task.opportunity_id,
+          grant_id: ctx.task.grant_id,
+          current_stage: ctx.task.current_pipeline_stage || ctx.task.selected_from_stage,
+        },
+      })
+      if (result?.skipped) {
+        const why = result?.policy?.message || result?.message || String(result?.reason || 'refused')
+        const gate = result?.policy?.code || result?.reason || 'refused'
+        await appendTaskEvent(req.db, {
+          taskId: ctx.task.id,
+          eventType: 'note',
+          step: 'manual_retry_refused',
+          message: `Manual retry #${retryCount} did NOT run: ${why} (${gate})`,
+          actorUserId: retryActorUserId,
+          actorRole: retryActorRole,
+          details: { retry_count: retryCount, reason: result?.reason || null, policy: result?.policy || null, closed_tasks: result?.closed_tasks || null },
+        }).catch(() => {})
+        await updateApplicationTask(req.db, ctx.task.id, {
+          lastAgentMessage: `Manual retry #${retryCount} did not run: ${why}`,
+        }).catch(() => {})
+      }
+      return result
+    })
     return res.status(202).json({ ok: true, queued: true, task_id: ctx.task.id, message: 'Hamilton is re-running this application in the background.' })
   } catch (err) {
     log.error('retry_failed', { err: err?.message })

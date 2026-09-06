@@ -50,3 +50,22 @@ describe('student-attendance clauses never mark an award institutional-only', ()
     expect(out).toMatch(/funds go to the/)
   })
 })
+
+describe('a scholarship for the NEXT GENERATION of a profession is a student award, not a call for the profession', () => {
+  it('the verbatim AFTE prose types student, never researcher-only', () => {
+    const n = mk('AFTE Scholarship', 'AFTE is proud to support the next generation of forensic scientists through annual scholarships of up to $2,000.', { sponsor: 'The Association of Firearm and Tool Mark Examiners' })
+    expect(n.entityTypesAllowed).toContain('student')
+    expect(n.entityTypesAllowed).not.toContain('researcher')
+  })
+
+  it('a real research call still types researcher', () => {
+    const n = mk('Research Infrastructure Awards', 'Proposals from faculty researchers and principal investigators at research institutions.')
+    expect(n.entityTypesAllowed).toContain('researcher')
+    expect(n.entityTypesAllowed).not.toContain('student')
+  })
+
+  it('a plain professional award for scientists stays researcher', () => {
+    const n = mk('Conference Travel Grant', 'Travel grants for scientists presenting at the annual meeting.')
+    expect(n.entityTypesAllowed).toContain('researcher')
+  })
+})

@@ -53,7 +53,9 @@ describe('resolveOwnPortalAccess', () => {
 describe('ssoCredentialFromVault', () => {
   it('bridges the vault SSO pair into the engine credential shape scoped to the portal host', () => {
     const c = ssoCredentialFromVault({ ownPortal: mtsu, identityValues: { sso_username: 'student', sso_password: 'pw', ssn: '000' } })
-    expect(c).toEqual(expect.objectContaining({ username: 'student', password: 'pw', portal_host: 'mtsu.scholarships.ngwebsolutions.com', source: 'identity_vault_sso' }))
+    // A bare PipelineMT username is completed to the UPN Microsoft's sign-in page asks for.
+    expect(c).toEqual(expect.objectContaining({ username: 'student@mtmail.mtsu.edu', password: 'pw', portal_host: 'mtsu.scholarships.ngwebsolutions.com', source: 'identity_vault_sso' }))
+    expect(c.allowed_hosts).toContain('login.microsoftonline.com')
   })
   it('never invents a credential from half a pair', () => {
     expect(ssoCredentialFromVault({ ownPortal: mtsu, identityValues: { sso_username: 'student' } })).toBeNull()

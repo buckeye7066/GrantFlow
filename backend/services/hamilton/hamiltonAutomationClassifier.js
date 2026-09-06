@@ -304,7 +304,11 @@ export function resolveOwnInstitutionPortal({ opportunity = null, grant = null, 
     // pages are re-routed to the scholarship portal.
     if (url && !institutionUrlNeedsRerouting(url)) return null
     if (sponsored || onOwnDomain) {
-      return { institution: entry.institution, portal_url: entry.portal_url, portal_host: entry.portal_host, platform: entry.platform, login_hint: entry.login_hint, vault_kinds: [...entry.vault_kinds], umbrella: entry.umbrella, replaced_url: url || null }
+      // idp_hosts / sso_username_domain ride along: the engine's login origin
+      // check and the vault→credential bridge read them off THIS object (live
+      // 2026-09-06: the copy dropped idp_hosts, so the SSO pair was refused on
+      // login.microsoftonline.com and every own-portal run died at login_result:false).
+      return { institution: entry.institution, portal_url: entry.portal_url, portal_host: entry.portal_host, platform: entry.platform, login_hint: entry.login_hint, vault_kinds: [...entry.vault_kinds], idp_hosts: Array.isArray(entry.idp_hosts) ? [...entry.idp_hosts] : [], sso_username_domain: entry.sso_username_domain || null, umbrella: entry.umbrella, replaced_url: url || null }
     }
   }
   return null

@@ -34,6 +34,9 @@ export const INSTITUTION_SCHOLARSHIP_PORTALS = Object.freeze([
     // PipelineMT username/password are typed (live, 2026-09-06). The engine may
     // type the vault SSO pair on these hosts and nowhere else.
     idp_hosts: ['nextgensso.com', 'login.microsoftonline.com', 'login.microsoft.com', 'login.live.com'],
+    // Microsoft's sign-in page itself says: "Students: username@mtmail.mtsu.edu".
+    // A bare PipelineMT username in the vault is completed to that UPN.
+    sso_username_domain: 'mtmail.mtsu.edu',
     login_hint: 'this portal takes the student’s PipelineMT (MTSU) login — add it to the identity vault as University SSO username/password, or sign in once side-by-side',
     vault_kinds: ['sso_username', 'sso_password'],
     umbrella: 'One General Application covers every MTSU scholarship; students cannot apply to individual awards there.',
