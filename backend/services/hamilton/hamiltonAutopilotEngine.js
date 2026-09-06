@@ -860,6 +860,30 @@ async function waitForSignInSettle(page, { timeoutMs = 12000, startUrl = null } 
   return last
 }
 
+// Does the page's visible primary submit read "Next" / "Continue" (a
+// username-first identity provider's first step)?
+async function primaryControlIsNext(page) {
+  const sels = ['#idSIButton9', 'input[type="submit"]:not([disabled])', 'button[type="submit"]:not([disabled])']
+  for (const sel of sels) {
+    let handles = []
+    try { handles = typeof page.$$ === 'function' ? await page.$$(sel) : [] } catch { handles = [] }
+    if (handles.length === 0) { const one = await page.$(sel).catch(() => null); if (one) handles = [one] }
+    for (const h of handles) {
+      if (!(await elementVisible(h))) continue
+      let label = ''
+      try {
+        label = typeof h.evaluate === 'function'
+          ? String(await h.evaluate((el) => (el.value || el.innerText || el.textContent || '')))
+          : ''
+      } catch { label = '' }
+      label = label.trim()
+      if (!label) continue
+      return /^(next|continue)$/i.test(label)
+    }
+  }
+  return false
+}
+
 async function elementVisible(handle) {
   if (!handle) return false
   if (typeof handle.isVisible !== 'function') return true
@@ -989,6 +1013,14 @@ async function attemptLoginDetailed(page, credential) {
       const visible = await passField.isVisible().catch(() => true)
       if (!visible) passField = null
     }
+    // GROUND TRUTH (probe on the prod container, 2026-09-06): Microsoft's FIRST
+    // step renders the username box AND a password box that measures as
+    // visible, with one button — "Next". Typing both and clicking Next made
+    // the provider discard the password and open its own "Enter password"
+    // step with an empty box, which nine rounds of prod runs then read as a
+    // rejected password. When the step's primary control says Next/Continue
+    // it is the USERNAME step, whatever the DOM says about the password box.
+    if (userField && passField && await primaryControlIsNext(page)) passField = null
     if (!userField) {
       const said = await readLoginFailureText(page)
       return { ok: false, reason: 'no_login_form', url: urlNow(), said, text: said ? null : await readVisibleTextSnippet(page) }
@@ -1280,8 +1312,13 @@ async function detectGate(page) {
   if (hasOtp) return { kind: '2fa', detail: 'One-time code input visible' }
   if (SSO_IDP_HOST_RX.test(hostOfUrl(url))) {
     const { bodyText } = await readBotWallSignals(page)
-    if (MFA_PROMPT_TEXT_RX.test(bodyText)) {
-      return { kind: '2fa', detail: `Multi-factor verification requested at ${url}` }
+    if (MFA_PROMPT_TEXT_RX.test(bodyText || '')) {
+      const prompt = maskIdentifiers(String(bodyText || '').replace(/\s+/g, ' ').trim()).slice(0, 220)
+      return {
+        kind: '2fa',
+        detail: `Multi-factor verification requested at ${hostOfUrl(url)}: "${prompt}"`,
+        prompt,
+      }
     }
   }
   // An identity-provider sign-in page asks for the USERNAME first and shows no
