@@ -860,6 +860,46 @@ async function waitForSignInSettle(page, { timeoutMs = 12000, startUrl = null } 
   return last
 }
 
+async function elementVisible(handle) {
+  if (!handle) return false
+  if (typeof handle.isVisible !== 'function') return true
+  return handle.isVisible().catch(() => true)
+}
+
+// The submit control that belongs to the password field's own step. Returns
+// true when a click was dispatched on a VISIBLE control.
+async function submitPasswordStep(page, passField) {
+  // 1. A visible submit inside the same <form> as the password field.
+  try {
+    const own = typeof passField.evaluateHandle === 'function'
+      ? await passField.evaluateHandle((el) => (el.form ? el.form.querySelector('input[type="submit"]:not([disabled]), button[type="submit"]:not([disabled]), button:not([type]):not([disabled])') : null))
+      : null
+    const ownEl = own && typeof own.asElement === 'function' ? own.asElement() : own
+    if (ownEl && await elementVisible(ownEl)) {
+      await ownEl.click({ timeout: 5000 })
+      return true
+    }
+  } catch { /* fall through */ }
+  // 2. The provider's primary button (Microsoft), then any VISIBLE submit.
+  for (const sel of ['input[type="submit"]:not([disabled])', 'button[type="submit"]:not([disabled])', '#idSIButton9:not([disabled])']) {
+    let handles = []
+    try { handles = typeof page.$$ === 'function' ? await page.$$(sel) : [] } catch { handles = [] }
+    if (handles.length === 0) {
+      const one = await page.$(sel).catch(() => null)
+      if (one) handles = [one]
+    }
+    for (const h of handles) {
+      if (!(await elementVisible(h))) continue
+      try { await h.click({ timeout: 5000 }); return true } catch { /* next */ }
+    }
+  }
+  const named = await page.$('button:has-text("Log in"), button:has-text("Sign in"), button:has-text("Login"), button:has-text("Continue")').catch(() => null)
+  if (named && await elementVisible(named)) {
+    try { await named.click({ timeout: 5000 }); return true } catch { /* fall through */ }
+  }
+  return false
+}
+
 // A password box that is in the DOM but NOT shown is not a password step.
 // Microsoft keeps its hidden inputs across steps; reading the DOM alone
 // turned every post-password page (MFA prompt, "Stay signed in?") into
@@ -1002,15 +1042,15 @@ async function attemptLoginDetailed(page, credential) {
       await passField.fill(String(password), { timeout: 5000 }).catch(() => {})
     }
 
-    let clicked = false
-    for (const sel of ['button[type="submit"]:not([disabled])', 'input[type="submit"]:not([disabled])']) {
-      const b = await page.$(sel).catch(() => null)
-      if (b) { await b.click({ timeout: 5000 }).catch(() => {}); clicked = true; break }
-    }
-    if (!clicked) {
-      const b = await page.$('button:has-text("Log in"), button:has-text("Sign in"), button:has-text("Login"), button:has-text("Continue")').catch(() => null)
-      if (b) { await b.click({ timeout: 5000 }).catch(() => {}); clicked = true }
-    }
+    // Submit the password STEP through the control that belongs to it. A
+    // page-wide "first submit button" pick can land on a hidden control from
+    // another step's form (an identity provider keeps every step's form in
+    // the DOM), the click then no-ops, and the provider simply shows "Enter
+    // password" again — prod 2026-09-06 19:34Z, all three MTSU runs, no
+    // provider error text at all. Order: a VISIBLE submit inside the password
+    // field's own form, then the provider's known primary button, then any
+    // VISIBLE submit, then Enter in the field.
+    const clicked = await submitPasswordStep(page, passField)
     if (!clicked) await passField.press('Enter').catch(() => {})
 
     await page.waitForLoadState('networkidle', { timeout: 15000 }).catch(() => {})
@@ -1018,6 +1058,21 @@ async function attemptLoginDetailed(page, credential) {
     await page.waitForLoadState('networkidle', { timeout: 8000 }).catch(() => {})
     const progress = await waitForSignInProgress(page)
     if (progress !== 'no_progress_page') await page.waitForLoadState('networkidle', { timeout: 10000 }).catch(() => {})
+    // The password step re-rendered with an EMPTY box and no error: the submit
+    // was not taken (a lost click). Submit once more, this time with Enter.
+    {
+      const again = await visiblePasswordField(page)
+      if (again && !(await readLoginFailureText(page))) {
+        const v = typeof again.inputValue === 'function' ? await again.inputValue().catch(() => null) : null
+        if (v !== null && v === '') {
+          await again.fill(String(password), { timeout: 5000 }).catch(() => {})
+          await again.press('Enter').catch(() => {})
+          await page.waitForLoadState('networkidle', { timeout: 15000 }).catch(() => {})
+          await waitForSignInSettle(page, { startUrl: (() => { try { return page.url() } catch { return null } })() })
+          await waitForSignInProgress(page)
+        }
+      }
+    }
     // Microsoft's "Stay signed in?" interstitial: answer Yes so the SAML hop
     // completes and the session cookie persists for the run.
     const kmsi = await page.$('#idSIButton9, input[type="submit"][value="Yes"], button:has-text("Yes")').catch(() => null)
@@ -1031,7 +1086,7 @@ async function attemptLoginDetailed(page, credential) {
     const stillPassword = await visiblePasswordField(page)
     if (stillPassword) {
       const said = await readLoginFailureText(page)
-      return { ok: false, reason: 'password_rejected', url: urlNow(), said, text: said ? null : await readVisibleTextSnippet(page), settled }
+      return { ok: false, reason: 'password_rejected', url: urlNow(), said, text: said ? null : await readVisibleTextSnippet(page), settled, progress }
     }
     // Still on a sign-in surface (a username-first IdP bounced back to its
     // first step, a rejected password re-rendering the form) is NOT a login.
@@ -1042,7 +1097,7 @@ async function attemptLoginDetailed(page, credential) {
       const said = await readLoginFailureText(page)
       return { ok: false, reason: 'still_login_surface', url: urlNow(), said, text: said ? null : await readVisibleTextSnippet(page) }
     }
-    return { ok: true, reason: null, url: urlNow(), said: null, settled }
+    return { ok: true, reason: null, url: urlNow(), said: null, settled, progress }
   } catch (err) {
     return { ok: false, reason: 'exception', url: urlNow(), said: String(err?.message || err).split('\n')[0].slice(0, 160) }
   }
@@ -2596,7 +2651,7 @@ export async function runAutopilot({
           trace.push({ step: 'login_attempt', detail: { username: '***' } })
           const loginVerdict = await attemptLoginDetailed(page, loginCredential)
           const ok = loginVerdict.ok === true
-          trace.push({ step: 'login_result', detail: { ok, reason: loginVerdict.reason || null, url: String(loginVerdict.url || '').slice(0, 160), said: loginVerdict.said || null, text: loginVerdict.text || null } })
+          trace.push({ step: 'login_result', detail: { ok, reason: loginVerdict.reason || null, url: String(loginVerdict.url || '').slice(0, 160), said: loginVerdict.said || null, text: loginVerdict.text || null, settled: loginVerdict.settled || null, progress: loginVerdict.progress || null } })
           if (ok) { loggedIn = true; continue }
           // The credential was accepted but the provider now asks for a second
           // factor: that is the 2FA gate, not a failed login. Re-read the page
