@@ -1,0 +1,36 @@
+name: Anya report repair validation
+on:
+  push:
+    branches: [fix/anya-report-2026-09-06]
+permissions:
+  contents: read
+  actions: read
+jobs:
+  evidence:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Extract release-gate failure evidence
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          curl --fail --silent --show-error --location --header "Authorization: Bearer $GH_TOKEN" "https://api.github.com/repos/buckeye7066/GrantFlow/actions/jobs/101576068116/logs" -o "$RUNNER_TEMP/backend-ci.log"
+          python3 - <<'PY'
+          import os, pathlib, re
+          root = pathlib.Path(os.environ['RUNNER_TEMP'])
+          text = (root / 'backend-ci.log').read_text(errors='replace')
+          text = re.sub(r'\x1b\[[0-?]*[ -/]*[@-~]', '', text)
+          lines = text.splitlines()
+          indices = [i for i, line in enumerate(lines) if re.search(r'\bnot ok\b|AssertionError|ERR_ASSERTION|\bFAIL\s|\[gate.*failed|##\[error\]', line)]
+          selected = set(range(max(0, len(lines)-80), len(lines)))
+          for i in indices:
+              selected.update(range(max(0, i-6), min(len(lines), i+30)))
+          excerpt = '\n'.join(f'{i+1}: {lines[i]}' for i in sorted(selected))
+          (root / 'failure-evidence.txt').write_text(excerpt)
+          print(excerpt[-45000:])
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-gate-failure-evidence
+          path: ${{ runner.temp }}/failure-evidence.txt
+          retention-days: 1
