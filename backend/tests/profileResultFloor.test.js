@@ -278,11 +278,9 @@ describe('a shortfall reaches the crawler (never a write-only queue)', () => {
 
   it('the broadening queries survive the query cap for a QUERY-RICH profile', () => {
     // THE DEFECT THIS PINS. The `low_results` branch added its broadening to
-    // `extra`, and buildWebQueries returns `[...forced, ...core, ...rotate(extra)]
-    // .slice(0, max)`. A rich profile builds 15+ core queries against a default
-    // cap of 14, so every broadening query it ever produced was truncated away —
-    // the same bucket bug the comment above that branch says was fixed for
-    // institution_gap. This test FAILS on pre-fix code.
+    // `extra`, and the old final slice dropped it whenever a rich profile
+    // filled the default cap of 14 with core queries. Required gap steering
+    // must survive both truncation and the new single-rotation seed cycle.
     const rich = {
       applicant_types: ['student', 'individual'], is_student: true,
       needs: ['student aid', 'housing', 'food', 'transportation', 'childcare'],
@@ -302,17 +300,39 @@ describe('a shortfall reaches the crawler (never a write-only queue)', () => {
     const withFloor = buildWebQueries(rich, { max: 14, year: 2026 }).join(' | ').toLowerCase()
     expect(withFloor).toMatch(/national (student aid|housing|food)/)
 
-    // (b) the pre-existing `low_results` branch's broadening survives too. Its
-    //     two queries are `<need> grant funding <word>` and `<state> assistance
-    //     programs`, and BOTH were unreachable for this profile before the move
-    //     out of `extra`. Asserted on the low_results class ALONE so the newer
-    //     floor branch cannot mask the regression.
-    const withLow = buildWebQueries(
-      { ...rich, learned_gaps: { classes: ['low_results'] } },
-      { max: 14, year: 2026 },
-    ).join(' | ').toLowerCase()
-    expect(withLow).toContain('grant funding student')
-    expect(withLow).toContain('tn assistance programs')
+    // (b) low_results ALONE must retain both need-based broadening and the
+    // applicant-appropriate state fallback. Students now search scholarship
+    // financial aid, not the generic individual-assistance wording. Checking
+    // multiple seeds keeps the rotation repair from masking starvation.
+    for (const seed of [0, 1, 7, 42]) {
+      const queries = buildWebQueries(
+        { ...rich, learned_gaps: { classes: ['low_results'] } },
+        { max: 14, year: 2026, seed },
+      )
+      expect(queries).toHaveLength(14)
+      expect(new Set(queries.map((query) => query.toLowerCase())).size).toBe(14)
+      const withLow = queries.join(' | ').toLowerCase()
+      expect(withLow).toContain('grant funding student')
+      expect(withLow).toContain('tn scholarship financial aid programs')
+    }
+  })
+
+  it.each([
+    ['individual', false, 'TN assistance programs'],
+    ['business', true, 'TN grant programs for business'],
+    ['nonprofit', true, 'TN grant programs for nonprofit'],
+  ])('keeps the %s state fallback appropriate under the query cap', (applicantType, isOrg, expected) => {
+    for (const seed of [0, 1, 7, 42]) {
+      const queries = buildWebQueries({
+        applicant_types: [applicantType], is_org: isOrg,
+        needs: ['housing', 'food', 'transportation', 'childcare', 'medical bills'],
+        interest_terms: ['community support', 'education', 'health'],
+        location: { state: 'TN', city: 'Cleveland', county: 'Bradley County' },
+        learned_gaps: { classes: ['low_results'] },
+      }, { max: 14, year: 2026, seed })
+      expect(queries).toHaveLength(14)
+      expect(queries).toContain(expected)
+    }
   })
 
   it('a gap-steering query already in the truncatable pool is PROMOTED, not silently dropped', () => {
