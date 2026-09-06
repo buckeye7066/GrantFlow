@@ -134,3 +134,31 @@ describe('attemptLoginDetailed says WHY a sign-in failed', () => {
     expect((await attemptLoginDetailed(page, cred)).reason).toBe('origin_refused')
   })
 })
+
+describe('a post-password page that keeps a HIDDEN password box is not a rejected password', () => {
+  const { attemptLoginDetailed } = _internal
+  const cred = ssoCredentialFromVault({
+    ownPortal: classifyFundingSource({ opportunity: dreamRow, profile: mtsuStudent }).own_institution_portal,
+    identityValues: { sso_username: 'jd2x', sso_password: 'pw-1' },
+  })
+  const ONE_STEP = '<html><body><form><input type="email" name="loginfmt" /><input type="password" name="passwd" /><input type="submit" id="idSIButton9" value="Sign in" /></form></body></html>'
+
+  it('an MFA prompt with the hidden input still in the DOM is ok (the loop reads the 2FA gate next)', async () => {
+    const page = fakePage(ONE_STEP, {
+      url: MS_URL,
+      onSubmit: (doc) => { doc.body.innerHTML = '<form><input type="password" name="passwd" data-hidden="1" /></form><h1>Approve sign in request</h1><p>Open your Authenticator app, and enter the number shown to sign in.</p>' },
+    })
+    const v = await attemptLoginDetailed(page, cred)
+    expect(v.ok).toBe(true)
+  })
+
+  it('an unrecognised page that still SHOWS the password box reports the visible words', async () => {
+    const page = fakePage(ONE_STEP, {
+      url: MS_URL,
+      onSubmit: (doc) => { doc.body.innerHTML = '<form><p>Your organization needs more information to keep your account secure.</p><input type="password" name="passwd" /><input type="submit" id="idSIButton9" value="Sign in" /></form>' },
+    })
+    const v = await attemptLoginDetailed(page, cred)
+    expect(v).toMatchObject({ ok: false, reason: 'password_rejected', said: null })
+    expect(v.text).toMatch(/organization needs more information/)
+  })
+})

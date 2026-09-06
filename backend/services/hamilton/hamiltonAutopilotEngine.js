@@ -792,6 +792,31 @@ async function readLoginFailureText(page) {
   return m ? m[0].replace(/\s+/g, ' ').trim().slice(0, 200) : null
 }
 
+// What the page shows when no known failure sentence matched — the first
+// visible words, so a verdict is never "the provider did not accept the
+// password" with nothing to check it against (prod 2026-09-06 round 4:
+// password_rejected, said:null, and no way to tell a wrong password from a
+// step the engine did not recognise).
+async function readVisibleTextSnippet(page) {
+  const { bodyText } = await readBotWallSignals(page)
+  const t = String(bodyText || '').replace(/\s+/g, ' ').trim()
+  return t ? t.slice(0, 240) : null
+}
+
+// A password box that is in the DOM but NOT shown is not a password step.
+// Microsoft keeps its hidden inputs across steps; reading the DOM alone
+// turned every post-password page (MFA prompt, "Stay signed in?") into
+// "still a password box" → password_rejected.
+async function visiblePasswordField(page) {
+  const f = await page.$('input[type="password"]:not([disabled])').catch(() => null)
+  if (!f) return null
+  if (typeof f.isVisible === 'function') {
+    const visible = await f.isVisible().catch(() => true)
+    if (!visible) return null
+  }
+  return f
+}
+
 /**
  * Boolean contract kept for every existing caller and test: true only when
  * the page no longer shows a sign-in surface. See attemptLoginDetailed for
@@ -867,7 +892,10 @@ async function attemptLoginDetailed(page, credential) {
       const visible = await passField.isVisible().catch(() => true)
       if (!visible) passField = null
     }
-    if (!userField) return { ok: false, reason: 'no_login_form', url: urlNow(), said: await readLoginFailureText(page) }
+    if (!userField) {
+      const said = await readLoginFailureText(page)
+      return { ok: false, reason: 'no_login_form', url: urlNow(), said, text: said ? null : await readVisibleTextSnippet(page) }
+    }
     // USERNAME-FIRST identity providers (Microsoft, Okta, Google) show the
     // password only after the username is submitted. Type it, advance, then
     // wait for the password box to appear.
@@ -886,7 +914,10 @@ async function attemptLoginDetailed(page, credential) {
       } catch { passField = null }
       if (!passField) passField = await page.$('input[type="password"]:not([disabled])').catch(() => null)
       if (passField && typeof passField.isVisible === 'function' && !(await passField.isVisible().catch(() => true))) passField = null
-      if (!passField) return { ok: false, reason: 'username_not_accepted', url: urlNow(), said: await readLoginFailureText(page) }
+      if (!passField) {
+        const said = await readLoginFailureText(page)
+        return { ok: false, reason: 'username_not_accepted', url: urlNow(), said, text: said ? null : await readVisibleTextSnippet(page) }
+      }
     } else {
       await userField.fill(String(username), { timeout: 5000 }).catch(() => {})
     }
@@ -914,14 +945,20 @@ async function attemptLoginDetailed(page, credential) {
         await page.waitForLoadState('networkidle', { timeout: 15000 }).catch(() => {})
       }
     }
-    const stillPassword = await page.$('input[type="password"]:not([disabled])').catch(() => null)
-    if (stillPassword) return { ok: false, reason: 'password_rejected', url: urlNow(), said: await readLoginFailureText(page) }
+    const stillPassword = await visiblePasswordField(page)
+    if (stillPassword) {
+      const said = await readLoginFailureText(page)
+      return { ok: false, reason: 'password_rejected', url: urlNow(), said, text: said ? null : await readVisibleTextSnippet(page) }
+    }
     // Still on a sign-in surface (a username-first IdP bounced back to its
     // first step, a rejected password re-rendering the form) is NOT a login.
     // A multi-factor prompt is: the credential was accepted, and the loop's
     // next gate read routes the prompt through the 2FA path.
     const afterGate = await detectGate(page).catch(() => null)
-    if (afterGate?.kind === 'login') return { ok: false, reason: 'still_login_surface', url: urlNow(), said: await readLoginFailureText(page) }
+    if (afterGate?.kind === 'login') {
+      const said = await readLoginFailureText(page)
+      return { ok: false, reason: 'still_login_surface', url: urlNow(), said, text: said ? null : await readVisibleTextSnippet(page) }
+    }
     return { ok: true, reason: null, url: urlNow(), said: null }
   } catch (err) {
     return { ok: false, reason: 'exception', url: urlNow(), said: String(err?.message || err).split('\n')[0].slice(0, 160) }
@@ -1073,7 +1110,14 @@ async function detectGate(page) {
   // the handler is keyed on this gate firing. A restored session that is still
   // valid shows no password field, so this never spuriously fires for it.
   const url = (() => { try { return page.url() } catch { return '' } })()
-  const hasPassword = await page.$('input[type="password"]:not([disabled])').catch(() => null)
+  let hasPassword = await page.$('input[type="password"]:not([disabled])').catch(() => null)
+  // A password input that is in the DOM but not SHOWN is not a wall: Microsoft
+  // keeps its hidden inputs across steps, so the MFA / "Stay signed in?" pages
+  // after a successful password otherwise read as "login required" again.
+  if (hasPassword && typeof hasPassword.isVisible === 'function') {
+    const visible = await hasPassword.isVisible().catch(() => true)
+    if (!visible) hasPassword = null
+  }
   if (hasPassword) {
     const onLoginUrl = /\/(login|signin|sso|cas|shibboleth)/i.test(url)
     // A password box is not always a login WALL. A credit union's homepage
@@ -2465,7 +2509,7 @@ export async function runAutopilot({
           trace.push({ step: 'login_attempt', detail: { username: '***' } })
           const loginVerdict = await attemptLoginDetailed(page, loginCredential)
           const ok = loginVerdict.ok === true
-          trace.push({ step: 'login_result', detail: { ok, reason: loginVerdict.reason || null, url: String(loginVerdict.url || '').slice(0, 160), said: loginVerdict.said || null } })
+          trace.push({ step: 'login_result', detail: { ok, reason: loginVerdict.reason || null, url: String(loginVerdict.url || '').slice(0, 160), said: loginVerdict.said || null, text: loginVerdict.text || null } })
           if (ok) { loggedIn = true; continue }
           // The credential was accepted but the provider now asks for a second
           // factor: that is the 2FA gate, not a failed login. Re-read the page
@@ -2484,13 +2528,15 @@ export async function runAutopilot({
                   : loginVerdict.reason === 'password_rejected' ? 'the provider did not accept the password'
                     : loginVerdict.reason === 'still_login_surface' ? 'the provider returned to its sign-in page'
                       : (loginVerdict.reason || 'unknown')
-            const said = loginVerdict.said ? ` The page said: "${loginVerdict.said}".` : ''
+            const said = loginVerdict.said
+              ? ` The page said: "${loginVerdict.said}".`
+              : (loginVerdict.text ? ` The page showed: "${String(loginVerdict.text).slice(0, 160)}".` : '')
             let host = ''
             try { host = new URL(String(loginVerdict.url || '')).hostname } catch { host = '' }
             return {
               status: 'blocked', blocker_kind: 'login',
               blocker_detail: `Saved login could not be completed automatically: ${why}${host ? ` (at ${host})` : ''}.${said}`,
-              login_failure: { reason: loginVerdict.reason || null, url: loginVerdict.url || null, said: loginVerdict.said || null },
+              login_failure: { reason: loginVerdict.reason || null, url: loginVerdict.url || null, said: loginVerdict.said || null, text: loginVerdict.text || null },
               filled_fields: filled, pages_visited: pagesVisited, trace, logged_in: loggedIn,
             }
           }
