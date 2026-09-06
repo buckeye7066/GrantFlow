@@ -57,6 +57,8 @@ import {
   cleanupExpiredAmyProfiles,
   markProfileCrawled,
   markProfilesTaught,
+  listAmyProfiles,
+  hasRequiredTeachingReceipt,
   REQUIRED_TEACHING_AGENTS,
 } from './amyProfileStore.js'
 import { evaluateDiscovery, buildAnyaHandoff, summarizeEvaluations, buildGuardEscapeEvaluations } from './amyReport.js'
@@ -140,6 +142,12 @@ export function describeLeverOutcome(tuning) {
  * failure mode: post-persist steps erroring left crawled profiles counted as
  * not-crawled) — the profile was genuinely crawled and must be reapable.
  */
+/** How many untaught survivors of dead runs one run adopts (env AMY_ORPHAN_ADOPT_LIMIT, default 25). */
+function amyOrphanAdoptLimit(env = process.env) {
+  const n = Number(env.AMY_ORPHAN_ADOPT_LIMIT ?? 25)
+  return Number.isFinite(n) && n >= 0 ? Math.floor(n) : 25
+}
+
 async function readLastDiscoveryAt(db, profileId) {
   try {
     const row = await db.prepare('SELECT last_discovery_at FROM profiles WHERE id = ?').get(profileId)
@@ -551,6 +559,62 @@ export async function runAmyTraining(options = {}) {
   }
 
   throwIfAmyRunAborted(signal)
+
+  // ── ADOPT ORPHANS FROM DEAD RUNS (owner 2026-09-05: "Amy profiles are not
+  // being crawled, gleaned from/learned from, and deleted afterwards") ──────
+  // A run that dies mid-flight (a deploy restarts the process; prod held the
+  // cohorts of THREE such runs on 2026-09-05) leaves synthetics that were
+  // created and maybe crawled but never TAUGHT. The expired sweep then refuses
+  // them (`not_taught`) and every nightly re-discovery renews their crawl
+  // grace (`crawled_too_recently`), so they are neither learned from nor
+  // deleted until the 96h starvation bound. This run ADOPTS them: crawled by
+  // this run, evaluated with the same evaluator, taught with the cohort, and
+  // reaped by this run's own cleanup — the create → crawl → teach → delete
+  // contract is completed by the next run instead of abandoned. Bounded by
+  // AMY_ORPHAN_ADOPT_LIMIT so a pile-up cannot starve the planned cohort.
+  const adoptedOrphans = { scanned: 0, adopted: [], skipped: [], limit: amyOrphanAdoptLimit() }
+  if (!keepProfiles) {
+    let survivors = []
+    try { survivors = await listAmyProfiles(db) } catch (err) { adoptedOrphans.error = String(err?.message || err) }
+    for (const row of survivors) {
+      throwIfAmyRunAborted(signal)
+      const meta = row.metadata
+      if (!meta || meta.amy_run_id === runId) continue
+      adoptedOrphans.scanned += 1
+      if (meta.synthetic !== true || meta.allow_sam_cleanup !== true) { adoptedOrphans.skipped.push({ id: row.id, reason: 'not_cleanable' }); continue }
+      if (hasRequiredTeachingReceipt(meta)) { adoptedOrphans.skipped.push({ id: row.id, reason: 'already_taught' }); continue }
+      if (adoptedOrphans.adopted.length >= adoptedOrphans.limit) { adoptedOrphans.skipped.push({ id: row.id, reason: 'limit' }); continue }
+      const scenario = {
+        scenario_id: meta.scenario_id || `orphan:${row.id}`,
+        category: row.primary_type || 'unknown',
+        label: row.display_name || meta.scenario_id || row.id,
+        primary_type: row.primary_type || null,
+        adopted_from_run: meta.amy_run_id || null,
+      }
+      scenarioByProfile.set(row.id, scenario)
+      const stampBefore = await readLastDiscoveryAt(db, row.id)
+      try {
+        const result = await runDiscovery({ db, profileId: row.id, dryRun: dryRunDiscovery, floor: sliderFloor, fetcher, signal })
+        throwIfAmyRunAborted(signal)
+        evaluations.push(evaluateDiscovery(scenario, row.id, result, { runId }))
+        if ((result && !result?.run?.skipped) || await discoveryStampAdvanced(db, row.id, stampBefore)) {
+          await markProfileCrawled(db, row.id, { now: clock(), floor: sliderFloor })
+          crawledProfileIds.push(row.id)
+          adoptedOrphans.adopted.push({ id: row.id, from_run: meta.amy_run_id || null, scenario_id: scenario.scenario_id })
+        } else {
+          adoptedOrphans.skipped.push({ id: row.id, reason: `discovery_skipped:${result?.run?.reason || 'unknown'}` })
+        }
+      } catch (err) {
+        throwIfAmyRunAborted(signal)
+        logger.warn('discovery threw for adopted synthetic profile', { profile_id: row.id, from_run: meta.amy_run_id, error: err?.message })
+        evaluations.push(evaluateDiscovery(scenario, row.id, null, { error: err?.message, runId }))
+        adoptedOrphans.skipped.push({ id: row.id, reason: `discovery_error:${err?.message || 'unknown'}` })
+      }
+    }
+    if (adoptedOrphans.adopted.length > 0 || adoptedOrphans.skipped.length > 0) {
+      logger.info('adopted orphan synthetic profiles from dead runs', { run_id: runId, adopted: adoptedOrphans.adopted.length, skipped: adoptedOrphans.skipped.length })
+    }
+  }
 
   const summary = summarizeEvaluations(evaluations)
   const handoff = buildAnyaHandoff({
@@ -1247,6 +1311,21 @@ export async function runAmyTraining(options = {}) {
     throwIfAmyRunAborted(signal)
   }
   combined.cleanup = cleanup
+  // Adopted orphans carry a FOREIGN run id, so the run-scoped pass above skips
+  // them (`run_mismatch`). Reap them by id with the same crawled + taught
+  // invariants; they were crawled and taught by THIS run.
+  combined.adopted_orphans = adoptedOrphans
+  if (!keepProfiles && adoptedOrphans.adopted.length > 0) {
+    throwIfAmyRunAborted(signal)
+    combined.adopted_orphans.cleanup = await cleanupAmyProfiles(db, {
+      onlyIds: adoptedOrphans.adopted.map((a) => a.id),
+      requireCrawled: true,
+      requireTaught: true,
+      force: true,
+      now: clock(),
+    })
+    throwIfAmyRunAborted(signal)
+  }
 
   // ── CLEANUP NET (owner directive 2026-07-06 "make sure those profiles are
   // getting deleted afterwards"): the pass above is scoped to THIS run's
