@@ -161,6 +161,38 @@ export function itemHasApplySurface(item) {
 }
 
 /**
+ * The catalog row (and this profile's task for it, if any) behind a dedupe
+ * hit. Tolerates test doubles with no db: both come back null.
+ */
+async function findExistingCatalogEntry(db, { opportunityId, profileId }) {
+  const out = { row: null, task: null }
+  if (!db || typeof db.prepare !== 'function' || !opportunityId) return out
+  try {
+    out.row = (await db.prepare('SELECT * FROM funding_opportunities WHERE id = ? LIMIT 1').get(String(opportunityId))) || null
+  } catch { out.row = null }
+  if (!profileId) return out
+  try {
+    out.task = (await db.prepare(
+      `SELECT t.id, t.status FROM application_tasks t
+        WHERE t.profile_id = ?
+          AND (t.opportunity_id = ?
+            OR t.grant_id IN (SELECT g.id FROM grants g WHERE g.funding_opportunity_id = ? AND g.profile_id = ?))
+        ORDER BY t.updated_at DESC LIMIT 1`,
+    ).get(String(profileId), String(opportunityId), String(opportunityId), String(profileId))) || null
+  } catch { out.task = null }
+  return out
+}
+
+/** Stored catalog row first; the listing snippet only fills blanks. */
+function mergeCatalogRowWithSnippet(row, snippet) {
+  const merged = { ...snippet }
+  for (const [k, v] of Object.entries(row || {})) {
+    if (v !== null && v !== undefined && v !== '') merged[k] = v
+  }
+  return merged
+}
+
+/**
  * Decompose a LISTING page into per-award candidates, admit + match each, and
  * (for ACCEPTs with a real apply link) hand off to the injected apply step.
  *
@@ -240,7 +272,31 @@ export async function decomposeListing(args = {}, deps = {}) {
       out.items.push(record.perItem)
       continue
     }
-    if (!ins || ins.skipped || (!ins.inserted && !ins.updated && !ins.id)) {
+    // A DEDUPE HIT IS AN ADMISSION, NOT A DEAD END (prod 2026-09-06). The
+    // inserter answers `skipped` with the EXISTING row's id when the award is
+    // already in the catalog under another source ("url_duplicate:web_search/
+    // null"). Every such award on Anastasia's HOPE/TELS and Buchanan listings
+    // — 9 of 12 enumerated — ended `not_admitted` and was never matched or
+    // applied for, though the catalog row was the very award. Carry the
+    // existing row forward: if this profile already has a task for it, say so
+    // (never a second task); otherwise match the STORED row and apply as usual.
+    const dedupeHit = Boolean(ins?.skipped && ins?.id && /duplicate/i.test(String(ins?.reason || '')))
+    let existingRow = null
+    if (dedupeHit) {
+      const existing = await findExistingCatalogEntry(db, { opportunityId: ins.id, profileId: profile?.id ?? null })
+      existingRow = existing.row
+      record.perItem.existing_row = true
+      record.perItem.dedupe_reason = ins.reason || null
+      if (existing.task) {
+        record.perItem.outcome = 'already_in_pipeline'
+        record.perItem.opportunity_id = ins.id
+        record.perItem.existing_task_id = existing.task.id
+        record.perItem.existing_task_status = existing.task.status || null
+        record.perItem.detail = `already in this profile's pipeline (task ${existing.task.status || 'unknown'})`
+        out.items.push(record.perItem)
+        continue
+      }
+    } else if (!ins || ins.skipped || (!ins.inserted && !ins.updated && !ins.id)) {
       record.perItem.outcome = 'not_admitted'
       record.perItem.detail = ins?.reason || 'inserter rejected or deduped without id'
       out.items.push(record.perItem)
@@ -250,10 +306,14 @@ export async function decomposeListing(args = {}, deps = {}) {
     record.perItem.opportunity_id = ins.id
     record.perItem.admitted = true
 
-    // 2. Canonical relevance decision (SOLE authority).
+    // 2. Canonical relevance decision (SOLE authority). A dedupe hit is judged
+    // on the STORED row (richer text than the listing snippet), with the
+    // snippet's own facts filling any blanks.
     let decision
     try {
-      decision = match(profile, buildOpportunityRecord(item, { listingUrl }), { profileSections })
+      const fresh = buildOpportunityRecord(item, { listingUrl })
+      const target = existingRow ? mergeCatalogRowWithSnippet(existingRow, fresh) : fresh
+      decision = match(profile, target, { profileSections })
     } catch (err) {
       record.perItem.outcome = 'match_error'
       record.perItem.detail = err?.message || String(err)

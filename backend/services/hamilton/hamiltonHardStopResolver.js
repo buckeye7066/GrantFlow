@@ -777,6 +777,21 @@ export async function attemptRuntimeUrlRescue(ctx, input, deps = {}) {
 }
 
 export async function resolveUnknownMethod(db, ctx, input) {
+  // A REGISTERED SCHOOL PORTAL IS NEVER "RESCUED" TO A PUBLIC PAGE (prod
+  // 2026-09-06): the engine reached mtsu.scholarships.ngwebsolutions.com,
+  // found no form on its public landing page (the form is behind the SSO),
+  // and this resolver "found the funder's own application page" at
+  // mtsu.edu/financial-aid/tels/ — a state-aid information page — then
+  // decomposed it into nine already-catalogued awards. The portal IS the
+  // application surface; a form-less landing there means the sign-in was not
+  // reached, which is a login wall to park honestly, not a page to replace.
+  const ownPortal = ctx?.classification?.own_institution_portal || null
+  if (ownPortal) {
+    const hint = ownPortal.login_hint ? ` — ${ownPortal.login_hint}` : ''
+    return blocked('own_portal_login_not_reached',
+      `${ownPortal.institution || 'The student’s institution'}’s scholarship portal (${ownPortal.portal_host}) showed no application form on the page Hamilton reached — its General Application sits behind the school sign-in, which was not completed${hint}. Hamilton will not substitute a public web page for the school’s own portal.`,
+      { portal_host: ownPortal.portal_host || null, blocker_kind: 'login' })
+  }
   // FIRST: try to FIND the funder's real application page and keep going.
   let rescue = null
   try {

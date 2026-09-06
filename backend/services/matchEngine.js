@@ -1921,6 +1921,16 @@ const oppIsNational = hasObjectiveResolvedScope
   } else if (stateMismatchAll) {
     tier = 'mismatch'
     subscale = 10
+  } else if (!oNorm && !oppZip && !oppCounty && !oppIsNational) {
+    // The OPPORTUNITY carries no location claim at all — no state, ZIP,
+    // county or national flag. That is "location signals missing" (the
+    // GEO_UNKNOWN_FACTOR doctrine in matchThresholds.js), never "explicitly
+    // serves somewhere else". Prod 2026-09-06: a national association's
+    // forensic-science scholarship (afte.org) decomposed from a listing
+    // arrived with no geography, fell into soft_mismatch, and the 0.3 crush
+    // factor turned a 12-data-point major+GPA+STEM match into a 5.
+    tier = 'unknown'
+    subscale = 35
   } else {
     tier = 'soft_mismatch'
     subscale = 30
