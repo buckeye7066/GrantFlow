@@ -162,3 +162,33 @@ describe('a post-password page that keeps a HIDDEN password box is not a rejecte
     expect(v.text).toMatch(/organization needs more information/)
   })
 })
+
+describe('a sign-in that is still swapping steps is waited for, not called a rejected password', () => {
+  const { attemptLoginDetailed } = _internal
+  const cred = ssoCredentialFromVault({
+    ownPortal: classifyFundingSource({ opportunity: dreamRow, profile: mtsuStudent }).own_institution_portal,
+    identityValues: { sso_username: 'jd2x', sso_password: 'pw-1' },
+  })
+
+  it('the password box that is still visible for a moment after submit, then goes, is a completed login', async () => {
+    const ONE_STEP = '<html><body><form><input type="email" name="loginfmt" /><input type="password" name="passwd" /><input type="submit" id="idSIButton9" value="Sign in" /></form></body></html>'
+    let submittedAt = 0
+    const page = fakePage(ONE_STEP, {
+      url: MS_URL,
+      onSubmit: () => { submittedAt = Date.now() },
+    })
+    // Simulate the SPA: the password input stays visible ~900ms after submit,
+    // then the lightbox re-renders with the next step (no password box).
+    const origDollar = page.$
+    page.$ = async (sel) => {
+      const h = await origDollar(sel)
+      // ...and the username box goes with it (the next step is a different form).
+      if (h && /password|email|loginfmt|user|identifier/.test(sel) && submittedAt && Date.now() - submittedAt > 900) return null
+      return h
+    }
+    page.waitForTimeout = async (ms) => { await new Promise((r) => setTimeout(r, ms)) }
+    const v = await attemptLoginDetailed(page, cred)
+    expect(v.ok).toBe(true)
+    expect(v.settled).toBe('password_gone')
+  })
+})
