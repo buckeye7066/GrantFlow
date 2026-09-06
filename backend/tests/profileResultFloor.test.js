@@ -319,8 +319,8 @@ describe('a shortfall reaches the crawler (never a write-only queue)', () => {
 
   it.each([
     ['individual', false, 'TN assistance programs'],
-    ['business', true, 'TN grant programs for business'],
-    ['nonprofit', true, 'TN grant programs for nonprofit'],
+    ['business', true, 'TN grant programs for small business'],
+    ['nonprofit', true, 'TN grant programs for nonprofit organization'],
   ])('keeps the %s state fallback appropriate under the query cap', (applicantType, isOrg, expected) => {
     for (const seed of [0, 1, 7, 42]) {
       const queries = buildWebQueries({
