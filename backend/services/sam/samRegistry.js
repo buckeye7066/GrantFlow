@@ -2452,9 +2452,10 @@ export const DIAGNOSTIC_CHECKS = Object.freeze([
       return {
         ok: !errored,
         summary: errored
-          ? `Hamilton weekly digest last run had ${summary.errors} draft error(s).`
+          ? `Hamilton weekly digest last run had ${summary.errors} ${summary.mode || 'delivery'} error(s)${summary.failures?.[0] ? ` — ${summary.failures[0].code}${summary.failures[0].status ? ` (HTTP ${summary.failures[0].status})` : ''}, profile ${summary.failures[0].profile_id}` : ''}.`
           : `Hamilton weekly digest ${enabled ? 'enabled' : 'disabled'}${summary ? ` — last run drafted ${summary.drafted ?? 0}, skipped ${summary.skipped_no_email ?? 0}` : ' (not run yet)'}.`,
         evidence: { enabled, last_summary: summary },
+        ...(errored ? { recommended_fix: summary.failures?.[0]?.next_action || 'Inspect Hamilton weekly digest runtime logs for the failed profile; the legacy summary did not retain a cause. Do not replay successful deliveries.' } : {}),
       }
     },
   },

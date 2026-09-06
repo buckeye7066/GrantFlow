@@ -4334,16 +4334,18 @@ if (process.env.NODE_ENV !== 'test') {
   // deploy-killed run can never wedge it. `runProfileCoverageSweep` is bounded
   // (limit + bounded autoheal) so a slice completes each run.
   function scheduleProfileCoverageSweep(dbInstance) {
-    const MARKER = 'coverage_audit_last_run'
     const intervalHours = Math.max(1, Number(process.env.COVERAGE_SWEEP_INTERVAL_HOURS) || 20)
     const dueMs = intervalHours * 60 * 60 * 1000
     const lockTtlMs = Math.max(60_000, Number(process.env.COVERAGE_SWEEP_LOCK_TTL_MS) || 10 * 60 * 1000)
     const runOnce = async () => {
       try {
         await ensureSystemKv(dbInstance)
-        const lastMs = await kvUpdatedAtMs(dbInstance, MARKER)
-        if (lastMs !== null && (Date.now() - lastMs) < dueMs) return // still fresh
-        const { runProfileCoverageSweep } = await import('./services/coverageAudit/profileResultCoverageAudit.js')
+        const { runProfileCoverageSweep, getLastCoverageSweep } = await import('./services/coverageAudit/profileResultCoverageAudit.js')
+        const { isCoverageSweepDue } = await import('./services/coverageAudit/coverageSweepFreshness.js')
+        const last = await getLastCoverageSweep(dbInstance)
+        // We already hold coverage-sweep's short-TTL, heartbeated lease.
+        // An interrupted/failed attempt must not buy 20 hours of freshness.
+        if (!isCoverageSweepDue(last, { dueMs })) return
         const result = await runProfileCoverageSweep(dbInstance, {})
         console.log('[coverage-sweep]', {
           scanned: result?.summary?.scanned ?? 0,

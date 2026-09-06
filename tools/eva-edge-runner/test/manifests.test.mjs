@@ -109,9 +109,9 @@ test('every runnable manifest resolves at least one executable runtime prerequis
 
 test('repaired portfolio manifests preserve their current repository contracts', () => {
   const publisher = manifestById('app-store-publisher')
-  assert.equal(publisher.launch_env?.PORT, '4000')
+  assert.equal(publisher.launch_env?.PORT, '45103')
   assert.equal(publisher.launch_env?.PUBLISHER_HOST, '127.0.0.1')
-  assert.equal(publisher.base_url, 'http://127.0.0.1:4000')
+  assert.equal(publisher.base_url, 'http://127.0.0.1:45103')
   for (const name of [
     'DOTENV_CONFIG_PATH',
     'PUBLISHER_VAULT_PATH',
@@ -154,15 +154,15 @@ test('repaired portfolio manifests preserve their current repository contracts',
   )
 
   const livehealth = manifestById('livehealth')
-  assert.equal(livehealth.start_command, 'cd server && npm start & npx vite --host 127.0.0.1 --port 5273 --strictPort')
+  assert.equal(livehealth.start_command, 'cd server && npm start & npx vite --host 127.0.0.1 --port 45204 --strictPort')
   assert.equal(livehealth.readiness_probe?.type, 'http')
   assert.equal(livehealth.readiness_probe?.path, '/healthz')
-  assert.equal(livehealth.readiness_probe?.port, 3210)
+  assert.equal(livehealth.readiness_probe?.port, 45104)
   assert.equal(livehealth.readiness_probe?.timeout_ms, 60000)
   assert.ok(livehealth.readiness_probe?.warm_paths?.includes('/@vite/client'))
-  assert.equal(livehealth.base_url, 'http://127.0.0.1:5273')
-  assert.equal(livehealth.launch_env?.VITE_API_URL, 'http://127.0.0.1:3210')
-  assert.equal(livehealth.launch_env?.CORS_ORIGIN, 'http://127.0.0.1:5273')
+  assert.equal(livehealth.base_url, 'http://127.0.0.1:45204')
+  assert.equal(livehealth.launch_env?.VITE_API_URL, 'http://127.0.0.1:45104')
+  assert.equal(livehealth.launch_env?.CORS_ORIGIN, 'http://127.0.0.1:45204')
 
   const factory = manifestById('factory-deck')
   assert.equal(factory.repo, 'buckeye7066/local-ai-factory')
@@ -361,4 +361,44 @@ test('no manifest claims a port a docker-prerequisite app publishes machine-wide
       )
     }
   }
+})
+
+
+test('the seven port-blocked apps use isolated, unique, fully paired test addresses', () => {
+  const names = ['incognito', 'genemap-discovery', 'app-store-publisher', 'livehealth', 'factory-deck', 'grantflow', 'sermonsmith']
+  const allocated = new Set()
+  for (const name of names) {
+    const m = manifestById(name)
+    const ui = new URL(m.base_url)
+    assert.equal(ui.hostname, '127.0.0.1', `${name}: one IPv4 loopback identity`)
+    const appPorts = new Set([Number(ui.port), Number(m.readiness_probe.port)])
+    for (const port of appPorts) {
+      assert.ok(port >= 45100 && port < 45300, `${name}: dedicated EVA port`)
+      assert.ok(!allocated.has(port), `${name}: must not collide with another app`)
+      allocated.add(port)
+      assert.ok(m.allowlist.ports.includes(port))
+    }
+    for (const journey of m.journeys || []) {
+      for (const step of journey.steps || []) {
+        if (step.action !== 'goto' || !/^https?:/.test(step.url || '')) continue
+        assert.equal(new URL(step.url).origin, ui.origin, `${name}: journey must target the owned instance`)
+      }
+    }
+    if (m.launch_env?.VITE_API_URL) assert.equal(Number(new URL(m.launch_env.VITE_API_URL).port), m.readiness_probe.port)
+    for (const key of ['CORS_ORIGIN', 'CORS_ORIGINS']) {
+      for (const origin of (m.launch_env?.[key] || '').split(',').filter(Boolean)) assert.equal(new URL(origin).port, ui.port)
+    }
+    if (['incognito', 'livehealth', 'grantflow', 'sermonsmith'].includes(name)) {
+      assert.match(m.start_command, new RegExp(`--port ${ui.port} --strictPort`))
+    }
+  }
+  const geneMap = manifestById('genemap-discovery')
+  assert.equal(geneMap.launch_env.VITE_PORT, new URL(geneMap.base_url).port)
+  const factory = manifestById('factory-deck')
+  assert.equal(factory.launch_env.FACTORY_UI_PORT, new URL(factory.base_url).port)
+  assert.equal(factory.launch_env.FACTORY_API_PROXY_PORT, factory.launch_env.PORT)
+  const grantflow = manifestById('grantflow')
+  assert.equal(Number(new URL(grantflow.launch_env.VITE_API_PROXY_TARGET).port), grantflow.readiness_probe.port)
+  const sermon = manifestById('sermonsmith')
+  assert.equal(sermon.launch_env.SERMONSMITH_DEV_API_URL, sermon.launch_env.VITE_API_URL)
 })
