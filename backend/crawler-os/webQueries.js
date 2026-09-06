@@ -121,7 +121,8 @@ function rotate(arr, offset) {
  * @returns {string[]}
  */
 export function buildWebQueries(thesis = {}, opts = {}) {
-  const max = Number.isFinite(opts.max) ? opts.max : 6;
+  const max = Number.isFinite(opts.max) ? Math.max(0, Math.floor(opts.max)) : 6;
+  if (max === 0) return [];
   const year = Number.isFinite(opts.year) ? opts.year : new Date().getFullYear();
   const seed = Number.isFinite(opts.seed) ? opts.seed : 0;
   const word = typeWord(thesis.applicant_types);
@@ -672,11 +673,27 @@ export function buildWebQueries(thesis = {}, opts = {}) {
     // hyperlocal_gap → re-emit county-scoped queries even if a prior run tried
     // them, AND escalate to the hyperlocal entity classes (education foundation
     // / churches / civic clubs) that plain county phrasing misses.
-    if (classes.includes('hyperlocal_gap') && county) {
-      force(isStudent ? `local scholarships ${county}` : `local assistance programs ${county}`);
-      force(isStudent ? `${county} education foundation scholarships` : `${county} emergency assistance fund`);
-      add(extra, `community foundation grants ${county}`);
-      add(extra, isStudent ? `Rotary Club scholarship ${county}` : `church assistance programs ${county}`);
+    // City-only profiles used to ignore the learned gap entirely. An org must
+    // also retain its applicant intent: household/church emergency assistance
+    // is not a useful escalation for a business, nonprofit, or university.
+    const hyperlocal = county || (thesis.location?.city ? geo : '');
+    if (classes.includes('hyperlocal_gap') && hyperlocal) {
+      if (isStudent) {
+        force(`local scholarships ${hyperlocal}`);
+        force(`${hyperlocal} education foundation scholarships`);
+        add(extra, `Rotary Club scholarship ${hyperlocal}`);
+      } else if (isOrgProfile) {
+        force(`${word} grants application ${hyperlocal}`);
+        force(`community foundation grants for ${word} ${hyperlocal}`);
+        if (types.includes('business')) add(extra, `small business development center funding ${hyperlocal}`);
+        if (types.includes('nonprofit')) add(extra, `private foundation nonprofit grants ${hyperlocal}`);
+        if (types.includes('school')) add(extra, `education foundation institutional grants ${hyperlocal}`);
+      } else {
+        force(`local assistance programs ${hyperlocal}`);
+        force(`${hyperlocal} emergency assistance fund`);
+        add(extra, `church assistance programs ${hyperlocal}`);
+      }
+      add(extra, `community foundation grants ${hyperlocal}`);
     }
     // low_results → broaden with national + state fallbacks keyed to the needs.
     //
@@ -689,7 +706,9 @@ export function buildWebQueries(thesis = {}, opts = {}) {
     // "too few results ⇒ search wider" hook existed and could not fire.
     if (classes.includes('low_results')) {
       for (const need of needs.slice(0, 3)) force(`${need} grant funding ${word}`);
-      if (state) force(`${state} assistance programs`);
+      if (state) force(isStudent
+        ? `${state} scholarship financial aid programs`
+        : (isOrgProfile ? `${state} grant programs for ${word}` : `${state} assistance programs`));
     }
     // result_floor_shortfall → the profile is BELOW ITS REQUESTED RESULT NUMBER
     // on rows that name money it could actually receive (pointers excluded).
@@ -711,33 +730,26 @@ export function buildWebQueries(thesis = {}, opts = {}) {
   // Last resort: a sparse profile still searches something useful.
   if (forced.length === 0 && core.length === 0 && extra.length === 0) add(core, `grants for ${word} ${geo || year}`);
 
-  // Collapse duplicates at assembly, keeping the FIRST occurrence. `force`
-  // deliberately re-emits a query that also lives in the truncatable `extra`
-  // pool: the forced copy wins its early slot here and the later copy falls
-  // away, without the pool's own length (and therefore its `seed` rotation)
-  // ever changing.
+  // Deduplicate BEFORE rotating, then rotate the unselected pool exactly once.
+  // Rotating EXTRA and then rotating the merged tail with the same seed can
+  // visit only a subset of the candidates indefinitely (e.g. 23/35 searches
+  // for a four-need individual), despite every nightly run claiming breadth.
+  // Keep the highest-priority forced/core head fixed and guarantee each other
+  // candidate a turn over one full seed cycle. Seed zero preserves ordering.
   const emitted = new Set();
-  const merged = [];
-  for (const q of [...forced, ...core, ...rotate(extra, seed)]) {
-    const k = q.toLowerCase();
-    if (emitted.has(k)) continue;
-    emitted.add(k);
-    merged.push(q);
-  }
-  if (merged.length <= max) return merged;
-  // ONE ROTATING TAIL SLOT (2026-08-02). A plain `.slice(0, max)` makes every
-  // over-budget run IDENTICAL across seeds: once CORE alone reaches the cap
-  // (a two-school student builds 15+ core queries against the live cap of 14),
-  // the rotated EXTRA pool is structurally unreachable and successive nightly
-  // runs stop covering new ground — the whole point of the seed. The head
-  // (max-1 highest-priority queries) stays seed-independent, so every pinned
-  // CORE guarantee up to that line is untouched; the final slot rotates over
-  // everything the budget would otherwise never reach. Seed 0 keeps the exact
-  // pre-change emission (rotate(…, 0) is the identity), so this widens
-  // coverage across runs without moving any single run's baseline.
-  const head = merged.slice(0, Math.max(0, max - 1));
-  const pool = rotate(merged.slice(Math.max(0, max - 1)), seed);
-  return [...head, ...pool.slice(0, 1)];
+  const unique = (queries) => queries.filter((q) => {
+    const key = q.toLowerCase();
+    if (emitted.has(key)) return false;
+    emitted.add(key);
+    return true;
+  });
+  const priority = unique([...forced, ...core]);
+  const broadening = unique(extra);
+  if (priority.length + broadening.length <= max) return [...priority, ...rotate(broadening, seed)];
+  const fixedCount = Math.min(priority.length, max - 1);
+  const head = priority.slice(0, fixedCount);
+  const pool = [...priority.slice(fixedCount), ...broadening];
+  return [...head, ...rotate(pool, seed).slice(0, max - head.length)];
 }
 
 export default { buildWebQueries };

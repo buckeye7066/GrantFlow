@@ -6,12 +6,12 @@
   "runtime_type": "web",
   "start_command": "npm start",
   "stop_command": "taskkill-by-port",
-  "readiness_probe": { "type": "http", "path": "/api/health", "port": 4000, "timeout_ms": 60000 },
-  "base_url": "http://127.0.0.1:4000",
+  "readiness_probe": { "type": "http", "path": "/api/health", "port": 45103, "timeout_ms": 60000 },
+  "base_url": "http://127.0.0.1:45103",
   "test_target": "disposable-local-instance",
   "required_env": ["PORT"],
   "launch_env": {
-    "PORT": "4000",
+    "PORT": "45103",
     "PUBLISHER_HOST": "127.0.0.1",
     "DOTENV_CONFIG_PATH": ".eva-tmp/app-store-publisher/empty.env",
     "PUBLISHER_VAULT_PATH": ".eva-tmp/app-store-publisher/credentials.vault.json",
@@ -36,7 +36,7 @@
   ],
   "allowlist": {
     "hosts": ["localhost", "127.0.0.1", "::1"],
-    "ports": [4000],
+    "ports": [45103],
     "routes": ["/", "/api/health"],
     "file_roots": [".eva-tmp/app-store-publisher"],
     "processes": ["node", "npm"]

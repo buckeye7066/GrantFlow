@@ -315,3 +315,51 @@ test('fifty-state profiles keep their existing query language (no churn)', () =>
   assert.ok(qs.includes('TN state scholarship programs'), 'state phrasing unchanged for TN');
   assert.ok(!qs.some((q) => /programas de ayuda/.test(q)), 'no Spanish lane outside PR');
 });
+
+// September 6 report: the same rotation seed applied twice permanently skipped
+// candidates. Test reachability of the COMPLETE query inventory, not just that
+// two seeds happen to differ. No network or admission/scoring changes.
+test('one complete seed cycle reaches every budgeted query without double-rotation starvation', () => {
+  const profiles = [
+    { applicant_types: ['individual'], needs: ['food', 'housing', 'transportation', 'medical'], location: { city: 'Fresno', state: 'CA' }, interest_terms: ['biology'] },
+    { ...NAMED_STUDENT, learned_gaps: { classes: ['low_results', 'hyperlocal_gap', 'result_floor_shortfall'] } },
+    { applicant_types: ['business'], is_org: true, needs: ['capital', 'equipment'], location: { city: 'Raleigh', state: 'NC' }, learned_gaps: { classes: ['hyperlocal_gap', 'low_results'] } },
+  ];
+  for (const thesis of profiles) {
+    const inventory = buildWebQueries(thesis, { year: 2026, max: 10000, seed: 0 });
+    for (const max of [1, 6, 8, 14]) {
+      const observed = new Set();
+      for (let seed = 0; seed < inventory.length; seed += 1) {
+        const queries = buildWebQueries(thesis, { year: 2026, max, seed });
+        assert.ok(queries.length <= max);
+        assert.equal(new Set(queries.map((q) => q.toLowerCase())).size, queries.length);
+        for (const q of queries) observed.add(q);
+      }
+      assert.deepEqual([...observed].sort(), [...inventory].sort(), `complete recall at budget ${max}`);
+    }
+  }
+});
+
+test('city-only learned gaps retain the business, nonprofit, university, and student search intent', () => {
+  for (const [types, city, state, isStudent] of [
+    [['business'], 'Raleigh', 'NC', false],
+    [['nonprofit'], 'Erie', 'PA', false],
+    [['school'], 'Fresno', 'CA', false],
+    [['student', 'individual'], 'Fresno', 'CA', true],
+  ]) {
+    const thesis = { applicant_types: types, is_org: !isStudent, is_student: isStudent, needs: ['education'], location: { city, state }, learned_gaps: { classes: ['hyperlocal_gap', 'low_results'] } };
+    for (const seed of [0, 7, 29]) {
+      const queries = buildWebQueries(thesis, { year: 2026, max: 14, seed });
+      assert.match(queries[0], new RegExp(city));
+      assert.match(queries[0], isStudent ? /local scholarships/ : /grants application/);
+      if (!isStudent) {
+        assert.ok(!queries.some((q) => /emergency assistance fund|church assistance programs/.test(q)));
+        assert.ok(queries.some((q) => q.includes(`${state} grant programs for`)));
+      }
+    }
+  }
+});
+
+test('a zero query budget emits no queries', () => {
+  assert.deepEqual(buildWebQueries(NAMED_STUDENT, { max: 0 }), []);
+});
