@@ -229,7 +229,7 @@ async function persistFreshCanonicalDecision(db, profileId, opportunityId, decis
     // is an allowlist — so a rescore silently UNPUBLISHED the pair it had just
     // re-proved. Measured on prod 2026-09-06: 142 pairs across 6 profiles
     // carried '4.1.2', 38 of them ACCEPT, invisible since this path went live
-    // on 2026-09-05 14:29 — which is why Anastasia's Discover page showed
+    // on 2026-09-05 14:29 — which is why that student's Discover page showed
     // "0 opportunities you can apply to" while 19 engine ACCEPTs sat in her
     // match store. A fresh rescore inserts into its own reconcile-surviving
     // lane; an EXISTING row keeps the lane it was discovered through (the

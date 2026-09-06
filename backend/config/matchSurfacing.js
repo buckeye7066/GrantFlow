@@ -242,7 +242,7 @@ export function opportunityLifecycleVisibilitySql({ tableAlias = '', dialect = '
  * four-truth proof produced by the canonical engine.
  *
  * THE POINTER ARM USED TO BE AN EXEMPTION, AND THAT WAS THE LEAK (owner report
- * 2026-09-06, Anastasia's crawl — "18 directories to search · 0 opportunities
+ * 2026-09-06, one student profile's crawl — "18 directories to search · 0 opportunities
  * you can apply to"). It returned true for any pointer that was merely not
  * REJECT and reached the REVIEW band, and true UNCONDITIONALLY for a pointer
  * nobody had scored. Nothing about the profile was required, so five 990
@@ -251,7 +251,7 @@ export function opportunityLifecycleVisibilitySql({ tableAlias = '', dialect = '
  * The score band is kept — it is a real signal — but it is no longer the whole
  * bar, and "never scored" now fails instead of passing: unknown is not
  * relevant. Measured on prod 2026-09-06: 172 surfaced pointer rows across all
- * profiles → 133 kept, 39 dropped (Anastasia 18 → 10, and every row the owner
+ * profiles → 133 kept, 39 dropped (that profile 18 → 10, and every row the owner
  * named is in the dropped 8).
  */
 export const DIRECTORY_MIN_SCORE = REVIEW_SCORE

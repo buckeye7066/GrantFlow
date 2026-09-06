@@ -189,7 +189,7 @@ describe('matchSurfacing — qualifiesForDisplay', () => {
   })
 
   it('a pointer NOBODY scored against this profile no longer surfaces - unknown is not relevant', () => {
-    // Owner report 2026-09-06 (Anastasia's crawl): the pointer arm used to
+    // Owner report 2026-09-06 (one student profile's crawl): the pointer arm
     // return true for an UNSCORED pointer unconditionally, and for any scored
     // one that merely reached the REVIEW band, so nothing about the profile was
     // required. That is how "Scholarships & Grants - Bradley University"

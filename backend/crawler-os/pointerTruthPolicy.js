@@ -9,7 +9,7 @@
  * OS package boundary, and `config/fundingTruthPolicy.js` re-exports both so
  * there is ONE predicate authority repo-wide.
  *
- * WHY IT EXISTS (owner report 2026-09-06, Anastasia's crawl). Discover showed
+ * WHY IT EXISTS (owner report 2026-09-06, one student profile's crawl). Discover
  * "18 directories to search · 0 opportunities you can apply to" — every visible
  * row a pointer, none of them tied to her by anything: five 990 grantmakers in
  * Michigan / Missouri / Oklahoma, an Illinois university's transfer
