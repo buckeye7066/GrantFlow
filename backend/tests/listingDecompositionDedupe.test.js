@@ -1,6 +1,6 @@
 /**
- * A DEDUPE HIT IS AN ADMISSION, NOT A DEAD END (prod 2026-09-06, Anastasia's
- * profile). The canonical inserter answers `skipped:true` WITH the existing
+ * A DEDUPE HIT IS AN ADMISSION, NOT A DEAD END (prod 2026-09-06, a real
+ * student profile). The canonical inserter answers `skipped:true` WITH the existing
  * row's id when an enumerated award is already in the catalog under another
  * source ("url_duplicate:web_search/null"). decomposeListing treated that as
  * `not_admitted` and never matched or applied for the award — 9 of 12 awards

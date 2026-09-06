@@ -429,7 +429,7 @@ function pad2(n) { return String(n).padStart(2, '0') }
 /**
  * Normalize a deadline-LIKE value to what a Postgres DATE column accepts.
  *
- * WHY (prod 2026-09-06, Anastasia's profile): listing decomposition inserts
+ * WHY (prod 2026-09-06, a real student profile): listing decomposition inserts
  * the enumerator's award items VERBATIM, and a real funder page says
  * "April 1 each year" (afte.org) or "Rolling / Open" (grantable.co). Both
  * reached this inserter as `deadline` and Postgres refused the row —

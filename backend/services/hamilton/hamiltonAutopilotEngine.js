@@ -865,10 +865,12 @@ async function attemptLogin(page, credential) {
     }
     const stillPassword = await page.$('input[type="password"]:not([disabled])').catch(() => null)
     if (stillPassword) return false
-    // A multi-factor prompt after the password is NOT a completed login; the
-    // caller re-detects the gate and hands off through the 2FA path.
+    // Still on a sign-in surface (a username-first IdP bounced back to its
+    // first step, a rejected password re-rendering the form) is NOT a login.
+    // A multi-factor prompt is: the credential was accepted, and the loop's
+    // next gate read routes the prompt through the 2FA path.
     const afterGate = await detectGate(page).catch(() => null)
-    if (afterGate && (afterGate.kind === '2fa' || afterGate.kind === 'login')) return false
+    if (afterGate?.kind === 'login') return false
     return true
   } catch {
     return false

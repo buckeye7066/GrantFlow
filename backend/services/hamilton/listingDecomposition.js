@@ -275,7 +275,7 @@ export async function decomposeListing(args = {}, deps = {}) {
     // A DEDUPE HIT IS AN ADMISSION, NOT A DEAD END (prod 2026-09-06). The
     // inserter answers `skipped` with the EXISTING row's id when the award is
     // already in the catalog under another source ("url_duplicate:web_search/
-    // null"). Every such award on Anastasia's HOPE/TELS and Buchanan listings
+    // null"). Every such award on a real student's HOPE/TELS and Buchanan listings
     // — 9 of 12 enumerated — ended `not_admitted` and was never matched or
     // applied for, though the catalog row was the very award. Carry the
     // existing row forward: if this profile already has a task for it, say so

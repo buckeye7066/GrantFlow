@@ -1,6 +1,6 @@
 /**
  * A SCHOOL PORTAL'S SIGN-IN IS REACHED, NOT MISTAKEN FOR AN EMPTY PAGE
- * (prod 2026-09-06, Anastasia's MTSU tasks). Live trace on
+ * (prod 2026-09-06, a real MTSU student's tasks). Live trace on
  * mtsu.scholarships.ngwebsolutions.com with the PipelineMT SSO pair in the
  * vault: page → inspect `field_count 0, button_options ["Continue Working"]`
  * → fill 0 → (clicked "Continue Working" as Next) → page → inspect → fill 0 →
@@ -105,7 +105,7 @@ const FULL_AUTH = {
   upload_documents: true, use_standing_attestation: true, use_saved_session: true,
   use_saved_credentials_reference: true,
 }
-const PROFILE = { basic_information: { first_name: 'Anastasia', last_name: 'White', email: 'student@example.org' } }
+const PROFILE = { basic_information: { first_name: 'Jane', last_name: 'Applicant', email: 'student@example.org' } }
 
 // The live NGWeb landing (mtsu.scholarships.ngwebsolutions.com, 2026-09-06),
 // reduced to the controls that matter: a Students SSO link, an ADMIN SSO link,
@@ -121,7 +121,7 @@ const NGWEB_LANDING = `<!DOCTYPE html><html><head><title>Scholarship Manager</ti
 const NGWEB_URL = 'https://mtsu.scholarships.ngwebsolutions.com/CMXAdmin/Cmx_Content.aspx?cpId=1276'
 
 const mtsu = resolveInstitutionScholarshipPortal('Middle Tennessee State University')
-const SSO_CRED = ssoCredentialFromVault({ ownPortal: mtsu, identityValues: { sso_username: 'aw2x@mtmail.mtsu.edu', sso_password: 'pw' } })
+const SSO_CRED = ssoCredentialFromVault({ ownPortal: mtsu, identityValues: { sso_username: 'jane.applicant@mtmail.mtsu.edu', sso_password: 'pw' } })
 
 describe('the NGWeb landing page', () => {
   it('detectSsoEntryLinks finds the Students SSO hop first and refuses the admin one', async () => {
@@ -199,7 +199,7 @@ describe('attemptLogin with the school SSO pair', () => {
   it('types the vault pair on a registry-declared IdP host and reports success once no password box remains', async () => {
     const page = jsdomPage(ONE_STEP, {
       url: 'https://login.microsoftonline.com/tenant/saml2',
-      onSubmit: (doc) => { doc.body.innerHTML = '<h1>Scholarship Manager</h1><p>Welcome, Anastasia. Qualified Opportunities 0.</p>' },
+      onSubmit: (doc) => { doc.body.innerHTML = '<h1>Scholarship Manager</h1><p>Welcome, Jane. Qualified Opportunities 0.</p>' },
     })
     expect(SSO_CRED.allowed_hosts).toContain('login.microsoftonline.com')
     expect(await attemptLogin(page, SSO_CRED)).toBe(true)
@@ -219,10 +219,19 @@ describe('attemptLogin with the school SSO pair', () => {
     expect(await attemptLogin(page, SSO_CRED)).toBe(true)
   })
 
-  it('a multi-factor prompt after the password is NOT a completed login', async () => {
+  it('a multi-factor prompt after the password is a 2FA gate on the next read, never a login failure', async () => {
     const page = jsdomPage(ONE_STEP, {
       url: 'https://login.microsoftonline.com/tenant/saml2',
       onSubmit: (doc) => { doc.body.innerHTML = '<h1>Approve sign in request</h1><p>Open your Authenticator app and enter the number shown.</p>' },
+    })
+    expect(await attemptLogin(page, SSO_CRED)).toBe(true)
+    expect((await detectGate(page))?.kind).toBe('2fa')
+  })
+
+  it('a rejected password that re-renders the sign-in form is NOT a login', async () => {
+    const page = jsdomPage(ONE_STEP, {
+      url: 'https://login.microsoftonline.com/tenant/saml2',
+      onSubmit: (doc) => { doc.body.innerHTML = '<form><p>Your account or password is incorrect.</p><input type="email" name="loginfmt" /><input type="submit" id="idSIButton9" value="Next" /></form>' },
     })
     expect(await attemptLogin(page, SSO_CRED)).toBe(false)
   })
