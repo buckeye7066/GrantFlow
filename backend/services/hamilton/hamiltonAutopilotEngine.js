@@ -779,11 +779,42 @@ async function clickButtonByBid(page, bid) {
  * Generic across portals — if it can't find/submit the form it returns false
  * and Hamilton falls back to the normal login hard-stop. Never logs the values.
  */
+// Visible text an identity provider prints when a sign-in fails. Captured
+// (sanitised, capped) into the login verdict so the run's trace and the
+// task's blocker say WHAT the provider said, never just "could not be
+// completed" — the verbatim class of 2026-09-06, three rounds of
+// `login_result:false` with no reason on any of them.
+const LOGIN_FAILURE_TEXT_RX = /(?:we couldn'?t find an account|that microsoft account doesn'?t exist|your account or password is incorrect|incorrect (?:user ?name|password)|invalid (?:user ?name|password|credentials|login)|enter a valid email|this username may be incorrect|account (?:has been )?locked|too many (?:attempts|sign-in)|sign-in (?:was )?blocked|access denied|unauthori[sz]ed)[^.\n]{0,120}/i
+
+async function readLoginFailureText(page) {
+  const { bodyText } = await readBotWallSignals(page)
+  const m = LOGIN_FAILURE_TEXT_RX.exec(bodyText || '')
+  return m ? m[0].replace(/\s+/g, ' ').trim().slice(0, 200) : null
+}
+
+/**
+ * Boolean contract kept for every existing caller and test: true only when
+ * the page no longer shows a sign-in surface. See attemptLoginDetailed for
+ * the reason a false carries.
+ */
 async function attemptLogin(page, credential) {
+  const verdict = await attemptLoginDetailed(page, credential)
+  return verdict.ok === true
+}
+
+/**
+ * Type a saved credential into the page's login form and report a VERDICT:
+ *   { ok, reason, url, said }
+ * reason ∈ origin_refused | no_login_form | username_not_accepted |
+ *          password_rejected | still_login_surface | exception
+ * `said` is the provider's own visible failure text when it printed one.
+ */
+async function attemptLoginDetailed(page, credential) {
+  const urlNow = () => { try { return page.url() } catch { return null } }
   try {
     const username = credential?.username
     const password = credential?.password
-    if (!username || !password) return false
+    if (!username || !password) return { ok: false, reason: 'no_credential', url: urlNow(), said: null }
     // Origin safety: only type a saved credential into a page whose host shares
     // the credential's registrable domain (eTLD+1). Defeats a portal that
     // redirects mid-flow to an attacker origin before the login form. Re-checked
@@ -799,7 +830,7 @@ async function attemptLogin(page, credential) {
     const allowedHosts = Array.isArray(credential?.allowed_hosts) ? credential.allowed_hosts.map((h) => String(h || '').toLowerCase()).filter(Boolean) : []
     const hostAllowed = allowedHosts.some((h) => currentHost === h || currentHost.endsWith(`.${h}`))
     if (!hostAllowed && (!allowedDomain || currentDomain !== allowedDomain)) {
-      return false
+      return { ok: false, reason: 'origin_refused', url: urlNow(), said: null }
     }
     const userSelectors = [
       'input[autocomplete="username"]:not([disabled])',
@@ -811,12 +842,23 @@ async function attemptLogin(page, credential) {
       'input[name*="login" i]:not([disabled])',
       'input[type="text"]:not([disabled])',
     ]
-    let userField = null
-    for (const sel of userSelectors) {
-      userField = await page.$(sel).catch(() => null)
-      if (userField) break
+    const findUserField = async () => {
+      for (const sel of userSelectors) {
+        const f = await page.$(sel).catch(() => null)
+        if (f) return f
+      }
+      return null
     }
+    let userField = await findUserField()
     let passField = await page.$('input[type="password"]:not([disabled])').catch(() => null)
+    // A JS-rendered sign-in (Microsoft, Okta) may not have painted its inputs
+    // at the instant the SSO hop lands. Give the form a moment to appear
+    // before deciding there is none.
+    if (!userField && !passField && typeof page.waitForSelector === 'function') {
+      await page.waitForSelector(`${userSelectors.join(', ')}, input[type="password"]:not([disabled])`, { timeout: 8000, state: 'visible' }).catch(() => null)
+      userField = await findUserField()
+      passField = await page.$('input[type="password"]:not([disabled])').catch(() => null)
+    }
     // Microsoft renders the password box in the DOM on the USERNAME step,
     // hidden (live login.microsoftonline.com, 2026-09-06): filling it there
     // times out and the run reads "still a password box" as a failed login.
@@ -825,7 +867,7 @@ async function attemptLogin(page, credential) {
       const visible = await passField.isVisible().catch(() => true)
       if (!visible) passField = null
     }
-    if (!userField) return false
+    if (!userField) return { ok: false, reason: 'no_login_form', url: urlNow(), said: await readLoginFailureText(page) }
     // USERNAME-FIRST identity providers (Microsoft, Okta, Google) show the
     // password only after the username is submitted. Type it, advance, then
     // wait for the password box to appear.
@@ -844,7 +886,7 @@ async function attemptLogin(page, credential) {
       } catch { passField = null }
       if (!passField) passField = await page.$('input[type="password"]:not([disabled])').catch(() => null)
       if (passField && typeof passField.isVisible === 'function' && !(await passField.isVisible().catch(() => true))) passField = null
-      if (!passField) return false
+      if (!passField) return { ok: false, reason: 'username_not_accepted', url: urlNow(), said: await readLoginFailureText(page) }
     } else {
       await userField.fill(String(username), { timeout: 5000 }).catch(() => {})
     }
@@ -873,16 +915,16 @@ async function attemptLogin(page, credential) {
       }
     }
     const stillPassword = await page.$('input[type="password"]:not([disabled])').catch(() => null)
-    if (stillPassword) return false
+    if (stillPassword) return { ok: false, reason: 'password_rejected', url: urlNow(), said: await readLoginFailureText(page) }
     // Still on a sign-in surface (a username-first IdP bounced back to its
     // first step, a rejected password re-rendering the form) is NOT a login.
     // A multi-factor prompt is: the credential was accepted, and the loop's
     // next gate read routes the prompt through the 2FA path.
     const afterGate = await detectGate(page).catch(() => null)
-    if (afterGate?.kind === 'login') return false
-    return true
-  } catch {
-    return false
+    if (afterGate?.kind === 'login') return { ok: false, reason: 'still_login_surface', url: urlNow(), said: await readLoginFailureText(page) }
+    return { ok: true, reason: null, url: urlNow(), said: null }
+  } catch (err) {
+    return { ok: false, reason: 'exception', url: urlNow(), said: String(err?.message || err).split('\n')[0].slice(0, 160) }
   }
 }
 
@@ -2421,8 +2463,9 @@ export async function runAutopilot({
         if (gate.kind === 'login' && loginCredential && !loginAttempted) {
           loginAttempted = true
           trace.push({ step: 'login_attempt', detail: { username: '***' } })
-          const ok = await attemptLogin(page, loginCredential)
-          trace.push({ step: 'login_result', detail: { ok } })
+          const loginVerdict = await attemptLoginDetailed(page, loginCredential)
+          const ok = loginVerdict.ok === true
+          trace.push({ step: 'login_result', detail: { ok, reason: loginVerdict.reason || null, url: String(loginVerdict.url || '').slice(0, 160), said: loginVerdict.said || null } })
           if (ok) { loggedIn = true; continue }
           // The credential was accepted but the provider now asks for a second
           // factor: that is the 2FA gate, not a failed login. Re-read the page
@@ -2435,7 +2478,21 @@ export async function runAutopilot({
           } else {
             // Login fill failed (couldn't find/submit form) — fall through to the
             // normal hard-stop so the user is told login is required.
-            return { status: 'blocked', blocker_kind: 'login', blocker_detail: 'Saved login could not be completed automatically', filled_fields: filled, pages_visited: pagesVisited, trace, logged_in: loggedIn }
+            const why = loginVerdict.reason === 'origin_refused' ? 'the sign-in page is on a host the saved login is not scoped to'
+              : loginVerdict.reason === 'no_login_form' ? 'no sign-in form appeared on the page'
+                : loginVerdict.reason === 'username_not_accepted' ? 'the provider did not accept the username'
+                  : loginVerdict.reason === 'password_rejected' ? 'the provider did not accept the password'
+                    : loginVerdict.reason === 'still_login_surface' ? 'the provider returned to its sign-in page'
+                      : (loginVerdict.reason || 'unknown')
+            const said = loginVerdict.said ? ` The page said: "${loginVerdict.said}".` : ''
+            let host = ''
+            try { host = new URL(String(loginVerdict.url || '')).hostname } catch { host = '' }
+            return {
+              status: 'blocked', blocker_kind: 'login',
+              blocker_detail: `Saved login could not be completed automatically: ${why}${host ? ` (at ${host})` : ''}.${said}`,
+              login_failure: { reason: loginVerdict.reason || null, url: loginVerdict.url || null, said: loginVerdict.said || null },
+              filled_fields: filled, pages_visited: pagesVisited, trace, logged_in: loggedIn,
+            }
           }
         }
         // One-time-code wall: read the code from HAMILTON'S OWN inbox and type
@@ -3290,7 +3347,7 @@ export const _internal = {
   SUBMIT_BUTTON_PATTERNS, NEXT_BUTTON_PATTERNS, DRAFT_BUTTON_PATTERNS,
   matchFieldKey, readProfileValues, applyNarrativeAnswers,
   clickButtonByBid, clickSubmitControl, clickButtonByBidVerdict, FEEDBACK_VALIDATION_IGNORE_RX,
-  detectGate, detectBotWall, attemptLogin,
+  detectGate, detectBotWall, attemptLogin, attemptLoginDetailed, readLoginFailureText,
   detectIdpLoginSurface, detectSsoEntryLinks, SSO_IDP_HOST_RX, SSO_ENTRY_PATH_RX, NEXT_BUTTON_EXCLUDE_RX,
   isIncidentalLoginWidget, readCaptchaShape, detectPaymentGate,
   retryOnContextLoss, navigateWithRecovery, DocumentDownloadTarget,
