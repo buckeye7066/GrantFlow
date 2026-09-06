@@ -51,6 +51,7 @@ describe('field-of-study restriction', () => {
     ['Where Every Note Counts Scholarship Campaign', 'Give to support student scholarships.', 'https://give.mtsu.edu/pages/music-campaign'],
     ['ASPIRE to Teach Emergency Fund', 'Emergency fund for teacher-candidates in the College of Education.', ''],
     ['ASPIRE to Teach Emergency Fund', 'Emergency fund for students at MTSU.', ''],
+    ['Archer-Johnstone Scholarship', 'The Archer-Johnstone Scholarship is available to management students at Middle Tennessee State University. You must have completed at least 55 credit hours, have a minimum 3.0 GPA, and demonstrate leadership abilities to be eligible for this award.', ''],
   ])('rejects %s for a declared forensic-science major', (title, description, url) => {
     const result = policyFor({ title, opportunity_kind: 'DIRECT_GRANT', description, apply_url: url || null })
     expect(result.decision).toBe('REJECT')

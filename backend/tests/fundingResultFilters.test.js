@@ -848,3 +848,24 @@ describe('2026-08-31 production precision residuals', () => {
     expect(classifyFundingResult({ title, application_url: 'https://example.org' }).bucket).toBe('not_a_grant')
   })
 })
+
+describe('a news recap of awards already handed out is not an award (2026-09-05)', () => {
+  it('routes the True Blue Tour recap to resources and keeps an award that states its own amount', () => {
+    const recap = classifyFundingResult({
+      title: 'True Blue Tour Scholarships',
+      opportunity_kind: 'DIRECT_GRANT',
+      source_url: 'https://www.mtsu.edu',
+      application_url: 'https://www.mtsu.edu',
+      description: 'During the True Blue Tour, MTSU President Sidney A. McPhee presented a total of $21,500 in scholarships directly to students, with additional funds available for educators to distribute to their students.',
+    })
+    expect(recap.bucket).toBe(RESULT_BUCKETS.RESOURCE)
+    expect(recap.reasons).toContain('past_award_recap')
+    const award = classifyFundingResult({
+      title: 'MTSU Presidential Scholarship',
+      opportunity_kind: 'DIRECT_GRANT',
+      application_url: 'https://www.mtsu.edu/financial-aid/scholarships/',
+      description: 'Guaranteed academic scholarship for incoming freshmen: $4,500 per year with an ACT of 25-29 and a 3.50 GPA.',
+    })
+    expect(award.bucket).toBe(RESULT_BUCKETS.FUNDABLE)
+  })
+})
