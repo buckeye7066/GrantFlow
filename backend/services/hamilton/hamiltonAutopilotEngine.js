@@ -208,6 +208,13 @@ const SUBMIT_BUTTON_PATTERNS = [/^submit/i, /finalize/i, /apply\s*now/i, /comple
 // boundary on it (prod, 2026-08-22).
 export const SUBMIT_BUTTON_EXCLUDE_RX = /submit\s+(all\s+)?(selections?|search|query|filters?|feedback|comments?|a\s+(question|request|ticket))\b|\bsearch\b/i
 const NEXT_BUTTON_PATTERNS   = [/^next/i, /continue/i, /proceed/i, /save\s*&\s*continue/i]
+// A "Continue Working" control is a SESSION-TIMEOUT dismissal, not a form
+// advance. NGWeb Scholarship Manager's public landing carries exactly one
+// button — `ngSessionTimeoutButton` "Continue Working" (onclick: reload) — and
+// the engine clicked it as "Next" twice, then ended `next_without_fields`
+// on a page whose real way forward was the "Students" sign-in link (live,
+// mtsu.scholarships.ngwebsolutions.com, 2026-09-06). Exported via _internal.
+export const NEXT_BUTTON_EXCLUDE_RX = /continue\s+working|stay\s+(?:signed|logged)\s+in|keep\s+(?:me\s+)?(?:signed|logged)\s+in|continue\s+(?:shopping|reading|browsing|watching)|extend\s+(?:my\s+)?session|session\s+(?:timeout|expir)/i
 const DRAFT_BUTTON_PATTERNS  = [/save\s*draft/i, /save\s*&\s*exit/i, /save\s*for\s*later/i]
 // LANDING PAGE → APPLICATION FORM. A "portal" URL often points at a program
 // description / landing page whose only control is an "Apply" / "Start
@@ -783,8 +790,15 @@ async function attemptLogin(page, credential) {
     // here against the LIVE page.url() right before any field is touched.
     const allowedDomain = registrableDomain(credential?.portal_host)
     let currentDomain = null
-    try { currentDomain = registrableDomain(new URL(page.url()).hostname) } catch { return false }
-    if (!allowedDomain || currentDomain !== allowedDomain) {
+    let currentHost = null
+    try { currentHost = new URL(page.url()).hostname.toLowerCase(); currentDomain = registrableDomain(currentHost) } catch { return false }
+    // A credential may name the identity-provider hosts its portal signs in
+    // through (`allowed_hosts`, from the institution registry) — the school
+    // SSO pair is typed on nextgensso.com / login.microsoftonline.com, never on
+    // the portal host itself. Anything outside that list is still refused.
+    const allowedHosts = Array.isArray(credential?.allowed_hosts) ? credential.allowed_hosts.map((h) => String(h || '').toLowerCase()).filter(Boolean) : []
+    const hostAllowed = allowedHosts.some((h) => currentHost === h || currentHost.endsWith(`.${h}`))
+    if (!hostAllowed && (!allowedDomain || currentDomain !== allowedDomain)) {
       return false
     }
     const userSelectors = [
@@ -802,9 +816,29 @@ async function attemptLogin(page, credential) {
       userField = await page.$(sel).catch(() => null)
       if (userField) break
     }
-    const passField = await page.$('input[type="password"]:not([disabled])').catch(() => null)
-    if (!userField || !passField) return false
-    await userField.fill(String(username), { timeout: 5000 }).catch(() => {})
+    let passField = await page.$('input[type="password"]:not([disabled])').catch(() => null)
+    if (!userField) return false
+    // USERNAME-FIRST identity providers (Microsoft, Okta, Google) show the
+    // password only after the username is submitted. Type it, advance, then
+    // wait for the password box to appear.
+    if (!passField) {
+      await userField.fill(String(username), { timeout: 5000 }).catch(() => {})
+      let advanced = false
+      for (const sel of ['#idSIButton9', 'input[type="submit"]:not([disabled])', 'button[type="submit"]:not([disabled])', 'button:has-text("Next")', 'button:has-text("Continue")']) {
+        const b = await page.$(sel).catch(() => null)
+        if (b) { await b.click({ timeout: 5000 }).catch(() => {}); advanced = true; break }
+      }
+      if (!advanced) await userField.press('Enter').catch(() => {})
+      try {
+        if (typeof page.waitForSelector === 'function') {
+          passField = await page.waitForSelector('input[type="password"]:not([disabled])', { timeout: 10000, state: 'visible' }).catch(() => null)
+        }
+      } catch { passField = null }
+      if (!passField) passField = await page.$('input[type="password"]:not([disabled])').catch(() => null)
+      if (!passField) return false
+    } else {
+      await userField.fill(String(username), { timeout: 5000 }).catch(() => {})
+    }
     await passField.fill(String(password), { timeout: 5000 }).catch(() => {})
 
     let clicked = false
@@ -819,8 +853,25 @@ async function attemptLogin(page, credential) {
     if (!clicked) await passField.press('Enter').catch(() => {})
 
     await page.waitForLoadState('networkidle', { timeout: 15000 }).catch(() => {})
+    // Microsoft's "Stay signed in?" interstitial: answer Yes so the SAML hop
+    // completes and the session cookie persists for the run.
+    const kmsi = await page.$('#idSIButton9, input[type="submit"][value="Yes"], button:has-text("Yes")').catch(() => null)
+    if (kmsi) {
+      const { bodyText } = await readBotWallSignals(page)
+      if (/stay signed in|keep me signed in|remember me/i.test(bodyText)) {
+        await kmsi.click({ timeout: 5000 }).catch(() => {})
+        await page.waitForLoadState('networkidle', { timeout: 15000 }).catch(() => {})
+      }
+    }
     const stillPassword = await page.$('input[type="password"]:not([disabled])').catch(() => null)
-    return !stillPassword
+    if (stillPassword) return false
+    // Still on a sign-in surface (a username-first IdP bounced back to its
+    // first step, a rejected password re-rendering the form) is NOT a login.
+    // A multi-factor prompt is: the credential was accepted, and the loop's
+    // next gate read routes the prompt through the 2FA path.
+    const afterGate = await detectGate(page).catch(() => null)
+    if (afterGate?.kind === 'login') return false
+    return true
   } catch {
     return false
   }
@@ -876,6 +927,83 @@ async function detectBotWall(page) {
   return null
 }
 
+// SSO / identity-provider hosts and paths. A school portal's sign-in is usually
+// a SAML hop into a shared IdP (nextgensso.com → login.microsoftonline.com for
+// MTSU's PipelineMT), and those pages ask for the USERNAME FIRST with no
+// password field on the page — so the password-only login heuristic below read
+// them as "no application form". Vendor-agnostic on purpose: a new IdP still
+// classifies as a login gate instead of dead-ending. Exported via _internal.
+export const SSO_IDP_HOST_RX = /(?:^|\.)(?:login\.microsoftonline\.com|login\.microsoft\.com|login\.live\.com|accounts\.google\.com|okta\.com|oktapreview\.com|nextgensso\.com|pingone\.com|pingidentity\.com|auth0\.com|onelogin\.com|duosecurity\.com)$|^(?:sso|login|signin|idp|cas|shibboleth|auth|adfs|fs)\./i
+export const SSO_ENTRY_PATH_RX = /startsso|\/saml2?\b|\/sso\b|\/oauth2\/authorize|\/adfs\/ls|\/login\b|\/signin\b|\/sign-in\b|\/cas\b|shibboleth|\/idp\//i
+// Anchor TEXT that names a sign-in entry on a landing page ("Students",
+// "Student Login", "Sign in", "Applicant Portal"). Staff/admin/reviewer
+// entries are refused explicitly — NGWeb's landing carries a second SSO link
+// for the ADMIN portal beside the student one.
+const SSO_ENTRY_TEXT_RX = /^(?:students?(?:\s+(?:portal|sign[\s-]?in|log[\s-]?in|login|access|enter))?|applicants?(?:\s+(?:portal|sign[\s-]?in|log[\s-]?in|login))?|sign[\s-]?in|log[\s-]?in|login|my\s+account|access\s+(?:your|the|my)\s+(?:account|portal|application)|student\s+portal|applicant\s+portal|current\s+students?)$/i
+const SSO_ENTRY_REFUSE_RX = /admin|staff|faculty|employee|reviewer|committee|donor|alumni|parent|counselor|advisor|recommender|register|create\s+(?:an?\s+)?account|sign\s*up|forgot/i
+// Username-first inputs an IdP page shows before any password.
+const IDP_USERNAME_SELECTOR = 'input[type="email"]:not([disabled]), input[name="loginfmt"], input[autocomplete="username"]:not([disabled]), input[name*="user" i]:not([disabled]):not([type="hidden"]), input[id*="user" i]:not([disabled]):not([type="hidden"]), input[name="identifier"]'
+// Multi-factor prompts that carry NO otp-named input (Microsoft push
+// approval, number matching, Duo push).
+const MFA_PROMPT_TEXT_RX = /approve (?:the )?sign[- ]?in request|open your authenticator app|enter the number shown|we(?:'| ha)ve sent a (?:notification|text|code)|verify your identity|two[- ]step verification|multi[- ]?factor authentication|enter (?:the|your) (?:verification )?code|duo push|check your phone/i
+
+function hostOfUrl(url) {
+  try { return new URL(String(url)).hostname.toLowerCase() } catch { return '' }
+}
+
+/** Is this page an identity-provider sign-in surface (username-first, no password yet)? */
+async function detectIdpLoginSurface(page, url) {
+  const host = hostOfUrl(url)
+  let path = ''
+  try { path = new URL(String(url)).pathname + new URL(String(url)).search } catch { path = '' }
+  const onIdp = SSO_IDP_HOST_RX.test(host) || SSO_ENTRY_PATH_RX.test(path)
+  if (!onIdp) return false
+  const userField = await page.$(IDP_USERNAME_SELECTOR).catch(() => null)
+  return Boolean(userField)
+}
+
+/** Sign-in entry links on a landing page, best first. Exported via _internal. */
+async function detectSsoEntryLinks(page) {
+  try {
+    const links = await page.$$eval('a[href], button[onclick], a[role="button"]', (els, { textRx, refuseRx, pathRx, hostRx }) => {
+      const T = new RegExp(textRx.source, textRx.flags)
+      const R = new RegExp(refuseRx.source, refuseRx.flags)
+      const P = new RegExp(pathRx.source, pathRx.flags)
+      const H = new RegExp(hostRx.source, hostRx.flags)
+      const out = []
+      const seen = new Set()
+      for (const el of els) {
+        const href = el.href || el.getAttribute('href') || ''
+        if (!/^https?:/i.test(href)) continue
+        const text = (el.innerText || el.textContent || el.getAttribute('aria-label') || el.getAttribute('title') || '').trim().replace(/\s+/g, ' ')
+        const id = `${el.id || ''} ${el.className || ''}`
+        if (R.test(text) || R.test(href) || R.test(id)) continue
+        let host = ''
+        let path = ''
+        try { const u = new URL(href); host = u.hostname.toLowerCase(); path = u.pathname + u.search } catch { continue }
+        const textHit = T.test(text)
+        const hrefHit = P.test(path) || H.test(host)
+        if (!textHit && !hrefHit) continue
+        const key = href.split('#')[0]
+        if (seen.has(key)) continue
+        seen.add(key)
+        const r = el.getBoundingClientRect ? el.getBoundingClientRect() : { width: 1, height: 1 }
+        const hidden = !(r.width > 0 && r.height > 0)
+        out.push({ href, text: text.slice(0, 80), hidden, score: (hrefHit ? 2 : 0) + (textHit ? 2 : 0) + (/student/i.test(text) ? 1 : 0) + (hidden ? 0 : 1) })
+      }
+      return out.sort((a, b) => b.score - a.score).slice(0, 6)
+    }, {
+      textRx: { source: SSO_ENTRY_TEXT_RX.source, flags: SSO_ENTRY_TEXT_RX.flags },
+      refuseRx: { source: SSO_ENTRY_REFUSE_RX.source, flags: SSO_ENTRY_REFUSE_RX.flags },
+      pathRx: { source: SSO_ENTRY_PATH_RX.source, flags: SSO_ENTRY_PATH_RX.flags },
+      hostRx: { source: SSO_IDP_HOST_RX.source, flags: SSO_IDP_HOST_RX.flags },
+    })
+    return Array.isArray(links) ? links : []
+  } catch {
+    return []
+  }
+}
+
 async function detectGate(page) {
   // Full-page bot-protection interstitial FIRST — it replaces the whole app, so
   // a bot-wall must win over the login/captcha/field heuristics (a challenge
@@ -909,9 +1037,21 @@ async function detectGate(page) {
       return { kind: 'login', detail: onLoginUrl ? `Login required at ${url}` : 'Password input visible — login required' }
     }
   }
-  // 2FA / OTP heuristics.
-  const hasOtp = await page.$('input[autocomplete*="one-time-code"], input[name*="otp"], input[name*="2fa"]').catch(() => null)
+  // 2FA / OTP heuristics. Microsoft's code box is `name="otc"`; a push /
+  // number-matching prompt has NO input at all and is read from its text.
+  const hasOtp = await page.$('input[autocomplete*="one-time-code"], input[name*="otp"], input[name*="2fa"], input[name="otc"], #idTxtBx_SAOTCC_OTC, input[name*="verificationcode" i], input[name*="passcode" i]').catch(() => null)
   if (hasOtp) return { kind: '2fa', detail: 'One-time code input visible' }
+  if (SSO_IDP_HOST_RX.test(hostOfUrl(url))) {
+    const { bodyText } = await readBotWallSignals(page)
+    if (MFA_PROMPT_TEXT_RX.test(bodyText)) {
+      return { kind: '2fa', detail: `Multi-factor verification requested at ${url}` }
+    }
+  }
+  // An identity-provider sign-in page asks for the USERNAME first and shows no
+  // password until the next step — still a login wall, not "no form".
+  if (!hasPassword && await detectIdpLoginSurface(page, url)) {
+    return { kind: 'login', detail: `Sign-in required at ${url}`, idp: true }
+  }
   // CAPTCHA heuristics — vendor-agnostic on purpose (owner: "if the captcha
   // changes every time, can he evolve with it?"). Covers reCAPTCHA, hCaptcha,
   // Cloudflare Turnstile/managed challenges, FunCaptcha/Arkose, and the
@@ -2143,6 +2283,37 @@ export async function runAutopilot({
       return false
     }
   }
+  // SIGN-IN ENTRY ON A LANDING PAGE. A school scholarship portal's public
+  // landing has NO form: its "Students" button starts the SSO hop. When
+  // Hamilton holds a login for this portal and the page shows nothing to
+  // fill, follow that entry ONCE before treating the page as form-less.
+  let ssoEntryFollowed = false
+  const tryFollowSsoEntry = async () => {
+    if (ssoEntryFollowed || loggedIn || !loginCredential) return false
+    const entries = await detectSsoEntryLinks(page)
+    const currentPage = (() => { try { return page.url().split('#')[0] } catch { return '' } })()
+    const next = entries.find((l) => {
+      const target = normalizeBrowserTargetUrl(l.href)
+      return target.split('#')[0] !== currentPage && isHamiltonBrowserTargetAllowed(target)
+    })
+    ssoEntryFollowed = true
+    if (!next) {
+      trace.push({ step: 'sso_entry_scan', detail: { candidates: entries.length, followed: false } })
+      return false
+    }
+    const target = normalizeBrowserTargetUrl(next.href)
+    trace.push({ step: 'sso_entry_follow', detail: { text: String(next.text || '').slice(0, 40), href: target.slice(0, 200) } })
+    reportLiveStep(runId, 'Opening the portal sign-in')
+    try {
+      await navigateWithRecovery(page, target, { navTimeoutMs: NAV_TIMEOUT_MS, trace })
+      await page.waitForLoadState('networkidle', { timeout: 8000 }).catch(() => null)
+      return true
+    } catch (err) {
+      if (err instanceof DocumentDownloadTarget) throw err
+      trace.push({ step: 'sso_entry_follow_failed', detail: { href: target.slice(0, 200), error: String(err?.message || err).split('\n')[0].slice(0, 160) } })
+      return false
+    }
+  }
   const missingIdentityKinds = new Set()
   // Required portal-specific questions Hamilton could not answer from the
   // profile (owner doctrine 2026-08-22, condition 2). Collected here; the
@@ -2244,9 +2415,19 @@ export async function runAutopilot({
           const ok = await attemptLogin(page, loginCredential)
           trace.push({ step: 'login_result', detail: { ok } })
           if (ok) { loggedIn = true; continue }
-          // Login fill failed (couldn't find/submit form) — fall through to the
-          // normal hard-stop so the user is told login is required.
-          return { status: 'blocked', blocker_kind: 'login', blocker_detail: 'Saved login could not be completed automatically', filled_fields: filled, pages_visited: pagesVisited, trace, logged_in: loggedIn }
+          // The credential was accepted but the provider now asks for a second
+          // factor: that is the 2FA gate, not a failed login. Re-read the page
+          // and let the 2FA path below (mailbox code, then honest hand-off)
+          // take it — the hand-off then names the real blocker.
+          const afterLogin = await retryOnContextLoss(page, () => detectGate(page)).catch(() => null)
+          if (afterLogin?.kind === '2fa') {
+            trace.push({ step: 'login_reached_2fa', detail: { url: (() => { try { return page.url() } catch { return null } })() } })
+            gate = afterLogin
+          } else {
+            // Login fill failed (couldn't find/submit form) — fall through to the
+            // normal hard-stop so the user is told login is required.
+            return { status: 'blocked', blocker_kind: 'login', blocker_detail: 'Saved login could not be completed automatically', filled_fields: filled, pages_visited: pagesVisited, trace, logged_in: loggedIn }
+          }
         }
         // One-time-code wall: read the code from HAMILTON'S OWN inbox and type
         // it. Mirrors the saved-login path above deliberately — attempted at
@@ -2350,9 +2531,15 @@ export async function runAutopilot({
       const fields = await retryOnContextLoss(page, () => detectFields(page))
       const submitButtons = (await retryOnContextLoss(page, () => detectButtons(page, SUBMIT_BUTTON_PATTERNS)))
         .filter((b) => !SUBMIT_BUTTON_EXCLUDE_RX.test(String(b.text || '')))
-      const nextButtons   = await retryOnContextLoss(page, () => detectButtons(page, NEXT_BUTTON_PATTERNS))
+      const nextButtons   = (await retryOnContextLoss(page, () => detectButtons(page, NEXT_BUTTON_PATTERNS)))
+        .filter((b) => !NEXT_BUTTON_EXCLUDE_RX.test(String(b.text || '')))
       const draftButtons  = await retryOnContextLoss(page, () => detectButtons(page, DRAFT_BUTTON_PATTERNS))
       trace.push({ step: 'inspect', detail: summarisePageState(page, fields, [...submitButtons, ...nextButtons, ...draftButtons]) })
+      // Nothing to fill and a login in hand: the sign-in entry comes before any
+      // "Next"/apply-link hunting (the NGWeb landing, live 2026-09-06).
+      if (fields.length === 0 && !loggedIn && loginCredential && !ssoEntryFollowed) {
+        if (await tryFollowSsoEntry()) continue
+      }
 
       // Map and fill recognised fields.
       let filledThisPage = 0
@@ -3095,6 +3282,7 @@ export const _internal = {
   matchFieldKey, readProfileValues, applyNarrativeAnswers,
   clickButtonByBid, clickSubmitControl, clickButtonByBidVerdict, FEEDBACK_VALIDATION_IGNORE_RX,
   detectGate, detectBotWall, attemptLogin,
+  detectIdpLoginSurface, detectSsoEntryLinks, SSO_IDP_HOST_RX, SSO_ENTRY_PATH_RX, NEXT_BUTTON_EXCLUDE_RX,
   isIncidentalLoginWidget, readCaptchaShape, detectPaymentGate,
   retryOnContextLoss, navigateWithRecovery, DocumentDownloadTarget,
   detectApplyLinks, isContactOrNewsletterForm, CONTEXT_LOSS_RX,

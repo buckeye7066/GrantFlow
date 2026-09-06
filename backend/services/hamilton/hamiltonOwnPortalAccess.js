@@ -40,6 +40,11 @@ export function ssoCredentialFromVault({ ownPortal = null, identityValues = null
     username: String(username),
     password: String(password),
     portal_host: ownPortal.portal_host || null,
+    // Every host the engine may type this pair into: the portal itself plus
+    // the identity providers its sign-in button hops through. The engine's
+    // origin check (attemptLogin) reads this list; a host outside it never
+    // sees the credential.
+    allowed_hosts: [ownPortal.portal_host, ...(Array.isArray(ownPortal.idp_hosts) ? ownPortal.idp_hosts : [])].filter(Boolean),
     source: 'identity_vault_sso',
     institution: ownPortal.institution || null,
   }

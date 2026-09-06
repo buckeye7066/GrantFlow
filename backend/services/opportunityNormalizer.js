@@ -444,6 +444,22 @@ function containsSearchPhrase(lower, phrase) {
   return new RegExp(`${lead}${escapeRegex(p)}${tail}`, 'i').test(lower)
 }
 
+// Clauses that describe the APPLICANT'S OWN enrollment ("attending an eligible
+// postsecondary institution", "enrolled at an accredited institution",
+// "accepted to a Tennessee institution of higher education"). Exported via
+// _internal for the normalizer tests.
+const STUDENT_ATTENDANCE_INSTITUTION_RX =
+  /\b(?:attend(?:s|ed|ing)?|enrol(?:l)?(?:s|ed|ing|ment)?|accept(?:ed|ance)|admit(?:ted)?|admission|matriculat\w*|study(?:ing)?|transfer(?:r?ing|red)?|degree[- ]seeking|full[- ]time|part[- ]time)\b[^.;:\n]{0,90}?\b(?:institutions?|colleges?|universit(?:y|ies)|schools?)\b(?:\s+of\s+higher\s+(?:education|learning))?/gi
+const ELIGIBLE_INSTITUTION_RX =
+  /\b(?:eligible|accredited|approved|participating|qualif(?:ied|ying)|title\s*iv|postsecondary|post-secondary|educational|academic|tennessee|[a-z]+-based)\s+(?:[a-z]+\s+){0,2}?institutions?\b(?:\s+of\s+higher\s+(?:education|learning))?/gi
+
+export function stripStudentAttendanceClauses(text) {
+  if (!text) return text
+  return String(text)
+    .replace(STUDENT_ATTENDANCE_INSTITUTION_RX, ' ')
+    .replace(ELIGIBLE_INSTITUTION_RX, ' ')
+}
+
 function matchesAnyPattern(text, patterns) {
   if (!text) return false
   const lower = text.toLowerCase()
@@ -917,9 +933,20 @@ export function normalizeOpportunity(rawOpp) {
   const kindLowerForFlags = String(rawOpp.opportunity_kind ?? rawOpp.kind ?? '').toLowerCase()
   const isResourceKind = ['directory', 'benefit', 'past_award_intel', 'school_portal'].includes(kindLowerForFlags)
 
+  // STUDENT-ATTENDANCE CLAUSES ARE NOT RECIPIENT CLAUSES (prod 2026-09-06):
+  // the full-text INSTITUTIONAL patterns include the bare word 'institution',
+  // and a student award's eligibility prose says "attending an eligible
+  // Tennessee postsecondary institution" (HOPE Lottery Scholarship, decomposed
+  // from mtsu.edu/financial-aid/tels/). That is a statement about WHERE the
+  // student studies, not WHO receives the money — yet it hard-rejected the
+  // state's flagship student scholarship for a Tennessee undergraduate as
+  // "institutions or research organizations only". Strip the clauses that
+  // describe the applicant's own enrollment before the recipient patterns
+  // read the text; every other institutional tell is untouched.
+  const textForInstitutional = stripStudentAttendanceClauses(text)
   const isInstitutionalOnly = Boolean(rawOpp.is_institutional_only) ||
     isAlreadyAwarded ||
-    (!isResourceKind && matchesAnyPattern(text, INSTITUTIONAL_PATTERNS))
+    (!isResourceKind && matchesAnyPattern(textForInstitutional, INSTITUTIONAL_PATTERNS))
 
   const isResearchOnly = Boolean(rawOpp.is_research_only) ||
     isAlreadyAwarded ||

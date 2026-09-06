@@ -416,13 +416,116 @@ function deriveRecordOrigin(opportunity) {
     return 'live_crawl'
 }
 
+const MONTH_NAMES = {
+  jan: 1, january: 1, feb: 2, february: 2, mar: 3, march: 3, apr: 4, april: 4, may: 5,
+  jun: 6, june: 6, jul: 7, july: 7, aug: 8, august: 8, sep: 9, sept: 9, september: 9,
+  oct: 10, october: 10, nov: 11, november: 11, dec: 12, december: 12,
+}
+const ROLLING_DEADLINE_RX = /\b(rolling|ongoing|open|continuous|year[- ]round|anytime|any time|no deadline|until (funds|funding) (are|is) (exhausted|depleted)|first[- ]come)\b/i
+const RECURRING_DEADLINE_RX = /\b(each|every) (year|spring|fall|autumn|summer|winter|semester|term|month)\b|\bannually\b|\bannual\b|\byearly\b/i
+
+function pad2(n) { return String(n).padStart(2, '0') }
+
+/**
+ * Normalize a deadline-LIKE value to what a Postgres DATE column accepts.
+ *
+ * WHY (prod 2026-09-06, a real student profile): listing decomposition inserts
+ * the enumerator's award items VERBATIM, and a real funder page says
+ * "April 1 each year" (afte.org) or "Rolling / Open" (grantable.co). Both
+ * reached this inserter as `deadline` and Postgres refused the row —
+ * `invalid input syntax for type date: "April 1 each year"` — so a genuinely
+ * matching forensic-science scholarship ended as `insert_error` and was
+ * never matched or applied for. SQLite (the test dialect) accepts any text
+ * in a DATE column, which is why no unit test ever saw it.
+ *
+ * Returns `{ deadline, deadline_type, recurrence }` — deadline_type is drawn
+ * ONLY from the column's CHECK vocabulary ('fixed' | 'rolling' | 'ongoing' |
+ * 'unknown'); recurrence is the lifecycle-contract column (migration 169):
+ *   - an ISO `YYYY-MM-DD` (or a Date / ISO timestamp passed through) when the
+ *     value parses as a real calendar date → deadline_type 'fixed';
+ *   - `deadline: null, deadline_type: 'rolling'` for rolling / open language;
+ *   - `deadline: <next occurrence>, deadline_type: 'fixed', recurrence:
+ *     'annual'` for a month+day with no year ("April 1 each year" → the next
+ *     April 1);
+ *   - `deadline: null, deadline_type: 'unknown', recurrence: 'annual'` for
+ *     "annually" / "each year" prose that names no date;
+ *   - `deadline: null` with no type for anything else (never a guess).
+ * The stored deadline_type / recurrence only ever fill a blank; a caller's own
+ * values win.
+ */
+export function normalizeDeadlineLike(value, { now = new Date() } = {}) {
+  const none = { deadline: null, deadline_type: null, recurrence: null }
+  if (value === null || value === undefined) return none
+  if (value instanceof Date) {
+    return Number.isNaN(value.getTime()) ? none : { deadline: value, deadline_type: 'fixed', recurrence: null }
+  }
+  if (typeof value !== 'string') return { deadline: value, deadline_type: null, recurrence: null }
+  const text = value.trim()
+  if (!text) return none
+  // Already machine-shaped: ISO date / timestamp.
+  if (/^\d{4}-\d{2}-\d{2}(?:[T ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?$/.test(text)) {
+    return { deadline: text, deadline_type: 'fixed', recurrence: null }
+  }
+  // US numeric dates: 4/1/2026, 04-01-2026.
+  const numeric = text.match(/^(\d{1,2})[/-](\d{1,2})[/-](\d{4})$/)
+  if (numeric) {
+    const [, m, d, y] = numeric
+    return { deadline: `${y}-${pad2(m)}-${pad2(d)}`, deadline_type: 'fixed', recurrence: null }
+  }
+  // Month-name dates, with or without a year ("April 1, 2026", "1 April 2026",
+  // "April 1 each year", "Apr 1").
+  const monthFirst = text.match(/^([A-Za-z]{3,9})\.?\s+(\d{1,2})(?:st|nd|rd|th)?(?:,)?(?:\s+(\d{4}))?\b/)
+  const dayFirst = text.match(/^(\d{1,2})(?:st|nd|rd|th)?\s+([A-Za-z]{3,9})\.?(?:,)?(?:\s+(\d{4}))?\b/)
+  const parts = monthFirst
+    ? { month: MONTH_NAMES[monthFirst[1].toLowerCase()], day: Number(monthFirst[2]), year: monthFirst[3] ? Number(monthFirst[3]) : null }
+    : dayFirst
+      ? { month: MONTH_NAMES[dayFirst[2].toLowerCase()], day: Number(dayFirst[1]), year: dayFirst[3] ? Number(dayFirst[3]) : null }
+      : null
+  if (parts && parts.month && parts.day >= 1 && parts.day <= 31) {
+    if (parts.year) return { deadline: `${parts.year}-${pad2(parts.month)}-${pad2(parts.day)}`, deadline_type: 'fixed', recurrence: null }
+    // No year: a recurring deadline. Store the NEXT occurrence so the row is
+    // sortable and expiry logic works; `recurrence` records that it repeats.
+    const ref = now instanceof Date && !Number.isNaN(now.getTime()) ? now : new Date()
+    let year = ref.getUTCFullYear()
+    const thisYear = Date.UTC(year, parts.month - 1, parts.day)
+    if (thisYear < Date.UTC(ref.getUTCFullYear(), ref.getUTCMonth(), ref.getUTCDate())) year += 1
+    return { deadline: `${year}-${pad2(parts.month)}-${pad2(parts.day)}`, deadline_type: 'fixed', recurrence: 'annual' }
+  }
+  if (ROLLING_DEADLINE_RX.test(text)) return { deadline: null, deadline_type: 'rolling', recurrence: null }
+  if (RECURRING_DEADLINE_RX.test(text)) return { deadline: null, deadline_type: 'unknown', recurrence: 'annual' }
+  // Last resort: whatever Date can parse unambiguously (e.g. "March 15 2027").
+  const parsed = Date.parse(text)
+  if (Number.isFinite(parsed) && /\d{4}/.test(text)) {
+    const d = new Date(parsed)
+    return { deadline: `${d.getUTCFullYear()}-${pad2(d.getUTCMonth() + 1)}-${pad2(d.getUTCDate())}`, deadline_type: 'fixed', recurrence: null }
+  }
+  return none
+}
+
 function normalizeDateLikeOrNull(value) {
-  if ((value === null || value === undefined)) return null
-  if (typeof value === 'string' && value.trim() === '') return null
-  return value
+  return normalizeDeadlineLike(value).deadline
+}
+
+/** deadline_type for a record: the caller's own value, else what the deadline text implies. */
+function deadlineTypeFor(opportunity) {
+  if (opportunity?.deadline_type !== null && opportunity?.deadline_type !== undefined) return opportunity.deadline_type
+  return normalizeDeadlineLike(opportunity?.deadline).deadline_type
+}
+
+/**
+ * Carry the deadline text's recurrence onto the opportunity object itself so
+ * the lifecycle-contract projection (`syncOpportunityContractProjection`,
+ * which reads `opportunity.recurrence`) records it. A caller's own value wins.
+ */
+function withDerivedRecurrence(opportunity) {
+  if (!opportunity || typeof opportunity !== 'object') return opportunity
+  if (opportunity.recurrence !== null && opportunity.recurrence !== undefined && String(opportunity.recurrence).trim() !== '') return opportunity
+  const derived = normalizeDeadlineLike(opportunity.deadline).recurrence
+  return derived ? { ...opportunity, recurrence: derived } : opportunity
 }
 
 export async function upsertFundingOpportunity(db, opportunity, opts = {}) {
+  opportunity = withDerivedRecurrence(opportunity)
   // TEXT HYGIENE at the single ingest choke point (owner QA 2026-08-03):
   // decode HTML entities ("&ndash;", "&amp;", "&nbsp;"), strip control chars,
   // collapse whitespace on the identity/display fields BEFORE any gate reads
@@ -785,9 +888,10 @@ export async function upsertFundingOpportunity(db, opportunity, opts = {}) {
           ? null
           : resolvedAmounts.amount_status,
       amount_confidence: resolvedAmounts.amount_confidence,
-      // Postgres DATE cannot accept empty string; normalize to null.
+      // Postgres DATE cannot accept empty string or prose; normalize to null
+      // (rolling / recurring prose is kept as deadline_type instead).
       deadline: normalizeDateLikeOrNull(opportunity.deadline),
-      deadline_type: opportunity.deadline_type ?? null,
+      deadline_type: deadlineTypeFor(opportunity),
       application_url: applicationUrl,
       is_national: toDbBoolean(db, isNational),
       state: normalizedState ?? (isNational ? 'nationwide' : null),
@@ -1223,9 +1327,10 @@ export async function upsertFundingOpportunity(db, opportunity, opts = {}) {
         ? null
         : resolvedAmounts.amount_status,
     amount_confidence: resolvedAmounts.amount_confidence,
-    // Postgres rejects empty-string dates (e.g. ""), so normalize to null.
+    // Postgres rejects empty-string and prose dates, so normalize to null
+    // (rolling / recurring prose is kept as deadline_type instead).
     deadline: normalizeDateLikeOrNull(opportunity.deadline),
-    deadline_type: opportunity.deadline_type ?? null,
+    deadline_type: deadlineTypeFor(opportunity),
     application_url: applicationUrl,
     is_national: toDbBoolean(db, isNational),
     state: normalizedState ?? (isNational ? 'nationwide' : null),

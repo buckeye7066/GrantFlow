@@ -190,6 +190,11 @@ export function describeDecomposition(decomposition, childTaskCount = 0) {
     const outcomes = [...new Set((decomposition?.items || []).map((i) => i?.outcome).filter(Boolean))]
     parts.push(`No child task was created — every admitted award ended as: ${outcomes.join(', ') || 'unrecorded'}.`)
   }
+  const alreadyInPipeline = (decomposition?.items || []).filter((i) => i?.outcome === 'already_in_pipeline')
+  if (alreadyInPipeline.length > 0) {
+    const named = alreadyInPipeline.slice(0, 3).map((i) => `${i.title}${i.existing_task_status ? ` (${i.existing_task_status})` : ''}`)
+    parts.push(`${alreadyInPipeline.length} award(s) on this listing are already in the profile's pipeline with their own task: ${named.join('; ')}${alreadyInPipeline.length > 3 ? '; …' : ''}.`)
+  }
   if (rejected.length > 0) {
     parts.push(`${rejected.length} candidate(s) were refused by the fabrication guard.`)
   }
