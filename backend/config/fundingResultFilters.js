@@ -299,6 +299,16 @@ export function hasFundableSignal(row) {
 }
 
 /** Result buckets, in the order the chain decides them. */
+/**
+ * A NEWS RECAP of awards already handed out ("the President presented a total
+ * of $21,500 in scholarships directly to students") is a story about past
+ * recipients, not something the reader can apply to. Live 2026-09-05: "True
+ * Blue Tour Scholarships" (source_url the bare university homepage) sat in a
+ * student's pipeline at ACCEPT 75 and Hamilton drafted it. Identity fields
+ * only; a real award that STATES its own amount ("$4,500 per year") is untouched.
+ */
+export const PAST_AWARD_RECAP_RX = /\b(?:presented|handed out|gave away|distributed|awarded)\s+(?:a total of\s+)?\$[\d,]+(?:\.\d+)?\s+in\s+(?:scholarships|grants|awards)\b(?:\s+(?:directly\s+)?to\s+(?:students|recipients|winners))?|\b(?:scholarship|award)\s+recipients\s+were\s+(?:announced|named|honored)\b/i
+
 export const RESULT_BUCKETS = Object.freeze({
   NOT_A_GRANT: 'not_a_grant',
   RESOURCE: 'resource',
@@ -471,6 +481,9 @@ export function classifyFundingResult(row, { now = new Date() } = {}) {
   const brandSurface = aggregatorBrandSurface(row)
   if (brandSurface) {
     return { bucket: RESULT_BUCKETS.RESOURCE, reasons: [`aggregator_surface:${brandSurface}`], stale }
+  }
+  if (PAST_AWARD_RECAP_RX.test(`${title} ${String(row.description ?? row.summary ?? '')}`)) {
+    return { bucket: RESULT_BUCKETS.RESOURCE, reasons: ['past_award_recap'], stale }
   }
   if (!hasFundableSignal(row)) {
     return { bucket: RESULT_BUCKETS.RESOURCE, reasons: ['no_fundable_signal'], stale }

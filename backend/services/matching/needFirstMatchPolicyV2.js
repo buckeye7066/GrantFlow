@@ -699,7 +699,9 @@ const DISCIPLINE_IMPLICATIONS = Object.freeze({
   engineering: ['engineering', 'science'],
   computing: ['computing', 'science'],
 })
-const DISCIPLINE_RESTRICTION_RX = /\b(?:majoring in|majors? in|students? (?:in|of) the|college of|school of|department of|enrolled in the|pursuing a (?:degree|major) in|for (?:[a-z-]+ )?(?:majors|students))\b/i
+// "available to management students" (Archer-Johnstone, live 2026-09-05) is
+// the same positive restriction as "for management majors".
+const DISCIPLINE_RESTRICTION_RX = /\b(?:majoring in|majors? in|students? (?:in|of) the|college of|school of|department of|enrolled in the|pursuing a (?:degree|major) in|(?:for|available to|open to|awarded to|limited to|restricted to) (?:[a-z-]+ )?(?:majors|students))\b/i
 
 function disciplinesIn(text) {
   const out = new Set()
