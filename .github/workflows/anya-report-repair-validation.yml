@@ -21,11 +21,13 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh api /repos/buckeye7066/GrantFlow/actions/jobs/101517948691/logs > "$RUNNER_TEMP/backend-ci.log"
+          curl --fail --silent --show-error --location --header "Authorization: Bearer $GH_TOKEN" "https://api.github.com/repos/buckeye7066/GrantFlow/actions/jobs/101517948691/logs" -o "$RUNNER_TEMP/backend-ci.log"
           python3 - <<'PY'
           import os, pathlib, re
           root = pathlib.Path(os.environ['RUNNER_TEMP'])
-          lines = (root / 'backend-ci.log').read_text(errors='replace').splitlines()
+          text = (root / 'backend-ci.log').read_text(errors='replace')
+          text = re.sub(r'\x1b\[[0-?]*[ -/]*[@-~]', '', text)
+          lines = text.splitlines()
           indices = [i for i, line in enumerate(lines) if re.search(r'\bnot ok\b|AssertionError|ERR_ASSERTION', line)]
           selected = set()
           for i in indices:
@@ -37,6 +39,7 @@ jobs:
           print(excerpt[:50000])
           PY
       - uses: actions/upload-artifact@v4
+        if: always()
         with:
           name: anya-repair-evidence
           path: |
