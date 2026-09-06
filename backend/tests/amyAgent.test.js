@@ -1343,3 +1343,78 @@ describe('Amy weight tuning with empirical validation', () => {
     } finally { db.close() }
   })
 })
+
+describe('Amy orphans from dead runs (owner 2026-09-05: "not crawled, gleaned from, and deleted afterwards")', () => {
+  const HOUR = 60 * 60 * 1000
+
+  it('REAPER: a re-crawl stamped AFTER the TTL never renews the mid-flight grace; a pre-expiry crawl inside the grace still holds', async () => {
+    const db = createDb()
+    try {
+      // Prod shape 2026-09-05: created 30h ago with a 24h TTL (expired 6h ago),
+      // taught, then re-discovered by the nightly sweep 1h ago — the old rule
+      // skipped it `crawled_too_recently` night after night.
+      db.exec('ALTER TABLE profiles ADD COLUMN last_discovery_at TEXT')
+      const renewed = (await createAmyProfile(db, generateScenarios({ runId: 'amy-dead' })[0], { runId: 'amy-dead', ttlHours: 24, now: new Date(Date.now() - 30 * HOUR) })).profileId
+      // Amy's own crawl happened inside the run (29h ago); the nightly fleet
+      // sweep stamped profiles.last_discovery_at 1h ago — after the TTL.
+      await markProfileCrawled(db, renewed, { now: new Date(Date.now() - 29 * HOUR) })
+      await markProfilesTaught(db, [renewed], { runId: 'amy-dead', agents: REQUIRED_TEACHING_AGENTS, receipt: { run_id: 'amy-dead' } })
+      db.prepare('UPDATE profiles SET last_discovery_at = ? WHERE id = ?').run(new Date(Date.now() - 1 * HOUR).toISOString(), renewed)
+      // Control: created 25h ago with a 24h TTL (expired 1h ago); Amy's OWN
+      // marker says crawled 2h ago and inside the 6h grace — a run may still be
+      // mid-flight between crawl and learning, so the grace holds.
+      const held = (await createAmyProfile(db, generateScenarios({ runId: 'amy-live' })[1], { runId: 'amy-live', ttlHours: 24, now: new Date(Date.now() - 25 * HOUR) })).profileId
+      await markProfileCrawled(db, held, { now: new Date(Date.now() - 2 * HOUR) })
+      await markProfilesTaught(db, [held], { runId: 'amy-live', agents: REQUIRED_TEACHING_AGENTS, receipt: { run_id: 'amy-live' } })
+
+      const res = await cleanupExpiredAmyProfiles(db)
+      expect(res.ids).toContain(renewed)
+      expect(db.prepare('SELECT id FROM profiles WHERE id = ?').get(renewed)).toBeFalsy()
+      expect(res.skipped_ids.some((s) => s.id === held && s.reasons.includes('crawled_too_recently'))).toBe(true)
+      expect(db.prepare('SELECT id FROM profiles WHERE id = ?').get(held)).toBeTruthy()
+    } finally {
+      db.close()
+    }
+  })
+
+  it('RUN: an untaught survivor of a dead run is ADOPTED — crawled by this run, evaluated, taught, and deleted; a taught survivor is left to the expired sweep', async () => {
+    const db = createDb()
+    try {
+      // The dead run created and crawled it 3h ago, then the process died
+      // before teaching (no receipt). Its TTL has NOT expired.
+      const orphan = (await createAmyProfile(db, generateScenarios({ runId: 'amy-dead' })[0], { runId: 'amy-dead', ttlHours: 48, now: new Date(Date.now() - 3 * HOUR) })).profileId
+      await markProfileCrawled(db, orphan, { now: new Date(Date.now() - 3 * HOUR) })
+      // A taught, unexpired survivor is NOT an orphan.
+      const taught = (await createAmyProfile(db, generateScenarios({ runId: 'amy-done' })[1], { runId: 'amy-done', ttlHours: 48, now: new Date(Date.now() - 3 * HOUR) })).profileId
+      await markProfileCrawled(db, taught, { now: new Date(Date.now() - 3 * HOUR) })
+      await markProfilesTaught(db, [taught], { runId: 'amy-done', agents: REQUIRED_TEACHING_AGENTS, receipt: { run_id: 'amy-done' } })
+
+      const crawledIds = []
+      const fake = makeFakeDiscovery(db)
+      const out = await runAmyTraining({
+        db,
+        categories: CATEGORY_IDS.slice(0, 2),
+        perCategory: 1,
+        dryRunDiscovery: true,
+        runDiscovery: async (args) => { crawledIds.push(args.profileId); return fake(args) },
+        writeArtifact: async (name) => `audit-reports/${name}`,
+        clock: () => new Date(),
+      })
+      expect(out.combined.adopted_orphans.scanned).toBe(2)
+      expect(out.combined.adopted_orphans.adopted.map((a) => a.id)).toEqual([orphan])
+      expect(out.combined.adopted_orphans.adopted[0].from_run).toBe('amy-dead')
+      expect(out.combined.adopted_orphans.skipped).toEqual([{ id: taught, reason: 'already_taught' }])
+      // Crawled by THIS run and evaluated with the cohort.
+      expect(crawledIds).toContain(orphan)
+      expect(out.summary.scenarios).toBe(3)
+      // Deleted by this run's own cleanup (crawled + taught invariants held).
+      expect(out.combined.adopted_orphans.cleanup.deleted).toBe(1)
+      expect(out.combined.adopted_orphans.cleanup.ids).toEqual([orphan])
+      expect(db.prepare('SELECT id FROM profiles WHERE id = ?').get(orphan)).toBeFalsy()
+      // The taught survivor is untouched by adoption (the expired sweep owns it).
+      expect(db.prepare('SELECT id FROM profiles WHERE id = ?').get(taught)).toBeTruthy()
+    } finally {
+      db.close()
+    }
+  })
+})

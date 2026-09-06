@@ -605,7 +605,27 @@ export async function cleanupAmyProfiles(db, { runId = null, expiredOnly = false
           Number.isFinite(nowMs) &&
           (nowMs - createdMs) >= maxAge &&
           isMetadataExpired(meta, now)
-        if (!starved) reasonsToSkip.push('crawled_too_recently')
+        // A crawl signal stamped AFTER the row's own TTL cannot be its training
+        // run's crawl (owner 2026-09-05: synthetics "not deleted afterwards").
+        // The grace exists to protect a run mid-flight between crawl and
+        // learning; a nightly re-discovery of an already-expired synthetic is
+        // not that, and honoring it renewed the grace every night until the
+        // 96h starvation bound. The reaper's other guards (crawled, taught,
+        // expired) still hold — this only stops a post-expiry re-crawl from
+        // counting as protection.
+        // Narrow by construction: Amy's OWN crawl marker (markProfileCrawled)
+        // after expiry still holds the grace — that is a run mid-flight. Only
+        // a signal that came from ANOTHER discovery path (profiles.
+        // last_discovery_at advanced past the TTL while Amy's marker did not)
+        // is a re-discovery, never a training crawl.
+        const expiresMs = meta?.expires_at ? Date.parse(meta.expires_at) : NaN
+        const amyCrawlMs = Date.parse(meta?.last_crawled_at || meta?.crawled_at || '')
+        const rediscoveredAfterExpiry =
+          Number.isFinite(expiresMs) &&
+          crawledMs > expiresMs &&
+          !(Number.isFinite(amyCrawlMs) && amyCrawlMs > expiresMs) &&
+          isMetadataExpired(meta, now)
+        if (!starved && !rediscoveredAfterExpiry) reasonsToSkip.push('crawled_too_recently')
       }
     }
     // Optional scope: a specific id set (e.g. profiles crawled this run).
