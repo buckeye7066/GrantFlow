@@ -3,6 +3,8 @@ import {
   isPrivateResolutionVerdict,
   resolvePublicBrowserTarget,
 } from './controlledBetaBrowserPolicy.js'
+import fs from 'node:fs'
+import os from 'node:os'
 import { createLogger } from '../../utils/logger.js'
 
 const log = createLogger('service:browserLaunch')
@@ -58,6 +60,57 @@ export const REALISTIC_PORTAL_UA =
  * previously-working deployment worse. Returns { browser, engine } so callers
  * can log which engine actually served the session.
  */
+/**
+ * The environment the browser process is launched with: the server's, with a
+ * HOME full Chromium can actually use.
+ *
+ * MEASURED on the prod container 2026-09-06, one fresh process each, as the
+ * app user (`node`, uid 1000): HOME=/home/node → chromium-new-headless;
+ * HOME=/ , HOME unset, HOME=/tmp → the browser process dies at launch
+ * (SIGTRAP after `chrome_crashpad_handler: --database is required`) and the
+ * launcher downgrades to headless-shell. The server is started without a
+ * usable HOME, so EVERY prod run had been on the engine this file's own
+ * header says Akamai-class walls kill — and Microsoft's sign-in served that
+ * engine a page the login flow could not advance. A root shell (HOME=/root)
+ * never reproduced it, which is why it read as "args/load dependent".
+ *
+ * Order: the process's HOME when it is a real, writable directory that is
+ * not `/`; else the account's passwd home (os.userInfo().homedir) when it
+ * exists and is writable; else a directory of our own under the OS tmp root
+ * (created). Exported for tests; `deps` lets a test supply fs/os fakes.
+ */
+export function launchEnv(base = process.env, deps = {}) {
+  const fsx = deps.fs || fs
+  const osx = deps.os || os
+  const env = { ...base }
+  const usable = (dir) => {
+    const d = String(dir || '').trim()
+    if (!d || d === '/' || d === '/nonexistent') return false
+    try {
+      if (!fsx.statSync(d).isDirectory()) return false
+      fsx.accessSync(d, fsx.constants.W_OK)
+      return true
+    } catch { return false }
+  }
+  let home = usable(env.HOME) ? String(env.HOME).trim() : null
+  if (!home) {
+    let passwdHome = null
+    try { passwdHome = osx.userInfo().homedir } catch { passwdHome = null }
+    if (usable(passwdHome)) home = String(passwdHome)
+  }
+  if (!home) {
+    const own = `${osx.tmpdir()}/hamilton-browser-home`
+    try { fsx.mkdirSync(own, { recursive: true }) } catch { /* fall through */ }
+    if (usable(own)) home = own
+  }
+  if (home) {
+    env.HOME = home
+    if (!String(env.XDG_CONFIG_HOME || '').trim()) env.XDG_CONFIG_HOME = `${home}/.config`
+    if (!String(env.XDG_CACHE_HOME || '').trim()) env.XDG_CACHE_HOME = `${home}/.cache`
+  }
+  return env
+}
+
 // Translate a VALIDATED bypass strategy (from hamiltonBotBypassRegistry) into
 // Chromium launch args. Input is already allowlist-validated; this only maps
 // the known knobs to flags — it can never introduce an arbitrary arg.
@@ -95,8 +148,15 @@ export async function launchPortalBrowser(chromium, { headless = true, extraArgs
   // a few allowlisted args) the registry has already validated. Never code.
   const strategyArgs = bypassStrategyLaunchArgs(bypassStrategy)
   const args = [...CHROMIUM_CONTAINER_ARGS, '--disable-blink-features=AutomationControlled', ...strategyArgs, ...extraArgs]
+  // Full Chromium's crash handler needs a writable HOME to place its database
+  // (`chrome_crashpad_handler: --database is required` → the browser process
+  // dies at launch → every prod run silently downgraded to headless-shell,
+  // 2026-09-06). The server process on Railway runs without HOME; a launch
+  // from `railway ssh` (HOME=/root) succeeded 3/3 with the same args. Give the
+  // browser a HOME of its own when the process has none.
+  const env = launchEnv()
   try {
-    const browser = await chromium.launch({ headless, channel: 'chromium', args })
+    const browser = await chromium.launch({ headless, channel: 'chromium', args, env })
     return { browser, engine: 'chromium-new-headless' }
   } catch (err) {
     // NAME THE DOWNGRADE. This file's own header records that `headless-shell`
@@ -108,7 +168,7 @@ export async function launchPortalBrowser(chromium, { headless = true, extraArgs
     // logged and returned so a caller can say which it was.
     const downgradeReason = String(err?.message || err)
     log.warn(`[browserLaunch] full-Chromium launch FAILED, downgrading to headless-shell (this engine is blocked by Akamai-class walls): ${downgradeReason}`)
-    const browser = await chromium.launch({ headless, args })
+    const browser = await chromium.launch({ headless, args, env })
     return { browser, engine: 'headless-shell', downgraded_from: 'chromium-new-headless', downgrade_reason: downgradeReason }
   }
 }
