@@ -33,11 +33,17 @@ function kindsFor(ownPortal) {
  */
 export function ssoCredentialFromVault({ ownPortal = null, identityValues = null } = {}) {
   if (!ownPortal || !identityValues || typeof identityValues !== 'object') return null
-  const username = identityValues.sso_username
+  const rawUsername = identityValues.sso_username
   const password = identityValues.sso_password
-  if (!username || !password) return null
+  if (!rawUsername || !password) return null
+  // A school IdP signs students in by UPN ("username@mtmail.mtsu.edu"); a
+  // bare portal username typed there is "We couldn't find an account". The
+  // registry names the domain; a username that already carries one is kept.
+  let username = String(rawUsername).trim()
+  const upnDomain = String(ownPortal.sso_username_domain || '').trim().replace(/^@/, '')
+  if (upnDomain && !username.includes('@')) username = `${username}@${upnDomain}`
   return {
-    username: String(username),
+    username,
     password: String(password),
     portal_host: ownPortal.portal_host || null,
     // Every host the engine may type this pair into: the portal itself plus

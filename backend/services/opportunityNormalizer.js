@@ -399,14 +399,29 @@ function normalizeFundingType(raw) {
 // ---------------------------------------------------------------------------
 // Extract entity types from opportunity text
 // ---------------------------------------------------------------------------
-function extractEntityTypesFromText(text) {
+// A scholarship that names the PEOPLE IT GROWS is a student award, not a call
+// for the profession it names. Prod 2026-09-06: "AFTE is proud to support the
+// next generation of forensic scientists through annual scholarships" typed the
+// award researcher-ONLY on the word 'scientists' and hard-rejected a
+// forensic-science undergraduate. The bare profession noun ('scientist',
+// 'researcher') yields to this shape; 'faculty', 'principal investigator',
+// 'postdoc' and 'research institution' are still what they say.
+const NEXT_GENERATION_AWARD_RX = /\b(?:next generation|future|aspiring|emerging|tomorrow's|up-and-coming)\s+(?:of\s+)?(?:[a-z-]+\s+){0,3}?(?:scientists?|researchers?|investigators?|professionals?|leaders?)\b|\bstudents?\s+(?:pursuing|studying|majoring|preparing|interested)\b|\bscholarships?\s+(?:for|to support|supporting)\s+(?:[a-z-]+\s+){0,3}?students?\b/i
+const PROFESSION_NOUN_ONLY = new Set(['researcher', 'scientist', 'investigator'])
+
+export function extractEntityTypesFromText(text) {
   if (!text) return []
   const lower = text.toLowerCase()
   const types = new Set()
+  const studentAward = NEXT_GENERATION_AWARD_RX.test(lower)
   for (const { type, patterns } of ENTITY_PATTERNS) {
-    if (patterns.some((p) => containsSearchPhrase(lower, p))) {
-      types.add(type)
+    const hits = patterns.filter((p) => containsSearchPhrase(lower, p))
+    if (hits.length === 0) continue
+    if (type === 'researcher' && studentAward && hits.every((h) => PROFESSION_NOUN_ONLY.has(h))) {
+      types.add('student')
+      continue
     }
+    types.add(type)
   }
   return [...types]
 }
