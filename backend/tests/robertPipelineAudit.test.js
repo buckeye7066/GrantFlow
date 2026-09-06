@@ -283,6 +283,30 @@ describe('every gate can actually reject, and can actually pass', () => {
     expect(gateQualifies(plain, undergradFacts).pass).toBe(true)
   })
 
+  it('QUALIFIES honors the engine POSITIVE-FACT rules: an adult-learner program for an 18-year-old and a fellowship demanding ACT 30 from a declared ACT 28 (owner 2026-09-05)', () => {
+    const studentFacts = {
+      ...facts,
+      sections: {
+        basic_information: { state: 'TN', profile_category: 'college_student', date_of_birth: '2008-07-19', academic_status: { act_score: 28, sat_score: 1230, gpa: 3.84, education_level: 'College Freshman (incoming)' } },
+        education: { current_institution: 'Middle Tennessee State University', intended_major: 'Forensic Science', gpa: '3.84', act_score: '28' },
+      },
+    }
+    const reconnect = { title: 'Tennessee Reconnect Scholarship', sponsor: 'Tennessee Reconnect Act', description: 'last-dollar scholarship for eligible adult students in Tennessee', entity_types_allowed: '["student","individual"]' }
+    const r1 = gateQualifies(reconnect, studentFacts)
+    expect(r1.pass).toBe(false)
+    expect(r1.evidence.gate).toBe('need_first_positive_fact')
+    expect(r1.evidence.detail).toMatch(/Adult-learner/)
+    const buchanan = { title: 'The Buchanan Fellowship', sponsor: 'Middle Tennessee State University', eligibility_text: 'ACT composite score of 30 or higher, or SAT score of 1360 or higher.', entity_types_allowed: '["student"]' }
+    const r2 = gateQualifies(buchanan, studentFacts)
+    expect(r2.pass).toBe(false)
+    expect(r2.evidence.detail).toMatch(/Stated minimum ACT 30/)
+    // A fitting award for the same student still passes; silence stays neutral.
+    const honors = { title: 'Honors Freshman Scholarship', sponsor: 'Middle Tennessee State University', eligibility_text: '(27 ACT and high school GPA of 3.3 or higher) OR (24 ACT and high school GPA of 3.7 or higher).', entity_types_allowed: '["student"]' }
+    expect(gateQualifies(honors, studentFacts).pass).toBe(true)
+    const plain = { title: 'AFTE Forensic Science Scholarship', sponsor: 'AFTE', entity_types_allowed: '["student"]' }
+    expect(gateQualifies(plain, studentFacts).pass).toBe(true)
+  })
+
   it('QUALIFIES rejects an out-of-state place-declaring row and keeps an in-state one', () => {
     const outOfState = { title: 'Polk County, GA — Local assistance programs', sponsor: 'Findhelp', entity_types_allowed: '["individual"]' }
     expect(gateQualifies(outOfState, facts).pass).toBe(false)

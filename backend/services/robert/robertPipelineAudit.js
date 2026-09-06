@@ -74,6 +74,7 @@ import {
   RESULT_BUCKETS,
 } from '../../config/fundingResultFilters.js'
 import { evaluateApplicantTypeEligibility } from '../applicantTypeGate.js'
+import { positiveFactMismatches } from '../matching/needFirstMatchPolicyV2.js'
 import { stageOfLifeConflictForSections } from '../../config/stageOfLifeEligibility.js'
 import {
   declaredNeedsFrom,
@@ -448,6 +449,27 @@ export function gateQualifies(row, facts) {
       pass: false,
       reason: REJECTION_REASONS.PROFILE_MISMATCH,
       evidence: { gate: 'stage_of_life', detail: stageConflict.reason, bars: stageConflict.classId },
+    }
+  }
+
+  // POSITIVE-FACT rules of the canonical engine (owner 2026-09-05). The
+  // pipeline held rows the engine now hard-rejects — adult-learner programs
+  // (Tennessee Reconnect) for an 18-year-old, K-12 vouchers for an enrolled
+  // undergraduate, a business-major award for a forensic-science major, a
+  // fellowship demanding ACT 30 from a declared ACT 28 — because the rule
+  // landed AFTER admission and this gate never consulted it. Measured
+  // read-only 2026-09-05: 10 of one student's 25 active rows. The engine's
+  // positive-fact rules are the same authority on the way OUT as on the way
+  // IN; purpose/need scoring stays out of this gate (silence is neutral).
+  const positiveFacts = positiveFactMismatches({
+    profileContext: { profile: facts.profile, sections: facts.sections },
+    opportunity: row,
+  })
+  if (positiveFacts.length > 0) {
+    return {
+      pass: false,
+      reason: REJECTION_REASONS.PROFILE_MISMATCH,
+      evidence: { gate: 'need_first_positive_fact', detail: positiveFacts[0], mismatches: positiveFacts },
     }
   }
 
