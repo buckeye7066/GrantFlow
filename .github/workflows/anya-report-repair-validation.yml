@@ -1,0 +1,28 @@
+name: Anya report repair validation
+on:
+  push:
+    branches: [fix/anya-report-2026-09-06]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: Capture tracked source for the repair workspace
+        run: git archive --format=tar.gz --output="$RUNNER_TEMP/GrantFlow-source.tar.gz" HEAD
+      - uses: actions/upload-artifact@v4
+        with:
+          name: anya-repair-source
+          path: ${{ runner.temp }}/GrantFlow-source.tar.gz
+          retention-days: 1
+      - name: Validate runner syntax
+        run: |
+          for source in tools/eva-edge-runner/src/*.mjs; do node --check "$source"; done
