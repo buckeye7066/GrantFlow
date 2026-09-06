@@ -99,3 +99,38 @@ describe('attemptLogin on the live Microsoft shape', () => {
     expect(await attemptLogin(page, bare)).toBe(false)
   })
 })
+
+describe('attemptLoginDetailed says WHY a sign-in failed', () => {
+  const { attemptLoginDetailed } = _internal
+  const cred = ssoCredentialFromVault({
+    ownPortal: classifyFundingSource({ opportunity: dreamRow, profile: mtsuStudent }).own_institution_portal,
+    identityValues: { sso_username: 'jd2x', sso_password: 'pw-1' },
+  })
+
+  it('a rejected password carries the provider text', async () => {
+    const page = fakePage('<html><body><form><input type="email" name="loginfmt" /><input type="password" name="passwd" /><input type="submit" id="idSIButton9" value="Sign in" /></form></body></html>', {
+      url: MS_URL,
+      onSubmit: (doc) => { doc.body.innerHTML = '<form><div id="passwordError">Your account or password is incorrect. If you don\'t remember your password, reset it now.</div><input type="password" name="passwd" /><input type="submit" id="idSIButton9" value="Sign in" /></form>' },
+    })
+    const v = await attemptLoginDetailed(page, cred)
+    expect(v.ok).toBe(false)
+    expect(v.reason).toBe('password_rejected')
+    expect(v.said).toMatch(/account or password is incorrect/i)
+    expect(v.url).toBe(MS_URL)
+  })
+
+  it('an unknown username carries the provider text', async () => {
+    const page = fakePage(MS_STEP1, {
+      url: MS_URL,
+      onSubmit: (doc) => { doc.body.innerHTML = '<form><div id="usernameError">We couldn\'t find an account with that username. Try another, or get a new Microsoft account.</div><input type="email" name="loginfmt" /><input type="submit" id="idSIButton9" value="Next" /></form>' },
+    })
+    const v = await attemptLoginDetailed(page, cred)
+    expect(v).toMatchObject({ ok: false, reason: 'username_not_accepted' })
+    expect(v.said).toMatch(/couldn't find an account/i)
+  })
+
+  it('a host outside the scope is origin_refused', async () => {
+    const page = fakePage(MS_STEP1, { url: 'https://evil.example.net/login', onSubmit: () => {} })
+    expect((await attemptLoginDetailed(page, cred)).reason).toBe('origin_refused')
+  })
+})
