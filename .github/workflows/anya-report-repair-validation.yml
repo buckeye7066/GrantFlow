@@ -16,13 +16,21 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '24'
-      - name: Capture tracked source for the repair workspace
-        run: git archive --format=tar.gz --output="$RUNNER_TEMP/GrantFlow-source.tar.gz" HEAD
+      - name: Capture report-scoped public sources for the repair workspace
+        run: |
+          mkdir -p "$RUNNER_TEMP/report-sources/GrantFlow"
+          git archive HEAD | tar -x -C "$RUNNER_TEMP/report-sources/GrantFlow"
+          for repo in incognito livehealth genemap-discovery kidney-antigen-discovery app-store-publisher local-ai-factory sermonsmith mind-over-math are-we-mice-or-are-we-men family-stewardship-navigator; do
+            git clone --depth=1 "https://github.com/buckeye7066/$repo.git" "$RUNNER_TEMP/report-sources/$repo"
+            git -C "$RUNNER_TEMP/report-sources/$repo" rev-parse HEAD > "$RUNNER_TEMP/report-sources/$repo/REPAIR_BASE_SHA"
+            rm -rf "$RUNNER_TEMP/report-sources/$repo/.git"
+          done
+          tar -czf "$RUNNER_TEMP/portfolio-source.tar.gz" -C "$RUNNER_TEMP/report-sources" .
       - uses: actions/upload-artifact@v4
         with:
           name: anya-repair-source
-          path: ${{ runner.temp }}/GrantFlow-source.tar.gz
+          path: ${{ runner.temp }}/portfolio-source.tar.gz
           retention-days: 1
-      - name: Validate runner syntax
-        run: |
-          for source in tools/eva-edge-runner/src/*.mjs; do node --check "$source"; done
+      - name: EVA runner regression suite
+        working-directory: tools/eva-edge-runner
+        run: npm test
