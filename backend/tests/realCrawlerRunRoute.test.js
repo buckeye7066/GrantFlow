@@ -139,7 +139,19 @@ function seedLifecycleResults(db, profileId) {
         match_explanation, match_reasons, match_explain_json, matcher_version
       ) VALUES (?, ?, ?, ?, 'Persisted lifecycle fixture.', '[]', ?, 'crawler-os')
     `).run(profileId, row.id, row.score, row.decision,
-      row.decision === 'ACCEPT' ? verifiedFourTruthExplain() : '{}')
+      row.decision === 'ACCEPT'
+        ? verifiedFourTruthExplain()
+        // A POINTER carries the four gates in their pointer sense
+        // (crawler-os/pointerTruthPolicy.js): tied to this profile
+        // geographically, serving a recorded need, scored against its data
+        // points. This fixture exercises LIFECYCLE, so it states that evidence
+        // rather than relying on the exemption the pointer arm used to grant.
+        : JSON.stringify({
+          matched_location: 'state',
+          matched_profile_type: true,
+          matched_needs: ['housing'],
+          matched_profile_facts: ['Profile signal: geo:state'],
+        }))
   }
 }
 

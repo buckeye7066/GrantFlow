@@ -27,6 +27,15 @@
 import { REVIEW_SCORE } from './matchThresholds.js'
 import { isPointerKind } from './opportunityKindClasses.js'
 import { hasPositiveFourTruthProof } from './fundingTruthPolicy.js'
+import { hasPositivePointerTruth, pointerTruthVerdict } from './pointerTruthPolicy.js'
+
+/**
+ * The lane a promotion-time canonical rescore writes into. Exported separately
+ * because two places need the exact literal: the writer
+ * (`services/opportunityMatcher.persistFreshCanonicalDecision`) and the boot
+ * repair that moves rows stranded in an engine-version lane back into it.
+ */
+export const CANONICAL_RESCORE_MATCHER_VERSION = 'canonical-rescore-link'
 
 /**
  * Matcher versions that represent legitimate, profile-scoped matches meant to
@@ -134,6 +143,17 @@ export const SURFACED_MATCHER_VERSIONS = Object.freeze([
   //                         at REVIEW was never recommendable and never reached
   //                         the people it exists for.
   'national-assistance-link',
+  //   - canonical-rescore-link : a pair the PROMOTION rescore re-proved with the
+  //                         canonical engine (opportunityMatcher.
+  //                         persistFreshCanonicalDecision). It needs a lane of
+  //                         its own because that writer used to stamp the
+  //                         ENGINE version ('4.1.2') into `matcher_version`,
+  //                         and this list is an allowlist — so re-proving a
+  //                         pair silently UNPUBLISHED it. Prod 2026-09-06: 142
+  //                         pairs across 6 profiles were sitting in the '4.1.2'
+  //                         lane, 38 of them ACCEPT, invisible to every read
+  //                         path since that writer went live on 2026-09-05.
+  CANONICAL_RESCORE_MATCHER_VERSION,
 ])
 
 /**
@@ -214,12 +234,51 @@ export function opportunityLifecycleVisibilitySql({ tableAlias = '', dialect = '
 /**
  * Whether a stored row may be shown to this profile.
  *
- * Pointer resources remain clearly labelled research leads and follow their
- * REVIEW-band rule. A direct funding source is different: neither a score nor a
- * historical ACCEPT is permission to surface it. It requires the current ACCEPT
- * plus the persisted four-truth proof produced by the canonical engine.
+ * Pointer resources remain clearly labelled research leads and are never
+ * represented as direct funding — but they are subject to the SAME four gates,
+ * read in their pointer sense (`config/pointerTruthPolicy.js`). A direct
+ * funding source is different again: neither a score nor a historical ACCEPT is
+ * permission to surface it. It requires the current ACCEPT plus the persisted
+ * four-truth proof produced by the canonical engine.
+ *
+ * THE POINTER ARM USED TO BE AN EXEMPTION, AND THAT WAS THE LEAK (owner report
+ * 2026-09-06, Anastasia's crawl — "18 directories to search · 0 opportunities
+ * you can apply to"). It returned true for any pointer that was merely not
+ * REJECT and reached the REVIEW band, and true UNCONDITIONALLY for a pointer
+ * nobody had scored. Nothing about the profile was required, so five 990
+ * grantmakers in MI / MO / OK, an Illinois university's transfer scholarship,
+ * and an MTSU degree-program page all surfaced for a Cleveland, TN student.
+ * The score band is kept — it is a real signal — but it is no longer the whole
+ * bar, and "never scored" now fails instead of passing: unknown is not
+ * relevant. Measured on prod 2026-09-06: 172 surfaced pointer rows across all
+ * profiles → 133 kept, 39 dropped (Anastasia 18 → 10, and every row the owner
+ * named is in the dropped 8).
  */
 export const DIRECTORY_MIN_SCORE = REVIEW_SCORE
+
+/**
+ * Why a pointer was refused, for `diagnostics.dropped_reasons`. Returns null
+ * when the row is not a pointer or the pointer passed — a drop is never silent.
+ * @returns {{ reason: string, failed: string[] }|null}
+ */
+export function pointerDisplayRefusal(row, minScore) {
+  if (!row || !isPointerRow(row)) return null
+  if (qualifiesForDisplay(row, minScore)) return null
+  const decision = String(row.match_decision || row.decision || '').toUpperCase()
+  if (decision === 'REJECT') return { reason: 'pointer_rejected', failed: ['decision'] }
+  if (!isOpportunityLifecycleVisible(row)) return { reason: 'pointer_lifecycle', failed: ['lifecycle'] }
+  const verdict = pointerTruthVerdict(row)
+  if (!verdict.pass) return { reason: 'pointer_four_gates', failed: verdict.failed }
+  return { reason: 'pointer_below_review_band', failed: ['score'] }
+}
+
+function isPointerRow(row) {
+  return Boolean(
+    row.is_directory ||
+    row.is_directory_resource ||
+    isPointerKind(row.opportunity_kind || row.opportunity_type || row.type),
+  )
+}
 
 export function qualifiesForDisplay(row, _minScore) {
   if (!row) return false
@@ -227,18 +286,18 @@ export function qualifiesForDisplay(row, _minScore) {
   const decision = String(row.match_decision || row.decision || '').toUpperCase()
   if (decision === 'REJECT') return false
 
-  const pointer = Boolean(
-    row.is_directory ||
-    row.is_directory_resource ||
-    isPointerKind(row.opportunity_kind || row.opportunity_type || row.type),
-  )
-  if (pointer) {
-    // Never-scored is unknown, not irrelevant. A scored pointer must reach the
-    // REVIEW band, and it is never represented as direct funding.
+  if (isPointerRow(row)) {
+    // The four gates, in their pointer sense: real, relatable (a GEOGRAPHIC tie
+    // to this profile), meets a recorded need, and the engine actually used the
+    // profile's data on it. A pointer nobody scored carries none of that
+    // evidence and is refused — unknown is not relevant.
+    if (!hasPositivePointerTruth(row)) return false
+    // A scored pointer must additionally reach the REVIEW band. An unscored one
+    // cannot satisfy the gates above, so the null arm no longer needs a bypass.
     const raw = row.match_score
-    if (raw === null || raw === undefined || raw === '') return true
+    if (raw === null || raw === undefined || raw === '') return false
     const dirScore = Number(raw)
-    return !Number.isFinite(dirScore) || dirScore >= DIRECTORY_MIN_SCORE
+    return Number.isFinite(dirScore) && dirScore >= DIRECTORY_MIN_SCORE
   }
 
   return decision === 'ACCEPT' && hasPositiveFourTruthProof(row)
@@ -253,4 +312,6 @@ export default {
   opportunityLifecycleVisibilityPortableSql,
   opportunityLifecycleVisibilitySql,
   qualifiesForDisplay,
+  pointerDisplayRefusal,
+  CANONICAL_RESCORE_MATCHER_VERSION,
 }

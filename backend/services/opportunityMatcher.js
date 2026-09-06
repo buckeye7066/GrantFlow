@@ -38,6 +38,7 @@ import {
 } from '../utils/grantFingerprint.js'
 import { isDismissed as isPipelineDismissed } from './pipelineDismissals.js'
 import { classifyFundingResult, RESULT_BUCKETS } from '../config/fundingResultFilters.js'
+import { CANONICAL_RESCORE_MATCHER_VERSION } from '../config/matchSurfacing.js'
 import { declaredNeedsFrom, evaluateDeclaredNeedCoverage } from './pipelinePrecision.js'
 import { createLogger } from '../utils/logger.js'
 
@@ -149,7 +150,45 @@ async function persistFreshCanonicalDecision(db, profileId, opportunityId, decis
   }
 
   const now = new Date().toISOString()
+
+  // THE RESCORE MUST NOT DESTROY EVIDENCE IT DID NOT RE-MEASURE.
+  //
+  // `four_truth_proof` is built one layer up, in
+  // `crawler-os/matchEngine.buildFourTruthProof`; the CANONICAL engine
+  // structurally never writes it. This function overwrites match_explain_json
+  // wholesale with the canonical explain, so a rescore silently STRIPPED the
+  // proof — and `config/matchSurfacing.qualifiesForDisplay` requires it for
+  // every direct-funding row, so the pair stopped surfacing even though the
+  // rescore had just re-confirmed its ACCEPT. Measured on prod 2026-09-06:
+  // 78/78 `crawler-os` ACCEPTs and 83/83 `crawler-os-xmatch` ACCEPTs carry a
+  // passing proof; **0 of the 38 rescored ACCEPTs do**.
+  //
+  // The proof is carried forward ONLY when the fresh verdict AGREES with the
+  // one the proof records — so a pair the engine has since demoted loses it,
+  // exactly as it should, and nothing is ever asserted that a gate did not
+  // once measure. It is a merge of unre-measured evidence, never a fabrication.
+  let carriedFourTruthProof = null
+  try {
+    const priorRow = await db.prepare(
+      `SELECT match_explain_json FROM profile_opportunity_matches
+        WHERE profile_id = ? AND opportunity_id = ?`,
+    ).get(profileId, opportunityId)
+    const prior = priorRow?.match_explain_json
+      ? JSON.parse(priorRow.match_explain_json)
+      : null
+    const priorProof = prior?.four_truth_proof ?? null
+    const proofDecision = String(priorProof?.relatable?.canonical_decision ?? '').trim().toUpperCase()
+    const freshDecision = String(decision.decision ?? '').trim().toUpperCase()
+    if (priorProof && proofDecision && proofDecision === freshDecision) {
+      carriedFourTruthProof = priorProof
+    }
+  } catch {
+    // A missing row or unparseable explain simply means there is no prior proof
+    // to carry; the fresh row is then honestly unproven rather than wrongly so.
+  }
+
   const explain = {
+    ...(carriedFourTruthProof ? { four_truth_proof: carriedFourTruthProof } : {}),
     ...(decision.match_explain ?? {}),
     score_scale_id:
       decision.scoreScaleId ?? decision.match_explain?.score_scale_id ?? null,
@@ -158,6 +197,9 @@ async function persistFreshCanonicalDecision(db, profileId, opportunityId, decis
       decision.match_explain?.scoring_policy_version ??
       null,
     canonical_decision: String(decision.decision ?? '').toUpperCase() || null,
+    // The ENGINE version lives here, where it always did. It must never be
+    // written to `matcher_version` — see the lane note below.
+    matcher_version: decision.matcherVersion ?? decision.match_explain?.matcher_version ?? null,
   }
   const decisionValues = [
     ['match_score', Number.isFinite(Number(decision.score)) ? Number(decision.score) : null],
@@ -166,7 +208,6 @@ async function persistFreshCanonicalDecision(db, profileId, opportunityId, decis
     ['match_explanation', decision.explanation ?? null],
     ['match_reasons', JSON.stringify(decision.reasons ?? [])],
     ['match_explain_json', JSON.stringify(explain)],
-    ['matcher_version', decision.matcherVersion ?? null],
     ['computed_at', decision.evaluatedAt ?? now],
     ['updated_at', now],
     ['evaluated_at', decision.evaluatedAt ?? now],
@@ -182,11 +223,30 @@ async function persistFreshCanonicalDecision(db, profileId, opportunityId, decis
     ...(columns.has('id') ? [['id', `${String(profileId)}:${String(opportunityId)}`]] : []),
     ['profile_id', profileId],
     ['opportunity_id', opportunityId],
+    // `matcher_version` is the row's SURFACING LANE, not the engine version.
+    // Writing `decision.matcherVersion` here (the canonical engine's '4.1.2')
+    // put the pair in a lane no read path knows, and `SURFACED_MATCHER_VERSIONS`
+    // is an allowlist — so a rescore silently UNPUBLISHED the pair it had just
+    // re-proved. Measured on prod 2026-09-06: 142 pairs across 6 profiles
+    // carried '4.1.2', 38 of them ACCEPT, invisible since this path went live
+    // on 2026-09-05 14:29 — which is why Anastasia's Discover page showed
+    // "0 opportunities you can apply to" while 19 engine ACCEPTs sat in her
+    // match store. A fresh rescore inserts into its own reconcile-surviving
+    // lane; an EXISTING row keeps the lane it was discovered through (the
+    // column is deliberately absent from `decisionValues`, so the ON CONFLICT
+    // update never touches it).
+    ...(columns.has('matcher_version') ? [['matcher_version', CANONICAL_RESCORE_MATCHER_VERSION]] : []),
     ...decisionValues,
   ]
-  const updateAssignments = decisionValues
-    .map(([column]) => `${column} = excluded.${column}`)
-    .join(', ')
+  const updateAssignments = [
+    ...decisionValues.map(([column]) => `${column} = excluded.${column}`),
+    // The lane is PRESERVED, never rebranded — but an EMPTY one is filled, so a
+    // row that never recorded a lane is not left permanently unsurfaceable.
+    // COALESCE(<table>.col, excluded.col) is accepted by both SQLite and Postgres.
+    ...(columns.has('matcher_version')
+      ? ['matcher_version = COALESCE(profile_opportunity_matches.matcher_version, excluded.matcher_version)']
+      : []),
+  ].join(', ')
   const result = await db.prepare(
     `INSERT INTO profile_opportunity_matches
        (${insertValues.map(([column]) => column).join(', ')})

@@ -205,11 +205,37 @@ describe('qualified pipeline promotion', () => {
 
     expect(grantsFor(db, 'real')).toHaveLength(0)
     expect(db.prepare('SELECT outcome, reason FROM pipeline_promotion_outcomes').get()).toEqual({ outcome: 'live_reject', reason: 'live_reject' })
+    // The rescore replaces the pair TRUTH but never the pair's SURFACING LANE.
+    // `matcher_version` names the lane a row was discovered through and is read
+    // back through the `SURFACED_MATCHER_VERSIONS` allowlist; writing the engine
+    // version here is what stranded 142 prod pairs (38 ACCEPT) in a '4.1.2' lane
+    // no read path knows, so a re-proved pair silently vanished from Discover.
     expect(db.prepare(`SELECT match_score, match_decision, matcher_version
                          FROM profile_opportunity_matches
                         WHERE opportunity_id = 'fresh-reject'`).get())
-      .toEqual({ match_score: 0, match_decision: 'reject', matcher_version: 'test-live' })
+      .toEqual({ match_score: 0, match_decision: 'reject', matcher_version: 'crawler-os' })
     expect(computeSpy).toHaveBeenCalledTimes(1)
+    db.close()
+  })
+
+  it('a pair with NO lane is given one the read paths actually surface', async () => {
+    // A row that recorded no lane is invisible to every read path, because
+    // SURFACED_MATCHER_VERSIONS is an allowlist. The rescore preserves a real
+    // lane and FILLS an empty one with its own reconcile-surviving lane; writing
+    // the engine version there is what stranded 142 prod pairs (prod 2026-09-06).
+    const { SURFACED_MATCHER_VERSIONS } = await import('../config/matchSurfacing.js')
+    const db = makeDb()
+    seedProfile(db, 'real')
+    seedCandidate(db, 'real', { id: 'laneless', storedScore: 1, storedDecision: 'LOW' })
+    db.prepare(`UPDATE profile_opportunity_matches SET matcher_version = NULL
+                 WHERE opportunity_id = 'laneless'`).run()
+
+    await runQualifiedPipelinePromotion(db, { batch: 1, amountFollowup: false })
+
+    const lane = db.prepare(`SELECT matcher_version FROM profile_opportunity_matches
+                              WHERE opportunity_id = 'laneless'`).get()?.matcher_version
+    expect(lane).toBe('canonical-rescore-link')
+    expect(SURFACED_MATCHER_VERSIONS).toContain(lane)
     db.close()
   })
 
@@ -241,8 +267,11 @@ describe('qualified pipeline promotion', () => {
       match_score: 18,
       match_confidence: 0.9,
       match_decision: 'accept',
-      matcher_version: 'test-live',
+      // The discovery lane survives the rescore (see the note above); the ENGINE
+      // version travels in match_explain_json, where it always did.
+      matcher_version: 'crawler-os',
     })
+    expect(JSON.parse(persisted.match_explain_json).matcher_version).toBe('test-live')
     expect(JSON.parse(persisted.match_explain_json)).toMatchObject({
       score_scale_id: 'data_point_v1',
       scoring_policy_version: 'need-first-v1',

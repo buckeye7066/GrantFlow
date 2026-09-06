@@ -101,11 +101,31 @@ describe('profileResultCoverageAudit — detection', () => {
       surfacedRows: [
         { match_score: 60, match_decision: 'review', title: 'weak' }, // below floor, not accept → hidden
         withVerifiedFourTruth({ match_score: 72, match_decision: 'accept', title: 'HOPE' }), // accept below 75 → surfaced
-        { is_directory: true, title: 'dir' }, // unscored directory → surfaced
+        // A directory the engine PROVED against this profile → surfaced. A
+        // pointer faces the same four gates in their pointer sense
+        // (crawler-os/pointerTruthPolicy.js), so it must carry that evidence.
+        {
+          is_directory: true,
+          title: 'dir',
+          match_score: 40,
+          match_decision: 'review',
+          url: 'https://example.gov/dir',
+          match_explain: {
+            matched_location: 'state',
+            matched_profile_type: true,
+            matched_needs: ['housing'],
+            matched_profile_facts: ['Profile signal: geo:state'],
+          },
+        },
         // A directory the engine affirmatively scored irrelevant (< REVIEW band)
         // no longer surfaces — 2026-07-05 rule (student-aid directory scored 0
         // for a senior citizen was showing in the matches view).
         { is_directory: true, match_score: 5, title: 'irrelevant dir' },
+        // A directory NOBODY scored against this profile no longer surfaces
+        // either (2026-09-06): the pointer arm used to admit an unscored pointer
+        // unconditionally, which is how a Peoria, IL scholarship page reached a
+        // Cleveland, TN student. Unknown is not relevant.
+        { is_directory: true, title: 'unscored dir' },
       ],
       unsurfacedCount: 0,
       thesis: student([]),

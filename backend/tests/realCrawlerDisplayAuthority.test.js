@@ -34,6 +34,28 @@ const profileContext = {
   },
 }
 
+// A pointer carries the four gates in their POINTER sense (real / relatable /
+// meets a recorded need / the engine used the profile's data) — see
+// crawler-os/pointerTruthPolicy.js. These fixtures exist to exercise lifecycle,
+// trust and minScore behavior, so they carry that evidence explicitly rather
+// than relying on the exemption the pointer arm used to grant.
+const POINTER_MATCH_EVIDENCE = Object.freeze({
+  matched_location: 'state',
+  matched_profile_type: true,
+  matched_needs: ['professional_development'],
+  matched_profile_facts: ['Profile signal: geo:state'],
+})
+
+function storedPointer(overrides = {}) {
+  return storedMatch({
+    is_directory_resource: true,
+    match_score: REVIEW_SCORE,
+    match_decision: 'REVIEW',
+    match_explain: POINTER_MATCH_EVIDENCE,
+    ...overrides,
+  })
+}
+
 function storedMatch(overrides = {}) {
   return {
     id: 'stored-match',
@@ -164,13 +186,10 @@ describe('real crawler display authority', () => {
       match_score: REVIEW_SCORE,
       match_decision: 'REVIEW',
     })
-    const referral = storedMatch({
+    const referral = storedPointer({
       id: 'stored-referral',
       title: 'Ohio Workforce Funding Directory',
       opportunity_kind: 'referral',
-      is_directory_resource: true,
-      match_score: REVIEW_SCORE,
-      match_decision: 'REVIEW',
     })
 
     const selection = selectCanonicalDisplayOpportunities(
@@ -193,14 +212,11 @@ describe('real crawler display authority', () => {
       id: 'broken-direct',
       link_status: 'broken',
     })
-    const brokenDirectory = storedMatch({
+    const brokenDirectory = storedPointer({
       id: 'broken-directory',
       title: 'Veterans Funding Resource Directory',
       opportunity_kind: 'directory',
-      is_directory_resource: true,
       link_status: 'broken',
-      match_score: REVIEW_SCORE,
-      match_decision: 'REVIEW',
     })
 
     const selection = selectCanonicalDisplayOpportunities(
@@ -226,25 +242,19 @@ describe('real crawler display authority', () => {
       is_hidden: 0,
       is_active: 0,
     })
-    const hiddenPointer = storedMatch({
+    const hiddenPointer = storedPointer({
       id: 'hidden-pointer',
       title: 'Quarantined Funding Directory',
       opportunity_kind: 'directory',
-      is_directory_resource: true,
       is_hidden: true,
       is_active: true,
-      match_score: REVIEW_SCORE,
-      match_decision: 'REVIEW',
     })
-    const visiblePointer = storedMatch({
+    const visiblePointer = storedPointer({
       id: 'visible-pointer',
       title: 'Visible Funding Directory',
       opportunity_kind: 'directory',
-      is_directory_resource: true,
       is_hidden: false,
       is_active: true,
-      match_score: REVIEW_SCORE,
-      match_decision: 'REVIEW',
     })
 
     const selection = selectCanonicalDisplayOpportunities(

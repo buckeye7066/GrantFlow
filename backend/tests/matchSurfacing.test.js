@@ -7,6 +7,7 @@ import {
   opportunityLifecycleVisibility,
   opportunityLifecycleVisibilitySql,
   qualifiesForDisplay,
+  pointerDisplayRefusal,
 } from '../config/matchSurfacing.js'
 import {
   ACCEPT_SCORE,
@@ -28,6 +29,7 @@ describe('matchSurfacing — surfaced matcher versions', () => {
       'catalog-rescore-link',
       'funder-behavior-link',
       'national-assistance-link',
+      'canonical-rescore-link',
     ])
   })
 
@@ -100,7 +102,7 @@ describe('matchSurfacing — surfaced matcher versions', () => {
 
   it('builds a valid SQL IN() fragment from the constant', () => {
     expect(SURFACED_MATCHER_VERSIONS_SQL).toBe(
-      "('crawler-os','crawler-os-xmatch','web-llm','institution-link','profile-discovery-link','field-of-study-link','student-aid-instate-link','county-crisis-need-link','catalog-rescore-link','funder-behavior-link','national-assistance-link')",
+      "('crawler-os','crawler-os-xmatch','web-llm','institution-link','profile-discovery-link','field-of-study-link','student-aid-instate-link','county-crisis-need-link','catalog-rescore-link','funder-behavior-link','national-assistance-link','canonical-rescore-link')",
     )
     // Round-trip: fragment lists exactly the same versions, quoted.
     for (const v of SURFACED_MATCHER_VERSIONS) {
@@ -159,23 +161,102 @@ describe('matchSurfacing — qualifiesForDisplay', () => {
     }), MIN)).toBe(false)
   })
 
-  it('surfaces directories past the display floor (mission rule), but not ones the engine scored irrelevant', () => {
+  // A pointer that CARRIES the four gates in their pointer sense: tied to this
+  // profile geographically, serving a recorded need, scored against the
+  // profile's own data points. Shaped like a real crawler-os explain row.
+  const provenPointer = (extra = {}) => ({
+    is_directory: true,
+    url: 'https://example.gov/locator',
+    match_decision: 'REVIEW',
+    match_explain: {
+      matched_location: 'state',
+      matched_profile_type: true,
+      matched_needs: ['housing'],
+      matched_profile_facts: ['Profile signal: geo:state'],
+    },
+    ...extra,
+  })
+
+  it('surfaces a PROVEN directory past the display floor (mission rule), but not one the engine scored irrelevant', () => {
     // A review-worthy directory below the requested display floor still surfaces.
-    expect(qualifiesForDisplay({ is_directory: true, match_score: REVIEW_SCORE }, MIN)).toBe(true)
-    expect(qualifiesForDisplay({ is_directory: true, match_score: DIRECTORY_MIN_SCORE }, MIN)).toBe(true)
-    // ...and an UNSCORED directory always surfaces (never scored ≠ scored irrelevant)...
-    expect(qualifiesForDisplay({ is_directory: true }, MIN)).toBe(true)
-    expect(qualifiesForDisplay({ is_directory: true, match_score: null }, MIN)).toBe(true)
+    expect(qualifiesForDisplay(provenPointer({ match_score: REVIEW_SCORE }), MIN)).toBe(true)
+    expect(qualifiesForDisplay(provenPointer({ match_score: DIRECTORY_MIN_SCORE }), MIN)).toBe(true)
     // ...but a directory the engine affirmatively judged irrelevant stays hidden
     // (demo_senior_family's real case: federal student-aid directory scored 0 for a senior citizen).
-    expect(qualifiesForDisplay({ is_directory: true, match_score: 0 }, MIN)).toBe(false)
-    expect(qualifiesForDisplay({ is_directory: true, match_score: 5 }, MIN)).toBe(false)
-    expect(qualifiesForDisplay({ is_directory: true, match_score: DIRECTORY_MIN_SCORE - 1 }, MIN)).toBe(false)
+    expect(qualifiesForDisplay(provenPointer({ match_score: 0 }), MIN)).toBe(false)
+    expect(qualifiesForDisplay(provenPointer({ match_score: 5 }), MIN)).toBe(false)
+    expect(qualifiesForDisplay(provenPointer({ match_score: DIRECTORY_MIN_SCORE - 1 }), MIN)).toBe(false)
+  })
+
+  it('a pointer NOBODY scored against this profile no longer surfaces - unknown is not relevant', () => {
+    // Owner report 2026-09-06 (Anastasia's crawl): the pointer arm used to
+    // return true for an UNSCORED pointer unconditionally, and for any scored
+    // one that merely reached the REVIEW band, so nothing about the profile was
+    // required. That is how "Scholarships & Grants - Bradley University"
+    // (bradley.edu, Peoria IL) reached a Cleveland, TN student carrying
+    // `dataPointEvidence.total_credit: 0` and no matched needs or signals.
+    expect(qualifiesForDisplay({ is_directory: true }, MIN)).toBe(false)
+    expect(qualifiesForDisplay({ is_directory: true, match_score: null }, MIN)).toBe(false)
+    expect(qualifiesForDisplay({ is_directory: true, match_score: REVIEW_SCORE }, MIN)).toBe(false)
+    expect(qualifiesForDisplay({
+      is_directory: true,
+      match_score: 26,
+      url: 'https://www.bradley.edu/admissions/cost/scholarships/',
+      match_decision: 'REVIEW',
+      match_explain_json: JSON.stringify({
+        gate: 'recorded_discovery_provenance',
+        source: 'web_search',
+        dataPointEvidence: { bonus_credit: 0, total_credit: 0 },
+      }),
+    }, MIN)).toBe(false)
+  })
+
+  it('a pointer matched on CATEGORY but on nothing geographic is not relatable', () => {
+    // The five 990 grantmakers the owner named (Kresge/Troy MI, Community
+    // Foundation for Southeast Michigan/Detroit, Mott/Flint MI, Edward Jones/MO,
+    // Muncrief/OK) all surfaced for a Tennessee student carrying exactly
+    // `matchedSignals: ["category","needs"]` - no geographic leg at all.
+    const michiganFoundation = {
+      is_directory: true,
+      match_score: 24,
+      url: 'https://projects.propublica.org/nonprofits/organizations/381403160',
+      match_decision: 'REVIEW',
+      match_explain_json: JSON.stringify({
+        matchedNeeds: ['education', 'housing'],
+        matchedSignals: ['category', 'needs'],
+      }),
+    }
+    expect(qualifiesForDisplay(michiganFoundation, MIN)).toBe(false)
+    expect(pointerDisplayRefusal(michiganFoundation, MIN)).toEqual({
+      reason: 'pointer_four_gates',
+      failed: ['relatable'],
+    })
+    // The same row, once the engine ties it to the profile's own state, surfaces.
+    expect(qualifiesForDisplay({
+      ...michiganFoundation,
+      match_explain_json: JSON.stringify({
+        matchedNeeds: ['education', 'housing'],
+        matchedSignals: ['geo:state', 'category', 'needs'],
+      }),
+    }, MIN)).toBe(true)
   })
 
   it('recognizes directory resources and typed referrals without route-local flags', () => {
-    expect(qualifiesForDisplay({ is_directory_resource: true, match_score: REVIEW_SCORE }, MIN)).toBe(true)
-    expect(qualifiesForDisplay({ opportunity_kind: 'referral', match_score: REVIEW_SCORE }, MIN)).toBe(true)
+    expect(qualifiesForDisplay(provenPointer({ is_directory: undefined, is_directory_resource: true, match_score: REVIEW_SCORE }), MIN)).toBe(true)
+    expect(qualifiesForDisplay(provenPointer({ is_directory: undefined, opportunity_kind: 'referral', match_score: REVIEW_SCORE }), MIN)).toBe(true)
+  })
+
+  it('names the failed gates so a pointer drop is never silent', () => {
+    expect(pointerDisplayRefusal(provenPointer({ match_score: REVIEW_SCORE }), MIN)).toBeNull()
+    expect(pointerDisplayRefusal({ match_decision: 'ACCEPT', match_score: 90 }, MIN)).toBeNull()
+    expect(pointerDisplayRefusal({ is_directory: true, match_score: 26 }, MIN)).toEqual({
+      reason: 'pointer_four_gates',
+      failed: ['real', 'relatable', 'meets_profile_need', 'profile_qualifies'],
+    })
+    expect(pointerDisplayRefusal(provenPointer({ match_score: 1 }), MIN)).toEqual({
+      reason: 'pointer_below_review_band',
+      failed: ['score'],
+    })
   })
 
   it('never lets ACCEPT or pointer preservation override explicit lifecycle quarantine', () => {
@@ -187,11 +268,11 @@ describe('matchSurfacing — qualifiesForDisplay', () => {
       match_explain: { four_truth_proof: positiveProof },
     }, MIN)).toBe(false)
     expect(qualifiesForDisplay({
+      ...provenPointer({ match_score: REVIEW_SCORE }),
+      is_directory: undefined,
       is_hidden: 0,
       is_active: 0,
       opportunity_kind: 'referral',
-      match_score: REVIEW_SCORE,
-      match_decision: 'REVIEW',
     }, MIN)).toBe(false)
   })
 
