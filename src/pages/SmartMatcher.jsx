@@ -926,7 +926,10 @@ export default function SmartMatcher() {
                                           ))}
                                       </div>
                                   ) : inferredNeeds.length === 0 && needsState.customItems.length === 0 ? (
-                                      <p className="text-sm text-slate-500 italic">No inferred needs for this profile.</p>
+                                      <p className="text-sm text-amber-700">
+                                          {(suggestionsResponse?.data ?? suggestionsResponse)?.message
+                                            || "GrantFlow could not read a need from this profile. A profile is only here because it has a need, so this profile was not parsed correctly — open it and confirm its needs, type, and sections."}
+                                      </p>
                                   ) : (
                                       <>
                                           {inferredNeeds.map((suggestion) => {

@@ -2,7 +2,7 @@ import express from 'express'
 import { requireAuthenticatedUser, ensureProfileAccess } from '../utils/accessControl.js'
 import { discoverNewCatalogItems, ensureItemCatalogSeeded } from '../services/itemCatalogService.js'
 import { loadProfileContext } from '../services/profileHelpers.js'
-import { deriveProfileItemNeeds } from '../config/profileItemNeeds.js'
+import { buildProfileNeedSuggestions } from '../services/needs/profileNeedSuggestions.js'
 import { formatError } from '../middleware/errorHandler.js'
 
 import { createLogger } from '../utils/logger.js'
@@ -36,35 +36,37 @@ router.get('/suggestions', async (req, res) => {
     // offered hearing aids. The suggestions this endpoint serves now come from
     // what the profile actually DECLARED, each carrying the field id it was
     // read from. Response shape is unchanged so the existing chips render as-is.
-    let derived = null
+    // DERIVED FIRST (owner rule 2026-08-02), and NEVER EMPTY for a parsed
+    // profile (owner rule 2026-09-05: "a profile is only in GrantFlow if it
+    // has a need; no inferred needs means the profile was not parsed"). The
+    // ladder in profileNeedSuggestions: declared item needs → the needs plan
+    // → declared canonical needs → an explicit PARSE FAILURE. Each tier is a
+    // declared or type-derived fact; nothing is guessed from prose.
+    let ctx = null
     let derivationError = null
     try {
-      const ctx = await loadProfileContext(req.db, String(profileId))
-      derived = deriveProfileItemNeeds(ctx?.profile ?? {}, ctx?.sections ?? {})
+      ctx = await loadProfileContext(req.db, String(profileId))
     } catch (err) {
       derivationError = err?.message ?? String(err)
-      routeLogger.warn(`[items/suggestions] derivation failed: ${derivationError}`)
+      routeLogger.warn(`[items/suggestions] profile read failed: ${derivationError}`)
     }
 
-    if (derived) {
+    if (ctx) {
+      const built = buildProfileNeedSuggestions({ profile: ctx?.profile ?? {}, sections: ctx?.sections ?? {}, limit: safeLimit })
+      if (built.parse_failure) {
+        routeLogger.warn('[items/suggestions] parse failure: no need readable from the profile', { profile_id: String(profileId) })
+      }
       return res.json({
         profile_id: String(profileId),
-        count: Math.min(derived.needs.length, safeLimit),
-        suggestions: derived.needs.slice(0, safeLimit).map((n) => ({
-          name: n.item,
-          category: n.category,
-          // Not a score: these are DERIVED facts, not ranked guesses. A number
-          // here would imply a measurement nobody made.
-          score: null,
-          reasons: [`Declared in ${n.evidence}`],
-          source: n.source,
-          evidence: n.evidence,
-          need_text: n.need_text,
-        })),
+        count: built.suggestions.length,
+        suggestions: built.suggestions,
+        suggestion_basis: built.basis,
+        parse_failure: built.parse_failure,
+        message: built.message,
         // Honest empties: an owner whose list is short can see exactly which
         // declared fields produced nothing and which values named no item.
-        unmapped: derived.unmapped,
-        silent_fields: derived.silentFields,
+        unmapped: built.unmapped,
+        silent_fields: built.silent_fields,
         free_text_field: 'financial_information.item_needs',
         generated_at: new Date().toISOString(),
       })
@@ -81,6 +83,7 @@ router.get('/suggestions', async (req, res) => {
       derivation_failed: true,
       derivation_error: derivationError,
       suggestion_basis: 'none',
+      parse_failure: true,
     })
   } catch (error) {
     routeLogger.error('[items/suggestions] error', error)
