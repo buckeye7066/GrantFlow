@@ -797,9 +797,36 @@ async function readLoginFailureText(page) {
 // password" with nothing to check it against (prod 2026-09-06 round 4:
 // password_rejected, said:null, and no way to tell a wrong password from a
 // step the engine did not recognise).
+// An identity provider's "working" page: the credential was accepted and the
+// provider is completing the sign-in (Microsoft: "Trying to sign you in",
+// live 2026-09-06 19:07Z). Not a wall, not a rejection — wait for it.
+const SIGNIN_IN_PROGRESS_RX = /trying to sign you in|signing you in|please wait|one moment|redirecting|taking you to|working on it|just a moment/i
+
+async function waitForSignInProgress(page, { timeoutMs = 20000 } = {}) {
+  const t0 = Date.now()
+  let seen = false
+  while (Date.now() - t0 < timeoutMs) {
+    const { bodyText } = await readBotWallSignals(page)
+    if (!SIGNIN_IN_PROGRESS_RX.test(bodyText || '')) return seen ? 'progressed' : 'no_progress_page'
+    seen = true
+    if (typeof page.waitForTimeout === 'function') await page.waitForTimeout(500).catch(() => {})
+    else await new Promise((r) => setTimeout(r, 500))
+  }
+  return 'still_in_progress'
+}
+
+// A page snippet is diagnostic text for the trace and the task card; the
+// applicant's own login identifier printed on the provider's password step
+// ("<upn> Enter password", live 2026-09-06) must not travel with it.
+function maskIdentifiers(text) {
+  return String(text || '')
+    .replace(/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g, '[email]')
+    .replace(/\b\d{3}[-.\s]?\d{3}[-.\s]?\d{4}\b/g, '[phone]')
+}
+
 async function readVisibleTextSnippet(page) {
   const { bodyText } = await readBotWallSignals(page)
-  const t = String(bodyText || '').replace(/\s+/g, ' ').trim()
+  const t = maskIdentifiers(String(bodyText || '').replace(/\s+/g, ' ').trim())
   return t ? t.slice(0, 240) : null
 }
 
@@ -963,7 +990,17 @@ async function attemptLoginDetailed(page, credential) {
     } else {
       await userField.fill(String(username), { timeout: 5000 }).catch(() => {})
     }
+    // The password box can be visible while its step is still animating in;
+    // a fill in that instant is dropped (live 2026-09-06 19:07Z: "Enter
+    // password" still showing with an empty box after the submit). Give it a
+    // beat, fill, read the value back, and fill once more if it did not land.
+    if (typeof page.waitForTimeout === 'function') await page.waitForTimeout(400).catch(() => {})
     await passField.fill(String(password), { timeout: 5000 }).catch(() => {})
+    const landed = typeof passField.inputValue === 'function' ? await passField.inputValue().catch(() => null) : null
+    if (landed !== null && landed !== String(password)) {
+      if (typeof page.waitForTimeout === 'function') await page.waitForTimeout(600).catch(() => {})
+      await passField.fill(String(password), { timeout: 5000 }).catch(() => {})
+    }
 
     let clicked = false
     for (const sel of ['button[type="submit"]:not([disabled])', 'input[type="submit"]:not([disabled])']) {
@@ -979,6 +1016,8 @@ async function attemptLoginDetailed(page, credential) {
     await page.waitForLoadState('networkidle', { timeout: 15000 }).catch(() => {})
     const settled = await waitForSignInSettle(page, { startUrl: (() => { try { return page.url() } catch { return null } })() })
     await page.waitForLoadState('networkidle', { timeout: 8000 }).catch(() => {})
+    const progress = await waitForSignInProgress(page)
+    if (progress !== 'no_progress_page') await page.waitForLoadState('networkidle', { timeout: 10000 }).catch(() => {})
     // Microsoft's "Stay signed in?" interstitial: answer Yes so the SAML hop
     // completes and the session cookie persists for the run.
     const kmsi = await page.$('#idSIButton9, input[type="submit"][value="Yes"], button:has-text("Yes")').catch(() => null)
@@ -1088,7 +1127,14 @@ async function detectIdpLoginSurface(page, url) {
   const onIdp = SSO_IDP_HOST_RX.test(host) || SSO_ENTRY_PATH_RX.test(path)
   if (!onIdp) return false
   const userField = await page.$(IDP_USERNAME_SELECTOR).catch(() => null)
-  return Boolean(userField)
+  if (!userField) return false
+  // Hidden inputs persist across a provider's steps ("Trying to sign you in"
+  // still carries the username box in the DOM). Only a SHOWN box is a surface.
+  if (typeof userField.isVisible === 'function') {
+    const visible = await userField.isVisible().catch(() => true)
+    if (!visible) return false
+  }
+  return true
 }
 
 /** Sign-in entry links on a landing page, best first. Exported via _internal. */
@@ -3445,7 +3491,7 @@ export const _internal = {
   SUBMIT_BUTTON_PATTERNS, NEXT_BUTTON_PATTERNS, DRAFT_BUTTON_PATTERNS,
   matchFieldKey, readProfileValues, applyNarrativeAnswers,
   clickButtonByBid, clickSubmitControl, clickButtonByBidVerdict, FEEDBACK_VALIDATION_IGNORE_RX,
-  detectGate, detectBotWall, attemptLogin, attemptLoginDetailed, readLoginFailureText,
+  detectGate, detectBotWall, attemptLogin, attemptLoginDetailed, readLoginFailureText, waitForSignInProgress, maskIdentifiers,
   detectIdpLoginSurface, detectSsoEntryLinks, SSO_IDP_HOST_RX, SSO_ENTRY_PATH_RX, NEXT_BUTTON_EXCLUDE_RX,
   isIncidentalLoginWidget, readCaptchaShape, detectPaymentGate,
   retryOnContextLoss, navigateWithRecovery, DocumentDownloadTarget,
