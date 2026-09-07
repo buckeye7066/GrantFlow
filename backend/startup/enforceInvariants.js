@@ -5440,7 +5440,7 @@ export async function enforcePipelinePrecision(db) {
       scanned: 0, kept: 0, removed: 0, relabeled: 0, failed: 0, tasksCancelled: 0,
       protectedProfilesSkipped: 0, needNeutralProfile: 0, needNeutralRow: 0,
       harvestFirst: 0, truncated: false, loadFailures: 0, firstLoadError: null,
-      rescored: 0, restamped: 0, unscorable: 0,
+      rescored: 0, restamped: 0, unscorable: 0, cleared: 0,
     }
     const byGate = { [GATES.ENGINE]: 0, [GATES.RELATABLE]: 0, [GATES.QUALIFIES]: 0, [GATES.COVERS_NEED]: 0, [GATES.REAL]: 0 }
     const byReason = {}
@@ -5511,9 +5511,10 @@ export async function enforcePipelinePrecision(db) {
         counts.scanned += 1
         let verdict = null
         let failedGate = null
+        let scored = null
         try {
-          // Engine first: the canonical decision, then the structural gates.
-          let scored = null
+          // The canonical decision is computed up front (and re-stamped);
+          // the engine conjunct itself runs after the structural gates.
           if (computeMatchDecision) {
             try { scored = await scoreRowWithEngine(db, facts, row, { computeMatchDecision }) } catch { scored = null }
           }
@@ -5555,7 +5556,40 @@ export async function enforcePipelinePrecision(db) {
           log.warn('pipeline_precision: gate threw (non-fatal)', { grant: row.grant_id, error: String(err?.message || err) })
           continue
         }
-        if (!failedGate) { counts.kept += 1; continue }
+        if (!failedGate) {
+          counts.kept += 1
+          // A row that passes EVERY gate today may still wear an 'ineligible'
+          // label an earlier matching-policy pass wrote (the 2026-09-05
+          // `strict_pipeline:qualifies:applicant_type:pass` class: the code was
+          // fixed, the labels it had already written were not). Clear it when
+          // every tag is a matching-policy tag this sweep or the strict
+          // reconciliation authored. Hamilton's link-evidence tags
+          // (`strict_pipeline:real:*`) are NOT this sweep's domain and stay.
+          if (hasEligStatus && hasIneligReasons && String(row.eligibility_status ?? '').toLowerCase() === 'ineligible') {
+            let existing = []
+            try {
+              const raw = row.ineligibility_reasons
+              existing = typeof raw === 'string' ? JSON.parse(raw || '[]') : (Array.isArray(raw) ? raw : [])
+            } catch { existing = [] }
+            const tags = (Array.isArray(existing) ? existing : []).map((t) => String(t))
+            const clearable = tags.length > 0 && tags.every((t) =>
+              (t.startsWith('pipeline_precision:') || t.startsWith('strict_pipeline:') || t.startsWith('robert_pipeline_audit:')) &&
+              !t.startsWith('strict_pipeline:real:'))
+            if (clearable && writes < limit) {
+              try {
+                const eligible = scored?.decision?.eligible === true ? 'true' : 'maybe'
+                await db.prepare('UPDATE grants SET eligibility_status = ?, ineligibility_reasons = ? WHERE id = ?')
+                  .run(eligible, '[]', row.grant_id)
+                writes += 1
+                counts.cleared += 1
+                affectedProfiles.add(profileId)
+              } catch (err) {
+                log.warn('pipeline_precision: stale label clear failed (non-fatal)', { grant: row.grant_id, error: String(err?.message || err) })
+              }
+            }
+          }
+          continue
+        }
 
         const reasonKey = `${failedGate}:${verdict?.reason ?? 'failed'}`
         const detail = verdict?.evidence?.detail ?? verdict?.evidence?.gate ?? null
