@@ -9539,6 +9539,176 @@ export async function enforceStageOfLifeMatchScope(db) {
 }
 
 /**
+ * INVARIANT: A SURFACED AWARD'S TEMPORAL ANCHOR IS ONE THE PROFILE STILL MEETS
+ * (owner rule 2026-09-07 — the temporal twin of enforceStageOfLifeMatchScope).
+ * "Graduating seniors entering <college>" / "incoming freshmen" at a college
+ * the profile graduated from, "residents of" a city it moved away from: the
+ * per-call gate is `temporalAnchorConflict` in matchEngine.makeDecision; this
+ * is the boot net over the rolling snapshot so existing rows heal without a
+ * re-crawl. Silence is neutral: a subject the profile says nothing about is
+ * never purged. ENFORCE_TEMPORAL_ANCHOR_SCOPE=0 for count-only.
+ */
+export async function enforceTemporalAnchorMatchScope(db) {
+  return runInvariant('temporal_anchor_match_scope', async () => {
+    const matchCols = await listMatchColumns(db)
+    if (!matchCols.has('profile_id') || !matchCols.has('opportunity_id')) {
+      return { scanned: 0, repaired: 0, enforced: true, skipped: 'schema' }
+    }
+    let deriveStageOfLife, temporalAnchorConflict
+    try {
+      ;({ deriveStageOfLife } = await import('../config/profileDerivedFacts.js'))
+      ;({ temporalAnchorConflict } = await import('../config/temporalRelatability.js'))
+    } catch (err) {
+      log.warn('temporal_anchor_match_scope: deps unavailable (non-fatal)', { error: String(err?.message || err) })
+      return { scanned: 0, repaired: 0, enforced: true, skipped: 'deps' }
+    }
+    const limit = _boundedLimit('MATCH_SCOPE_PURGE_LIMIT', MATCH_SCOPE_PURGE_LIMIT_DEFAULT)
+    const countOnly = _parseBoolEnv(process.env.ENFORCE_TEMPORAL_ANCHOR_SCOPE) === false
+
+    // ALL profiles — the match store is a rolling snapshot, so a producer-side
+    // gate alone lands only after each profile's next crawl.
+    let profileIds
+    try {
+      profileIds = await db
+        .prepare("SELECT id FROM profiles WHERE status IS NULL OR status = 'active' ORDER BY created_at")
+        .all()
+    } catch (err) {
+      log.warn('temporal_anchor_match_scope: profile query failed (non-fatal)', { error: String(err?.message || err) })
+      return { scanned: 0, repaired: 0, enforced: true, skipped: 'query' }
+    }
+
+    // The evidence columns this DB actually has. `title` is the only one that
+    // is universal; the rest are probed so a schema that lacks one degrades to
+    // "fewer fragments", never to a query error that silently no-ops the whole
+    // sweep while it reads green (the #946/#954 schema-drift class).
+    const oppCols = await listOpportunityColumns(db)
+    const EVIDENCE_COLS = ['title', 'sponsor', 'description', 'eligibility_text', 'eligibility_bullets']
+      .filter((c) => oppCols.size === 0 || oppCols.has(c))
+    if (!EVIDENCE_COLS.includes('title')) {
+      return { scanned: 0, repaired: 0, enforced: true, skipped: 'schema' }
+    }
+    // Only the TEXT columns are LIKE-able; eligibility_bullets is a JSON array
+    // string, which LIKE still matches usefully as a superset.
+    let scanned = 0
+    const violating = []
+    let profilesWithStage = 0
+    for (const row of profileIds || []) {
+      if (violating.length >= limit) break
+      const ctx = await _loadProfileContextForInvariant(db, row.id)
+      if (!ctx) continue
+      let stage = null
+      try { stage = deriveStageOfLife(ctx.sections ?? {})?.value ?? null } catch { /* purpose still applies */ }
+      if (stage && stage !== 'unclassified') profilesWithStage += 1
+      let candidates
+      try {
+        candidates = await db
+          .prepare(
+            `SELECT m.id AS match_id, m.profile_id, m.opportunity_id, ${EVIDENCE_COLS.map((c) => `o.${c}`).join(', ')}
+               FROM profile_opportunity_matches m
+               JOIN funding_opportunities o ON o.id = m.opportunity_id
+              WHERE m.profile_id = ?
+              LIMIT ?`,
+          )
+          .all(row.id, limit)
+      } catch (err) {
+        log.warn('temporal_anchor_match_scope: candidate query failed (non-fatal)', {
+          profile: row.id, error: String(err?.message || err),
+        })
+        continue
+      }
+      for (const c of candidates || []) {
+        scanned += 1
+        const conflict = temporalAnchorConflict(ctx.sections ?? {}, c)
+        if (conflict) violating.push({ ...c, stage, conflict })
+      }
+    }
+
+    const describe = (v) => `${v.title} (${v.conflict.classId}: "${v.conflict.phrase}" in ${v.conflict.field}; subject ${v.conflict.subject}; profile stage ${v.stage})`
+    if (countOnly) {
+      if (violating.length > 0) {
+        log.warn('awards the profile\'s academic stage cannot receive are surfaced (purge DISABLED via ENFORCE_TEMPORAL_ANCHOR_SCOPE=0)', {
+          wouldRepair: violating.length, scanned, profilesWithStage, examples: violating.slice(0, 3).map(describe),
+        })
+      }
+      return { scanned, repaired: 0, wouldRepair: violating.length, profilesWithStage, enforced: false }
+    }
+    if (violating.length === 0) return { scanned, repaired: 0, profilesWithStage, enforced: true }
+
+    // A persisted mismatch must also leave Hamilton's active queue. Completed,
+    // submitted and cancelled work is historical evidence and remains intact.
+    let tasksCancelled = 0
+    const reconciled = []
+    try {
+      const { cancelApplicationTask } = await import('../services/hamilton/applicationTaskStore.js')
+      const terminal = ['submitted', 'completed', 'cancelled']
+      for (const v of violating) {
+        try {
+          const ph = terminal.map(() => '?').join(', ')
+          // Include grant-only legacy tasks whose grant links to this catalog
+          // opportunity; ensureApplicationTask intentionally preserves these.
+          let tasks = []
+          try {
+            tasks = await db.prepare(`SELECT DISTINCT t.id
+              FROM application_tasks t
+              LEFT JOIN grants g ON g.id = t.grant_id AND g.profile_id = t.profile_id
+              WHERE t.profile_id = ?
+                AND (t.opportunity_id = ? OR g.funding_opportunity_id = ?)
+                AND t.status NOT IN (${ph})`).all(v.profile_id, v.opportunity_id, v.opportunity_id, ...terminal)
+          } catch (selectErr) {
+            // A deployment with NO application_tasks relation (or a schema
+            // predating the joined columns) has no Hamilton queue to reconcile
+            // against. That is "zero tasks to cancel", not a failed
+            // reconciliation, and the match must still be repaired — retaining
+            // it made the sweep report `repaired: 0` on every such database
+            // (caught by stageOfLifeEligibility.test.js when this hardening was
+            // rebased onto main, 2026-08-21). A failure DURING cancellation,
+            // below, is a different fact and still retains the match.
+            const msg = String(selectErr?.message || selectErr).toLowerCase()
+            if (!(msg.includes('no such table') || msg.includes('no such column') || msg.includes('does not exist'))) throw selectErr
+            tasks = []
+          }
+          for (const task of tasks || []) {
+            await cancelApplicationTask(db, task.id, { actorRole: 'system', reason: v.conflict.reason })
+            tasksCancelled += 1
+          }
+          reconciled.push(v)
+        } catch (err) {
+          // Retain this match as the durable retry handle. Other violations are
+          // isolated and can still reconcile during the same boot.
+          log.warn('temporal_anchor_match_scope: task reconciliation failed; retaining match', {
+            matchId: v.match_id, error: String(err?.message || err),
+          })
+        }
+      }
+    } catch (err) {
+      log.warn('temporal_anchor_match_scope: task reconciliation unavailable (non-fatal)', { error: String(err?.message || err) })
+    }
+    const ids = reconciled.map((v) => v.match_id)
+    let repaired = 0
+    for (let i = 0; i < ids.length; i += 200) {
+      const slice = ids.slice(i, i + 200)
+      const ph = slice.map(() => '?').join(', ')
+      const res = await db.prepare(`DELETE FROM profile_opportunity_matches WHERE id IN (${ph})`).run(...slice)
+      repaired += changesOf(res) || slice.length
+    }
+    log.info('removed matches to awards the profile\'s academic stage cannot receive', {
+      repaired,
+      tasksCancelled,
+      scanned,
+      profilesAffected: new Set(violating.map((v) => v.profile_id)).size,
+      examples: violating.slice(0, 3).map(describe),
+    })
+    return {
+      scanned,
+      repaired,
+      profilesWithStage,
+      profilesAffected: new Set(violating.map((v) => v.profile_id)).size,
+      enforced: true,
+    }
+  })
+}
+
+/**
  * INVARIANT: A SURFACED AWARD MATCHES THE PROFILE'S FIELD OF STUDY
  * (2026-08-23 — the field-of-study twin of enforceStageOfLifeMatchScope).
  *
@@ -11352,6 +11522,7 @@ export async function runEnforceInvariants(db, { logger = log } = {}) {
   // reentry). Runs immediately AFTER the recall gates so anything they added
   // this boot is held to the same bar in the SAME boot, not a boot late.
   steps.push(await enforceStageOfLifeMatchScope(db))
+  steps.push(await enforceTemporalAnchorMatchScope(db))
   steps.push(await enforceFieldOfStudyMatchScope(db))
   // Surface-table hygiene: a persisted match whose catalog row was deleted
   // (dedupe/reality-gate/reaper purges never cleaned matches up) is an
@@ -11627,6 +11798,7 @@ export const __testables = {
   enforceJohnDraftPlausibility,
   enforceProfileResultFloor,
   enforceStageOfLifeMatchScope,
+  enforceTemporalAnchorMatchScope,
   enforceFieldOfStudyMatchScope,
   enforceStudentAidInStateRecall,
 }

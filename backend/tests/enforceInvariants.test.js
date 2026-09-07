@@ -1222,7 +1222,7 @@ describe('enforceInvariants — runner', () => {
     // + engine_version_matcher_lane (2026-09-06): a pair whose matcher_version
     //   holds an ENGINE semver instead of a surfacing lane is invisible to every
     //   read path; 142 prod pairs (38 ACCEPT) were stranded that way.
-    expect(summary.ran).toBe(67)
+    expect(summary.ran).toBe(68)
     expect(summary.failed).toBe(0)
     expect(summary.steps.map((s) => s.name)).toEqual([
       'sticky_deletes',
@@ -1314,6 +1314,9 @@ describe('enforceInvariants — runner', () => {
       'stale_match_explain_refresh',
       'engine_version_matcher_lane',
       'stage_of_life_match_scope',
+      // TEMPORAL ANCHOR scope net (owner rule 2026-09-07): awards restricted to
+      // students ENTERING / residents OF a subject the profile's only tie to is PAST.
+      'temporal_anchor_match_scope',
       'field_of_study_match_scope',
       'no_dangling_matches',
       // RESULT FLOOR census (owner rule 2026-08-01, third clause). After every

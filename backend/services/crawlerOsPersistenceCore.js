@@ -29,6 +29,7 @@ import {
   MAX_ATTENDED_INSTITUTIONS,
 } from '../config/profileInstitutions.js';
 import { deriveProfileFacts, searchTermsFromFacts } from '../config/profileDerivedFacts.js';
+import { originSearchTerms } from '../config/temporalRelatability.js';
 import { declaredNeedsFrom } from './pipelinePrecision.js';
 import { stampMatchConfidenceProvenance } from './matching/matchConfidenceProvenance.js';
 import { syncOpportunityContractProjection } from './opportunityRepository.js';
@@ -504,6 +505,10 @@ export function profileContextToThesisInput(ctx = {}) {
     // Ranked, provenanced topical seeds. `buildThesis` prefers these over the
     // unranked `tags` slice; see the note above.
     derived_interest_terms: searchTermsFromFacts(derivedFacts),
+    // What the profile qualifies for by HISTORY or ORIGIN — the high school it
+    // graduated from, a college it left, its heritage, its birthplace — as
+    // ready search queries (owner rule 2026-09-07). Read by buildWebQueries.
+    origin_search_terms: originSearchTerms(sections ?? {}),
     // The full fact set, carried onto the thesis so LANE SELECTION (planner.js)
     // and the query builder read the SAME derivation — the owner's rule that the
     // crawlers always pull from the profile BEFORE crawling and decide which

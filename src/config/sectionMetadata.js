@@ -112,6 +112,20 @@ export const SECTION_METADATA = {
         "help": "County of residence or operations."
       },
       {
+        "name": "birthplace",
+        "label": "Birthplace",
+        "format": "text",
+        "scored": false,
+        "help": "City and state where you were born (e.g. \"Chattanooga, TN\"). Some awards are for natives of a place. Not used for match scoring."
+      },
+      {
+        "name": "previous_residences",
+        "label": "Places you used to live",
+        "format": "string_array",
+        "scored": false,
+        "help": "Cities or counties you lived in before your current address, one per line, with years if you know them (e.g. \"Chattanooga, TN (2008-2015)\"). Some awards are for current or former residents. Not used for match scoring."
+      },
+      {
         "name": "date_of_birth",
         "label": "Date of birth",
         "format": "date",
@@ -1850,6 +1864,20 @@ export const SECTION_METADATA = {
         "label": "High school GPA",
         "format": "text",
         "help": "High school GPA when explicitly provided."
+      },
+      {
+        "name": "high_school_name",
+        "label": "High school",
+        "format": "text",
+        "scored": false,
+        "help": "The high school you attend or graduated from (e.g. \"Cleveland High School\"). Reaches alumni scholarships; once your class has graduated it is treated as a past school, so senior-only awards no longer match. Not used for match scoring."
+      },
+      {
+        "name": "high_school_graduation_year",
+        "label": "High school graduation year",
+        "format": "text",
+        "scored": false,
+        "help": "Four-digit year you graduated (or will graduate) from high school. Not used for match scoring."
       },
       {
         "name": "interests",

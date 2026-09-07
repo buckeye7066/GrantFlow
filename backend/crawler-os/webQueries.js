@@ -295,6 +295,16 @@ export function buildWebQueries(thesis = {}, opts = {}) {
   if (isStudent) {
     for (const term of interests.slice(0, 2)) add(core, `${term} scholarships ${year}`);
   }
+  // What the profile qualifies for BY HISTORY OR ORIGIN (owner rule
+  // 2026-09-07): the high school it graduated from, the college it left, its
+  // heritage, its birthplace. `config/temporalRelatability.originSearchTerms`
+  // phrases these as ready queries ("<school> alumni scholarship", "<heritage>
+  // heritage scholarship"). Two are CORE for the same reason the declared
+  // major is; the rest rotate through EXTRA.
+  const originTerms = (Array.isArray(thesis.origin_terms) ? thesis.origin_terms : [])
+    .map((t) => String(t ?? '').trim())
+    .filter((t) => t.length > 6 && t.length < 80);
+  originTerms.forEach((term, i) => add(i < 2 ? core : extra, term));
   // Hyperlocal, COUNTY-level awards (community foundations, county scholarships,
   // local civic clubs) — keyed to the county, which the city phrase never reaches.
   if (county) {

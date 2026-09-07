@@ -133,12 +133,26 @@ export function pointerMatchedNeeds(row) {
  */
 export function pointerGeoEvidence(row) {
   const explain = explainOf(row)
+  // TEMPORAL ANCHOR (owner rule 2026-09-07). A tie the engine judged STALE —
+  // the row wants students ENTERING a college the profile has already
+  // graduated from, residents of a city the profile moved away from — is not
+  // relatable no matter what geography the row shares. A tie the row honors
+  // by HISTORY or ORIGIN (alumni, hometown, birthplace, heritage) IS relatable
+  // even when no present-day geography lines up.
+  const temporal = explain.temporal_anchor && typeof explain.temporal_anchor === 'object' ? explain.temporal_anchor : null
+  const temporalVerdict = lower(temporal?.verdict)
+  if (temporalVerdict === 'stale') return false
+  if (temporalVerdict === 'fit_current' || temporalVerdict === 'fit_past' || temporalVerdict === 'fit_origin') return true
   const signals = [...asArray(explain.matchedSignals), ...asArray(explain.matched_signals)].map(lower)
   if (signals.some((signal) => signal.startsWith('geo:'))) return true
   const facts = [...asArray(explain.matched_profile_facts), ...asArray(explain.matchedProfileFacts)].map(lower)
   if (facts.some((fact) => fact.includes('geo:'))) return true
+  // `matched_location: 'partial'` is crawler-os's "geo breakdown > 0", which a
+  // row with NO state and no geographic fact still earns (a no-essay
+  // sweepstakes read 'partial' with zero geo data points on 2026-09-07). It is
+  // not evidence of a tie to THIS profile; only an explicit location is.
   const location = lower(explain.matched_location ?? explain.matchedLocation)
-  return location !== '' && location !== 'none' && location !== 'no match' && location !== 'null'
+  return location !== '' && location !== 'none' && location !== 'no match' && location !== 'null' && location !== 'partial'
 }
 
 /** Did the engine actually use the profile's own data points on this pair? */
