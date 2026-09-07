@@ -1,5 +1,5 @@
 import Database from 'better-sqlite3'
-import { normalizeSqliteArgs } from '../../backend/db/index.js'
+import { normalizeSqliteArgs } from '../../backend/db/sqliteArgs.js'
 
 // Production-faithful SQLite wrapper for unit tests.
 //
