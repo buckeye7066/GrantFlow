@@ -87,7 +87,9 @@ export function ProfilePricingGate({ profileId, children, onUnlocked }) {
     )
   }
 
-  if (!status?.installed && !status?.is_admin) {
+  // No pricing row yet: the agreement cannot be recorded (the server answers
+  // no_pricing), so never offer a form whose only outcome is that error.
+  if ((!status?.installed || status?.blocking_reason === 'no_pricing_yet') && !status?.is_admin) {
     return (
       <Alert>
         <AlertTitle>Pricing not yet available</AlertTitle>
