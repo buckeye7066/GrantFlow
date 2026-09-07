@@ -4,7 +4,8 @@ import { Link } from 'react-router-dom';
 import { createPageUrl } from '@/utils';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
-import { Loader2, Plus, Check, CheckSquare, Square, Search, Database, Star, Home, Info } from 'lucide-react';
+import { Loader2, Plus, Check, CheckSquare, Square, Search, Database, Star, Home, Info, EyeOff } from 'lucide-react';
+import { dismissProfileFundingSource } from '@/api/matching';
 import { useToast } from "@/components/ui/use-toast";
 import { Progress } from "@/components/ui/progress";
 import { Checkbox } from '@/components/ui/checkbox';
@@ -176,6 +177,56 @@ function computeOpportunityKeys(list) {
   });
 }
 
+/**
+ * "Not relevant" — sticky removal of one result from THIS profile's Discover
+ * list. Owner report 2026-09-07: "I do not have a way to delete the ones that
+ * are not relevant." The server side already existed
+ * (DELETE /api/profiles/:id/funding-sources/:opportunityId records a
+ * pipeline_dismissals tombstone the list query honours, so a re-crawl cannot
+ * bring the row back); nothing on the page ever called it.
+ */
+export const DismissResultButton = ({ opportunity, profileId, onDismissed }) => {
+  const queryClient = useQueryClient();
+  const { toast } = useToast();
+  const opportunityId = opportunity?.id ?? opportunity?.opportunity_id ?? null;
+  const mutation = useMutation({
+    mutationFn: () => dismissProfileFundingSource(profileId, opportunityId),
+    onSuccess: () => {
+      onDismissed?.(opportunityId);
+      queryClient.invalidateQueries({ queryKey: ['discover-catalog'] });
+      queryClient.invalidateQueries({ queryKey: ['grants'] });
+      toast({
+        title: 'Removed from your results',
+        description: `"${opportunity?.title || 'This item'}" will not come back for this profile.`,
+        duration: 3500,
+      });
+    },
+    onError: () => {
+      toast({
+        variant: 'destructive',
+        title: 'Could not remove',
+        description: 'Please try again. If this keeps happening, refresh and sign in again.',
+        duration: 4500,
+      });
+    },
+  });
+  if (!profileId || !opportunityId) return null;
+  return (
+    <Button
+      type="button"
+      variant="ghost"
+      size="sm"
+      className="w-full mt-2 text-slate-500 hover:text-red-700 hover:bg-red-50"
+      disabled={mutation.isPending}
+      onClick={() => mutation.mutate()}
+      aria-label={`Not relevant: ${opportunity?.title || 'result'}`}
+    >
+      {mutation.isPending ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <EyeOff className="w-4 h-4 mr-2" />}
+      Not relevant
+    </Button>
+  );
+};
+
 export const AddToPipelineButton = ({ opportunity, onAddToPipeline, organizationName, disabledReason = null }) => {
   const queryClient = useQueryClient();
   const { toast } = useToast();
@@ -341,7 +392,11 @@ export default function SearchResults({ results = [], profileId, onAddToPipeline
   const { toast } = useToast();
   const { savedIds, toggleGrant, isSaved } = useSavedGrantsStore();
 
-  const uniqueResults = React.useMemo(() => dedupeFundingResults(results), [results]);
+  const [dismissedIds, setDismissedIds] = React.useState(() => new Set());
+  const uniqueResults = React.useMemo(
+    () => dedupeFundingResults(results).filter((opp) => !dismissedIds.has(opp?.id ?? opp?.opportunity_id)),
+    [results, dismissedIds],
+  );
 
   // Apply housing filter
   const displayResults = React.useMemo(() => {
@@ -857,6 +912,11 @@ export default function SearchResults({ results = [], profileId, onAddToPipeline
                   onAddToPipeline={onAddToPipeline}
                   organizationName={organizationName}
                   disabledReason={pipelineBlockReason}
+                />
+                <DismissResultButton
+                  opportunity={opp}
+                  profileId={profileId}
+                  onDismissed={(id) => setDismissedIds((prev) => new Set(prev).add(id))}
                 />
               </div>
             </div>

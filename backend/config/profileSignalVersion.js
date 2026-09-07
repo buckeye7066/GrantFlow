@@ -31,7 +31,7 @@
  */
 
 /** Bump on ANY change to the files below (date + counter). */
-export const PROFILE_SIGNAL_VERSION = '2026.09.07-1'
+export const PROFILE_SIGNAL_VERSION = '2026.09.07-2'
 
 /** Repo-relative files whose content decides what the engine believes about a profile. */
 export const PROFILE_SIGNAL_DERIVATION_FILES = Object.freeze([
@@ -50,6 +50,6 @@ export const PROFILE_SIGNAL_DERIVATION_FILES = Object.freeze([
  * sha256 over the LF-normalized concatenation of the files above, pinned by
  * `scripts/pin-signal-version.mjs`. The test recomputes it.
  */
-export const PROFILE_SIGNAL_DERIVATION_HASH = 'cc401568dea68fd7fd41100eeb2e023f57fcf1fb6ca0ac320b6238b87947429a'
+export const PROFILE_SIGNAL_DERIVATION_HASH = '870f91ae84ceb0fffd9b3fb1a2b2c89121212b46010e6d9c0bd85171996b12b9'
 
 export default { PROFILE_SIGNAL_VERSION, PROFILE_SIGNAL_DERIVATION_FILES, PROFILE_SIGNAL_DERIVATION_HASH }

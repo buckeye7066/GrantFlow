@@ -739,7 +739,17 @@ router.get('/profile/:profileId/opportunities', async (req, res, next) => {
       // that the strict canonical pass had filtered, the scored pool reflects
       // the recovered set so `returned` can never exceed `total_scored`.
       const totalScored = relaxation ? Math.max(mapped.length, qualified.length) : mapped.length
-      const histogramSource = relaxation ? qualified : mapped
+      // The histogram feeds the UI's "N more scored below your filter" line, so
+      // it may count ONLY rows the display gates would show at a lower score.
+      // Counting every scored row told a transfer student "59 more scored below
+      // your filter" when the hidden rows were REVIEW/unproven direct funding
+      // that no slider position could reveal (prod 2026-09-07). Those are
+      // reported separately as held_back so the page can say so.
+      const displayable = (relaxation ? qualified : mapped).filter(
+        (o) => qualifiesForDisplay(o, 0) && o.eligible !== false && o.eligibility_relaxed !== true,
+      )
+      const histogramSource = displayable
+      const heldBack = Math.max(0, (relaxation ? qualified : mapped).length - displayable.length)
 
       // Promotion/UI counts come from the durable canonical outcomes, never a
       // second client-side interpretation of scores. Missing migration/first
@@ -770,6 +780,8 @@ router.get('/profile/:profileId/opportunities', async (req, res, next) => {
           ? 'Crawler OS found no rules-eligible funding for this profile. No generic fallback results were added.'
           : relaxation?.threshold_relaxed_reason || undefined,
         score_histogram: buildScoreHistogram(histogramSource),
+        // Scored rows no slider position can reveal (REVIEW / unproven direct funding).
+        held_back: heldBack,
         opportunities: qualified,
         referrals: [],
         diagnostics: {

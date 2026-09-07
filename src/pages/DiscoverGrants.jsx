@@ -2173,6 +2173,11 @@ export default function DiscoverGrants() {
               )}
               {catalogIsFetching && <span className="ml-1 text-xs text-slate-400">(updating…)</span>}
             </span>
+            {Number(catalogPayload?.held_back) > 0 && (
+              <span className="text-slate-600">
+                {' '}· <strong>{catalogPayload.held_back}</strong> held back — scored, but not yet proven as funding you can apply for (review-only or awaiting verification); no score setting reveals them.
+              </span>
+            )}
             {resultsReconciliation?.hidden && (
               <span className="text-slate-600">
                 {resultsReconciliation.belowFloorCount} more scored below your filter (≥{resultsReconciliation.minScore}).{' '}

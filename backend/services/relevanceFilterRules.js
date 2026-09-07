@@ -1158,7 +1158,7 @@ export const RELEVANCE_RULES = [
         hard: true, // data quality — always reject
         oppPattern: null,
         profileCheck: (pd, oppText, opp) => {
-                const url = opp?.application_url || opp?.source_url || opp?.url || ''
+                const url = opp?.application_url || opp?.apply_url || opp?.source_url || opp?.url || ''
                 return !url || typeof url !== 'string' || !url.startsWith('http')
         },
         reason: 'Data quality: no actionable URL — cannot apply or visit this opportunity',
