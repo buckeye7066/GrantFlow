@@ -175,6 +175,20 @@ describe('pointerTruthPolicy — the four gates in their pointer sense', () => {
     expect(pointerMatchedNeeds(tsuScholarships)).toContain('education')
   })
 
+  it('an attendance-gate row for the applicant own institution is relatable, whatever its geo signal says', () => {
+    const row = {
+      match_decision: 'review', match_score: 33, opportunity_kind: 'DIRECTORY', application_url: 'https://www.mtsu.edu/housing/',
+      match_explain_json: JSON.stringify({
+        gate: 'attendance', institution: 'Middle Tennessee State University',
+        matchedSignals: ['geo:national', 'keywords', 'needs'], matchedNeeds: ['housing'], eligibility_fit: 'maybe',
+      }),
+    }
+    expect(pointerGeoEvidence(row)).toBe(true)
+    // Same explain with no geo signal and no attendance gate: no tie.
+    const untied = { ...row, match_explain_json: JSON.stringify({ matchedSignals: ['keywords', 'needs'], matchedNeeds: ['housing'] }) }
+    expect(pointerGeoEvidence(untied)).toBe(false)
+  })
+
   it('does not require an applicant-type signal — a locator serves its area', () => {
     const signals = JSON.parse(mtsuOffCampusHousing.match_explain_json).matchedSignals
     expect(signals).not.toContain('applicant_type')

@@ -143,6 +143,14 @@ export function pointerGeoEvidence(row) {
   const temporalVerdict = lower(temporal?.verdict)
   if (temporalVerdict === 'stale' || temporalVerdict === 'elsewhere') return false
   if (temporalVerdict === 'fit_current' || temporalVerdict === 'fit_past' || temporalVerdict === 'fit_origin') return true
+  // A recall-net row written for an INSTITUTION the profile attends (gate
+  // 'attendance', institution named — institutionRunRecall) is a tie to this
+  // profile by construction: the school IS where the applicant is. The fact
+  // timeline / temporal gate is what retires a former school, not this leg.
+  // Without it a transfer student's own university housing pages read
+  // "geo:national" after a canonical re-score and failed relatable
+  // (prod 2026-09-07).
+  if (lower(explain.gate) === 'attendance' && String(explain.institution ?? '').trim() !== '') return true
   const signals = [...asArray(explain.matchedSignals), ...asArray(explain.matched_signals)].map(lower)
   if (signals.some((signal) => signal.startsWith('geo:'))) return true
   const facts = [...asArray(explain.matched_profile_facts), ...asArray(explain.matchedProfileFacts)].map(lower)
