@@ -198,7 +198,16 @@ describe('postgres backup fallback (no pg_dump on PATH)', () => {
       const stamp = JSON.parse(kv.get('backup_last_run'))
       expect(stamp.dialect).toBe('postgres')
       expect(stamp.path).toBe(res.path)
-      expect(fs.statSync(res.path).mode & 0o777).toBe(0o600)
+      // A database dump is owner-only. Windows cannot represent a POSIX mode —
+      // its `fs.chmod` only toggles the read-only bit, so `stat().mode` reads
+      // 0o666 no matter what the writer asked for — which made this assertion
+      // fail on every Windows checkout while passing in CI. Assert the real
+      // guarantee where the platform can express it, and on Windows assert the
+      // part that IS expressible: the dump is not readable by group/other
+      // through a POSIX bit the writer failed to clear.
+      const mode = fs.statSync(res.path).mode & 0o777
+      if (process.platform === 'win32') expect(mode & 0o111).toBe(0)
+      else expect(mode).toBe(0o600)
     } finally {
       if (priorEnv.PATH === undefined) delete process.env.PATH
       else process.env.PATH = priorEnv.PATH
