@@ -3020,6 +3020,11 @@ app.use('/api/admin/crawl-coverage', lazyRouter('./routes/adminCrawlCoverage.js'
 // read-only dashboard route's documented "never mutates" contract holds):
 // trigger one targeted, bounded re-crawl of a single stale source.
 app.use('/api/admin/crawl-coverage-actions', lazyRouter('./routes/adminCrawlCoverageActions.js'));
+// Who, in GrantFlow's OWN records, has used an IP address (sign-ins + audited
+// actions joined to accounts). Consumed by the axiombiolabs.org visitor
+// dashboard on the owner's laptop; a registry can never name the person
+// behind a consumer carrier pool, only our records can. Admin, read-only.
+app.use('/api/admin/visitor-identity', lazyRouter('./routes/adminVisitorIdentity.js'));
 // "Which crawlers fire for this profile, and why?" — explainable plan + a
 // coverage audit that flags zero-coverage / org-directory-only profiles so a
 // VFD can never silently miss FEMA AFG again (architecture: crawler planning).
