@@ -49,6 +49,11 @@ const ROWS = [
   { id: 'legal', t: 'Small Business Legal Defense Fund', s: 'Legal Aid Society', ent: ['individual', 'student'], cats: ['legal'], url: 'https://example-legal.org/fund', remove: 'covers_need' },
   // RELATABLE — a scholarship SEARCH ENGINE, not an application.
   { id: 'bigfuture', t: 'College Board BigFuture Scholarship Search', s: 'College Board', ent: ['student'], cats: ['education'], url: 'https://bigfuture.collegeboard.org/scholarship-search', remove: 'relatable' },
+  // ENGINE — the canonical engine's temporal gate: an award for students
+  // ENTERING another college while this profile is enrolled at MTSU and names
+  // the other college nowhere ("elsewhere"). Every structural gate above would
+  // keep it (student-eligible, education need, real apply URL).
+  { id: 'cscc', t: "Principal's Scholarship for graduating seniors entering Cleveland State Community College", s: 'Cleveland State Community College', ent: ['student'], cats: ['education'], url: 'https://clevelandstatecc.edu/scholarships/apply', remove: 'engine' },
 ]
 
 function seed(rows = ROWS, { declareNeeds = true } = {}) {
@@ -124,7 +129,7 @@ describe('enforcePipelinePrecision — the boot net for the three conjuncts', ()
     expect(result.scanned).toBe(ROWS.length)
     expect(result.kept + result.removed + result.relabeled + result.failed).toBe(result.scanned)
     expect(result.failed).toBe(0)
-    expect(result.byGate).toEqual({ relatable: 1, qualifies: 2, covers_need: 1, real: 1 })
+    expect(result.byGate).toEqual({ engine: 1, relatable: 1, qualifies: 2, covers_need: 1, real: 1 })
     expect(Object.values(result.byReason).reduce((a, b) => a + b, 0)).toBe(result.removed + result.relabeled)
     expect(result.needNeutralRow).toBe(1)
     expect(result.needNeutralProfile).toBe(0)
@@ -139,7 +144,7 @@ describe('enforcePipelinePrecision — the boot net for the three conjuncts', ()
     for (const r of ROWS.filter((x) => x.keep)) {
       expect(remaining, `"${r.t}" must survive`).toContain(`g-${r.id}`)
     }
-    expect(result.removed).toBe(4)
+    expect(result.removed).toBe(5)
     expect(result.kept).toBe(2)
   })
 
@@ -155,11 +160,21 @@ describe('enforcePipelinePrecision — the boot net for the three conjuncts', ()
 
   it('TOMBSTONES every removal so the sticky-delete net keeps it gone', () => {
     const tombstones = sqlite.prepare('SELECT title, reason FROM pipeline_dismissals WHERE profile_id = ?').all(PROFILE_ID)
-    expect(tombstones.length).toBe(4)
+    expect(tombstones.length).toBe(5)
     expect(tombstones.every((t) => String(t.reason).startsWith('pipeline_precision:'))).toBe(true)
     const titles = tombstones.map((t) => t.title)
     expect(titles).toContain('Developmental Sciences')
     expect(titles).toContain('Small Business Legal Defense Fund')
+  })
+
+  it('RE-SCORES every row through the canonical engine and RE-STAMPS the fresh verdict', () => {
+    expect(result.rescored).toBe(ROWS.length)
+    expect(result.restamped).toBe(ROWS.length)
+    const pell = sqlite.prepare('SELECT match_score, match_decision FROM grants WHERE id = ?').get('g-pell')
+    expect(Number.isFinite(Number(pell.match_score))).toBe(true)
+    expect(['ACCEPT', 'REVIEW']).toContain(pell.match_decision)
+    const tombstone = sqlite.prepare('SELECT reason FROM pipeline_dismissals WHERE profile_id = ? AND title LIKE ?').get(PROFILE_ID, "Principal's Scholarship%")
+    expect(String(tombstone?.reason)).toMatch(/^pipeline_precision:engine:/)
   })
 
   it('is idempotent — a second boot removes nothing and re-labels nothing new', async () => {
@@ -180,7 +195,11 @@ describe('enforcePipelinePrecision — silence is neutral and REPORTED', () => {
     expect(res.ok).toBe(true)
     expect(res.byGate.covers_need).toBe(0)
     expect(res.needNeutralProfile).toBe(2)
-    expect(grantIds(sqlite)).toEqual(['g-legal', 'g-pell'])
+    // The NEED gate stays silent, but the ENGINE — the one matching authority —
+    // still speaks: a small-business legal fund is not a match for a college
+    // student who declares nothing, and the engine would never admit it today.
+    expect(res.byGate.engine).toBe(1)
+    expect(grantIds(sqlite)).toEqual(['g-pell'])
   })
 
   it('skips LOUDLY (not green) when the catalog lacks the gate-evidence columns', async () => {

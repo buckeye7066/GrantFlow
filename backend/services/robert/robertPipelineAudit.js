@@ -93,12 +93,104 @@ const log = createLogger('robert-pipeline-audit')
 
 /** The four gates, in the order they are evaluated (cheap → networked). */
 export const GATES = Object.freeze({
+  ENGINE: 'engine',
   RELATABLE: 'relatable',
   QUALIFIES: 'qualifies',
   COVERS_NEED: 'covers_need',
   REAL: 'real',
 })
-export const GATE_ORDER = Object.freeze([GATES.RELATABLE, GATES.QUALIFIES, GATES.COVERS_NEED, GATES.REAL])
+// The structural gates run FIRST so a failure keeps its precise, lever-mapped
+// label (qualifies → eligibility_gate, covers_need → source_keyword_coverage);
+// the engine then catches everything they cannot see (temporal anchors,
+// declined aid types, hard eligibility, deadlines) before the network REAL gate.
+export const GATE_ORDER = Object.freeze([GATES.RELATABLE, GATES.QUALIFIES, GATES.COVERS_NEED, GATES.ENGINE, GATES.REAL])
+
+/**
+ * THE ENGINE CONJUNCT (owner order 2026-09-07, "redo all pipelines to reflect
+ * this change"). The four structural gates below never ask the ONE matching
+ * authority — `matchEngine.computeMatchDecision` — so a pipeline row admitted
+ * before the temporal gate, the need-provenance fix and the apply_url fix kept
+ * its seat: a community college's "graduating seniors entering <college>"
+ * award stayed on a transfer student's pipeline months after she left, and a
+ * Work-Study row stayed on a profile that declines work-study. Every pipeline
+ * row is now re-scored by the canonical engine on every boot: a REJECT fails
+ * this gate with the engine's own words, and every row (protected ones
+ * included) is RE-STAMPED with the fresh score / decision / explanation so the
+ * pipeline shows what the engine currently believes.
+ */
+export function gateEngine(row, scored) {
+  if (!scored?.decision) {
+    return { pass: true, reason: null, evidence: { gate: 'engine', detail: 'no_catalog_row_to_score' } }
+  }
+  const decision = String(scored.decision.decision ?? '').trim().toUpperCase()
+  const reasons = Array.isArray(scored.decision.ineligibilityReasons)
+    ? scored.decision.ineligibilityReasons.map((r) => String(r)).filter(Boolean)
+    : []
+  const explanation = String(scored.decision.explanation ?? '').trim()
+  if (decision !== 'REJECT') {
+    return {
+      pass: true,
+      reason: null,
+      evidence: { gate: 'engine', decision, score: scored.decision.score ?? null, explanation },
+    }
+  }
+  const slug = (reasons[0] || explanation || 'engine_reject')
+    .toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 60) || 'engine_reject'
+  return {
+    pass: false,
+    reason: slug,
+    evidence: {
+      gate: 'engine',
+      decision,
+      score: scored.decision.score ?? null,
+      explanation,
+      ineligibility_reasons: reasons,
+      detail: 'canonical_engine_reject',
+    },
+  }
+}
+
+/** Load the catalog row behind a pipeline row and run the canonical engine on it. */
+export async function scoreRowWithEngine(db, facts, row, { computeMatchDecision } = {}) {
+  const opportunityId = row?.funding_opportunity_id ?? row?.opportunity_id ?? null
+  if (typeof computeMatchDecision !== 'function' || !facts?.profile || !opportunityId) return null
+  let opportunity = null
+  try {
+    opportunity = await db.prepare('SELECT * FROM funding_opportunities WHERE id = ? LIMIT 1').get(String(opportunityId))
+  } catch {
+    opportunity = null
+  }
+  if (!opportunity) return null
+  const decision = computeMatchDecision(facts.profile, opportunity, { profileSections: facts.sections ?? {} })
+  return { decision, opportunity }
+}
+
+/** Grant columns the re-stamp may write; each is written only when present. */
+const STAMP_COLUMNS = Object.freeze(['match_score', 'match_decision', 'match_explanation', 'match_reasons', 'matched_needs', 'match_confidence', 'matcher_version', 'evaluated_at'])
+
+/**
+ * Re-stamp a pipeline row with the engine's current verdict. Column-aware so
+ * an older schema never breaks the sweep. Returns true when a write happened.
+ */
+export async function stampPipelineRowFromDecision(db, grantId, decision, grantCols) {
+  if (!grantId || !decision || !grantCols?.has) return false
+  const explain = decision.match_explain ?? {}
+  const values = {
+    match_score: Number.isFinite(Number(decision.score)) ? Math.round(Number(decision.score)) : null,
+    match_decision: String(decision.decision ?? '').toUpperCase() || null,
+    match_explanation: decision.explanation ?? null,
+    match_reasons: JSON.stringify(Array.isArray(decision.reasons) ? decision.reasons : (explain.reasons ?? [])),
+    matched_needs: JSON.stringify(decision.matchedNeeds ?? explain.matchedNeeds ?? []),
+    match_confidence: Number.isFinite(Number(decision.confidence)) ? Math.round(Number(decision.confidence)) : null,
+    matcher_version: decision.matcherVersion ?? explain.matcher_version ?? null,
+    evaluated_at: new Date().toISOString(),
+  }
+  const cols = STAMP_COLUMNS.filter((c) => grantCols.has(c))
+  if (cols.length === 0) return false
+  const sql = `UPDATE grants SET ${cols.map((c) => `${c} = ?`).join(', ')} WHERE id = ?`
+  const res = await db.prepare(sql).run(...cols.map((c) => values[c]), String(grantId))
+  return Number(res?.changes ?? res?.rowCount ?? 0) > 0
+}
 
 /** Bounded retries for the REAL gate before a row is called `unverifiable`. */
 export const REAL_GATE_MAX_ATTEMPTS = Number(process.env.ROBERT_REAL_GATE_ATTEMPTS) || 2
@@ -636,6 +728,9 @@ export async function gateReal(row, { now = new Date(), checkUrl = defaultCheckU
  * reclassified in the registry cannot silently gain authority here.
  */
 export const GATE_TO_LEVER = Object.freeze({
+  // An engine REJECT is a matching-policy verdict (eligibility, temporal
+  // anchor, need provenance, deadline) — never an Amy autonomous lever.
+  [GATES.ENGINE]: 'relevance_policy',
   [GATES.COVERS_NEED]: 'source_keyword_coverage',
   [GATES.RELATABLE]: 'url_hygiene',
   [GATES.REAL]: 'url_hygiene',
@@ -938,8 +1033,17 @@ export async function auditProfilePipeline(db, profileId, {
     let verdict = null
     let failedGate = null
     try {
+      let scored = null
+      try {
+        const { computeMatchDecision } = await import('../matchEngine.js')
+        scored = await scoreRowWithEngine(db, facts, row, { computeMatchDecision })
+      } catch (err) {
+        scored = null
+        log.warn('audit-pipelines: engine scoring failed for a row (row kept for the structural gates)', { grant: row.grant_id, error: err?.message || String(err) })
+      }
       for (const gate of GATE_ORDER) {
-        if (gate === GATES.RELATABLE) verdict = gateRelatable(row, { now })
+        if (gate === GATES.ENGINE) verdict = gateEngine(row, scored)
+        else if (gate === GATES.RELATABLE) verdict = gateRelatable(row, { now })
         else if (gate === GATES.QUALIFIES) verdict = gateQualifies(row, facts)
         else if (gate === GATES.COVERS_NEED) verdict = gateCoversNeed(row, facts)
         else if (gate === GATES.REAL) {

@@ -5403,7 +5403,12 @@ export async function enforcePipelinePrecision(db) {
       log.warn('pipeline_precision: verifier unavailable (non-fatal)', { error: String(err?.message || err) })
       return { scanned: 0, repaired: 0, enforced: true, skipped: 'deps' }
     }
-    const { loadProfileFacts, loadPipelineRows, gateRelatable, gateQualifies, gateCoversNeed, gateRealOffline, GATES } = audit
+    const { loadProfileFacts, loadPipelineRows, gateRelatable, gateQualifies, gateCoversNeed, gateRealOffline, GATES, gateEngine, scoreRowWithEngine, stampPipelineRowFromDecision } = audit
+    // THE ENGINE CONJUNCT (owner order 2026-09-07): every pipeline row is
+    // re-scored by the ONE matching authority each boot and re-stamped with
+    // the fresh verdict; a REJECT fails the sweep with the engine's reasons.
+    let computeMatchDecision = null
+    try { ({ computeMatchDecision } = await import('../services/matchEngine.js')) } catch { computeMatchDecision = null }
     let cancelApplicationTask = null
     let recordDismissalFn = null
     try { ({ cancelApplicationTask } = await import('../services/hamilton/applicationTaskStore.js')) } catch { cancelApplicationTask = null }
@@ -5435,8 +5440,9 @@ export async function enforcePipelinePrecision(db) {
       scanned: 0, kept: 0, removed: 0, relabeled: 0, failed: 0, tasksCancelled: 0,
       protectedProfilesSkipped: 0, needNeutralProfile: 0, needNeutralRow: 0,
       harvestFirst: 0, truncated: false, loadFailures: 0, firstLoadError: null,
+      rescored: 0, restamped: 0, unscorable: 0,
     }
-    const byGate = { [GATES.RELATABLE]: 0, [GATES.QUALIFIES]: 0, [GATES.COVERS_NEED]: 0, [GATES.REAL]: 0 }
+    const byGate = { [GATES.ENGINE]: 0, [GATES.RELATABLE]: 0, [GATES.QUALIFIES]: 0, [GATES.COVERS_NEED]: 0, [GATES.REAL]: 0 }
     const byReason = {}
     const affectedProfiles = new Set()
     const examples = []
@@ -5506,6 +5512,21 @@ export async function enforcePipelinePrecision(db) {
         let verdict = null
         let failedGate = null
         try {
+          // Engine first: the canonical decision, then the structural gates.
+          let scored = null
+          if (computeMatchDecision) {
+            try { scored = await scoreRowWithEngine(db, facts, row, { computeMatchDecision }) } catch { scored = null }
+          }
+          if (scored?.decision) {
+            counts.rescored += 1
+            try {
+              if (await stampPipelineRowFromDecision(db, row.grant_id, scored.decision, grantCols)) counts.restamped += 1
+            } catch (err) {
+              log.warn('pipeline_precision: re-stamp failed (non-fatal)', { grant: row.grant_id, error: String(err?.message || err) })
+            }
+          } else {
+            counts.unscorable += 1
+          }
           verdict = gateRelatable(row, { now })
           if (!verdict.pass) failedGate = GATES.RELATABLE
           if (!failedGate) {
@@ -5517,6 +5538,13 @@ export async function enforcePipelinePrecision(db) {
             if (!verdict.pass) failedGate = GATES.COVERS_NEED
             else if (profileDeclaresNoNeeds) counts.needNeutralProfile += 1
             else if (verdict?.evidence?.detail === 'opportunity_states_no_need_vocabulary') counts.needNeutralRow += 1
+          }
+          if (!failedGate) {
+            // The canonical engine — the one matching authority — catches what
+            // the structural gates cannot see (temporal anchors, declined aid
+            // types, hard eligibility, deadlines).
+            verdict = gateEngine(row, scored)
+            if (!verdict.pass) failedGate = GATES.ENGINE
           }
           if (!failedGate) {
             const real = gateRealOffline(row, { now })
