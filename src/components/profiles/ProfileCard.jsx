@@ -20,7 +20,7 @@ import { createPageUrl } from "@/utils";
 import { useAuthenticatedAvatar } from "@/hooks/useAuthenticatedAvatar";
 import { isRealProfileId } from "@/api/profileIdGuards";
 
-export default function ProfileCard({ profile, onViewInvoices, onDelete, isAdmin, onHardDelete, onRestore }) {
+export default function ProfileCard({ profile, onViewInvoices, onDelete, isAdmin, onHardDelete, onRestore, onReactivate }) {
   const navigate = useNavigate();
   const billing = profile.billing || {};
   const tier = billing.tier || {};
@@ -83,6 +83,8 @@ export default function ProfileCard({ profile, onViewInvoices, onDelete, isAdmin
 
   const isOrphanedProfile = !profile.organization_id && !profile.user_id;
   const isDeletedProfile = String(profile?.status || '').toLowerCase() === 'deleted'
+  const isSuspendedProfile = String(profile?.status || '').toLowerCase() === 'suspended'
+  const isBannedProfile = Boolean(profile?.banned) || String(profile?.lifecycle || '').toLowerCase() === 'banned'
   const avatarCacheBuster = React.useMemo(() => {
     // Prefer avatar_url (changes per upload), then updated_at as fallback.
     const raw = profile?.avatar_url || profile?.updated_at || ""
@@ -257,6 +259,25 @@ export default function ProfileCard({ profile, onViewInvoices, onDelete, isAdmin
             <FileText className="mr-2 h-4 w-4" />
             Billing
           </Button>
+          {Boolean(isAdmin) && (isSuspendedProfile || isBannedProfile) ? (
+            <Badge variant="outline" className="border-amber-300 bg-amber-50 text-amber-800" data-testid="profile-lifecycle-badge">
+              {isBannedProfile ? "Banned" : "Suspended"}
+            </Badge>
+          ) : null}
+          {Boolean(isAdmin) && isSuspendedProfile && !isBannedProfile ? (
+            <Button
+              variant="outline"
+              size="sm"
+              className="shrink-0"
+              aria-label={`Reactivate profile ${displayName}`}
+              onClick={(event) => {
+                event.stopPropagation();
+                onReactivate?.(profile);
+              }}
+            >
+              Reactivate
+            </Button>
+          ) : null}
           {Boolean(isAdmin) && isDeletedProfile ? (
             <Button
               variant="outline"

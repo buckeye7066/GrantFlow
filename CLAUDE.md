@@ -69,6 +69,44 @@ npm run opps:ensure-national-minimum  # Ensure national opportunity floor
 - **Deployment**: Frontend → Vercel, Backend → Railway (PostgreSQL).
 - **Canonical product rules + goals**: `docs/canonical_rules.md` is the single source of truth. Read it before changing matching, discovery, pipeline, or tenancy behavior.
 
+## Anya — the assistant's POWERS are tools, not prose (owner order 2026-09-07)
+
+The owner's transcript: "give me the script from our last conversation" → "I
+can't retrieve past conversations" (every exchange is stored in
+`anya_sessions`/`anya_messages`; the panel simply mints a fresh session each
+time it opens and the model saw only the current session's last 20 messages);
+"I cannot see <profile> in My Profiles even though I am admin — fix it" →
+"this would require adjustments to the admin interface" (the profile was
+soft-deleted; the restore route existed; Anya had no tool for it). Rules:
+
+- **Past conversations are a tool, scoped to the caller.**
+  `backend/services/anyaConversationRecall.js` (`conversation.recent` /
+  `conversation.search` / `conversation.recall`) reads the caller's own
+  sessions (or any profile they can access; admins see all). The context
+  builder injects the last three conversations so the model knows they exist.
+  The prompt says: NEVER claim past conversations are unavailable.
+- **Admin lifecycle is a tool.** `backend/services/profileLifecycle.js` is the
+  ONE answer to active / suspended / deleted / banned (banned = the profile's
+  user email is on `owner_blocklist`; buckets are EXCLUSIVE — a banned user's
+  suspended profile is "banned", not "suspended"). `admin.profile.listByStatus`
+  / `admin.profile.restore` / `admin.profile.setStatus` (suspend / reactivate /
+  ban / unban via `billing/accountStatus`) are confirmation-gated. The same
+  service backs `GET /api/profiles?status=active,suspended,deleted,banned` and
+  the four checkboxes on My Profiles (`includeDeleted=true` is the legacy
+  spelling of `status=active,deleted`).
+- **End users get their profile's buttons as tools and NOTHING off-topic.**
+  `profile.runDiscovery` is the "Discover funding" button (same
+  `runProfileDiscoveryLive`, bounded); the user prompt carries a SCOPE rule —
+  only this user's profile(s), their funding, GrantFlow, and their plan tier
+  (the context builder injects a plan block from `billingAccounts` +
+  `entitlementService`, so a locked feature is named, never simulated).
+  Off-topic requests get one friendly sentence and a redirect.
+- Every mutating tool follows the `student.commitToUniversity` shape:
+  `confirmed:false` returns `confirmation_required` + what will change;
+  `confirmed:true` acts. A new chat tool must be added to
+  `CHAT_CALLABLE_TOOL_DOCS` in `anyaOrchestrator.js` or the model never sees it.
+  Guard test: `backend/tests/anyaAssistantPowers.test.js`.
+
 ## Portal automation chain (2026-08-03) — REQUIRED READING before touching Hamilton portal work
 
 **THE FIXTURE-ONLY CONFINEMENT DESCRIBED HERE IS GONE. Corrected 2026-08-21

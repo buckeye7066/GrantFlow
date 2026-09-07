@@ -69,7 +69,7 @@ const HIGH_IMPACT_SECTIONS = {
  * @returns {Promise<string>} Formatted context block for the system prompt
  */
 export async function buildAnyaContext(db, user, opts = {}) {
-  const { profileId, currentPage, pageContext } = opts
+  const { profileId, currentPage, pageContext, sessionId = null } = opts
   const sections = []
 
   // Load profile data once and share across sub-builders
@@ -93,6 +93,18 @@ export async function buildAnyaContext(db, user, opts = {}) {
   // brain memory) — lets her be personable and pick up where they left off. ──
   const memoryBlock = await buildProfileMemoryBlock(db, profileId)
   if (memoryBlock) sections.push(memoryBlock)
+
+  // ── 1c. The plan this profile is on (owner rule 2026-09-07: Anya helps
+  // within the user's tier — she must know what is included and what is locked).
+  const planBlock = await buildPlanBlock(db, user, profileId)
+  if (planBlock) sections.push(planBlock)
+
+  // ── 1d. Past conversations (owner rule 2026-09-07): "the script from our
+  // last conversation" must be answerable — the panel mints a fresh session
+  // every time it opens, so without this the model never knew prior sessions
+  // existed. Bounded to the last three; conversation.* tools read more.
+  const conversationsBlock = await buildRecentConversationsBlockSafe(db, user, { profileId, excludeSessionId: sessionId })
+  if (conversationsBlock) sections.push(conversationsBlock)
 
   // ── 2. Available results / matching snapshot ──
   const resultsBlock = await buildResultsSnapshot(db, profileContext)
@@ -129,6 +141,44 @@ export async function buildAnyaContext(db, user, opts = {}) {
   }
 
   return ['## Live Context (grounded in real data — use this, not generic advice)', '', ...sections].join('\n')
+}
+
+async function buildRecentConversationsBlockSafe(db, user, opts) {
+  if (!db || !user) return null
+  try {
+    const { buildRecentConversationsBlock } = await import('./anyaConversationRecall.js')
+    return await buildRecentConversationsBlock(db, user, opts)
+  } catch {
+    return null
+  }
+}
+
+/**
+ * The plan block: tier name, monthly amount, what is included, what is locked.
+ * Read through the SAME authorities the Billing page uses (billingAccounts +
+ * entitlementService) so Anya never describes a plan the app would not honor.
+ */
+async function buildPlanBlock(db, user, profileId) {
+  if (!db || !profileId) return null
+  try {
+    const [{ ensureBillingAccount, mapAccountRow, computeEffectiveBilling }, { resolveAllProfileEntitlements }] = await Promise.all([
+      import('./billingAccounts.js'),
+      import('./billing/entitlementService.js'),
+    ])
+    const accountRow = await ensureBillingAccount(db, profileId)
+    const account = mapAccountRow(accountRow)
+    const billing = await computeEffectiveBilling(db, profileId, account)
+    const ent = await resolveAllProfileEntitlements(db, { profileId, isAdmin: Boolean(user?.isAdmin) })
+    const tierName = billing?.is_pro_bono ? 'Pro Bono' : (account?.tier?.name || billing?.tier_id || 'Tier pending')
+    const monthly = billing?.is_pro_bono ? '$0 (pro bono)' : `$${((Number(billing?.net_monthly_cents) || 0) / 100).toFixed(2)}/month`
+    const lines = ['### This profile\'s plan (answer feature questions within it; a locked feature needs an upgrade, never a workaround)']
+    lines.push(`- Tier: ${tierName} — ${monthly}${account?.discount_type && account.discount_type !== 'none' ? ` (${account.discount_type} discount ${account.discount_percent || 0}%)` : ''}`)
+    if (Array.isArray(ent?.allowed) && ent.allowed.length) lines.push(`- Included: ${ent.allowed.join(', ')}`)
+    if (Array.isArray(ent?.locked) && ent.locked.length) lines.push(`- Locked on this plan: ${ent.locked.join(', ')}`)
+    return lines.join('\n')
+  } catch {
+    return null
+  }
 }
 
 /**

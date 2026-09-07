@@ -168,6 +168,14 @@ export async function hardDeleteProfileAdmin(profileId, payload = {}) {
   })
 }
 
+/** Reactivate a SUSPENDED profile (billing/admin). */
+export async function reactivateProfileAdmin(profileId) {
+  return apiFetch(`/api/billing/admin/accounts/${encodeURIComponent(profileId)}/reactivate`, {
+    method: 'POST',
+    body: JSON.stringify({}),
+  })
+}
+
 export async function restoreProfileAccessAdmin(profileId, payload = {}) {
   assertRealProfileId(profileId, 'restoreProfileAccessAdmin')
   return apiFetch(`/api/admin/profiles/${profileId}/restore-access`, {
