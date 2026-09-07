@@ -5952,3 +5952,242 @@ registerTool({
     return { has_run: true, last_run: last }
   },
 })
+
+// ═══════════════════════════════════════════════════════════════════════════
+// ASSISTANT POWERS (owner order 2026-09-07)
+//
+// Anya told the owner "I can't retrieve past conversations" (every exchange
+// is stored) and "this would require adjustments to the admin interface"
+// (the restore route already existed). Three gaps closed here, one section
+// each:
+//   1. PAST CONVERSATIONS — recent / search / recall over anya_messages,
+//      scoped to what the caller may read (anyaConversationRecall.js).
+//   2. PROFILE ACTIONS FOR END USERS — the profile page's "Discover funding"
+//      button as a confirmation-gated tool, access-scoped like every other
+//      profile tool.
+//   3. ADMIN PROFILE LIFECYCLE — list by status, restore a deleted profile,
+//      suspend / reactivate / ban / unban — the same services the admin
+//      routes call (profileLifecycle.js, billing/accountStatus.js).
+// Every mutating tool is confirmation-gated (confirmed:false → what will
+// change; confirmed:true → do it), the pattern student.commitToUniversity set.
+// ═══════════════════════════════════════════════════════════════════════════
+
+function anyaCallerIdentity(context) {
+  const ctx = context?.ctx
+  return ctx?.userId ?? ctx?.id ?? ctx?.user_id ?? ctx?.email ?? null
+}
+
+registerTool({
+  name: 'conversation.recent',
+  description: "List the caller's most recent past conversations with Anya (newest first): session id, when, the last thing they asked, the last thing Anya answered. Scoped to sessions the caller may read. Use for \"last time\" / \"our last conversation\" / \"the script you gave me\".",
+  schema: {
+    type: 'object',
+    properties: {
+      profileId: { type: 'string', description: 'Optional: only conversations about this profile.' },
+      limit: { type: 'integer', minimum: 1, maximum: 20, description: 'Max sessions (default 5).' },
+    },
+  },
+  handler: async (params, context) => {
+    if (!context?.db) throw new Error('Database connection unavailable')
+    if (!anyaCallerIdentity(context)) { const e = new Error('Not authorized'); e.status = 403; throw e }
+    const { listRecentConversations } = await import('./anyaConversationRecall.js')
+    const conversations = await listRecentConversations(context.db, context.ctx, {
+      profileId: params?.profileId ? String(params.profileId) : null,
+      limit: params?.limit,
+      excludeSessionId: context?.sessionId ?? null,
+    })
+    return {
+      count: conversations.length,
+      conversations,
+      guidance: conversations.length === 0
+        ? 'No earlier conversations are stored for this user. Say so plainly and offer to recreate what they need.'
+        : 'Call conversation.recall with a session_id to read that conversation in full before re-delivering anything from it.',
+    }
+  },
+})
+
+registerTool({
+  name: 'conversation.search',
+  description: "Search the caller's past conversations for a word or phrase (case-insensitive). Returns excerpts with session ids and dates. Scoped to what the caller may read.",
+  schema: {
+    type: 'object',
+    properties: {
+      query: { type: 'string', description: 'The word or phrase to look for (e.g. "script", "Angelika", "LOI").' },
+      profileId: { type: 'string', description: 'Optional: only conversations about this profile.' },
+      limit: { type: 'integer', minimum: 1, maximum: 25, description: 'Max hits (default 8).' },
+    },
+    required: ['query'],
+  },
+  handler: async (params, context) => {
+    if (!context?.db) throw new Error('Database connection unavailable')
+    if (!anyaCallerIdentity(context)) { const e = new Error('Not authorized'); e.status = 403; throw e }
+    const { searchConversations } = await import('./anyaConversationRecall.js')
+    const hits = await searchConversations(context.db, context.ctx, {
+      query: params?.query,
+      profileId: params?.profileId ? String(params.profileId) : null,
+      limit: params?.limit,
+    })
+    return { count: hits.length, hits, guidance: hits.length ? 'Use conversation.recall on the best session_id to read it in full.' : 'Nothing matched. Say what you searched for; do not claim past conversations are unavailable.' }
+  },
+})
+
+registerTool({
+  name: 'conversation.recall',
+  description: 'Read one past conversation in full by session id (from conversation.recent / conversation.search). Newest messages are kept fullest, so a long script or list from the last answer survives. Scoped to what the caller may read.',
+  schema: {
+    type: 'object',
+    properties: {
+      sessionId: { type: 'string', description: 'The session id to read.' },
+      limit: { type: 'integer', minimum: 1, maximum: 200, description: 'Max messages, newest first (default 40).' },
+    },
+    required: ['sessionId'],
+  },
+  handler: async (params, context) => {
+    if (!context?.db) throw new Error('Database connection unavailable')
+    if (!anyaCallerIdentity(context)) { const e = new Error('Not authorized'); e.status = 403; throw e }
+    const { recallConversation } = await import('./anyaConversationRecall.js')
+    return recallConversation(context.db, context.ctx, { sessionId: params?.sessionId, limit: params?.limit })
+  },
+})
+
+registerTool({
+  name: 'profile.runDiscovery',
+  description: 'Run funding discovery for a profile NOW — the same action as the "Discover funding" button on the profile page (Crawler OS live discovery, bounded to a short time budget so the chat stays responsive). Confirmation-gated: first call with confirmed:false returns what will run; call again with confirmed:true after the user approves. Reports what was stored and matched.',
+  schema: {
+    type: 'object',
+    properties: {
+      profileId: { type: 'string', description: 'The profile to run discovery for.' },
+      confirmed: { type: 'boolean', description: 'Set true ONLY after the user explicitly approved running discovery.' },
+    },
+    required: ['profileId'],
+  },
+  handler: async (params, context) => {
+    if (!context?.db) throw new Error('Database connection unavailable')
+    const profileId = String(params?.profileId ?? '').trim()
+    if (!profileId) throw new Error('profileId is required')
+    if (!ensureProfileAccess(context?.ctx, profileId)) { const e = new Error('Not authorized to run discovery for this profile'); e.status = 403; throw e }
+    if (params?.confirmed !== true) {
+      return {
+        confirmation_required: true,
+        action: 'run_discovery',
+        profile_id: profileId,
+        message: 'Discovery will search the configured source lanes for this profile and add anything that passes the match gates to its funding results. It runs for up to ~25 seconds. Ask the user to confirm, then call again with confirmed:true.',
+      }
+    }
+    const { runProfileDiscoveryLive } = await import('./crawlerOsService.js')
+    const started = Date.now()
+    const result = await runProfileDiscoveryLive({ db: context.db, profileId, timeBudgetMs: 25_000, deadlineMs: Date.now() + 28_000 })
+    const stored = Number(result?.stored ?? result?.count ?? result?.inserted ?? result?.total_found ?? 0) || 0
+    return {
+      ok: result?.success !== false && !result?.skipped,
+      profile_id: profileId,
+      skipped: result?.skipped ?? null,
+      stored,
+      matches: Number(result?.matches ?? result?.count ?? stored) || stored,
+      sources_used: Array.isArray(result?.sources_used) ? result.sources_used : Array.isArray(result?.sources) ? result.sources : [],
+      elapsed_ms: Date.now() - started,
+      guidance: 'Tell the user what was found in plain words and suggest opening Discover to review; do not restate raw counts as a promise of eligibility.',
+    }
+  },
+})
+
+registerTool({
+  name: 'admin.profile.listByStatus',
+  description: 'ADMIN. List profiles by lifecycle status — active, suspended, deleted, banned — with counts per bucket. Use when an admin cannot find a profile in My Profiles, asks what is deleted/suspended/banned, or before restoring or reactivating a profile. Read-only.',
+  requiresAdmin: true,
+  schema: {
+    type: 'object',
+    properties: {
+      statuses: { type: 'array', items: { type: 'string', enum: ['active', 'suspended', 'deleted', 'banned'] }, description: 'Which buckets to list (default: all four).' },
+      query: { type: 'string', description: 'Optional partial display name.' },
+      limit: { type: 'integer', minimum: 1, maximum: 500, description: 'Max rows (default 50).' },
+    },
+  },
+  handler: async (params, context) => {
+    if (!context?.db) throw new Error('Database connection unavailable')
+    const { listProfilesByStatus } = await import('./profileLifecycle.js')
+    const res = await listProfilesByStatus(context.db, { statuses: params?.statuses ?? [], query: params?.query ?? null, limit: params?.limit })
+    return {
+      ...res,
+      guidance: 'To SEE a bucket in My Profiles the admin ticks its checkbox (Active / Suspended / Deleted / Banned). To CHANGE a profile: admin.profile.restore for deleted; admin.profile.setStatus reactivate for suspended; admin.profile.setStatus unban for banned.',
+    }
+  },
+})
+
+registerTool({
+  name: 'admin.profile.restore',
+  description: 'ADMIN. Restore a soft-DELETED profile so it appears again in My Profiles (status → active). Confirmation-gated: confirmed:false returns what will change; confirmed:true restores. A suspended profile is NOT restored here — use admin.profile.setStatus with action "reactivate".',
+  requiresAdmin: true,
+  schema: {
+    type: 'object',
+    properties: {
+      profileId: { type: 'string', description: 'The profile id (use profile.find or admin.profile.listByStatus to get it).' },
+      confirmed: { type: 'boolean', description: 'Set true ONLY after the admin explicitly approved the restore.' },
+    },
+    required: ['profileId'],
+  },
+  handler: async (params, context) => {
+    if (!context?.db) throw new Error('Database connection unavailable')
+    const profileId = String(params?.profileId ?? '').trim()
+    if (!profileId) throw new Error('profileId is required')
+    const row = await context.db.prepare('SELECT id, display_name, status FROM profiles WHERE id = ? LIMIT 1').get(profileId)
+    if (!row) return { ok: false, error: 'profile_not_found', profile_id: profileId }
+    if (params?.confirmed !== true) {
+      return {
+        confirmation_required: true,
+        action: 'restore_profile',
+        profile_id: profileId,
+        display_name: row.display_name,
+        status_now: row.status ?? 'active',
+        message: String(row.status ?? '').toLowerCase() === 'deleted'
+          ? `"${row.display_name}" is deleted. Restoring sets it active so it appears in My Profiles again. Ask the admin to confirm, then call again with confirmed:true.`
+          : `"${row.display_name}" is ${row.status || 'active'}, not deleted — nothing to restore.${String(row.status ?? '').toLowerCase() === 'suspended' ? ' Use admin.profile.setStatus with action "reactivate".' : ''}`,
+      }
+    }
+    const { restoreDeletedProfile } = await import('./profileLifecycle.js')
+    return restoreDeletedProfile(context.db, { profileId, actor: anyaCallerIdentity(context) ?? 'admin' })
+  },
+})
+
+registerTool({
+  name: 'admin.profile.setStatus',
+  description: "ADMIN. Change a profile's account status: suspend (pause access), reactivate (lift a suspension), ban (block the user's login via the owner blocklist AND suspend the profile), unban (lift the ban). The same services the Admin → Billing panel calls; the account is notified. Confirmation-gated.",
+  requiresAdmin: true,
+  schema: {
+    type: 'object',
+    properties: {
+      profileId: { type: 'string' },
+      action: { type: 'string', enum: ['suspend', 'reactivate', 'ban', 'unban'] },
+      reason: { type: 'string', description: 'Optional reason recorded with a suspend/ban.' },
+      confirmed: { type: 'boolean', description: 'Set true ONLY after the admin explicitly approved the change.' },
+    },
+    required: ['profileId', 'action'],
+  },
+  handler: async (params, context) => {
+    if (!context?.db) throw new Error('Database connection unavailable')
+    const profileId = String(params?.profileId ?? '').trim()
+    const action = String(params?.action ?? '').trim().toLowerCase()
+    if (!profileId) throw new Error('profileId is required')
+    if (!['suspend', 'reactivate', 'ban', 'unban'].includes(action)) return { ok: false, error: 'unknown_action' }
+    const row = await context.db.prepare('SELECT id, display_name, status FROM profiles WHERE id = ? LIMIT 1').get(profileId)
+    if (!row) return { ok: false, error: 'profile_not_found', profile_id: profileId }
+    if (params?.confirmed !== true) {
+      const what = {
+        suspend: 'pause access to this account (the profile shows as suspended and the account is told how to lift it)',
+        reactivate: 'lift the suspension and tell the account it is active again',
+        ban: "block this user's login through the owner blocklist and suspend the profile",
+        unban: "remove this user's emails from the owner blocklist (the profile stays suspended until reactivated)",
+      }[action]
+      return { confirmation_required: true, action, profile_id: profileId, display_name: row.display_name, status_now: row.status ?? 'active', message: `This will ${what}. Ask the admin to confirm, then call again with confirmed:true.` }
+    }
+    const by = anyaCallerIdentity(context) ?? 'admin'
+    const { suspendProfile, reactivateProfile, banProfileUser, unbanProfileUser } = await import('./billing/accountStatus.js')
+    switch (action) {
+      case 'suspend': return suspendProfile(context.db, { profileId, reason: params?.reason || 'admin_suspend', suspendedBy: by })
+      case 'reactivate': return reactivateProfile(context.db, { profileId, reactivatedBy: by })
+      case 'ban': return banProfileUser(context.db, { profileId, reason: params?.reason || 'owner_ban', bannedBy: by })
+      case 'unban': return unbanProfileUser(context.db, { profileId, unbannedBy: by })
+      default: return { ok: false, error: 'unknown_action' }
+    }
+  },
+})

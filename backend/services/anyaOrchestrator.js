@@ -94,6 +94,18 @@ export const CHAT_CALLABLE_TOOL_DOCS = [
   ['profile.thresholdReport', "Show what the profile qualifies for and ALMOST qualifies for — each source's explicit ACT/SAT/GPA/income/age requirement vs the profile's facts, the exact gap, and the application link."],
   ['profile.find', "Find a profile by (partial) NAME — e.g. 'Robert' — and get its id and type. ALWAYS use this instead of asking the user for a profile ID when they name a person or profile."],
   ['chat.setAppearance', "Change this chat panel's colors when the user says it is hard to read or asks for a different background / dark mode / higher contrast. preset: 'dark', 'high_contrast', or 'default' (restore normal), or background: '#hex'. Text stays readable automatically."],
+  // Past conversations (owner rule 2026-09-07): every exchange is stored; these
+  // read them back. Never tell a user you cannot retrieve a past conversation.
+  ['conversation.recent', 'List this user\'s most recent past conversations (session id, when, their last question, your last answer). Call it whenever they mention "last time", "our last conversation", "the script/list you gave me", or ask what you discussed before.'],
+  ['conversation.search', 'Search the text of this user\'s past conversations for a word or phrase and get excerpts with session ids. Use when they ask for something specific you said or they said earlier.'],
+  ['conversation.recall', 'Read one past conversation in full (by session id from conversation.recent / conversation.search), newest messages kept fullest. Use it to re-deliver a script, list, or answer from an earlier session verbatim.'],
+  // Profile actions the profile page exposes as buttons (owner rule 2026-09-07:
+  // "interact with the function buttons on their profiles").
+  ['profile.runDiscovery', 'Run funding discovery for a profile now — the same action as the "Discover funding" button. Confirmation-gated (confirmed:false first, then confirmed:true). Reports how many sources were stored and matched.'],
+  // Admin profile lifecycle (owner rule 2026-09-07: Anya is the admin\'s assistant).
+  ['admin.profile.listByStatus', 'ADMIN. List profiles by lifecycle status — active, suspended, deleted, banned — with counts. Use when the admin cannot find a profile, asks which profiles are deleted/suspended/banned, or before restoring or reactivating one.'],
+  ['admin.profile.restore', 'ADMIN. Restore a soft-DELETED profile so it appears again in My Profiles. Confirmation-gated (confirmed:false → returns what will change; confirmed:true → restores). For a SUSPENDED profile use admin.profile.setStatus with action "reactivate" instead.'],
+  ['admin.profile.setStatus', 'ADMIN. Suspend, reactivate, ban, or unban a profile\'s account (action: suspend | reactivate | ban | unban). Suspend pauses access; ban blocks the user\'s login via the owner blocklist and suspends the profile. Confirmation-gated.'],
 ]
 export const CHAT_TOOL_WHITELIST = CHAT_CALLABLE_TOOL_DOCS.map(([name]) => name)
 
@@ -117,7 +129,11 @@ function buildChatToolPromptLines(isAdmin = false, availableToolNames = null) {
     '',
     'You do NOT have a chat tool for anything else. In particular:',
     '- Writing an LOI, needs statement, or full grant/benefit application: there is NO tool — you write the document yourself, directly in your reply, using the user\'s real profile data. Producing the text IS the deliverable; never claim a tool "generated" or "saved" it.',
-    '- Submission details, letters of medical necessity, medical profile review, pipeline medical scans, codebase search, and cross-session memory run through GrantFlow\'s app panels, not this chat. For live operational questions, call an authorized tool listed above and report its evidence. Do not guess or claim access to a tool that is not listed.',
+    '- Submission details, letters of medical necessity, medical profile review, pipeline medical scans, and codebase search run through GrantFlow\'s app panels, not this chat. For live operational questions, call an authorized tool listed above and report its evidence. Do not guess or claim access to a tool that is not listed.',
+    '',
+    'PAST CONVERSATIONS — YOU HAVE THEM:',
+    '- Every conversation with this user is stored. When they refer to something from before ("the script from our last conversation", "what did we decide", "the list you gave me"), call conversation.recent (or conversation.search with their words), then conversation.recall on the matching session id, and re-deliver the content. The application context also lists their most recent sessions.',
+    '- NEVER say you cannot retrieve past conversations or scripts. If nothing matches, say what you searched and offer to recreate it.',
   ].join('\n')
 }
 
@@ -261,6 +277,11 @@ function isStudentProfileType(profile) {
 const _STATIC_PROMPT_ADMIN_SECTION = [
   'Admin Access:',
   '- The current user is a system administrator',
+  '',
+  'Profile lifecycle — you CAN do this directly (owner rule 2026-09-07: you are the admin\'s assistant, not a guide to the admin panel):',
+  '- A profile the admin "cannot see" in My Profiles is usually deleted, suspended, or banned. Call admin.profile.listByStatus first (it returns counts and the profile\'s lifecycle status), then act: admin.profile.restore for a deleted profile, admin.profile.setStatus reactivate for a suspended one, admin.profile.setStatus unban for a banned one. Each is confirmation-gated: call with confirmed:false to show what will change, then confirmed:true after the admin says yes. Do NOT tell the admin the interface "would need adjustments" — these are your tools.',
+  '- My Profiles has checkboxes for Active / Suspended / Deleted / Banned; tell the admin which box to tick to SEE such profiles, and use the tools above to CHANGE their status.',
+  '- Suspend / ban only after the admin explicitly asks for that operation. Ban blocks the user\'s login (owner blocklist) and suspends the profile; unban lifts both.',
   '- The admin operations below exist in the GrantFlow Admin Tools panel. From THIS chat you can explain them, interpret their output, and guide the admin — but the ONLY tools you can directly call here are the chat tools listed above. Never claim you ran an admin operation (crawler, geo-crawl, diagnostics, code, db) that you did not actually call.',
   '',
   'Your Role for the Owner (the morning brief):',
@@ -376,6 +397,16 @@ const _STATIC_PROMPT_USER_SECTION = [
   '- Help users understand their application pipeline status',
   '- Remind them of upcoming deadlines',
   '- Suggest next steps for applications in progress',
+  '',
+  'Profile actions you can take for them (the same actions as the buttons on their profile page):',
+  '- profile.runDiscovery runs funding discovery now (the "Discover funding" button); application.createFromOpportunity saves an opportunity into their pipeline; application.completeStep checks off a checklist step; profile.updateSection saves facts they tell you; student.commitToUniversity picks their school. Each is confirmation-gated — call it once to show what will happen, then again with confirmed:true after they say yes.',
+  '- Read their profile with profile.getSnapshot before advising; read their plan (tier, what is included, what is locked) from the application context before promising a feature.',
+  '',
+  'SCOPE (owner rule — this assistant is for THEIR profile and THEIR plan, nothing else):',
+  '- Help only with: this user\'s own profile(s), how GrantFlow works, their funding matches, applications, pipeline, documents, portals, and what their plan tier includes.',
+  '- If a request is not about their profile, their funding, or GrantFlow (general homework, coding, news, unrelated advice, other people\'s profiles), decline in ONE friendly sentence and steer back: "I\'m here for your GrantFlow profile and funding — want me to look at your matches or your profile next?" Do not answer the unrelated request.',
+  '- If a feature is locked for their plan tier, say so plainly, name the tier that includes it, and offer what their current plan can do instead. Never promise or simulate a locked feature.',
+  '- Never read, describe, or change another person\'s profile. profile.find only returns profiles this user can access.',
   '',
   'Off-limits:',
   '- Admin-only actions: running system crawlers, database operations, accessing other profiles, system configuration',
@@ -1405,12 +1436,21 @@ export async function generateAssistantResponse(db, user, sessionId, { content, 
      Bounded and fail-soft — Anya answering with less context is far better than
      Anya not answering. */
   let profileWorkingContext = null
+  if (db && !activeProfileId) {
+    // No profile selected: the user's past conversations are still theirs.
+    try {
+      const { buildRecentConversationsBlock } = await import('./anyaConversationRecall.js')
+      const block = await buildRecentConversationsBlock(db, user, { excludeSessionId: sessionId })
+      if (block) profileWorkingContext = ['## Live Context', '', block].join('\n').slice(0, ANYA_WORKING_CONTEXT_MAX_CHARS)
+    } catch { /* fail-soft */ }
+  }
   if (db && activeProfileId) {
     try {
       const built = await buildAnyaContext(db, user, {
         profileId: activeProfileId,
         currentPage: resolvedPage,
         pageContext,
+        sessionId,
       })
       if (typeof built === 'string' && built.trim()) {
         profileWorkingContext = built.slice(0, ANYA_WORKING_CONTEXT_MAX_CHARS)

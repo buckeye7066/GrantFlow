@@ -610,7 +610,16 @@ router.get('/', listProfilesLimiter, async (req, res) => {
     const user = req.user ?? { role: 'guest' }
     let isAdmin = req.ctx?.isAdmin === true ? true : await isAdminUserWithDb(req.db, user)
     const includeSummary = req.query.summary === 'true'
-    const includeDeleted = req.query.includeDeleted === 'true'
+    // Lifecycle filter (owner rule 2026-09-07): `status=active,suspended,deleted,banned`
+    // (CSV) selects which lifecycle buckets to return; absent → active only.
+    // `includeDeleted=true` is the legacy spelling of status=active,deleted.
+    const { statusFilterSql, parseStatusFilter } = await import('../services/profileLifecycle.js')
+    const requestedStatuses = parseStatusFilter(req.query.status)
+    const includeDeleted = req.query.includeDeleted === 'true' || requestedStatuses.includes('deleted')
+    const lifecycleStatuses = requestedStatuses.length > 0
+      ? requestedStatuses
+      : (includeDeleted ? ['active', 'deleted'] : [])
+    const lifecycleWhere = ` AND ${statusFilterSql(lifecycleStatuses, 'p')}`
     // Hide Amy's synthetic crawler-training profiles (created_by 'agent:amy') from
     // the owner-facing profile list — they are not real applicants and reading
     // "Amy Synthetic — College Student #3" in the list makes prod look like
@@ -667,7 +676,7 @@ router.get('/', listProfilesLimiter, async (req, res) => {
       if (idList.length === 0) return res.json([])
 
       const placeholders = idList.map(() => '?').join(', ')
-      const whereDeleted = includeDeleted ? '' : " AND (p.status IS NULL OR p.status <> 'deleted')"
+      const whereDeleted = lifecycleWhere
 
       const rows = await req.db
         .prepare(
@@ -697,7 +706,7 @@ router.get('/', listProfilesLimiter, async (req, res) => {
       }
 
       const placeholders = ids.map(() => '?').join(', ')
-      const whereDeleted = includeDeleted ? '' : " AND (p.status IS NULL OR p.status <> 'deleted')"
+      const whereDeleted = lifecycleWhere
 
       // Get all accessible profiles (with pagination)
       const rows = await req.db
@@ -720,7 +729,7 @@ router.get('/', listProfilesLimiter, async (req, res) => {
     // boolean `includeDeleted`; no user-supplied values flow into the
     // string, so the template-literal interpolation below is safe. The
     // `safeAdminWhere` name makes that visible to the auditor.
-    let safeAdminWhere = includeDeleted ? '' : "WHERE (p.status IS NULL OR p.status <> 'deleted')"
+    let safeAdminWhere = `WHERE ${statusFilterSql(lifecycleStatuses, 'p')}`
     if (!includeSynthetic) {
       safeAdminWhere = safeAdminWhere
         ? `${safeAdminWhere} AND COALESCE(p.created_by, '') <> 'agent:amy'`

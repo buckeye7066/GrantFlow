@@ -1,7 +1,7 @@
 import React, { useState, useMemo } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
-import { listProfiles, deleteProfile, hardDeleteProfileAdmin, restoreProfileAccessAdmin } from "@/api/profiles";
+import { listProfiles, deleteProfile, hardDeleteProfileAdmin, restoreProfileAccessAdmin, reactivateProfileAdmin } from "@/api/profiles";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -38,7 +38,10 @@ export default function MyProfiles() {
   const isAdmin = normalizeUserAdmin(user);
 
   const [viewMode, setViewMode] = useState(() => (isAdmin ? "all" : "mine"));
-  const [includeDeleted, setIncludeDeleted] = useState(false);
+  // Lifecycle filter (owner rule 2026-09-07): which buckets an admin sees.
+  const [lifecycle, setLifecycle] = useState({ active: true, suspended: false, deleted: false, banned: false });
+  const lifecycleParam = Object.entries(lifecycle).filter(([, on]) => on).map(([k]) => k).join(",");
+  const toggleLifecycle = (key) => (v) => setLifecycle((prev) => ({ ...prev, [key]: Boolean(v) }));
   
   // Fetch profiles with summary data
   const { 
@@ -46,13 +49,13 @@ export default function MyProfiles() {
     isLoading, 
     error 
   } = useQuery({
-    queryKey: ['profiles', 'summary', viewMode, includeDeleted],
+    queryKey: ['profiles', 'summary', viewMode, lifecycleParam],
     queryFn: () => {
       const mode = isAdmin ? viewMode : "mine";
       return listProfiles({
         summary: true,
         ...(mode === "mine" ? { scope: "mine" } : {}),
-        ...(includeDeleted ? { includeDeleted: true } : {}),
+        ...(isAdmin && lifecycleParam && lifecycleParam !== "active" ? { status: lifecycleParam } : {}),
       });
     },
   });
@@ -159,6 +162,25 @@ export default function MyProfiles() {
     setHardDeleteReason("orphan_cleanup");
   };
 
+  const reactivateMutation = useMutation({
+    mutationFn: async ({ id }) => reactivateProfileAdmin(id),
+    onSuccess: () => {
+      toast({ title: "Profile reactivated", description: "The suspension was lifted; the account is active again." });
+      queryClient.invalidateQueries({ queryKey: ['profiles'] });
+      useAuthStore.getState().refreshProfiles({ reason: 'profile-reactivated', force: true });
+    },
+    onError: (error) => {
+      toast({ title: "Reactivate failed", description: error.message || "Failed to reactivate the profile.", variant: "destructive" });
+    },
+  });
+
+  const handleReactivateProfile = (profile) => {
+    if (!profile?.id) return;
+    const ok = window.confirm(`Reactivate "${profile.display_name || profile.name || profile.id}"?\n\nThis lifts the suspension and notifies the account.`)
+    if (!ok) return;
+    reactivateMutation.mutate({ id: profile.id })
+  }
+
   const handleRestoreProfile = (profile) => {
     if (!profile?.id) return
     const ok = window.confirm(`Restore "${profile.display_name || profile.name || profile.id}"?\n\nThis will clear the deleted status so it appears again.`)
@@ -245,10 +267,20 @@ export default function MyProfiles() {
               </Button>
             </div>
             <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
-              <label className="flex items-center gap-2 text-sm text-slate-700">
-                <Checkbox checked={includeDeleted} onCheckedChange={(v) => setIncludeDeleted(Boolean(v))} />
-                Include deleted
-              </label>
+              <div className="flex flex-wrap items-center gap-3 text-sm text-slate-700" data-testid="profile-lifecycle-filter">
+                <span className="text-xs uppercase tracking-wide text-slate-500">Show</span>
+                {[
+                  ["active", "Active"],
+                  ["suspended", "Suspended"],
+                  ["deleted", "Deleted"],
+                  ["banned", "Banned"],
+                ].map(([key, label]) => (
+                  <label key={key} className="flex items-center gap-2">
+                    <Checkbox checked={lifecycle[key]} onCheckedChange={toggleLifecycle(key)} aria-label={`Show ${label.toLowerCase()} profiles`} />
+                    {label}
+                  </label>
+                ))}
+              </div>
               <Button
                 type="button"
                 variant="outline"
@@ -309,6 +341,7 @@ export default function MyProfiles() {
                   onDelete={handleDeleteProfile}
                   onHardDelete={handleHardDeleteProfile}
                   onRestore={handleRestoreProfile}
+                  onReactivate={handleReactivateProfile}
                 />
               ))}
             </div>
