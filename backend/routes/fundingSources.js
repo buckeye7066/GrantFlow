@@ -30,6 +30,7 @@ import {
 } from '../services/pipelineDismissals.js'
 import { cleanExtractedText } from '../utils/htmlTextHygiene.js'
 import { createLogger } from '../utils/logger.js'
+import { PROFILE_SIGNAL_VERSION } from '../config/profileSignalVersion.js'
 
 const log = createLogger('route:funding-sources')
 const router = express.Router()
@@ -323,6 +324,7 @@ router.get('/profiles/:id/funding-sources', async (req, res) => {
       resource_count: 0,
       scoring_policy_version: null,
       current_scoring_policy_version: NEED_FIRST_SCORING_VERSION,
+      current_signal_version: PROFILE_SIGNAL_VERSION,
       persisted_scoring_policy_versions: {},
       scoring_policy_unknown_count: 0,
       scoring_policy_all_current: false,

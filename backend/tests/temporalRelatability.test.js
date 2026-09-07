@@ -147,10 +147,23 @@ describe('temporalRelatability — the row declares WHEN, the timeline says whet
     expect(ev.verdict).toBe('fit_current')
   })
 
-  it("an institution the profile says NOTHING about is neutral (TSU 'must be admitted' is unknown, not stale)", () => {
-    expect(temporalAnchorConflict(studentSections(), TSU, { now: NOW })).toBeNull()
-    const ev = temporalAnchorEvidence(studentSections(), TSU, { now: NOW })
-    expect(ev?.verdict ?? 'unknown').toBe('unknown')
+  it("'must be admitted to TSU' is ELSEWHERE for a student who declares she is at MTSU (and never named TSU)", () => {
+    const conflict = temporalAnchorConflict(studentSections(), TSU, { now: NOW })
+    expect(conflict).toBeTruthy()
+    expect(conflict.classId).toBe('current_enrollment')
+    expect(conflict.reason).toMatch(/elsewhere/)
+    expect(conflict.reason).toMatch(/Middle Tennessee State University/)
+  })
+
+  it('the same TSU row is NEUTRAL when TSU is a declared target, or when the profile declares no current school', () => {
+    const targeting = studentSections({ education: { target_colleges: ['Tennessee State University'] } })
+    expect(temporalAnchorConflict(targeting, TSU, { now: NOW })).toBeNull()
+    expect(temporalAnchorEvidence(targeting, TSU, { now: NOW }).verdict).toBe('unknown')
+    const noSchool = studentSections({
+      education: { current_institution: '', schools: {} },
+      basic_information: { current_school: '', academic_status: { education_level: 'High School Senior' } },
+    })
+    expect(temporalAnchorConflict(noSchool, TSU, { now: NOW })).toBeNull()
   })
 
   it('an ALUMNI award honors a PAST tie — the declared high school reaches it', () => {

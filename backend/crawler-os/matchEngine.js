@@ -17,6 +17,7 @@ import {
   NEED_FIRST_SCORING_VERSION,
 } from '../services/matching/needFirstScoringAdapter.js';
 import { MATCH_DECISION, OPPORTUNITY_KIND } from './contract.js';
+import { PROFILE_SIGNAL_VERSION } from '../config/profileSignalVersion.js';
 
 export { MATCHER_VERSION };
 export const SCORING_POLICY_VERSION = NEED_FIRST_SCORING_VERSION;
@@ -292,6 +293,7 @@ export function computeMatchDecision(opportunity, thesis = {}, opts = {}) {
       need_first_policy: canonical?.match_explain?.needFirstPolicy ?? null,
       four_truth_proof: fourTruthProof,
       scoring_policy_version: NEED_FIRST_SCORING_VERSION,
+      signal_version: PROFILE_SIGNAL_VERSION,
       canonical_decision: canonical?.decision ?? 'REVIEW',
       canonical_score: score,
       matcher_version: canonical?.matcherVersion ?? MATCHER_VERSION,

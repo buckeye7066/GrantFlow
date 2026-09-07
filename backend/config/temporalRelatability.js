@@ -23,6 +23,11 @@
  *
  *   stale        — the row requires a CURRENT tie and the profile's only tie is
  *                  PAST (provable impossibility; the engine REJECTs)
+ *   elsewhere    — the row requires being enrolled at / entering institution X
+ *                  and the profile DECLARES it is at institution Y, with X
+ *                  named nowhere (not even as a target). "Must be admitted to
+ *                  TSU" for a student who says she is at MTSU (owner rule
+ *                  2026-09-07). A conflict, like stale.
  *   fit_current  — the row's requirement is met by a current tie
  *   fit_past     — the row honors a past tie and the profile has one
  *   fit_origin   — the row honors origin and the profile declares it
@@ -38,6 +43,7 @@
 import {
   buildProfileFactTimeline,
   institutionRelationship,
+  currentInstitutions,
   residenceRelationship,
   hasHeritage,
   parsePlace,
@@ -240,7 +246,17 @@ function judgeAnchor(timeline, anchor) {
   const { classId, requires, subject } = anchor
   if (subject.kind === 'institution') {
     const rel = institutionRelationship(timeline, subject.value)
-    if (!rel) return { fit: 'unknown', relationship: null }
+    if (!rel) {
+      // No tie at all. If the row needs the applicant AT / ENTERING this
+      // school and the profile declares it is at a different one, that is a
+      // declared mismatch: "elsewhere". With no declared current school the
+      // subject is simply unknown.
+      if (requires === REQUIRES.CURRENT && currentInstitutions(timeline).length > 0) {
+        return { fit: 'elsewhere', relationship: null, elsewhere: currentInstitutions(timeline) }
+      }
+      return { fit: 'unknown', relationship: null }
+    }
+    if (rel === FACT_STATUS.PROSPECTIVE) return { fit: 'unknown', relationship: rel }
     if (requires === REQUIRES.PAST_OR_CURRENT) return { fit: rel === FACT_STATUS.PAST ? 'fit_past' : 'fit_current', relationship: rel }
     if (rel === FACT_STATUS.PAST) return { fit: 'stale', relationship: rel }
     return { fit: 'fit_current', relationship: rel }
@@ -281,18 +297,20 @@ const FIT_RANK = Object.freeze({ fit_current: 3, fit_past: 2, fit_origin: 1, unk
 
 /**
  * The verdict for a row against a timeline.
- * @returns {{ verdict: 'stale'|'fit_current'|'fit_past'|'fit_origin'|'unknown', anchors: Array, reason: string|null }|null}
+ * @returns {{ verdict: 'stale'|'elsewhere'|'fit_current'|'fit_past'|'fit_origin'|'unknown', anchors: Array, reason: string|null }|null}
  */
 export function temporalAnchorVerdict(timeline, row) {
   const anchors = detectTemporalAnchors(row)
   if (anchors.length === 0) return null
   const judged = anchors.map((a) => ({ ...a, ...judgeAnchor(timeline, a) }))
-  const stale = judged.find((a) => a.fit === 'stale')
+  const stale = judged.find((a) => a.fit === 'stale') ?? judged.find((a) => a.fit === 'elsewhere')
   if (stale) {
     const cls = TEMPORAL_ANCHOR_CLASSES.find((c) => c.id === stale.classId)
-    const was = stale.relationship === FACT_STATUS.PAST ? 'a PAST tie' : 'a different declared fact'
+    const was = stale.fit === 'elsewhere'
+      ? `elsewhere: the profile declares it is at ${stale.elsewhere.join(' and ')}`
+      : stale.relationship === FACT_STATUS.PAST ? 'a PAST tie' : 'a different declared fact'
     return {
-      verdict: 'stale',
+      verdict: stale.fit,
       anchors: judged,
       reason: `Restricted to ${cls?.label ?? stale.classId} (${describeSubject(stale)}: "${stale.phrase}" in ${stale.field}); the profile's relationship is ${was}`,
     }
@@ -313,8 +331,8 @@ export function temporalAnchorVerdict(timeline, row) {
 export function temporalAnchorConflict(sections, row, { now = new Date() } = {}) {
   const timeline = buildProfileFactTimeline(sections ?? {}, { now })
   const v = temporalAnchorVerdict(timeline, row)
-  if (!v || v.verdict !== 'stale') return null
-  const stale = v.anchors.find((a) => a.fit === 'stale')
+  if (!v || (v.verdict !== 'stale' && v.verdict !== 'elsewhere')) return null
+  const stale = v.anchors.find((a) => a.fit === v.verdict)
   return { reason: v.reason, classId: stale.classId, phrase: stale.phrase, field: stale.field, subject: describeSubject(stale) }
 }
 

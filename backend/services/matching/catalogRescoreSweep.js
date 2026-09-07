@@ -57,6 +57,7 @@ import { isFundableOpportunity } from '../../config/fundingResultFilters.js'
 import { SCORE_SCALE_ID } from '../../config/matchThresholds.js'
 import { createLogger } from '../../utils/logger.js'
 import { NEED_FIRST_SCORING_VERSION } from './needFirstScoringAdapter.js'
+import { PROFILE_SIGNAL_VERSION } from '../../config/profileSignalVersion.js'
 
 const log = createLogger('catalog-rescore')
 
@@ -579,6 +580,7 @@ export async function runCatalogRescoreSweep(db, opts = {}) {
             json(explain, {
               score_scale_id: SCORE_SCALE_ID,
               scoring_policy_version: NEED_FIRST_SCORING_VERSION,
+              signal_version: PROFILE_SIGNAL_VERSION,
               matcher_version: decision?.matcherVersion ?? null,
             }),
             null, 'catalog_rescore', decision?.evaluatedAt ?? evaluatedAt,

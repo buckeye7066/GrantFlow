@@ -25,13 +25,15 @@
  */
 
 import { deriveStageOfLife } from './profileDerivedFacts.js'
-import { cleanInstitutionName } from './profileInstitutions.js'
+import { cleanInstitutionName, resolveAspirationalInstitutions } from './profileInstitutions.js'
 
 export const FACT_STATUS = Object.freeze({
   CURRENT: 'current',
   ENTERING: 'entering',
   PAST: 'past',
   ORIGIN: 'origin',
+  /** Named as a target / applied to, not attended: an aspiration, never a tie. */
+  PROSPECTIVE: 'prospective',
 })
 
 /** A status text that says the relationship is OVER. */
@@ -322,6 +324,13 @@ export function buildProfileFactTimeline(sections = {}, { now = new Date() } = {
       institutions.push({ name, kind, status: entry.status, evidence: field.id })
     }
   }
+  // Aspirations (target colleges, applications) are recorded so an award for
+  // students ENTERING one of them is judged neutral rather than "elsewhere":
+  // the profile may well enroll there. They never satisfy a current tie.
+  for (const name of resolveAspirationalInstitutions(s)) {
+    if (institutions.some((i) => sameInstitutionName(i.name, name))) continue
+    institutions.push({ name, kind: 'college', status: FACT_STATUS.PROSPECTIVE, evidence: 'config/profileInstitutions (aspiration)' })
+  }
   const residences = []
   let birthplace = null
   for (const field of TIMELINE_PLACE_FIELDS) {
@@ -353,7 +362,15 @@ export function institutionRelationship(timeline, name) {
   if (hits.length === 0) return null
   if (hits.some((h) => h.status === FACT_STATUS.CURRENT)) return FACT_STATUS.CURRENT
   if (hits.some((h) => h.status === FACT_STATUS.ENTERING)) return FACT_STATUS.ENTERING
-  return FACT_STATUS.PAST
+  if (hits.some((h) => h.status === FACT_STATUS.PAST)) return FACT_STATUS.PAST
+  return FACT_STATUS.PROSPECTIVE
+}
+
+/** The institution(s) the profile is AT or ENTERING right now (declared). */
+export function currentInstitutions(timeline) {
+  return (timeline?.institutions ?? [])
+    .filter((i) => i.status === FACT_STATUS.CURRENT || i.status === FACT_STATUS.ENTERING)
+    .map((i) => i.name)
 }
 
 /** Does a residence entry cover a parsed place (state must agree; city/county when named)? */
@@ -387,6 +404,7 @@ export default {
   TIMELINE_HERITAGE_FIELDS,
   buildProfileFactTimeline,
   institutionRelationship,
+  currentInstitutions,
   residenceRelationship,
   hasHeritage,
   parsePlace,

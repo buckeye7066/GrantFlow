@@ -10,6 +10,7 @@ import {
   staleMatchExplainSql,
 } from '../services/matching/matchExplainPersistence.js'
 import { SCORE_SCALE_ID } from '../config/matchThresholds.js'
+import { PROFILE_SIGNAL_VERSION } from '../config/profileSignalVersion.js'
 
 describe('buildPersistedMatchExplain', () => {
   it('merges engine policy with linker gate provenance', () => {
@@ -64,11 +65,11 @@ describe('isStaleMatchExplain', () => {
   it('accepts a real policy string as current WHEN the explain also carries evidence', () => {
     expect(isStaleMatchExplain({
       gate: 'attendance',
-      scoring_policy_version: 'need_first_v2',
+      scoring_policy_version: 'need_first_v2', signal_version: PROFILE_SIGNAL_VERSION,
       matchedSignals: ['geo:state'],
     })).toBe(false)
     expect(isStaleMatchExplain(JSON.stringify({
-      scoreBreakdown: { scoring_policy_version: 'need_first_v2' },
+      signal_version: PROFILE_SIGNAL_VERSION, scoreBreakdown: { scoring_policy_version: 'need_first_v2' },
       matched_needs: ['housing'],
     }))).toBe(false)
   })
@@ -84,7 +85,7 @@ describe('isStaleMatchExplain', () => {
     expect(isStaleMatchExplain({
       gate: 'recorded_discovery_provenance',
       source: 'web_search',
-      scoring_policy_version: 'need_first_v2',
+      scoring_policy_version: 'need_first_v2', signal_version: PROFILE_SIGNAL_VERSION,
       dataPointEvidence: { bonus_credit: 0, total_credit: 0 },
       scoreBreakdown: { total: 24 },
     })).toBe(true)
@@ -95,7 +96,7 @@ describe('isStaleMatchExplain', () => {
     // the keys, so re-scoring a genuinely unmatched pair does not queue it
     // again on the next boot.
     expect(isStaleMatchExplain({
-      scoring_policy_version: 'need_first_v2',
+      scoring_policy_version: 'need_first_v2', signal_version: PROFILE_SIGNAL_VERSION,
       matchedSignals: [],
       matchedNeeds: [],
     })).toBe(false)
@@ -103,7 +104,7 @@ describe('isStaleMatchExplain', () => {
 
   it('reads BOTH persisted shapes as evidence', () => {
     for (const key of ['matchedSignals', 'matchedNeeds', 'matched_profile_facts', 'matched_location', 'matched_needs']) {
-      expect(isStaleMatchExplain({ scoring_policy_version: 'need_first_v2', [key]: [] })).toBe(false)
+      expect(isStaleMatchExplain({ scoring_policy_version: 'need_first_v2', signal_version: PROFILE_SIGNAL_VERSION, [key]: [] })).toBe(false)
     }
   })
 })

@@ -141,7 +141,7 @@ export function pointerGeoEvidence(row) {
   // even when no present-day geography lines up.
   const temporal = explain.temporal_anchor && typeof explain.temporal_anchor === 'object' ? explain.temporal_anchor : null
   const temporalVerdict = lower(temporal?.verdict)
-  if (temporalVerdict === 'stale') return false
+  if (temporalVerdict === 'stale' || temporalVerdict === 'elsewhere') return false
   if (temporalVerdict === 'fit_current' || temporalVerdict === 'fit_past' || temporalVerdict === 'fit_origin') return true
   const signals = [...asArray(explain.matchedSignals), ...asArray(explain.matched_signals)].map(lower)
   if (signals.some((signal) => signal.startsWith('geo:'))) return true
@@ -181,12 +181,19 @@ export function pointerTruthVerdict(row) {
   const url = row?.url ?? row?.actionable_url ?? row?.application_url ?? row?.apply_url ??
     row?.source_url ?? row?.evidence_url ?? row?.info_url ?? null
 
+  // A temporal anchor the engine judged STALE or ELSEWHERE is an eligibility
+  // statement the row's own text made ("entering <college>", "must be
+  // admitted to <university>") that the profile cannot meet, so the applicant
+  // does not qualify whatever else matched (owner rule 2026-09-07).
+  const temporalVerdict = lower(explain.temporal_anchor?.verdict)
+  const temporalDisqualifies = temporalVerdict === 'stale' || temporalVerdict === 'elsewhere'
   const legs = {
     real: Boolean(url) && !DEAD_REALITY.has(lower(row?.reality_status)),
     relatable: pointerGeoEvidence(row),
     meets_profile_need: pointerMatchedNeeds(row).length > 0,
     profile_qualifies: decision !== 'reject' &&
       !NEGATIVE_ELIGIBILITY.has(eligibility) &&
+      !temporalDisqualifies &&
       pointerProfileEvidence(row),
   }
   const failed = Object.entries(legs).filter(([, passed]) => !passed).map(([name]) => name)
