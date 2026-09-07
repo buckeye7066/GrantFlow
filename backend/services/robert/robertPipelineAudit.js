@@ -316,6 +316,7 @@ const GRANT_ROW_COLUMNS = Object.freeze([
   ['title', 'grant_title'], ['funder', 'funder'], ['status', 'grant_status'], ['deadline', 'grant_deadline'],
   ['application_url', 'grant_application_url'], ['url', 'grant_url'], ['amount_requested', 'amount_requested'],
   ['match_score', 'match_score'], ['match_decision', 'match_decision'], ['updated_at', 'updated_at'],
+  ['eligibility_status', 'eligibility_status'], ['ineligibility_reasons', 'ineligibility_reasons'],
 ])
 
 /** `funding_opportunities` columns the gates read — [column, alias]. */

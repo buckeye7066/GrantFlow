@@ -54,6 +54,12 @@ const ROWS = [
   // the other college nowhere ("elsewhere"). Every structural gate above would
   // keep it (student-eligible, education need, real apply URL).
   { id: 'cscc', t: "Principal's Scholarship for graduating seniors entering Cleveland State Community College", s: 'Cleveland State Community College', ent: ['student'], cats: ['education'], url: 'https://clevelandstatecc.edu/scholarships/apply', remove: 'engine' },
+  // STALE LABEL — passes every gate today but still wears the 2026-09-05
+  // `applicant_type:pass` label an earlier pass wrote → label CLEARED.
+  { id: 'stale', t: 'Tennessee Student Assistance Award', s: 'Tennessee Student Assistance Corporation', ent: ['student'], cats: ['education'], url: 'https://www.tn.gov/collegepays/tsaa/apply', keep: true, status: 'submitted', elig: 'ineligible', reasons: ['strict_pipeline:qualifies:applicant_type:pass', 'strict_pipeline:qualifies:qualifies:applicant_type:pass'] },
+  // HAMILTON EVIDENCE LABEL — passes every gate, but the link-verification tag
+  // is Hamilton's domain, not this sweep's → label KEPT.
+  { id: 'unverified', t: 'Federal Supplemental Educational Opportunity Grant', s: 'Federal Student Aid', ent: ['student'], cats: ['education'], url: 'https://studentaid.gov/fseog/apply', keep: true, status: 'submitted', elig: 'ineligible', reasons: ['strict_pipeline:real:real:link_not_positively_verified:unknown'] },
 ]
 
 function seed(rows = ROWS, { declareNeeds = true } = {}) {
@@ -105,11 +111,11 @@ function seed(rows = ROWS, { declareNeeds = true } = {}) {
     (id, title, sponsor, entity_types_allowed, categories, source, source_url, application_url, is_active)
     VALUES (@id, @title, @sponsor, @ent, @cats, 'test_lane', @url, @url, 1)`)
   const g = sqlite.prepare(`INSERT INTO grants
-    (id, profile_id, funding_opportunity_id, title, funder, status, updated_at)
-    VALUES (?, ?, ?, ?, ?, ?, '2026-08-20T00:00:00Z')`)
+    (id, profile_id, funding_opportunity_id, title, funder, status, eligibility_status, ineligibility_reasons, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, '2026-08-20T00:00:00Z')`)
   for (const r of rows) {
     fo.run({ id: `fo-${r.id}`, title: r.t, sponsor: r.s, ent: JSON.stringify(r.ent), cats: JSON.stringify(r.cats ?? []), url: r.url })
-    g.run(`g-${r.id}`, PROFILE_ID, `fo-${r.id}`, r.t, r.s, r.status ?? 'discovered')
+    g.run(`g-${r.id}`, PROFILE_ID, `fo-${r.id}`, r.t, r.s, r.status ?? 'discovered', r.elig ?? null, r.reasons ? JSON.stringify(r.reasons) : null)
   }
   return { sqlite, db: wrapSqlite(sqlite) }
 }
@@ -145,7 +151,7 @@ describe('enforcePipelinePrecision — the boot net for the three conjuncts', ()
       expect(remaining, `"${r.t}" must survive`).toContain(`g-${r.id}`)
     }
     expect(result.removed).toBe(5)
-    expect(result.kept).toBe(2)
+    expect(result.kept).toBe(4)
   })
 
   it('RE-LABELS a protected (submitted) failure and never deletes it', () => {
@@ -177,11 +183,22 @@ describe('enforcePipelinePrecision — the boot net for the three conjuncts', ()
     expect(String(tombstone?.reason)).toMatch(/^pipeline_precision:engine:/)
   })
 
+  it('CLEARS a stale matching-policy label on a row that passes every gate, and KEEPS a Hamilton link-evidence label', () => {
+    expect(result.cleared).toBe(1)
+    const stale = sqlite.prepare('SELECT status, eligibility_status, ineligibility_reasons FROM grants WHERE id = ?').get('g-stale')
+    expect(stale.status).toBe('submitted')
+    expect(stale.eligibility_status).not.toBe('ineligible')
+    expect(JSON.parse(stale.ineligibility_reasons)).toEqual([])
+    const unverified = sqlite.prepare('SELECT eligibility_status, ineligibility_reasons FROM grants WHERE id = ?').get('g-unverified')
+    expect(unverified.eligibility_status).toBe('ineligible')
+    expect(JSON.parse(unverified.ineligibility_reasons)).toEqual(['strict_pipeline:real:real:link_not_positively_verified:unknown'])
+  })
+
   it('is idempotent — a second boot removes nothing and re-labels nothing new', async () => {
     const again = await enforcePipelinePrecision(db)
     expect(again.ok).toBe(true)
     expect(again.removed).toBe(0)
-    expect(again.scanned).toBe(3) // pell + silent + the re-labeled HUD row
+    expect(again.scanned).toBe(5) // pell + silent + stale + unverified + the re-labeled HUD row
     expect(again.relabeled).toBe(1) // the protected row still fails; the tag is appended once
     const hud = sqlite.prepare('SELECT ineligibility_reasons FROM grants WHERE id = ?').get('g-hud')
     expect(JSON.parse(hud.ineligibility_reasons).length).toBe(1)
