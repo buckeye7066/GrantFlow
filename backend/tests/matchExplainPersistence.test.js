@@ -61,14 +61,50 @@ describe('isStaleMatchExplain', () => {
     expect(isStaleMatchExplain({ scoring_policy_version: '' })).toBe(true)
   })
 
-  it('accepts a real policy string as current', () => {
+  it('accepts a real policy string as current WHEN the explain also carries evidence', () => {
     expect(isStaleMatchExplain({
       gate: 'attendance',
       scoring_policy_version: 'need_first_v2',
+      matchedSignals: ['geo:state'],
     })).toBe(false)
     expect(isStaleMatchExplain(JSON.stringify({
       scoreBreakdown: { scoring_policy_version: 'need_first_v2' },
+      matched_needs: ['housing'],
     }))).toBe(false)
+  })
+
+  it('an explain with a policy but NO match evidence is stale (2026-09-06)', () => {
+    // The display gates read the per-pair evidence keys; an explain that lost
+    // them reads as unproven even when the engine can prove the pair on the
+    // spot. Real case: "Bradley-Cleveland Community Services Agency" — the
+    // applicant's OWN county agency — stored as
+    // {gate, source, needFirstPolicy, scoring_policy_version, dataPointEvidence,
+    //  scoreBreakdown}, while a fresh score returns
+    // matchedSignals ["geo:city","keywords","needs"] and 17 matched data points.
+    expect(isStaleMatchExplain({
+      gate: 'recorded_discovery_provenance',
+      source: 'web_search',
+      scoring_policy_version: 'need_first_v2',
+      dataPointEvidence: { bonus_credit: 0, total_credit: 0 },
+      scoreBreakdown: { total: 24 },
+    })).toBe(true)
+  })
+
+  it('EMPTY evidence still counts as evidence, so a refreshed row converges', () => {
+    // Key ABSENCE is the test, never emptiness: a fresh write always carries
+    // the keys, so re-scoring a genuinely unmatched pair does not queue it
+    // again on the next boot.
+    expect(isStaleMatchExplain({
+      scoring_policy_version: 'need_first_v2',
+      matchedSignals: [],
+      matchedNeeds: [],
+    })).toBe(false)
+  })
+
+  it('reads BOTH persisted shapes as evidence', () => {
+    for (const key of ['matchedSignals', 'matchedNeeds', 'matched_profile_facts', 'matched_location', 'matched_needs']) {
+      expect(isStaleMatchExplain({ scoring_policy_version: 'need_first_v2', [key]: [] })).toBe(false)
+    }
   })
 })
 

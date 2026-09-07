@@ -143,10 +143,16 @@ describe('runStaleMatchExplainRefresh', () => {
     expect(after.match_explain_json).toBe(before.match_explain_json)
   })
 
-  it('skips rows that already carry scoring_policy_version', async () => {
+  it('skips rows that already carry scoring_policy_version AND match evidence', async () => {
     const raw = makeDb()
     seedPair(raw, {
-      explain: { gate: 'attendance', scoring_policy_version: 'need_first_v2' },
+      explain: {
+        gate: 'attendance',
+        scoring_policy_version: 'need_first_v2',
+        // Evidence keys are load-bearing since the pointer gates read them;
+        // an explain carrying a policy but no evidence is stale (2026-09-06).
+        matchedSignals: ['geo:state'],
+      },
     })
     const res = await runStaleMatchExplainRefresh(wrap(raw), {
       deps: {

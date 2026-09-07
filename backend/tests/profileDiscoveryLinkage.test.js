@@ -110,6 +110,33 @@ const MTSU_AID = {
   application_url: 'https://www.mtsu.edu/financial-aid/',
   is_active: 1, profile_id: 'p-demo_stem_student',
 }
+/**
+ * The real prod row behind the 2026-09-06 report: an OTHER school's aid portal
+ * that reached a Tennessee student because a crawl run for her returned it.
+ * bradley.edu is Bradley University in Peoria, ILLINOIS — the page is a
+ * transfer scholarship for Illinois Central College students — and the
+ * crawl-stamped `state` reads 'TN', so geography cannot catch it.
+ */
+const BRADLEY_UNIVERSITY_PORTAL = {
+  id: 'row-bradley-university-portal',
+  title: 'Scholarships & Grants - Bradley University',
+  sponsor: 'bradley.edu',
+  state: 'TN', is_national: 0, opportunity_kind: 'school_portal', source: 'web_search',
+  source_url: 'https://www.bradley.edu/admissions/cost/scholarships/',
+  application_url: 'https://www.bradley.edu/admissions/cost/scholarships/',
+  is_active: 1, profile_id: 'p-demo_stem_student',
+}
+/** The same SHAPE for a school the student's own profile names. */
+const MTSU_PORTAL = {
+  id: 'row-mtsu-portal',
+  title: 'Middle Tennessee State University — Scholarships',
+  sponsor: 'Middle Tennessee State University',
+  state: 'TN', is_national: 0, opportunity_kind: 'school_portal', source: 'web_search',
+  source_url: 'https://www.mtsu.edu/financial-aid/scholarships.php',
+  application_url: 'https://www.mtsu.edu/financial-aid/scholarships.php',
+  is_active: 1, profile_id: 'p-demo_stem_student',
+}
+
 /** Provenance naming a profile that no longer exists (3 such rows in prod). */
 const ORPHANED = {
   id: 'row-orphan-provenance',
@@ -271,6 +298,56 @@ describe('enforceProfileDiscoveredCatalogLinkage', () => {
     expect(ids).not.toContain(HARVARD_AID.id)
     expect(ids).toContain(MTSU_AID.id)
     expect(res.aspirationRefused).toBe(1)
+  })
+
+  it('REFUSES a school portal the profile does not NAME, and keeps the one it does', async () => {
+    // A school's own aid portal is institution-scoped: only a student connected
+    // to that school can use it. Provenance is only "a crawl for this profile
+    // returned this page", and geography cannot help — the Peoria row's
+    // crawl-stamped state reads 'TN'.
+    addOpp(db, BRADLEY_UNIVERSITY_PORTAL)
+    addOpp(db, MTSU_PORTAL)
+    const res = await enforceProfileDiscoveredCatalogLinkage(wrap(db))
+    const ids = linkRows(db, 'p-demo_stem_student').map((r) => r.opportunity_id)
+    expect(ids).not.toContain(BRADLEY_UNIVERSITY_PORTAL.id)
+    expect(ids).toContain(MTSU_PORTAL.id)
+    expect(res.institutionUnconnectedRefused).toBe(1)
+  })
+
+  it('composes with the ASPIRATION rule rather than double-counting it', async () => {
+    // Harvard is on this student's target-college list, so the OLDER aspiration
+    // guard refuses its portal before the institution rule is reached. The two
+    // rules therefore never both fire on one row, and the counters stay honest.
+    addOpp(db, {
+      ...BRADLEY_UNIVERSITY_PORTAL,
+      id: 'row-harvard-portal',
+      title: 'Harvard University — Financial Aid',
+      sponsor: 'Harvard University',
+      source_url: 'https://college.harvard.edu/financial-aid',
+      application_url: 'https://college.harvard.edu/financial-aid',
+    })
+    const res = await enforceProfileDiscoveredCatalogLinkage(wrap(db))
+    expect(linkRows(db, 'p-demo_stem_student').map((r) => r.opportunity_id)).not.toContain('row-harvard-portal')
+    expect(res.aspirationRefused).toBe(1)
+    expect(res.institutionUnconnectedRefused).toBe(0)
+  })
+
+  it('CONVERGES: a portal already linked to an unconnected profile is removed', async () => {
+    // The refusal alone cannot reach a row that is already linked — the
+    // candidate query excludes those by design — so the net re-derives this one
+    // refusal from the profile itself and drops the residue.
+    addOpp(db, MTSU_PORTAL)
+    addOpp(db, BRADLEY_UNIVERSITY_PORTAL)
+    const legacy = db.prepare(`INSERT INTO profile_opportunity_matches
+      (id, profile_id, opportunity_id, match_score, match_decision, matcher_version)
+      VALUES (?, ?, ?, ?, 'review', 'profile-discovery-link')`)
+    legacy.run('pd:legacy-mtsu', 'p-demo_stem_student', MTSU_PORTAL.id, 20)
+    legacy.run('pd:legacy-bradley', 'p-demo_stem_student', BRADLEY_UNIVERSITY_PORTAL.id, 26)
+
+    await enforceProfileDiscoveredCatalogLinkage(wrap(db))
+    const ids = linkRows(db, 'p-demo_stem_student').map((r) => r.opportunity_id)
+    expect(ids).not.toContain(BRADLEY_UNIVERSITY_PORTAL.id)
+    expect(ids).toContain(MTSU_PORTAL.id)
   })
 
   it('never links a row to a profile its provenance does NOT name', async () => {

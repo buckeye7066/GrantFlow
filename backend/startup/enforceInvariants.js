@@ -8595,6 +8595,29 @@ export async function enforceInstitutionAidLinkage(db) {
  * Bounded (`PROFILE_DISCOVERY_LINK_LIMIT`, default 500);
  * `ENFORCE_PROFILE_DISCOVERY_LINK=0` for count-only.
  */
+/**
+ * A SCHOOL'S OWN AID PORTAL — an institution-scoped resource whose contract is
+ * "this school's aid, for this school's students". `school_portal` is the
+ * canonical kind for it (config/opportunityKindClasses.POINTER_KINDS).
+ */
+function isSchoolPortalRow(row) {
+  return String(row?.opportunity_kind ?? row?.kind ?? '').trim().toLowerCase() === 'school_portal'
+}
+
+/**
+ * Does the profile NAME the institution behind this row? Attended OR
+ * aspirational — a student may legitimately browse the aid portal of a school
+ * on their own list, which is why this bar is looser than the attendance-only
+ * rule that governs a school's individual AWARDS. Delegates the identity test
+ * to `config/profileInstitutions.opportunitySponsoredByInstitution` (the
+ * whole-name, bidirectional-token rule) so no second matching rule can drift.
+ */
+function institutionNamedByProfile(row, attended, aspirational, sponsoredBy) {
+  if (typeof sponsoredBy !== 'function') return false
+  const own = [...(attended || []), ...(aspirational || [])]
+  return own.some((name) => sponsoredBy(name, row))
+}
+
 export async function enforceProfileDiscoveredCatalogLinkage(db) {
   return runInvariant('profile_discovered_catalog_linkage', async () => {
     const matchCols = await listMatchColumns(db)
@@ -8645,6 +8668,7 @@ export async function enforceProfileDiscoveredCatalogLinkage(db) {
     let linked = 0
     let rejectedByEngine = 0
     let aspirationRefused = 0
+    let institutionUnconnectedRefused = 0
     let orphanProfile = 0
     let unscorable = 0
     const truncated = (candidates?.length ?? 0) >= writeLimit
@@ -8668,6 +8692,28 @@ export async function enforceProfileDiscoveredCatalogLinkage(db) {
       const byAspiration = aspirational.some((s) => opportunitySponsoredByInstitution(s, opp))
       if (byAspiration && !attended.some((s) => opportunitySponsoredByInstitution(s, opp))) {
         aspirationRefused += 1
+        continue
+      }
+
+      // A SCHOOL'S OWN AID PORTAL IS INSTITUTION-SCOPED: only a student
+      // connected to THAT school can use it, so the profile must NAME it
+      // (attended or aspirational — this bar is deliberately looser than the
+      // aspiration rule above, which governs a school's individual AWARDS).
+      //
+      // Provenance alone used to be enough, and provenance is only "a crawl run
+      // for this profile returned this page". Measured on prod 2026-09-06:
+      // BOTH active `school_portal` pointer rows in the fleet were linked to a
+      // profile with no connection to the school — "Scholarships & Grants -
+      // Bradley University" (bradley.edu, Peoria IL, whose page is a transfer
+      // scholarship for Illinois Central College students) reached a Tennessee
+      // student carrying 21 of her own institutions, none of them Bradley.
+      //
+      // GEOGRAPHY CANNOT CATCH THIS: the row's crawl-stamped `state` reads 'TN'
+      // (the #1380 provenance trap), so the engine emits a `geo:state` signal
+      // for an Illinois school. Institution identity is the only honest test
+      // for an institution-scoped resource.
+      if (isSchoolPortalRow(opp) && !institutionNamedByProfile(opp, attended, aspirational, opportunitySponsoredByInstitution)) {
+        institutionUnconnectedRefused += 1
         continue
       }
 
@@ -8729,6 +8775,49 @@ export async function enforceProfileDiscoveredCatalogLinkage(db) {
     // a bound-limited pass can never delete rows it never re-derived, and only
     // for profiles this pass actually re-derived.
     let stale = 0
+    // NARROW convergence arm for the institution rule above.
+    //
+    // It is deliberately NOT a diff against the candidate set: that set excludes
+    // already-linked rows by design, so diffing against it would delete every
+    // link on the next boot (the documented trap). It also cannot iterate
+    // `eligibleByProfile` — a row that is ALREADY linked never becomes a
+    // candidate, so the profiles needing convergence are exactly the ones that
+    // set would miss. Instead it re-derives ONE refusal straight from the match
+    // table, narrowed by a SQL predicate on the kind (never a post-LIMIT JS
+    // filter), so it can neither over-delete nor go unreachable.
+    if (!countOnly) {
+      let portalRows = []
+      try {
+        portalRows = await db.prepare(
+          `SELECT m.id, m.profile_id, fo.title, fo.sponsor, fo.source_url,
+                  fo.application_url, fo.opportunity_kind
+             FROM profile_opportunity_matches m
+             JOIN funding_opportunities fo ON fo.id = m.opportunity_id
+            WHERE m.matcher_version = 'profile-discovery-link'
+              AND LOWER(COALESCE(CAST(fo.opportunity_kind AS TEXT), '')) = 'school_portal'`,
+        ).all()
+      } catch { portalRows = [] }
+      const doomed = []
+      for (const row of portalRows || []) {
+        const profileId = String(row.profile_id)
+        if (!ctxCache.has(profileId)) ctxCache.set(profileId, await _loadProfileContextForInvariant(db, profileId))
+        const ctx = ctxCache.get(profileId)
+        if (!ctx?.sections) continue
+        const attended = resolveAttendedInstitutions(ctx.sections)
+        const aspirational = resolveAspirationalInstitutions(ctx.sections)
+        if (!institutionNamedByProfile(row, attended, aspirational, opportunitySponsoredByInstitution)) {
+          doomed.push(row.id)
+        }
+      }
+      for (let i = 0; i < doomed.length; i += 200) {
+        const slice = doomed.slice(i, i + 200)
+        const ph = slice.map(() => '?').join(', ')
+        try {
+          const res = await db.prepare(`DELETE FROM profile_opportunity_matches WHERE id IN (${ph})`).run(...slice)
+          stale += changesOf(res) || slice.length
+        } catch { /* best-effort */ }
+      }
+    }
     if (!countOnly && !truncated) {
       for (const [profileId, eligible] of eligibleByProfile) {
         try {
@@ -8765,6 +8854,7 @@ export async function enforceProfileDiscoveredCatalogLinkage(db) {
         wouldRepair: wouldLink.length,
         rejectedByEngine,
         aspirationRefused,
+        institutionUnconnectedRefused,
         orphanProfile,
         truncated,
         enforced: false,
@@ -8772,7 +8862,8 @@ export async function enforceProfileDiscoveredCatalogLinkage(db) {
     }
     if (linked > 0 || stale > 0) {
       log.info('linked profiles to the catalog rows discovered FOR them', {
-        linked, stale, scanned, rejectedByEngine, aspirationRefused, orphanProfile, unscorable, examples,
+        linked, stale, scanned, rejectedByEngine, aspirationRefused, institutionUnconnectedRefused,
+        orphanProfile, unscorable, examples,
       })
     }
     return {
@@ -8781,6 +8872,7 @@ export async function enforceProfileDiscoveredCatalogLinkage(db) {
       stale,
       rejectedByEngine,
       aspirationRefused,
+      institutionUnconnectedRefused,
       orphanProfile,
       unscorable,
       truncated,
@@ -10541,26 +10633,54 @@ export async function enforceEngineVersionMatcherLane(db) {
 
     const stranded = (rows || []).filter((row) => ENGINE_VERSION_MATCHER_RX.test(String(row.matcher_version ?? '')))
     const scanned = stranded.reduce((sum, row) => sum + Number(row.n ?? 0), 0)
-    if (stranded.length === 0) return { scanned: 0, repaired: 0, enforced: true }
 
-    // The SAME writer also stripped `four_truth_proof` from these rows' explain
-    // (the canonical engine never writes it; crawler-os's wrapper does), and a
-    // proof cannot be re-manufactured here without re-running the crawler-os
-    // builder with the opportunity and thesis. Re-stamping the lane therefore
-    // makes the row READABLE again but does not by itself make an ACCEPT
-    // recommendable — that returns when the profile's next crawler-os run
-    // re-scores the pair. COUNT AND REPORT IT rather than let the residue be
-    // silent; `acceptsAwaitingProof` is the honest size of what is still owed.
+    // AN ACCEPT WITH NO PROOF IS AN UNRECOMMENDABLE ACCEPT, AND IT IS COUNTED
+    // EVERY BOOT — not only on the boots that also find a stranded lane.
+    //
+    // `qualifiesForDisplay` requires the persisted four-truth proof for every
+    // direct-funding row, and only crawler-os's wrapper builds one; the
+    // canonical engine never does. So any writer that persists an engine
+    // decision straight through — the promotion rescore before it was fixed,
+    // and today the RECALL nets (institution-link and its siblings) — produces
+    // an ACCEPT the read paths can never show. A proof is capture-time evidence
+    // (reality verdict + evidence URL + content hash + capture timestamp) and
+    // the catalog row does NOT carry the hash, so it cannot be re-manufactured
+    // here without a real re-fetch. It returns when the pair is next scored
+    // through crawler-os.
+    //
+    // Measured on prod 2026-09-06 after this net converged: 12 such ACCEPTs,
+    // all `institution-link`, all on Amy synthetic profiles. This census is
+    // what stops that number from growing back in silence — the earlier version
+    // computed it only when a stranded lane existed, so on a clean boot the
+    // debt reported as nothing at all.
     let acceptsAwaitingProof = 0
+    let acceptsAwaitingProofByLane = {}
     try {
-      const row = await db.prepare(
-        `SELECT COUNT(*) AS n FROM profile_opportunity_matches
+      const debtRows = await db.prepare(
+        `SELECT COALESCE(matcher_version, '(none)') AS lane, COUNT(*) AS n
+           FROM profile_opportunity_matches
           WHERE LOWER(COALESCE(match_decision, '')) = 'accept'
-            AND COALESCE(match_explain_json, '') NOT LIKE '%four_truth_proof%'`,
-      ).get()
-      acceptsAwaitingProof = Number(row?.n ?? 0)
+            AND COALESCE(match_explain_json, '') NOT LIKE '%four_truth_proof%'
+          GROUP BY COALESCE(matcher_version, '(none)')`,
+      ).all()
+      for (const row of debtRows || []) {
+        const n = Number(row?.n ?? 0)
+        if (!Number.isFinite(n) || n <= 0) continue
+        acceptsAwaitingProof += n
+        acceptsAwaitingProofByLane[String(row.lane)] = n
+      }
     } catch {
       acceptsAwaitingProof = 0
+      acceptsAwaitingProofByLane = {}
+    }
+    if (acceptsAwaitingProof > 0) {
+      log.warn('ACCEPTs carry no four-truth proof and therefore cannot be recommended', {
+        acceptsAwaitingProof, byLane: acceptsAwaitingProofByLane,
+      })
+    }
+
+    if (stranded.length === 0) {
+      return { scanned: 0, repaired: 0, acceptsAwaitingProof, acceptsAwaitingProofByLane, enforced: true }
     }
 
     let repaired = 0
@@ -10585,6 +10705,7 @@ export async function enforceEngineVersionMatcherLane(db) {
       scanned,
       repaired,
       acceptsAwaitingProof,
+      acceptsAwaitingProofByLane,
       lanes: stranded.map((row) => String(row.matcher_version)),
       enforced: true,
     }

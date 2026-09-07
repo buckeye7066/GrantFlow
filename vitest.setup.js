@@ -23,6 +23,27 @@ process.env.ENABLE_CENSUS_GEO = process.env.ENABLE_CENSUS_GEO ?? "false"
 // explicit escape hatch, which overrides this flag).
 process.env.GRANTFLOW_TEST_RUNNER = process.env.GRANTFLOW_TEST_RUNNER ?? "1"
 
+// NO TEST MAY SPEND A REAL LLM CALL. Same rule as the two flags above, for the
+// one class they did not cover: `utils/aiProviders.invokeJsonWithFallback` and
+// its text twin fall back to Anthropic when OpenAI fails, and
+// `getAnthropicClient()` builds a REAL client from an ambient
+// `ANTHROPIC_API_KEY`. A developer machine that exports provider keys therefore
+// turned "the provider returned invalid JSON" tests into live paid calls whose
+// answer was a real model's — `aiMatchCanonicalAuthority`'s parse-failure case
+// asserted `ai_enhanced === false` and got `true`, because Anthropic answered
+// with perfectly good observations. CI has no keys, so it passed there and
+// failed only locally: a test whose verdict depends on the developer's shell.
+//
+// Credentials are removed BEFORE any test module loads. The suites that
+// exercise provider behaviour set what they need in their own setup, which runs
+// after this file, so they are unaffected. `GRANTFLOW_ALLOW_LIVE_LLM_IN_TESTS`
+// is the deliberate escape hatch, mirroring the live-web one above.
+if (!/^(1|true|yes|on)$/i.test(String(process.env.GRANTFLOW_ALLOW_LIVE_LLM_IN_TESTS ?? ''))) {
+  for (const key of ['ANTHROPIC_API_KEY', 'OPENAI_API_KEY', 'ANYA_OPENAI_MODEL']) {
+    delete process.env[key]
+  }
+}
+
 globalThis.ResizeObserver =
   globalThis.ResizeObserver ??
   class {
