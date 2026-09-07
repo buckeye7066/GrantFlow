@@ -2,7 +2,7 @@
  * hamiltonOwnPortalCoverage.js — a school scholarship covered by an ALREADY
  * SUBMITTED General Application is DONE, not a login to perform.
  *
- * GROUND TRUTH (prod, Anastasia's profile, 2026-09-06): MTSU's scholarship
+ * GROUND TRUTH (prod, one student profile, 2026-09-06): MTSU's scholarship
  * portal states "you can NOT apply individually to scholarships … all are
  * covered by the General Scholarship Application," and that General
  * Application was verified submitted on 2026-08-03 (a live authenticated

@@ -2693,7 +2693,7 @@ async function runAutopilotPathway(db, {
   // is DONE: MTSU's portal states scholarships cannot be applied to
   // individually. Resolve it as covered BEFORE any SSO login, so it never
   // parks — run after run — on Microsoft's Authenticator MFA wall chasing a
-  // login that cannot and need not happen (Anastasia's DREAM Scholarship, 14
+  // login that cannot and need not happen (one student's DREAM Scholarship, 14
   // blocked retries). Never sweeps a FAFSA/state award or a program with its
   // own application system: those own urls are not governed, and silence is
   // never coverage.
