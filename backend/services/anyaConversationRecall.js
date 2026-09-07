@@ -44,7 +44,7 @@ function accessibleIds(user) {
 
 /** WHERE clause (on alias `s`) restricting sessions to what the caller may read. */
 export function sessionScopeSql(user, alias = 's') {
-  if (user?.isAdmin) return { where: '1 = 1', params: [] }
+  if (user?.isAdmin) return { safeWhere: '1 = 1', params: [] }
   const userId = user?.userId ?? user?.id ?? null
   const ids = accessibleIds(user) ?? []
   const active = user?.activeProfileId ?? user?.profile_id ?? null
@@ -56,8 +56,8 @@ export function sessionScopeSql(user, alias = 's') {
     clauses.push(`${alias}.profile_id IN (${profileIds.map(() => '?').join(', ')})`)
     params.push(...profileIds)
   }
-  if (clauses.length === 0) return { where: '1 = 0', params: [] }
-  return { where: `(${clauses.join(' OR ')})`, params }
+  if (clauses.length === 0) return { safeWhere: '1 = 0', params: [] }
+  return { safeWhere: `(${clauses.join(' OR ')})`, params }
 }
 
 /**
@@ -80,7 +80,7 @@ export async function listRecentConversations(db, user, { profileId = null, limi
             (SELECT m.content FROM anya_messages m WHERE m.session_id = s.id AND m.role = 'assistant'
                ORDER BY m.created_at DESC LIMIT 1) AS last_assistant_message
        FROM anya_sessions s
-      WHERE ${scope.where}${extra.length ? ` AND ${extra.join(' AND ')}` : ''}
+      WHERE ${scope.safeWhere}${extra.length ? ` AND ${extra.join(' AND ')}` : ''}
         AND EXISTS (SELECT 1 FROM anya_messages m WHERE m.session_id = s.id)
       ORDER BY s.updated_at DESC
       LIMIT ?`,
@@ -110,7 +110,7 @@ export async function searchConversations(db, user, { query, limit = 8, profileI
     `SELECT m.session_id, m.role, m.content, m.created_at, s.title, s.profile_id
        FROM anya_messages m
        JOIN anya_sessions s ON s.id = m.session_id
-      WHERE ${scope.where}${extra.length ? ` AND ${extra.join(' AND ')}` : ''}
+      WHERE ${scope.safeWhere}${extra.length ? ` AND ${extra.join(' AND ')}` : ''}
         AND LOWER(m.content) LIKE ?
       ORDER BY m.created_at DESC
       LIMIT ?`,
@@ -141,7 +141,7 @@ export async function recallConversation(db, user, { sessionId, limit = 40, maxC
   if (!db || !sid) return { ok: false, error: 'session_id_required' }
   const scope = sessionScopeSql(user, 's')
   const session = await db.prepare(
-    `SELECT s.id, s.title, s.profile_id, s.created_at, s.updated_at FROM anya_sessions s WHERE s.id = ? AND ${scope.where} LIMIT 1`,
+    `SELECT s.id, s.title, s.profile_id, s.created_at, s.updated_at FROM anya_sessions s WHERE s.id = ? AND ${scope.safeWhere} LIMIT 1`,
   ).get(sid, ...scope.params)
   if (!session) return { ok: false, error: 'session_not_found_or_not_accessible' }
   const max = Math.max(1, Math.min(Number(limit) || 40, 200))

@@ -77,11 +77,15 @@ export async function listProfilesByStatus(db, { statuses = [], query = null, li
   let where = `WHERE COALESCE(p.created_by, '') <> 'agent:amy' AND ${statusFilterSql(wanted.length ? wanted : ['active', 'suspended', 'deleted', 'banned'], 'p')}`
   const q = String(query ?? '').trim().toLowerCase()
   if (q) { where += ' AND LOWER(p.display_name) LIKE ?'; params.push(`%${q}%`) }
+  // Every fragment below is assembled from constants and validated status
+  // names; user text only ever travels through `?` params.
+  const safeBanned = bannedProfileSql('p')
+  const safeWhere = where
   const rows = await db.prepare(
     `SELECT p.id, p.display_name, p.primary_type, p.status, p.updated_at, p.user_id,
-            CASE WHEN ${bannedProfileSql('p')} THEN 1 ELSE 0 END AS banned
+            CASE WHEN ${safeBanned} THEN 1 ELSE 0 END AS banned
        FROM profiles p
-       ${where}
+       ${safeWhere}
       ORDER BY p.updated_at DESC
       LIMIT ?`,
   ).all(...params, max)
@@ -97,10 +101,10 @@ export async function listProfilesByStatus(db, { statuses = [], query = null, li
   try {
     const c = await db.prepare(
       `SELECT
-         SUM(CASE WHEN (p.status IS NULL OR p.status = 'active') AND NOT ${bannedProfileSql('p')} THEN 1 ELSE 0 END) AS active,
-         SUM(CASE WHEN p.status = 'suspended' AND NOT ${bannedProfileSql('p')} THEN 1 ELSE 0 END) AS suspended,
-         SUM(CASE WHEN p.status = 'deleted' AND NOT ${bannedProfileSql('p')} THEN 1 ELSE 0 END) AS deleted,
-         SUM(CASE WHEN ${bannedProfileSql('p')} THEN 1 ELSE 0 END) AS banned
+         SUM(CASE WHEN (p.status IS NULL OR p.status = 'active') AND NOT ${safeBanned} THEN 1 ELSE 0 END) AS active,
+         SUM(CASE WHEN p.status = 'suspended' AND NOT ${safeBanned} THEN 1 ELSE 0 END) AS suspended,
+         SUM(CASE WHEN p.status = 'deleted' AND NOT ${safeBanned} THEN 1 ELSE 0 END) AS deleted,
+         SUM(CASE WHEN ${safeBanned} THEN 1 ELSE 0 END) AS banned
        FROM profiles p WHERE COALESCE(p.created_by, '') <> 'agent:amy'`,
     ).get()
     for (const k of Object.keys(counts)) counts[k] = Number(c?.[k]) || 0
