@@ -6,6 +6,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import Database from 'better-sqlite3'
 import { runStaleMatchExplainRefresh } from '../services/matching/staleMatchExplainRefresh.js'
+import { PROFILE_SIGNAL_VERSION } from '../config/profileSignalVersion.js'
 
 function makeDb() {
   const db = new Database(':memory:')
@@ -148,7 +149,7 @@ describe('runStaleMatchExplainRefresh', () => {
     seedPair(raw, {
       explain: {
         gate: 'attendance',
-        scoring_policy_version: 'need_first_v2',
+        scoring_policy_version: 'need_first_v2', signal_version: PROFILE_SIGNAL_VERSION,
         // Evidence keys are load-bearing since the pointer gates read them;
         // an explain carrying a policy but no evidence is stale (2026-09-06).
         matchedSignals: ['geo:state'],

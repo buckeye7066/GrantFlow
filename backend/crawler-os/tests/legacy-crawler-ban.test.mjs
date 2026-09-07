@@ -75,6 +75,14 @@ const ALLOWED_SHARED_IMPORTS = new Set([
   // Amy's amount_recall_miss measure pre-extraction values. Zero imports, zero
   // I/O — verified dependency-free.
   'backend/services/awardAmountExtractor.js',
+  // The ONE profile-signal version stamp. Every persisted match_explain (OS
+  // engine, canonical engine, adapter, rescore sweep) must carry the SAME
+  // PROFILE_SIGNAL_VERSION so isStaleMatchExplain can retire rows scored under
+  // an older need/temporal derivation (the veteran-in-291-rows class). A private
+  // copy inside the OS would drift from the canonical stamp and either never
+  // go stale or always go stale. Pure constants + a pinned derivation hash;
+  // zero imports, zero I/O — verified dependency-free 2026-09-07.
+  'backend/config/profileSignalVersion.js',
   // The ONE text-hygiene choke point (HTML entity decoding + tag stripping),
   // imported by crawler-os/storage.js so text is cleaned AT INGEST rather than
   // at each read surface. A private copy inside the OS is the drift this

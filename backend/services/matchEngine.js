@@ -62,6 +62,7 @@ import { isPointerOpportunityRow } from '../config/linkLifecycleKinds.js'
 import { exceedsIndividualAwardCeiling, statedAwardCeiling } from '../config/individualAwardCeiling.js'
 import { evaluateOpportunityAgainstPreferences } from '../config/aidTypePreferences.js'
 import { stageOfLifeConflictForSections } from '../config/stageOfLifeEligibility.js'
+import { temporalAnchorConflict, temporalAnchorEvidence } from '../config/temporalRelatability.js'
 import { fieldOfStudyConflict } from '../config/fieldOfStudyEligibility.js'
 import {
   fieldOfStudyApplicantConflict,
@@ -3983,6 +3984,26 @@ export function makeDecision(score, profile, opportunity, normalizedProfile = nu
     }
   }
 
+  // TEMPORAL ANCHOR (owner rule 2026-09-07). A row that restricts itself to
+  // students ENTERING or ENROLLED AT an institution, to CURRENT residents of a
+  // place, or to CURRENT high-school seniors is unwinnable when the profile's
+  // only tie to that subject is PAST — the community college the applicant
+  // graduated from in May still offered its "graduating seniors entering
+  // <college>" award in September. Same posture as the stage gate: refuses
+  // ONLY on a provable stale tie declared in the row's own words; an
+  // institution or place the profile says nothing about is neutral; a row
+  // that honors history or origin (alumni, hometown, birthplace, heritage) is
+  // recorded as a positive fit in the explain, never refused here.
+  const temporalConflict = temporalAnchorConflict(fullSections(sections, prof), opp)
+  if (temporalConflict) {
+    reasons.push(temporalConflict.reason)
+    return {
+      decision: 'REJECT',
+      explanation: `${temporalConflict.reason}.`,
+      reasons,
+    }
+  }
+
   // FIELD OF STUDY (2026-08-23). A scholarship whose TITLE restricts itself to a
   // specific vocational field the profile does NOT study is unwinnable — a
   // paramedic cannot receive a "Nursing Scholarship" (Robert 6b3c75ec, whose
@@ -4963,6 +4984,22 @@ export function computeMatchDecision(rawProfile, rawOpportunity, opts = {}) {
   // (it was only ever populated on the REJECT branch). (Mission System 3.)
   const missingEligibilityFields = canonicalMissingEligibilityFields
   match_explain.applicant_type_gate = applicantTypeEval
+  // TEMPORAL ANCHOR evidence for read paths (pointerTruthPolicy's relatable
+  // leg, the result card). A stale tie never reaches here — makeDecision
+  // already REJECTed it — so what lands is a positive fit (current / past /
+  // origin) or an unknown subject. Recorded as a matched signal too, so a row
+  // an applicant qualifies for by history or origin carries visible evidence.
+  try {
+    const temporalEvidence = temporalAnchorEvidence(fullSections(sectionsForScoring, rawProfile), rawOpportunity)
+    if (temporalEvidence) {
+      match_explain.temporal_anchor = temporalEvidence
+      if (/^fit_/.test(String(temporalEvidence.verdict)) && Array.isArray(match_explain.matchedSignals)) {
+        const signal = `temporal:${temporalEvidence.verdict}`
+        if (!match_explain.matchedSignals.includes(signal)) match_explain.matchedSignals.push(signal)
+        if (temporalEvidence.reason) reasons.push(temporalEvidence.reason)
+      }
+    }
+  } catch { /* evidence is additive; never fail a decision over it */ }
 
   // matched_profile_facts: a plain-language list of what specifically about
   // the profile caused this opportunity to surface. Used by Anya, the result

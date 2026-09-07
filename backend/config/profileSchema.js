@@ -104,6 +104,11 @@ export const PROFILE_SCHEMA = {
       state: { type: 'string', default: '', description: '2-letter US state abbreviation (e.g., TN, CA) for eligibility filtering.' },
       zip: { type: 'string', default: '', description: '5-digit ZIP code for local/county/state eligibility and matching.' },
       date_of_birth: { type: 'string', default: '', description: 'Date of birth (YYYY-MM-DD) for age-based eligibility programs.' },
+      // FACT TIMELINE (owner rule 2026-09-07): ORIGIN and PAST place facts a
+      // funder may honor ("natives of", "current or former residents of").
+      // Read by config/profileFactTimeline; `scored: false` (#1067 trap).
+      birthplace: { type: 'string', scored: false, default: '', description: 'City and state of birth, e.g. "Chattanooga, TN". An ORIGIN fact: reaches "born in" / "natives of" awards. NOT scored.' },
+      previous_residences: { type: 'array<string>', scored: false, default: [], description: 'Former residences as "City, ST" or "County County, ST", optionally with years, e.g. "Chattanooga, TN (2008-2015)". PAST facts: reach "current or former residents" awards and make "residents of" a former city stale. NOT scored.' },
       age: { type: 'number|null', default: null, description: 'Age (in years) if DOB is unavailable; used for age-based eligibility.' },
       gender: { type: 'string', default: '', description: 'Gender identity when explicitly provided; used for women/men-focused programs.' },
       profile_category: {
@@ -677,6 +682,14 @@ export const PROFILE_SCHEMA = {
       efc_sai_band: { type: 'string', default: '', description: 'Expected Family Contribution (EFC) / Student Aid Index (SAI) band (e.g., $0, $1-3000, $3001-6000) for need-based targeting.' },
       first_generation_college_student: { type: 'boolean', default: false, description: 'True if the student is the first in their immediate family to attend college; unlocks first-gen scholarships and TRIO programs.' },
       dual_enrollment: { type: 'boolean', default: false, description: 'True if the student is dual-enrolled in high school and college courses simultaneously.' },
+      // FACT TIMELINE (owner rule 2026-09-07): a funder anchors awards to WHEN
+      // a fact was true — alumni of a high school, students ENTERING a college.
+      // The high school attended is a PAST institution once its class has
+      // graduated; nothing else on the profile records it structurally (the
+      // "High School Senior" tag is a stale claim, not a fact). Deliberately
+      // `scored: false` — same deploy-denominator trap as item_needs (#1067).
+      high_school_name: { type: 'string', scored: false, default: '', description: 'Name of the high school attended or attending (e.g. "Cleveland High School"). Read by config/profileFactTimeline: PAST once high_school_graduation_year has passed, CURRENT before. Reaches alumni scholarships. NOT scored.' },
+      high_school_graduation_year: { type: 'number|null', scored: false, default: null, description: 'Year of high school graduation (four digits). Decides whether the high school is a current or past institution. NOT scored.' },
       notes: { type: 'string', format: 'prose', scored: false, default: '', description: 'Additional education context. DRAFTING ONLY; not scored or mined.' },
     },
   },

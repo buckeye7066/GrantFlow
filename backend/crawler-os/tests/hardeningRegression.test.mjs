@@ -115,7 +115,13 @@ test('match engine scores concrete needs before wildcard fallback', () => {
   });
   const match = computeMatchDecision(opp, thesis);
   assert.ok(match.match_explain.score_breakdown.need_component >= 60);
-  assert.deepEqual(match.match_explain.matched_needs.sort(), ['emergency', 'technology_equipment', 'vfd']);
+  // 'vfd' is an APPLICANT TYPE, not a need. It used to appear here because
+  // profileNormalizer read `profile.tags` (where the OS folds applicant types
+  // and keywords) as need categories — the same leak that credited "veteran"
+  // and "individual" as matched needs on 291 prod rows (2026-09-07). Applicant
+  // fit is credited through matched_profile_type; needs stay needs.
+  assert.deepEqual(match.match_explain.matched_needs.sort(), ['emergency', 'technology_equipment']);
+  assert.equal(match.match_explain.matched_profile_type, true);
 });
 
 test('safeUrl blocks bracketed IPv6 private/link-local literals', () => {

@@ -707,10 +707,19 @@ export function normalizeProfile(rawProfile, sections = null, signals = null, do
   const states = _stateAccumulator.slice()
 
   // -- Need categories --
+  // NEED PROVENANCE (owner rule 2026-09-07). A need is something the profile
+  // DECLARED it needs: the needs fields, the section need fields, a section
+  // whose key IS a need. `profile.tags` is NOT a need list — the crawler-os
+  // lane fills the canonical profile's `tags` with applicant types and mined
+  // keywords (`thesisToCanonicalProfile`), so reading tags here turned
+  // "individual" into a NEED on every crawler-scored row, and — before #1564 —
+  // the word "veteran" inside a profile's own DENIAL ("No military
+  // affiliation ... indicating veteran status") into a "Need: veteran" that
+  // three official housing locators then displayed as why they matched.
+  // Tags still feed keyword scoring and the talent/faith indicators below.
   const rawNeeds = [
     ...safeParseArray(profile.needs),
     ...safeParseArray(profile.need_categories),
-    ...safeParseArray(profile.tags),
   ]
 
   // Pull needs from profile sections too

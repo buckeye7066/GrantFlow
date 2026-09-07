@@ -1403,6 +1403,12 @@ export function buildThesis(profile = {}) {
     // Field-of-study / interest seeds for the open-web query builder (breadth
     // only; never used for scoring). See buildWebQueries.
     interest_terms,
+    // Ready-made queries for what the profile qualifies for by HISTORY or
+    // ORIGIN (alumni, hometown, birthplace, heritage) — see
+    // config/temporalRelatability.originSearchTerms. Breadth only.
+    origin_terms: Array.isArray(profile?.origin_search_terms)
+      ? profile.origin_search_terms.map((t) => String(t ?? '').trim()).filter(Boolean)
+      : [],
     // The derived-fact set with provenance, carried through so LANE SELECTION
     // (planner.plan) reads the same derivation the query builder does.
     derived_facts: profile?.derived_facts ?? null,

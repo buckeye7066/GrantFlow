@@ -9,6 +9,7 @@ import {
   evaluateNeedFirstMatchPolicy,
 } from './needFirstMatchPolicy.js'
 import { applyEligibilityConfirmationPolicy } from './eligibilityConfirmation.js'
+import { PROFILE_SIGNAL_VERSION } from '../../config/profileSignalVersion.js'
 
 export const NEED_FIRST_SCORING_VERSION = 'need_first_v2'
 
@@ -368,6 +369,7 @@ export function applyNeedFirstScoring({
     ...previousExplain,
     needFirstPolicy: policy,
     scoring_policy_version: NEED_FIRST_SCORING_VERSION,
+    signal_version: PROFILE_SIGNAL_VERSION,
     eligibility_confirmation: {
       confirmed: eligibilityPolicy.confirmation.confirmed,
       unconfirmed: eligibilityUnconfirmed,

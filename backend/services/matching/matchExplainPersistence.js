@@ -12,6 +12,7 @@
  */
 
 import { SCORE_SCALE_ID } from '../../config/matchThresholds.js'
+import { PROFILE_SIGNAL_VERSION } from '../../config/profileSignalVersion.js'
 
 function asObject(value) {
   return value && typeof value === 'object' && !Array.isArray(value) ? value : {}
@@ -46,6 +47,9 @@ export function buildPersistedMatchExplain(decision, gateMeta = {}) {
   if (scoringPolicyVersion !== null && scoringPolicyVersion !== undefined && String(scoringPolicyVersion).trim() !== '') {
     out.scoring_policy_version = scoringPolicyVersion
   }
+  // Every persisted explain names the profile-signal derivation it was made
+  // under (config/profileSignalVersion.js); a different version is stale.
+  out.signal_version = PROFILE_SIGNAL_VERSION
   return out
 }
 
@@ -102,6 +106,9 @@ export function isStaleMatchExplain(raw) {
     '',
   ).trim()
   if (!policy) return true
+  // A verdict made under an older profile-signal derivation is a claim the
+  // current code no longer makes (config/profileSignalVersion.js).
+  if (String(explain.signal_version ?? '').trim() !== PROFILE_SIGNAL_VERSION) return true
   return !carriesMatchEvidence(explain)
 }
 
@@ -119,6 +126,7 @@ export function staleMatchExplainSql(alias = 'm') {
     OR ${col} LIKE '%"scoring_policy_version": ""%'
     OR ${col} LIKE '%"scoring_policy_version":""%'
     OR NOT (${carriesEvidence})
+    OR ${col} NOT LIKE '%"signal_version"%"${PROFILE_SIGNAL_VERSION}"%'
   )`
 }
 
