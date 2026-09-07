@@ -9,6 +9,8 @@ export {
   fundingTruthProofFrom,
   hasPositiveFourTruthProof,
   isVerifiedDirectFundingRecommendation,
+  refreshFourTruthProof,
+  failedFourTruths,
 } from '../crawler-os/fundingTruthPolicy.js'
 
 export { default } from '../crawler-os/fundingTruthPolicy.js'

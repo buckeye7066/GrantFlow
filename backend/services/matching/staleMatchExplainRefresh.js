@@ -13,8 +13,34 @@ import {
   isStaleMatchExplain,
   staleMatchExplainSql,
 } from './matchExplainPersistence.js'
+import {
+  fundingTruthProofFrom,
+  refreshFourTruthProof,
+  failedFourTruths,
+} from '../../config/fundingTruthPolicy.js'
+import { isFundingResource } from './fundingSourcePresentation.js'
 
 const log = createLogger('stale-match-explain')
+
+/** Lanes whose rows crawler-os authored: the four-truth gate is theirs. */
+const CRAWLER_OS_LANES = new Set(['crawler-os', 'crawler-os-xmatch'])
+
+/**
+ * `needs_defaulted` is a thesis-level fact (crawler-os profileIntelligence):
+ * true when the profile declared no readable need and the set is a type-shaped
+ * guess. It is the one proof input that is neither on the row nor in the
+ * canonical decision, so it is derived once per profile from the same thesis
+ * builder crawl uses. Loaded lazily: the drain runs at boot and must not pull
+ * the crawler-os thesis builder into module load for the count-only path.
+ */
+async function thesisNeedsDefaulted(ctx) {
+  const [{ buildThesis }, { profileContextToThesisInput }] = await Promise.all([
+    import('../../crawler-os/profileIntelligence.js'),
+    import('../crawlerOsPersistenceCore.js'),
+  ])
+  const thesis = buildThesis(profileContextToThesisInput(ctx))
+  return thesis?.needs_defaulted === true
+}
 
 const changesOf = (res) => Number(res?.changes ?? res?.rowCount ?? 0) || 0
 
@@ -71,6 +97,7 @@ export async function runStaleMatchExplainRefresh(db, opts = {}) {
   const { computeMatchDecision } = deps.computeMatchDecision
     ? { computeMatchDecision: deps.computeMatchDecision }
     : await import('../matchEngine.js')
+  const needsDefaultedOf = typeof deps.thesisNeedsDefaulted === 'function' ? deps.thesisNeedsDefaulted : thesisNeedsDefaulted
   const { loadProfileContext } = deps.loadProfileContext
     ? { loadProfileContext: deps.loadProfileContext }
     : await import('../profileHelpers.js')
@@ -88,6 +115,8 @@ export async function runStaleMatchExplainRefresh(db, opts = {}) {
     unscorable: 0,
     skipped_no_profile: 0,
     convergence_errors: 0,
+    proofs_carried: 0,
+    held_at_review: 0,
     truncated: false,
   }
 
@@ -116,6 +145,7 @@ export async function runStaleMatchExplainRefresh(db, opts = {}) {
   }
 
   const ctxCache = new Map()
+  const needsDefaultedCache = new Map()
   for (const row of rows || []) {
     if (summary.scanned >= pairBudget || (Date.now() - startedAt) >= timeBudgetMs) {
       summary.truncated = true
@@ -140,8 +170,32 @@ export async function runStaleMatchExplainRefresh(db, opts = {}) {
       continue
     }
 
-    const gateMeta = gateMetaFromStub(parseExplain(row.existing_explain))
-    const explain = buildPersistedMatchExplain(decision, gateMeta)
+    const previousExplain = parseExplain(row.existing_explain)
+    const gateMeta = gateMetaFromStub(previousExplain)
+
+    // CARRY THE PROOF FORWARD. The canonical engine never builds a four-truth
+    // proof; persisting its explain over a crawler-os one silently unproved
+    // every proven direct row it touched (prod 2026-09-07: 452 crawler-os rows
+    // refreshed, 96 still proven). The REAL leg is capture-time evidence and
+    // is kept verbatim; the profile-side legs are recomputed from THIS decision.
+    let refreshedProof = null
+    const previousProof = fundingTruthProofFrom(previousExplain)
+    if (previousProof) {
+      let needsDefaulted
+      const cached = needsDefaultedCache.get(profileId)
+      if (cached !== undefined) needsDefaulted = cached
+      else {
+        try { needsDefaulted = await needsDefaultedOf(ctx) } catch { needsDefaulted = undefined }
+        needsDefaultedCache.set(profileId, needsDefaulted)
+      }
+      refreshedProof = refreshFourTruthProof(previousProof, { canonical: decision, opportunity: row, needsDefaulted })
+      if (refreshedProof) summary.proofs_carried += 1
+    }
+
+    const explain = buildPersistedMatchExplain(
+      decision,
+      refreshedProof ? { ...gateMeta, four_truth_proof: refreshedProof } : gateMeta,
+    )
     if (!explain.scoring_policy_version) {
       // Engine did not measure a policy — leave the stub; do not invent.
       summary.unscorable += 1
@@ -178,6 +232,25 @@ export async function runStaleMatchExplainRefresh(db, opts = {}) {
 
     let verdictToWrite = verdict || null
     let scoreToWrite = Number.isFinite(score) ? score : null
+    let explanationToWrite = decision?.explanation ?? null
+
+    // THE FOUR-TRUTH GATE, exactly as crawler-os applies it: a direct-funding
+    // ACCEPT is unrecommendable without an all-passed proof, and the display
+    // gate (config/matchSurfacing.qualifiesForDisplay) refuses it anyway. On
+    // crawler-os lanes the drain must therefore hold such an ACCEPT at REVIEW
+    // and SAY which truth failed, instead of writing an ACCEPT that only ever
+    // shows up as debt in the boot census.
+    const isDirectFunding = refreshedProof
+      ? refreshedProof.direct_funding === true
+      : !isFundingResource(row)
+    if (verdictToWrite === 'accept' && isDirectFunding &&
+        (refreshedProof ? refreshedProof.all_passed !== true : CRAWLER_OS_LANES.has(matcherVersion))) {
+      verdictToWrite = 'review'
+      explanationToWrite = refreshedProof
+        ? `four-truth gate held at REVIEW: ${failedFourTruths(refreshedProof).join(', ')}`
+        : 'no four-truth proof on record — held at REVIEW until this pair is re-scored through crawler-os'
+      summary.held_at_review += 1
+    }
 
     // Accept-only lanes: only allow ACCEPT to be written; keep stored decision/score otherwise
     if (ACCEPT_ONLY_VERSIONS.has(matcherVersion) && verdictToWrite !== 'accept') {
@@ -213,7 +286,7 @@ export async function runStaleMatchExplainRefresh(db, opts = {}) {
         JSON.stringify(explain),
         scoreToWrite,
         verdictToWrite,
-        decision?.explanation ?? null,
+        explanationToWrite,
         row.match_id,
         row.matcher_version,
       )

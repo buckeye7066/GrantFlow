@@ -186,3 +186,106 @@ describe('runStaleMatchExplainRefresh', () => {
     expect(JSON.parse(row.match_explain_json).scoring_policy_version).toBeUndefined()
   })
 })
+
+const PROVEN = Object.freeze({
+  why: 'crawler-os accept',
+  matched_needs: ['veteran', 'education'],
+  matched_location: 'state',
+  four_truth_proof: {
+    direct_funding: true,
+    all_passed: true,
+    real: {
+      gate: 'crawler_os.realityGate.enforceReality', passed: true, reality_status: 'verified',
+      evidence_url: 'https://example.org/apply', evidence_captured_at: '2026-09-07T17:34:30.628Z',
+      content_hash_present: true,
+    },
+    relatable: { passed: true, canonical_decision: 'ACCEPT', score: 80 },
+    meets_profile_need: { passed: true, matched_needs: ['veteran', 'education'], profile_needs_defaulted: false },
+    profile_qualifies: {
+      passed: true, eligibility: true, applicant_type_evidence: ['student'],
+      eligibility_prose_evidence: ['Transfer students'], missing_eligibility_fields: [],
+    },
+  },
+})
+
+function stubProvingEngine({ decision = 'accept', matchedNeeds = ['education'], signals = ['applicant_type', 'geo:state'] } = {}) {
+  return () => ({
+    decision,
+    score: 91,
+    eligible: true,
+    matchedNeeds,
+    missingEligibilityFields: [],
+    explanation: 'engine-refresh',
+    scoringPolicyVersion: 'need_first_v2',
+    scoreScaleId: 'data_point_test_v1',
+    matcherVersion: 'matcher-test-v1',
+    match_explain: {
+      matchedSignals: signals,
+      matchedNeeds,
+      scoreBreakdown: { total: 91, scoring_policy_version: 'need_first_v2' },
+    },
+  })
+}
+
+describe('four-truth proof survives the drain', () => {
+  it('carries the REAL leg forward, recomputes the profile legs, keeps ACCEPT when all four still pass', async () => {
+    const raw = makeDb()
+    seedPair(raw, { matcherVersion: 'crawler-os', explain: PROVEN })
+    const db = wrap(raw)
+    const summary = await runStaleMatchExplainRefresh(db, {
+      pairBudget: 10, writeEnabled: true, deps: { thesisNeedsDefaulted: async () => false, computeMatchDecision: stubProvingEngine() },
+    })
+    expect(summary.refreshed).toBe(1)
+    expect(summary.proofs_carried).toBe(1)
+    expect(summary.held_at_review).toBe(0)
+    const row = raw.prepare('SELECT match_decision, match_explain_json FROM profile_opportunity_matches WHERE id = ?').get('m1')
+    const explain = JSON.parse(row.match_explain_json)
+    expect(explain.signal_version).toBe(PROFILE_SIGNAL_VERSION)
+    expect(explain.four_truth_proof.real).toEqual(PROVEN.four_truth_proof.real)
+    // The stale "veteran" need is gone from the proof; needs come from THIS decision.
+    expect(explain.four_truth_proof.meets_profile_need.matched_needs).toEqual(['education'])
+    expect(explain.four_truth_proof.all_passed).toBe(true)
+    expect(row.match_decision).toBe('accept')
+  })
+
+  it('holds a direct ACCEPT at REVIEW and names the failed truth when the refreshed proof no longer passes', async () => {
+    const raw = makeDb()
+    seedPair(raw, { matcherVersion: 'crawler-os', explain: PROVEN })
+    const db = wrap(raw)
+    // Engine still says ACCEPT but matched no need this time.
+    const summary = await runStaleMatchExplainRefresh(db, {
+      pairBudget: 10, writeEnabled: true, deps: { thesisNeedsDefaulted: async () => false, computeMatchDecision: stubProvingEngine({ matchedNeeds: [] }) },
+    })
+    expect(summary.held_at_review).toBe(1)
+    const row = raw.prepare('SELECT match_decision, match_explanation, match_explain_json FROM profile_opportunity_matches WHERE id = ?').get('m1')
+    expect(row.match_decision).toBe('review')
+    expect(row.match_explanation).toMatch(/four-truth gate held at REVIEW: meets_profile_need/)
+    expect(JSON.parse(row.match_explain_json).four_truth_proof.all_passed).toBe(false)
+  })
+
+  it('a crawler-os direct row with NO proof on record cannot be written as ACCEPT', async () => {
+    const raw = makeDb()
+    seedPair(raw, { matcherVersion: 'crawler-os', explain: { why: 'old stub' } })
+    const db = wrap(raw)
+    const summary = await runStaleMatchExplainRefresh(db, {
+      pairBudget: 10, writeEnabled: true, deps: { thesisNeedsDefaulted: async () => false, computeMatchDecision: stubProvingEngine() },
+    })
+    expect(summary.held_at_review).toBe(1)
+    const row = raw.prepare('SELECT match_decision, match_explanation FROM profile_opportunity_matches WHERE id = ?').get('m1')
+    expect(row.match_decision).toBe('review')
+    expect(row.match_explanation).toMatch(/no four-truth proof on record/)
+  })
+
+  it('a linker lane without proof keeps its documented behaviour (ACCEPT written, no proof invented)', async () => {
+    const raw = makeDb()
+    seedPair(raw, { matcherVersion: 'institution-link', explain: { gate: 'attendance', institution: 'MTSU' } })
+    const db = wrap(raw)
+    const summary = await runStaleMatchExplainRefresh(db, {
+      pairBudget: 10, writeEnabled: true, deps: { thesisNeedsDefaulted: async () => false, computeMatchDecision: stubProvingEngine() },
+    })
+    expect(summary.held_at_review).toBe(0)
+    const row = raw.prepare('SELECT match_decision, match_explain_json FROM profile_opportunity_matches WHERE id = ?').get('m1')
+    expect(row.match_decision).toBe('accept')
+    expect(JSON.parse(row.match_explain_json).four_truth_proof).toBeUndefined()
+  })
+})

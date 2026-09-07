@@ -4889,7 +4889,14 @@ export function computeMatchDecision(rawProfile, rawOpportunity, opts = {}) {
   decisionReasons = guardedDecision.reasons
 
   // Post-decision guards
-  const hasUrl = Boolean(rawOpportunity?.application_url || rawOpportunity?.url)
+  // The catalog stores the apply target in `apply_url` (schema truth) at least
+  // as often as in `application_url`; crawler-os and the Discover route both
+  // read `apply_url ?? application_url`. Reading only application_url here
+  // downgraded 176 otherwise-ACCEPT pairs across 18 profiles to REVIEW
+  // ("missing application URL") while the row carried a live apply_url
+  // (prod 2026-09-07: a transfer student's TELS/HOPE and every MTSU
+  // scholarship). A bare source_url is NOT an apply target — that stays REVIEW.
+  const hasUrl = Boolean(rawOpportunity?.application_url || rawOpportunity?.apply_url || rawOpportunity?.url)
 
   if (decision === 'ACCEPT' && !hasUrl) {
     decision = 'REVIEW'
