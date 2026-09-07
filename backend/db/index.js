@@ -6,6 +6,7 @@ import fs from 'fs';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import { assertProfileScopedSql } from './scopedQuery.js';
+import { normalizeSqliteValue, normalizeSqliteArgs } from './sqliteArgs.js';
 
 // Validate critical environment on startup
 if (process.env.NODE_ENV === 'production') {
@@ -338,43 +339,10 @@ function bindingsToValues(names, bindings) {
   return names.map((name) => bindings[name]);
 }
 
-export function normalizeSqliteValue(value) {
-  if (value === undefined) return null
-  if (typeof value === 'boolean') return value ? 1 : 0
-  if (value instanceof Date) return value.toISOString()
-  // better-sqlite3 cannot bind objects/arrays; stringify for TEXT/JSON columns.
-  // (Buffers are handled by SQLite directly; Dates handled above.)
-  if (value && typeof value === 'object' && !Buffer.isBuffer(value)) {
-    try {
-      return JSON.stringify(value)
-    } catch {
-      return String(value)
-    }
-  }
-  return value
-}
-
-export function normalizeSqliteArgs(args) {
-  if (args.length === 1 && Array.isArray(args[0])) {
-    return [args[0].map(normalizeSqliteValue)]
-  }
-  if (
-    args.length === 1 &&
-    args[0] &&
-    typeof args[0] === 'object' &&
-    !Array.isArray(args[0]) &&
-    !(args[0] instanceof Date) &&
-    !Buffer.isBuffer(args[0])
-  ) {
-    const bindings = args[0]
-    const normalized = {}
-    for (const [key, val] of Object.entries(bindings)) {
-      normalized[key] = normalizeSqliteValue(val)
-    }
-    return [normalized]
-  }
-  return args.map(normalizeSqliteValue)
-}
+// Bound-parameter normalization lives in a side-effect-free module so test
+// helpers can import it WITHOUT opening the app database (this file opens it
+// at import time via `export const db = getDb()`).
+export { normalizeSqliteValue, normalizeSqliteArgs };
 
 function formatPgSyntaxSnippet({ sql, position }) {
   const rawSql = String(sql || '')
