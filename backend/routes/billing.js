@@ -31,6 +31,8 @@ import {
   revokeFreePeriod,
   describeFreePeriod,
   acknowledgeFreeNotice,
+  settleInvoicesAsProBono,
+  reconcileProBonoAccounts,
   FREE_PERIOD_DAYS,
 } from '../services/billing/invoiceService.js'
 import {
@@ -239,10 +241,20 @@ router.get('/me/:profileId/invoices', async (req, res) => {
     if (!(await canAccessProfile(req, profileId))) return res.status(403).json({ error: 'Not authorized' })
     await ensureInvoiceSchema(req.db)
     const rows = await req.db
-      .prepare(`SELECT id, period_key, period_start, period_end, amount_cents, currency, status, issued_at, due_at, paid_at, stripe_payment_link
+      .prepare(`SELECT id, period_key, period_start, period_end, amount_cents, currency, status, issued_at, due_at, paid_at, stripe_payment_link,
+                       gross_amount_cents, pro_bono_credit_cents, is_pro_bono, settled_reason
                   FROM billing_invoices WHERE profile_id = ? ORDER BY issued_at DESC LIMIT 100`)
       .all(profileId)
-    res.json({ invoices: rows || [] })
+    res.json({
+      invoices: (rows || []).map((r) => ({
+        ...r,
+        is_pro_bono: Boolean(r.is_pro_bono),
+        // amount_cents is what is DUE; gross is the value of the work. Older rows
+        // (before the pro bono columns) carry their balance as the gross.
+        gross_amount_cents: r.gross_amount_cents ?? r.amount_cents,
+        pro_bono_credit_cents: r.pro_bono_credit_cents ?? 0,
+      })),
+    })
   } catch (error) {
     res.status(500).json(formatError(error))
   }
@@ -263,6 +275,18 @@ router.post('/admin/backfill-anchor', requireAdmin, async (req, res) => {
   try {
     const anchor = req.body?.anchor ? new Date(req.body.anchor).toISOString() : new Date().toISOString()
     const result = await backfillBillingAnchor(req.db, anchor)
+    res.json({ ok: true, ...result })
+  } catch (error) {
+    res.status(500).json(formatError(error))
+  }
+})
+
+// ADMIN: settle every pro bono account that still shows a balance (and lift
+// any billing suspension on it). Dunning runs this automatically each pass;
+// this is the on-demand path.
+router.post('/admin/pro-bono/reconcile', requireAdmin, async (req, res) => {
+  try {
+    const result = await reconcileProBonoAccounts(req.db, {})
     res.json({ ok: true, ...result })
   } catch (error) {
     res.status(500).json(formatError(error))
@@ -732,11 +756,23 @@ router.put('/accounts/:profileId', requireAdmin, async (req, res) => {
       notes: req.body?.notes ?? null,
     })
 
+    // Pro bono just granted: every invoice still asking this profile for money
+    // becomes a $0 statement (value kept as the credit) and a billing suspension
+    // is lifted. Without this the pre-grant invoices kept dunning the account.
+    let proBonoSettlement = null
+    if (!previous.is_pro_bono && updated.is_pro_bono) {
+      proBonoSettlement = await settleInvoicesAsProBono(req.db, {
+        profileId,
+        settledBy: req.user.userId ?? req.user.email ?? 'admin',
+      }).catch((err) => ({ ok: false, error: err?.message, settled: 0, reactivated: false }))
+    }
+
     const events = await fetchAccountEvents(req.db, updated.id)
 
     res.json({
       account: mapAccountRow(updated),
       events,
+      ...(proBonoSettlement ? { pro_bono_settlement: proBonoSettlement } : {}),
     })
   } catch (error) {
     res.status(500).json(formatError(error))

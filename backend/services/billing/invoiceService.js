@@ -8,6 +8,13 @@
  *   - If unpaid after 7 days → the account is suspended.
  *   - Stripe webhook (or admin mark-paid) flips an invoice to paid and lifts any
  *     suspension.
+ *   - PRO BONO (admin-only flag on the billing account): the account still gets
+ *     a statement each cycle so the value of the work is on record, but it is
+ *     issued settled — gross value, a matching pro bono credit, $0 due, no
+ *     payment link, never chased. Flipping the flag on settles every open or
+ *     suspended invoice the same way and lifts a billing suspension; dunning
+ *     re-reads the flag before it chases anything, so an invoice issued before
+ *     the grant can never suspend a pro bono account.
  *
  * SAFETY: the whole cycle is gated behind BILLING_AUTOMATION_ENABLED (default
  * OFF) so it never sends real money emails or suspends accounts until the owner
@@ -22,9 +29,14 @@ import { sendEmail } from '../email.js'
 import { ADMIN_EMAIL } from '../../config/constants.js'
 import { createLogger } from '../../utils/logger.js'
 import { notifyProfile } from '../comms/commsService.js'
-import { suspendProfile, cadenceCycleDays } from './accountStatus.js'
+import { suspendProfile, reactivateProfile, cadenceCycleDays } from './accountStatus.js'
 
 const log = createLogger('invoiceService')
+
+/** Invoice status for a settled pro bono statement ($0 due, never dunned). */
+export const PRO_BONO_INVOICE_STATUS = 'pro_bono'
+/** Statuses that still carry a balance the account is being asked to pay. */
+const OPEN_INVOICE_STATUSES = ['sent', 'second_notice', 'suspended']
 
 export function isBillingAutomationEnabled() {
   return String(process.env.BILLING_AUTOMATION_ENABLED || 'false').toLowerCase() === 'true'
@@ -85,6 +97,17 @@ export async function ensureInvoiceSchema(db) {
     CREATE UNIQUE INDEX IF NOT EXISTS ux_billing_invoices_account_period ON billing_invoices(profile_id, period_key);
     CREATE INDEX IF NOT EXISTS idx_billing_invoices_status ON billing_invoices(status);
   `)
+  // Pro bono bookkeeping. amount_cents stays "what is DUE" (every existing
+  // reader + dunning keys off it); gross_amount_cents is the value of the work
+  // and pro_bono_credit_cents the write-off that brought the balance to $0.
+  for (const [col, ddl] of [
+    ['gross_amount_cents', 'INTEGER'],
+    ['pro_bono_credit_cents', 'INTEGER DEFAULT 0'],
+    ['is_pro_bono', isPg ? 'BOOLEAN DEFAULT FALSE' : 'BOOLEAN DEFAULT 0'],
+    ['settled_reason', 'TEXT'],
+  ]) {
+    try { await db.exec(`ALTER TABLE billing_invoices ADD COLUMN ${col} ${ddl}`) } catch { /* exists */ }
+  }
   ensured = true
 }
 
@@ -127,10 +150,11 @@ async function resolveRecipientEmail(db, profileId) {
 }
 
 /** Warm, MBA-level invoice email (HTML + text). */
-export function buildInvoiceEmail({ orgName, amountCents, periodStart, periodEnd, cadence, dueDate, paymentLink, secondNotice = false }) {
+export function buildInvoiceEmail({ orgName, amountCents, periodStart, periodEnd, cadence, dueDate, paymentLink, secondNotice = false, proBono = false, grossAmountCents = null, proBonoCreditCents = null }) {
   const amt = money(amountCents)
   const periodLine = periodStart && periodEnd ? `${periodStart} – ${periodEnd}` : 'the current period'
   const greeting = orgName ? `Hi ${orgName},` : 'Hello,'
+  if (proBono) return buildProBonoStatementEmail({ greeting, periodLine, cadence, grossAmountCents, proBonoCreditCents })
   const lead = secondNotice
     ? `A quick, friendly follow-up — our records show the invoice below is still open. If it's already on its way, thank you and please disregard.`
     : `Thank you for the work we get to do alongside you. Here is your ${cadence} invoice for ${periodLine}.`
@@ -149,15 +173,10 @@ export function buildInvoiceEmail({ orgName, amountCents, periodStart, periodEnd
     `We bill transparently — no percentage-of-award fees, ever — and we're glad to talk through anything.`, '',
     'With appreciation,', 'The GrantFlow team',
   ].filter((l) => l !== undefined).join('\n')
-  // CodeQL js/incomplete-html-attribute-sanitization (#384): this helper
-  // feeds href="${esc(paymentLink)}" below, but omitted `"` — an unescaped
+  // CodeQL js/incomplete-html-attribute-sanitization (#384): escHtml feeds
+  // href="${esc(paymentLink)}" below and must escape `"` too — an unescaped
   // double quote in paymentLink could break out of the attribute.
-  const esc = (s) => String(s || '')
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#39;')
+  const esc = escHtml
   const html = `<!doctype html><html><body style="font-family:system-ui,Arial,sans-serif;color:#0f172a;line-height:1.5">
     <p>${esc(greeting)}</p>
     <p>${esc(lead)}</p>
@@ -168,6 +187,51 @@ export function buildInvoiceEmail({ orgName, amountCents, periodStart, periodEnd
     </tbody></table>
     <p>${paymentLink ? `<a href="${esc(paymentLink)}" style="background:#059669;color:#fff;padding:10px 16px;border-radius:8px;text-decoration:none">Pay securely</a>` : esc(payLine)}</p>
     <p style="color:#475569;font-size:13px">We bill transparently — no percentage-of-award fees, ever — and we're glad to talk through anything.</p>
+    <p>With appreciation,<br/>The GrantFlow team</p>
+  </body></html>`
+  return { subject, html, text }
+}
+
+/** HTML-attribute-safe escape (shared by both email builders). */
+function escHtml(s) {
+  return String(s || '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;')
+}
+
+/**
+ * Pro bono statement: shows the value of the work, the pro bono credit that
+ * covers it, and a $0 balance. No due date, no payment link, no "pay" button —
+ * this is a record for the client's files, not a request for money.
+ */
+function buildProBonoStatementEmail({ greeting, periodLine, cadence, grossAmountCents, proBonoCreditCents }) {
+  const gross = money(grossAmountCents)
+  const credit = money(proBonoCreditCents ?? grossAmountCents)
+  const zero = money(0)
+  const lead = `This account is served pro bono, so nothing is owed. Here is your ${cadence} statement for ${periodLine} — it records the value of the work for your files.`
+  const subject = `Your GrantFlow statement — ${periodLine} (pro bono, ${zero} due)`
+  const text = [
+    greeting, '', lead, '',
+    `Value of services: ${gross}`,
+    `Pro bono credit: -${credit}`,
+    `Balance due: ${zero}`,
+    `Billing period: ${periodLine}`, '',
+    `No action is needed. We're honored to do this work alongside you — reply any time if anything looks off.`, '',
+    'With appreciation,', 'The GrantFlow team',
+  ].join('\n')
+  const html = `<!doctype html><html><body style="font-family:system-ui,Arial,sans-serif;color:#0f172a;line-height:1.5">
+    <p>${escHtml(greeting)}</p>
+    <p>${escHtml(lead)}</p>
+    <table style="border-collapse:collapse;margin:12px 0"><tbody>
+      <tr><td style="padding:4px 12px 4px 0;color:#475569">Value of services</td><td style="padding:4px 0">${gross}</td></tr>
+      <tr><td style="padding:4px 12px 4px 0;color:#475569">Pro bono credit</td><td style="padding:4px 0;color:#059669">-${credit}</td></tr>
+      <tr><td style="padding:4px 12px 4px 0;color:#475569">Balance due</td><td style="padding:4px 0;font-weight:700">${zero}</td></tr>
+      <tr><td style="padding:4px 12px 4px 0;color:#475569">Billing period</td><td style="padding:4px 0">${escHtml(periodLine)}</td></tr>
+    </tbody></table>
+    <p style="color:#475569;font-size:13px">No action is needed. We're honored to do this work alongside you — reply any time if anything looks off.</p>
     <p>With appreciation,<br/>The GrantFlow team</p>
   </body></html>`
   return { subject, html, text }
@@ -223,27 +287,118 @@ export async function generateInvoiceForAccount(db, accountRow, { now = new Date
   if (exists) return null
 
   const eff = await computeEffectiveBilling(db, account.profile_id, account)
-  if (eff.is_pro_bono || !eff.net_monthly_cents) return null // nothing to bill
+  const proBono = Boolean(eff.is_pro_bono)
+  // Pro bono: the statement carries the value of the work (what the account
+  // WOULD owe) with a matching credit; a paying account carries the net due.
+  const gross = proBono ? eff.pro_bono_credit_cents : eff.net_monthly_cents
+  if (!gross) return null // nothing to bill, nothing to record
+  const due = proBono ? 0 : gross
 
   const id = crypto.randomUUID()
   const recipient = await resolveRecipientEmail(db, account.profile_id)
-  const paymentLink = await maybeStripePaymentLink(db, { profileId: account.profile_id, amountCents: eff.net_monthly_cents, invoiceId: id })
-  const dueAt = new Date(now.getTime() + SUSPEND_DAYS() * 86400000).toISOString()
+  const paymentLink = proBono ? null : await maybeStripePaymentLink(db, { profileId: account.profile_id, amountCents: due, invoiceId: id })
+  const dueAt = proBono ? null : new Date(now.getTime() + SUSPEND_DAYS() * 86400000).toISOString()
+  const status = proBono ? PRO_BONO_INVOICE_STATUS : 'sent'
+  const paidAt = proBono ? now.toISOString() : null
 
   await db.prepare(
     `INSERT INTO billing_invoices (id, profile_id, account_id, cadence, period_key, period_start, period_end,
-        amount_cents, currency, status, recipient_email, stripe_payment_link, issued_at, due_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'USD', 'sent', ?, ?, ?, ?)`,
+        amount_cents, currency, status, recipient_email, stripe_payment_link, issued_at, due_at,
+        gross_amount_cents, pro_bono_credit_cents, is_pro_bono, settled_reason, paid_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'USD', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run(id, account.profile_id, account.id, cadence, moment.period_key, moment.period_start, moment.period_end,
-    eff.net_monthly_cents, recipient, paymentLink, now.toISOString(), dueAt)
+    due, status, recipient, paymentLink, now.toISOString(), dueAt,
+    gross, proBono ? gross : 0, dbBool(db, proBono), proBono ? 'pro_bono' : null, paidAt)
 
   const orgName = await resolveOrgName(db, account.profile_id)
   if (recipient && !isNonRoutableEmail(recipient)) {
-    const mail = buildInvoiceEmail({ orgName, amountCents: eff.net_monthly_cents, periodStart: moment.period_start, periodEnd: moment.period_end, cadence, dueDate: dueAt.slice(0, 10), paymentLink })
+    const mail = buildInvoiceEmail({
+      orgName, amountCents: due, periodStart: moment.period_start, periodEnd: moment.period_end, cadence,
+      dueDate: dueAt ? dueAt.slice(0, 10) : null, paymentLink,
+      proBono, grossAmountCents: gross, proBonoCreditCents: proBono ? gross : 0,
+    })
     await sendEmail({ to: recipient, cc: ownerCc(), subject: mail.subject, html: mail.html, text: mail.text })
   }
-  log.info('invoice generated', { profile_id: account.profile_id, period: moment.period_key, amount: eff.net_monthly_cents, emailed: Boolean(recipient) })
-  return { id, profile_id: account.profile_id, period_key: moment.period_key, amount_cents: eff.net_monthly_cents }
+  log.info(proBono ? 'pro bono statement generated' : 'invoice generated', { profile_id: account.profile_id, period: moment.period_key, amount_due: due, gross, emailed: Boolean(recipient) })
+  return { id, profile_id: account.profile_id, period_key: moment.period_key, amount_cents: due, gross_amount_cents: gross, is_pro_bono: proBono }
+}
+
+/** Boolean bind value for the active dialect (better-sqlite3 rejects JS booleans). */
+function dbBool(db, value) {
+  const b = Boolean(value)
+  return db?.dialect === 'postgres' ? b : (b ? 1 : 0)
+}
+
+/** SQL literal for "is_pro_bono is true" in the active dialect. */
+function proBonoTrueLiteral(db) {
+  return db?.dialect === 'postgres' ? 'TRUE' : '1'
+}
+
+/**
+ * Settle every invoice on a profile that still carries a balance as pro bono:
+ * status → 'pro_bono', the old balance becomes gross + credit, amount due → $0,
+ * marked paid now. If any of them had suspended the profile, lift it (with the
+ * normal "your account is active again" notice). Idempotent.
+ */
+export async function settleInvoicesAsProBono(db, { profileId, now = new Date(), settledBy = 'pro_bono' } = {}) {
+  if (!profileId) return { ok: false, error: 'profile_id_required', settled: 0, reactivated: false }
+  await ensureInvoiceSchema(db)
+  const pid = String(profileId)
+  const placeholders = OPEN_INVOICE_STATUSES.map(() => '?').join(',')
+  const open = await db.prepare(
+    `SELECT id, status, amount_cents, gross_amount_cents FROM billing_invoices WHERE profile_id = ? AND status IN (${placeholders})`,
+  ).all(pid, ...OPEN_INVOICE_STATUSES)
+  if (!open?.length) return { ok: true, profile_id: pid, settled: 0, reactivated: false }
+
+  const nowIso = now.toISOString()
+  for (const inv of open) {
+    const gross = Number.isFinite(Number(inv.gross_amount_cents)) && inv.gross_amount_cents !== null
+      ? Number(inv.gross_amount_cents)
+      : Number(inv.amount_cents) || 0
+    await db.prepare(
+      `UPDATE billing_invoices
+          SET status = ?, amount_cents = 0, gross_amount_cents = ?, pro_bono_credit_cents = ?, is_pro_bono = ?,
+              settled_reason = ?, paid_at = COALESCE(paid_at, ?), stripe_payment_link = NULL
+        WHERE id = ?`,
+    ).run(PRO_BONO_INVOICE_STATUS, gross, gross, dbBool(db, true), 'pro_bono', nowIso, inv.id)
+  }
+  const hadSuspension = open.some((inv) => inv.status === 'suspended')
+  let reactivated = false
+  if (hadSuspension) {
+    let prof = null
+    try { prof = await db.prepare('SELECT status FROM profiles WHERE id = ? LIMIT 1').get(pid) } catch { prof = null }
+    if (String(prof?.status || '') === 'suspended') {
+      const r = await reactivateProfile(db, { profileId: pid, reactivatedBy: settledBy })
+      reactivated = Boolean(r?.ok)
+    }
+  }
+  log.info('invoices settled as pro bono', { profile_id: pid, settled: open.length, reactivated, by: settledBy })
+  return { ok: true, profile_id: pid, settled: open.length, reactivated }
+}
+
+/**
+ * Every pro bono account with a balance still showing gets settled. Runs at the
+ * top of each dunning pass (so the prod backlog heals on the next cycle) and is
+ * exposed to the admin to run on demand.
+ */
+export async function reconcileProBonoAccounts(db, { now = new Date() } = {}) {
+  await ensureInvoiceSchema(db)
+  const placeholders = OPEN_INVOICE_STATUSES.map(() => '?').join(',')
+  const rows = await db.prepare(
+    `SELECT DISTINCT ba.profile_id FROM billing_accounts ba
+       JOIN billing_invoices bi ON bi.profile_id = ba.profile_id
+      WHERE ba.is_pro_bono = ${proBonoTrueLiteral(db)} AND bi.status IN (${placeholders})`,
+  ).all(...OPEN_INVOICE_STATUSES)
+  let settled = 0
+  let reactivated = 0
+  for (const row of rows || []) {
+    const r = await settleInvoicesAsProBono(db, { profileId: row.profile_id, now, settledBy: 'pro_bono_reconcile' })
+      .catch((err) => { log.warn('pro bono reconcile failed', { profile_id: row.profile_id, error: err?.message }); return null })
+    if (!r) continue
+    settled += r.settled
+    if (r.reactivated) reactivated += 1
+  }
+  return { accounts: rows?.length || 0, settled, reactivated }
 }
 
 async function resolveOrgName(db, profileId) {
@@ -263,6 +418,10 @@ export async function processDunning(db, { now = new Date() } = {}) {
   // override. Otherwise we keep reminding but never lock anyone out.
   const canSuspend = Boolean(process.env.STRIPE_SECRET_KEY)
     || String(process.env.BILLING_ALLOW_SUSPEND_WITHOUT_STRIPE || 'false').toLowerCase() === 'true'
+  // Re-read the pro bono flag BEFORE chasing anything: an invoice issued before
+  // the grant is settled ($0 due) here, so it can never remind or suspend.
+  const reconciled = await reconcileProBonoAccounts(db, { now })
+    .catch((err) => { log.warn('pro bono reconcile failed', { error: err?.message }); return { settled: 0 } })
   const open = await db.prepare(`SELECT * FROM billing_invoices WHERE status IN ('sent','second_notice')`).all()
   let reminded = 0
   let suspended = 0
@@ -307,7 +466,7 @@ export async function processDunning(db, { now = new Date() } = {}) {
       reminded += 1
     }
   }
-  return { reminded, suspended, voided }
+  return { reminded, suspended, voided, pro_bono_settled: reconciled.settled || 0 }
 }
 
 /** Mark an invoice paid (Stripe webhook or admin) + lift any suspension. */
@@ -316,7 +475,7 @@ export async function markInvoicePaid(db, { invoiceId = null, profileId = null, 
   let inv = null
   if (invoiceId) inv = await db.prepare('SELECT * FROM billing_invoices WHERE id = ?').get(invoiceId)
   else if (stripeInvoiceId) inv = await db.prepare('SELECT * FROM billing_invoices WHERE stripe_invoice_id = ?').get(stripeInvoiceId)
-  else if (profileId) inv = await db.prepare(`SELECT * FROM billing_invoices WHERE profile_id = ? AND status != 'paid' ORDER BY issued_at DESC LIMIT 1`).get(profileId)
+  else if (profileId) inv = await db.prepare(`SELECT * FROM billing_invoices WHERE profile_id = ? AND status IN ('sent','second_notice','suspended') ORDER BY issued_at DESC LIMIT 1`).get(profileId)
   if (!inv) return { ok: false, error: 'invoice_not_found' }
 
   await db.prepare(`UPDATE billing_invoices SET status = 'paid', paid_at = ? WHERE id = ?`).run(new Date().toISOString(), inv.id)
@@ -343,7 +502,7 @@ export async function runBillingCycle(db, { now = new Date(), force = false } = 
       if (r) generated += 1
     }
   } catch (err) { log.warn('runBillingCycle accounts query failed', { error: err?.message }) }
-  const dun = await processDunning(db, { now }).catch(() => ({ reminded: 0, suspended: 0 }))
+  const dun = await processDunning(db, { now }).catch(() => ({ reminded: 0, suspended: 0, voided: 0, pro_bono_settled: 0 }))
   return { ran: true, generated, ...dun }
 }
 

@@ -92,11 +92,17 @@ export async function computeEffectiveBilling(db, profileId, account) {
 
   let effective = baseMonthly
   if (Number.isInteger(account?.custom_monthly_cents)) { effective = account.custom_monthly_cents; basis = 'custom_override' }
+  const discountPct = Math.max(0, Math.min(100, Number(account?.discount_percent) || 0))
+  // What the account WOULD owe with every discount applied but before the pro
+  // bono flag zeroes it. A pro bono statement shows this as the value of the
+  // work and books the same amount as the pro bono credit, so the balance due
+  // is $0 while the write-off stays on record.
+  const wouldOwe = Math.max(0, Math.round(effective * (1 - discountPct / 100)))
+
   const proBono = Boolean(account?.is_pro_bono)
   if (proBono) { effective = 0; basis = 'pro_bono' }
 
-  const discountPct = Math.max(0, Math.min(100, Number(account?.discount_percent) || 0))
-  let net = proBono ? 0 : Math.max(0, Math.round(effective * (1 - discountPct / 100)))
+  let net = proBono ? 0 : wouldOwe
 
   // Free Week promotion: while active, the net charge is $0 for everyone. The
   // assigned tier, capabilities, and discounts are preserved so billing snaps
@@ -113,6 +119,8 @@ export async function computeEffectiveBilling(db, profileId, account) {
     effective_monthly_cents: effective,
     discount_percent: discountPct,
     net_monthly_cents: net,
+    would_owe_monthly_cents: wouldOwe,
+    pro_bono_credit_cents: proBono ? wouldOwe : 0,
     is_pro_bono: proBono,
     client_category: clientCategory,
   }

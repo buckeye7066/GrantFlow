@@ -1492,7 +1492,7 @@ export default function ProfileOverview({
               <h2 className="text-lg font-semibold text-slate-900">Billing Snapshot</h2>
               <p className="text-sm text-slate-600">
                 {billing.is_pro_bono
-                  ? "This profile is tracked as pro bono work. Time and expenses are logged but not invoiced."
+                  ? "This profile is served pro bono. Each statement records the value of the work with a matching pro bono credit, so the balance due is always $0."
                   : "Current tier and allowances based on the onboarding application. Admins can override at any time."}
               </p>
             </div>
@@ -1538,7 +1538,7 @@ export default function ProfileOverview({
                   .concat(billingEntitlements.capabilities.itemFunding ? ["Item funding discovery"] : [])
                   .concat(billingEntitlements.capabilities.documentAI ? ["AI document enrichment"] : [])
                   .concat(billingEntitlements.addons.length > 0 ? [`${billingEntitlements.addons.length} active capability add-on${billingEntitlements.addons.length === 1 ? "" : "s"}`] : [])
-                  .concat(billing.is_pro_bono ? ["Document time logged but not invoiced"] : [])
+                  .concat(billing.is_pro_bono ? ["Statements issued at $0 due (value recorded as a pro bono credit)"] : [])
                   .concat(!billing.tier ? ["Awaiting tier assignment"] : [])
                   .map((item, index) => (
                     <li key={`${item}-${index}`}>{item}</li>
