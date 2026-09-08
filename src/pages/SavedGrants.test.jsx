@@ -16,12 +16,17 @@ const { removeGrant, apiFetch } = vi.hoisted(() => ({
 }))
 
 vi.mock('@/api/client', () => ({ apiFetch }))
+vi.mock('@/stores/authStore', () => ({ useAuthStore: (select) => select({ activeProfileId: 'profile-test' }) }))
 vi.mock('@/stores/savedGrantsStore', () => ({
   useSavedGrantsStore: () => ({
     savedIds: ['sch-ana-workforce-scholarship'],
     removeGrant,
     sync: vi.fn(),
     synced: true,
+    syncing: false,
+    syncError: null,
+    writing: {},
+    opportunitiesMap: {},
     getNote: () => '',
     updateNote: vi.fn(),
   }),
@@ -45,15 +50,16 @@ describe('SavedGrants — missing grant (GET /api/grants/:id -> 404)', () => {
     apiFetch.mockClear()
   })
 
-  it('renders a graceful "no longer available" card, not the raw grant ID as a title', async () => {
+  it('renders a graceful "details unavailable" card, not the raw grant ID as a title', async () => {
     renderPage()
 
     await waitFor(() => {
-      expect(screen.getByText('This grant is no longer available')).toBeTruthy()
+      expect(screen.getByText('Source details are unavailable')).toBeTruthy()
     })
 
     // The raw id must NOT be shown as the card title (the old "Grant ID: <id>").
     expect(screen.queryByText(/^Grant ID:/)).toBeNull()
+    expect(screen.getByText(/does not prove the funder removed the program/)).toBeTruthy()
 
     // A working Remove action is present and calls removeGrant with the id.
     const removeBtn = screen.getAllByRole('button', { name: /^remove$/i })[0]

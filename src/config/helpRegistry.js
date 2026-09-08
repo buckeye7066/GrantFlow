@@ -16,9 +16,16 @@ export const CURRENT_MANUAL_VERSION = 1
  * Keys must match routeName values from src/nav/navConfig.js.
  */
 export const HELP_REGISTRY = [
+  {"key":"Applications","route":"/Applications","title":"Applications","description":"Track formal applications and their recorded outcomes. This is different from a bookmark or a proposal draft.","endUserDescription":"Track formal applications and their recorded outcomes. This is different from a bookmark or a proposal draft.","whoCanUse":"all","mainActions":[],"relatedFeatures":[],"fields":[]},
+  {"key":"HamiltonProcessing","route":"/HamiltonProcessing","title":"HamiltonProcessing","description":"Hamilton helps prepare applications from your saved information. Check his task status, provide requested details, and review any handoff.","endUserDescription":"Hamilton helps prepare applications from your saved information. Check his task status, provide requested details, and review any handoff.","whoCanUse":"all","mainActions":[],"relatedFeatures":[],"fields":[]},
+  {"key":"ItemFunding","route":"/ItemFunding","title":"ItemFunding","description":"Describe an item or practical need and look for programs that may provide it or help pay for it.","endUserDescription":"Describe an item or practical need and look for programs that may provide it or help pay for it.","whoCanUse":"all","mainActions":[],"relatedFeatures":[],"fields":[]},
+  {"key":"GreenHomePrograms","route":"/GreenHomePrograms","title":"GreenHomePrograms","description":"Explore no-cost home upgrade programs and check location, household, and property requirements.","endUserDescription":"Explore no-cost home upgrade programs and check location, household, and property requirements.","whoCanUse":"all","mainActions":[],"relatedFeatures":[],"fields":[]},
+  {"key":"SavedGrants","route":"/SavedGrants","title":"Saved Grants","description":"Your bookmarked opportunities, not submitted applications. Review a source here before moving it into your application workspace.","endUserDescription":"Your bookmarked opportunities, not submitted applications. Review a source here before moving it into your application workspace.","whoCanUse":"all","mainActions":[],"relatedFeatures":[],"fields":[]},
+  {"key":"ProfileDetail","route":"/ProfileDetail","title":"My Profile","description":"Tell GrantFlow about the person, family, or organization applying. Reuse these answers for matching and applications; save each edited section before leaving.","endUserDescription":"Tell GrantFlow about the person, family, or organization applying. Reuse these answers for matching and applications; save each edited section before leaving.","whoCanUse":"all","mainActions":[],"relatedFeatures":[],"fields":[]},
   // ── Home ──────────────────────────────────────────────────────────────────
   {
     key: 'Dashboard',
+    endUserDescription: "Start with your next step, then check saved funding, applications, and deadlines.",
     route: '/Dashboard',
     navGroup: 'home',
     title: 'Dashboard',
@@ -32,6 +39,7 @@ export const HELP_REGISTRY = [
   },
   {
     key: 'Calendar',
+    endUserDescription: "See deadlines and requested dates. Select a date to inspect the work that needs attention.",
     route: '/Calendar',
     navGroup: 'home',
     title: 'Calendar',
@@ -47,6 +55,7 @@ export const HELP_REGISTRY = [
   // ── Help ──────────────────────────────────────────────────────────────────
   {
     key: 'Help',
+    endUserDescription: "Find step-by-step instructions, open any authorized tool, or ask Anya. The written guide works without AI.",
     route: '/Help',
     navGroup: 'help',
     title: 'Help Center',
@@ -244,6 +253,7 @@ export const HELP_REGISTRY = [
   // ── Find Funding ──────────────────────────────────────────────────────────
   {
     key: 'DiscoverGrants',
+    endUserDescription: "Start a funding search using your profile. Review source requirements before saving or applying.",
     route: '/DiscoverGrants',
     navGroup: 'find',
     title: 'Discover Grants',
@@ -257,6 +267,7 @@ export const HELP_REGISTRY = [
   },
   {
     key: 'FundingResults',
+    endUserDescription: "Review the results of your funding searches and the reasons sources were matched to your profile.",
     route: '/FundingResults',
     navGroup: 'find',
     title: 'Funding Results',
@@ -270,6 +281,7 @@ export const HELP_REGISTRY = [
   },
   {
     key: 'SmartMatcher',
+    endUserDescription: "Describe a need and use your saved profile to search for relevant funding. Review the match explanation and any unknown requirements.",
     route: '/SmartMatcher',
     navGroup: 'find',
     title: 'Smart Matcher',
@@ -290,6 +302,7 @@ export const HELP_REGISTRY = [
   },
   {
     key: 'ProfileMatcher',
+    endUserDescription: "Match a selected profile against funding opportunities. Use this when you want to inspect profile-based matching rather than start a general search.",
     route: '/ProfileMatcher',
     navGroup: 'find',
     title: 'Profile Matcher',
@@ -303,6 +316,7 @@ export const HELP_REGISTRY = [
   },
   {
     key: 'FundingOpportunities',
+    endUserDescription: "Browse and filter the funding catalog. A listing is not a promise of eligibility or an award.",
     route: '/FundingOpportunities',
     navGroup: 'find',
     title: 'Funding Opportunities',
@@ -316,6 +330,7 @@ export const HELP_REGISTRY = [
   },
   {
     key: 'Funder',
+    endUserDescription: "Explore the organizations that provide funding. Check their official information and available programs.",
     route: '/Funder',
     navGroup: 'find',
     title: 'Funder',
@@ -329,6 +344,7 @@ export const HELP_REGISTRY = [
   },
   {
     key: 'DataSources',
+    endUserDescription: "See where GrantFlow obtains funding information. A data source is not itself an application.",
     route: '/DataSources',
     navGroup: 'find',
     title: 'Data Sources',
@@ -342,6 +358,7 @@ export const HELP_REGISTRY = [
   },
   {
     key: 'SourceDirectory',
+    endUserDescription: "Explore directories and organizations that point to funding. Follow through to an actual program before applying.",
     route: '/SourceDirectory',
     navGroup: 'find',
     title: 'Source Directory',
@@ -355,6 +372,7 @@ export const HELP_REGISTRY = [
   },
   {
     key: 'NOFOParser',
+    endUserDescription: "Understand a funding announcement (NOFO). Upload or inspect its requirements before preparing an application.",
     route: '/NOFOParser',
     navGroup: 'find',
     title: 'NOFO Parser',
@@ -368,6 +386,7 @@ export const HELP_REGISTRY = [
   },
   {
     key: 'AIGrantScorer',
+    endUserDescription: "Review an AI assessment of a grant or proposal. Treat it as assistance, not an eligibility decision or award prediction.",
     route: '/AIGrantScorer',
     navGroup: 'find',
     title: 'AI Grant Scorer',
@@ -383,6 +402,7 @@ export const HELP_REGISTRY = [
   // ── Work ──────────────────────────────────────────────────────────────────
   {
     key: 'Pipeline',
+    endUserDescription: "Your application workspace. Review an accepted source, prepare it with Hamilton, and track the result. Saving or preparing a draft does not submit it.",
     route: '/Pipeline',
     navGroup: 'work',
     title: 'Pipeline',
@@ -396,6 +416,7 @@ export const HELP_REGISTRY = [
   },
   {
     key: 'Proposals',
+    endUserDescription: "Prepare and edit written proposal drafts. A draft still needs the application and submission steps required by its funder.",
     route: '/Proposals',
     navGroup: 'work',
     title: 'Proposals',
@@ -409,6 +430,7 @@ export const HELP_REGISTRY = [
   },
   {
     key: 'Documents',
+    endUserDescription: "Keep and reuse documents for the active profile. Uploading a document does not submit an application.",
     route: '/Documents',
     navGroup: 'work',
     title: 'Documents',
@@ -422,6 +444,7 @@ export const HELP_REGISTRY = [
   },
   {
     key: 'PrintableApplication',
+    endUserDescription: "Prepare a printable application packet. Follow the source instructions to deliver it and retain its confirmation.",
     route: '/PrintableApplication',
     navGroup: 'work',
     title: 'Printable Application',

@@ -92,5 +92,21 @@
   "anya.onboarding.stateTitle": "What state are you in? This unlocks state-specific programs.",
   "anya.onboarding.allSet": "Great — you're all set! Let's find your first matches.",
   "anya.onboarding.findMatches": "Find My Matches",
-  "anya.onboarding.fillMoreDetails": "Fill in more details first"
+  "anya.onboarding.fillMoreDetails": "Fill in more details first",
+  "journey.orientation": "Page guide",
+  "journey.page": "Your funding workspace",
+  "journey.pageHint": "Review the information on this page, or open Help for the next steps.",
+  "journey.help": "Help with this page",
+  "journey.activeProfile": "Active funding profile",
+  "journey.chooseProfile": "Choose your profile",
+  "journey.profile": "My Profile",
+  "journey.noProfile": "No profile selected",
+  "journey.viewing": "Viewing",
+  "journey.how": "How funding works: show the steps",
+  "journey.notWizard": "These steps explain the journey, not a required wizard. Use any available tool whenever you need it.",
+  "journey.about": "About you",
+  "journey.find": "Find funding",
+  "journey.review": "Review and save",
+  "journey.prepare": "Prepare and apply",
+  "journey.track": "Track results"
 }

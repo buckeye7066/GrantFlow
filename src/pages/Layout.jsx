@@ -42,6 +42,8 @@ import MaintenanceGate from '@/components/maintenance/MaintenanceGate.jsx'
 import NotificationBell from '@/components/notifications/NotificationBell'
 import LoginAnnouncementModal from '@/components/announcements/LoginAnnouncementModal'
 import AppBreadcrumb from '@/components/shared/AppBreadcrumb'
+import EndUserPageGuide from '@/components/guidance/EndUserPageGuide'
+import { resumeStorageKey } from '@/lib/resumePath'
 import UserStepCoach from '@/components/guidance/UserStepCoach'
 import GrantLifecyclePhaseIndicator from '@/components/shared/GrantLifecyclePhaseIndicator'
 import { LanguageSwitcher } from '@/i18n/LanguageSwitcher.jsx'
@@ -142,6 +144,10 @@ export default function Layout({ children }) {
   const isAuthenticated = useAuthStore((state) => state.isAuthenticated)
 
   const isAdmin = hasFullAdminWorkspace(user)
+  const forcedWelcomeVideo = useAuthStore((state) => state.forcedWelcomeVideo)
+  const tourStatus = useAuthStore((state) => state.guidedCycleTourStatus)
+  const profileCompletion = useAuthStore((state) => state.profileCompletion)
+  const onboardingBusy = Boolean(forcedWelcomeVideo?.url) || (!isAdmin && profileCompletion?.blocked) || tourStatus === 'pending_reinterview'
   // Admins get every nav group expanded on first render (the "old view": all
   // tabs visible); their own collapse choices persist from then on. End users
   // keep the compact simplified nav untouched.
@@ -149,6 +155,8 @@ export default function Layout({ children }) {
   // full tool set must never find Find Funding or Work folded away.
   const [navGroupsOpen, toggleNavGroup] = useNavGroupsOpen(
     (isAdmin ? NAV_GROUPS : END_USER_NAV_GROUPS).map((group) => group.groupId),
+    user?.id ? String(user.id) + ':' + (isAdmin ? 'admin' : 'end-user') : null,
+    isAdmin ? NAV_GROUPS : END_USER_NAV_GROUPS,
   )
   const endUserEntitlements = useTierEntitlements(!isAdmin && isRealProfileId(activeProfileId) ? activeProfileId : null)
   const navCapabilities = !isAdmin && !endUserEntitlements.loading ? endUserEntitlements.capabilities : null
@@ -209,7 +217,8 @@ export default function Layout({ children }) {
     if (path.startsWith('/login') || path.startsWith('/set-password') || path.startsWith('/auth')) return
     if (path === '/' || path === '/Dashboard') return
     try {
-      window.localStorage.setItem('grantflow:last-visited-page', path)
+      const key = isAdmin ? 'grantflow:last-visited-page' : resumeStorageKey(user?.id, activeProfileId)
+      if (key) window.localStorage.setItem(key, path)
     } catch {
       // Local persistence is only a fallback.
     }
@@ -217,9 +226,9 @@ export default function Layout({ children }) {
     const { path: lastPath, at } = lastVisitedRef.current
     if (path !== lastPath || now - at >= 5000) {
       lastVisitedRef.current = { path, at: now }
-      setLastVisitedPath(path).catch(() => {})
+      setLastVisitedPath(path, isAdmin ? null : activeProfileId).catch(() => {})
     }
-  }, [isAuthenticated, location.pathname, location.search])
+  }, [isAuthenticated, location.pathname, location.search, user?.id, activeProfileId, isAdmin])
 
   const { anyaCopilotEnabled: copilotEnabled } = useFeatureFlags()
 
@@ -316,7 +325,7 @@ export default function Layout({ children }) {
                 </div>
               </div>
               <div className="flex items-center gap-2 md:gap-3">
-                <Button asChild variant="outline" size="sm" className="hidden md:inline-flex">
+                <Button asChild variant="outline" size="sm" className="inline-flex">
                   <Link to={createPageUrl('Help')}>
                     <Sparkles className="mr-2 h-3.5 w-3.5" />
                     {isAdmin ? t('layout.userManual') : 'Ask Anya'}
@@ -344,7 +353,7 @@ export default function Layout({ children }) {
               </div>
             </div>
             <div className="flex min-w-0 flex-col gap-1.5">
-              <AppBreadcrumb />
+              <AppBreadcrumb endUserGroups={!isAdmin ? END_USER_NAV_GROUPS : null} />
               {isAdmin ? <GrantLifecyclePhaseIndicator /> : null}
             </div>
           </header>
@@ -355,12 +364,15 @@ export default function Layout({ children }) {
               <MaintenanceGate />
               <ProBonoBanner />
               <FreePeriodNotice />
-              <LoginAnnouncementModal />
+              {!onboardingBusy ? <LoginAnnouncementModal /> : null}
+              {!isAdmin ? <OnboardingSequencer endUser /> : null}
+              {!isAdmin ? <EndUserPageGuide /> : null}
               {children}
             </div>
           </div>
         </main>
 
+        {!isAdmin && !onboardingBusy && location.pathname !== createPageUrl('Help') ? <AnyaFloatingButton profileId={activeProfileId} /> : null}
         {isAdmin ? (
           <>
             <OnboardingSequencer />

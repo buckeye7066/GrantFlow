@@ -130,7 +130,8 @@
     "memory:recall": "node scripts/obsidian-memory.mjs recall",
     "memory:note": "node scripts/obsidian-memory.mjs note",
     "predev": "npm run memory:startup",
-    "prestart": "npm run memory:startup"
+    "prestart": "npm run memory:startup",
+    "test:ux": "node node_modules/playwright/cli.js test -c tests/ux/playwright.config.mjs"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.122.0",

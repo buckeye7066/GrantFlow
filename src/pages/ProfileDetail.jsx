@@ -577,6 +577,7 @@ export default function ProfileDetail() {
 
   const [editingSection, setEditingSection] = React.useState(null)
   const [savingSectionKey, setSavingSectionKey] = React.useState(null)
+  const [saveFeedback, setSaveFeedback] = React.useState(null)
   const [aiLoadingKey, setAiLoadingKey] = React.useState(null)
   const canDeleteDocuments = Boolean(
     isAdmin ||
@@ -586,7 +587,10 @@ export default function ProfileDetail() {
 
   const upsertSectionMutation = useMutation({
     mutationFn: ({ sectionKey, values }) => upsertProfileSection(profileId, sectionKey, values),
+    onMutate: () => setSaveFeedback(null),
     onSuccess: (response, variables) => {
+      const skipped = Array.isArray(response?.rejected) ? response.rejected : []
+      setSaveFeedback({ kind: skipped.length ? 'partial' : 'saved', message: skipped.length ? 'Some answers were not accepted. Your entered text stays in the editor so you can correct it and save again.' : 'Saved. You can leave this page and return to your information later.' })
       queryClient.invalidateQueries({ queryKey: ["profile", profileId] })
       queryClient.invalidateQueries({ queryKey: ["profiles"] })
       const rejected = Array.isArray(response?.rejected) ? response.rejected : []
@@ -598,11 +602,12 @@ export default function ProfileDetail() {
                 .slice(0, 3)
                 .map((item) => `Skipped ${formatFieldLabel(variables?.sectionKey, item.key)}: ${formatRejectReason(item.reason)}`)
                 .join("; ")
-            : "Your updates are synced with the comprehensive application schema.",
+            : "Your profile updates have been saved.",
       })
     },
     onError: (err) => {
-      const message = err instanceof Error ? err.message : "Unable to save this section right now."
+      const message = err?.status === 403 ? 'You do not have permission to edit this profile. Your entered text has not been discarded.' : 'This section could not be saved. Your entered text is still available; check your connection and try again.'
+      setSaveFeedback({ kind: 'error', message })
       toast({
         title: "Save failed",
         description: message,
@@ -841,7 +846,11 @@ export default function ProfileDetail() {
               .join("; "),
           })
         }
-        await upsertSectionMutation.mutateAsync({ sectionKey: key, values: guardedValues })
+        const response = await upsertSectionMutation.mutateAsync({ sectionKey: key, values: guardedValues })
+        if (droppedFields.length || response?.rejected?.length) {
+          setSaveFeedback({ kind: 'partial', message: 'Some answers need attention. Accepted answers were saved; review the highlighted feedback before leaving this section.' })
+          return
+        }
         setEditingSection(null)
       } catch (err) {
         // Error toast handled in mutation onError
@@ -1381,12 +1390,12 @@ export default function ProfileDetail() {
           <Alert variant="destructive">
             <AlertCircle className="h-4 w-4" />
             <AlertDescription>
-              No profile selected. Choose a profile from the Profiles page to view its details.
+              No profile is selected. Choose an available profile from the page guide, or return Home for help.
             </AlertDescription>
           </Alert>
-          <Button onClick={() => navigate(createPageUrl("MyProfiles"))}>
+          <Button onClick={() => navigate(createPageUrl(isAdmin ? "MyProfiles" : "Dashboard"))}>
             <ArrowLeft className="mr-2 h-4 w-4" />
-            Back to Profiles
+            {isAdmin ? "Back to Profiles" : "Back to Home"}
           </Button>
         </div>
       </div>
@@ -1430,7 +1439,7 @@ export default function ProfileDetail() {
               <ArrowLeft className="mr-2 h-4 w-4" />
               Go Back
             </Button>
-            <Button onClick={() => navigate(createPageUrl("MyProfiles"))}>View all profiles</Button>
+            <Button onClick={() => navigate(createPageUrl(isAdmin ? "MyProfiles" : "Dashboard"))}>{isAdmin ? "View all profiles" : "Back to Home"}</Button>
           </div>
         </div>
       </div>
@@ -1440,15 +1449,16 @@ export default function ProfileDetail() {
   return (
     <div className="p-6 md:p-10">
       <div className="mx-auto flex max-w-6xl flex-col gap-6">
+        {savingSectionKey || saveFeedback ? <div role={saveFeedback?.kind === "error" || saveFeedback?.kind === "partial" ? "alert" : "status"} className="rounded-lg border border-border bg-card p-4 text-sm text-foreground">{savingSectionKey ? "Saving your profile changes..." : saveFeedback?.message}</div> : null}
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
             <p className="text-sm font-semibold uppercase tracking-wide text-slate-500">Profile</p>
             <h1 className="text-3xl font-bold text-slate-900">{profile.display_name}</h1>
           </div>
           <div className="flex flex-wrap gap-3">
-            <Button variant="outline" onClick={() => navigate(createPageUrl("MyProfiles"))}>
+            <Button variant="outline" onClick={() => navigate(createPageUrl(isAdmin ? "MyProfiles" : "Dashboard"))}>
               <ArrowLeft className="mr-2 h-4 w-4" />
-              Back to Profiles
+              {isAdmin ? "Back to Profiles" : "Back to Home"}
             </Button>
             {/* What is Hamilton working on for this profile + everywhere the
                 owner must add info for him to finish. The panel deep-links each
@@ -1493,10 +1503,10 @@ export default function ProfileDetail() {
         <div className="rounded-lg border border-slate-200 bg-white p-4 space-y-2">
           <div className="flex items-center justify-between text-sm">
             <span className="font-medium text-slate-700">
-              {completedSections} of {totalSections} sections complete ({completionPct}%)
+              {completedSections} of {totalSections} sections have answers ({completionPct}%)
             </span>
             {completionPct === 100 && (
-              <span className="text-emerald-600 font-medium text-xs">Profile complete</span>
+              <span className="text-emerald-600 font-medium text-xs">All sections started</span>
             )}
           </div>
           <div className="w-full bg-gray-200 rounded h-2">
@@ -1509,8 +1519,8 @@ export default function ProfileDetail() {
             />
           </div>
           {nextEmptySectionTitle && (
-            <p className="text-xs text-slate-500">
-              Fill in{' '}
+            <p className="text-sm text-foreground">
+              Continue with{' '}
               <button
                 type="button"
                 className="underline text-blue-600 hover:text-blue-800"
@@ -1953,6 +1963,7 @@ export default function ProfileDetail() {
         onClose={handleCloseEditor}
         onSave={handleSaveSection}
         isSaving={Boolean(savingSectionKey)}
+        saveError={saveFeedback?.kind === "error" || saveFeedback?.kind === "partial" ? saveFeedback.message : null}
         onAskAI={handleAskFromEditor}
       />
 

@@ -2,6 +2,7 @@ import React, { useState } from 'react'
 import { isGapGateEnabled } from '@/lib/gapGateFlag'
 import OnboardingVideo from '@/components/onboarding/OnboardingVideo'
 import LoginGapInterviewLauncher from '@/components/profiles/LoginGapInterviewLauncher'
+import EndUserWelcomeGuide from '@/components/onboarding/EndUserWelcomeGuide'
 import GuidedCycleTour from '@/components/onboarding/GuidedCycleTour'
 
 /**
@@ -23,7 +24,7 @@ import GuidedCycleTour from '@/components/onboarding/GuidedCycleTour'
  * suppresses ITS mount only while status === 'pending_reinterview', so
  * ordinary recurring gap-asking resumes on this user's next login onward).
  */
-export default function ResetOnboardingFlow() {
+export default function ResetOnboardingFlow({ endUser = false }) {
   const [step, setStep] = useState('video')
 
   const goToGapInterviewOrSkip = () => {
@@ -46,5 +47,5 @@ export default function ResetOnboardingFlow() {
     return <LoginGapInterviewLauncher onFinished={() => setStep('tour')} />
   }
 
-  return <GuidedCycleTour />
+  return endUser ? <EndUserWelcomeGuide /> : <GuidedCycleTour />
 }

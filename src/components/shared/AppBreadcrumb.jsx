@@ -11,11 +11,19 @@ import {
 import { getBreadcrumbSegments } from "@/nav/navConfig";
 import { useLanguage } from "@/i18n";
 
-export default function AppBreadcrumb() {
+export default function AppBreadcrumb({ endUserGroups = null }) {
   const location = useLocation();
   const { t } = useLanguage();
   const search = location.search?.replace(/^\?/, "") || "";
-  const segments = getBreadcrumbSegments(location.pathname, search);
+  const route = location.pathname.split('/')[1] || 'Dashboard';
+  const item = endUserGroups?.flatMap((group) => group.items).find((entry) => entry.routeName === route);
+  const existing = getBreadcrumbSegments(location.pathname, search);
+  const segments = endUserGroups ? (route === 'Dashboard' ? [existing[0]] : [existing[0], {
+    path: location.pathname + location.search,
+    label: item?.title || existing.at(-1)?.label || route,
+    labelI18nKey: item?.i18nKey,
+    isCurrent: true,
+  }]) : existing;
 
   // Translate each crumb label when it carries an i18n key; fall back to the
   // raw English label so unmapped routes still render correctly.
@@ -24,7 +32,7 @@ export default function AppBreadcrumb() {
   if (segments.length === 0) return null;
 
   return (
-    <Breadcrumb className="hidden sm:block">
+    <Breadcrumb className={endUserGroups ? "block" : "hidden sm:block"}>
       <BreadcrumbList>
         {segments.map((seg, i) => (
           <React.Fragment key={seg.path + seg.label + i}>

@@ -235,6 +235,9 @@ jobs:
       - name: Blocking Chromium, Safari/WebKit, and mobile Safari smoke
         run: npm run smoke
 
+      - name: Authenticated non-admin guidance and recovery journeys
+        run: npm run test:ux
+
       - name: Retain Playwright diagnostics on failure
         if: failure()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1

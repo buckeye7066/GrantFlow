@@ -13,6 +13,9 @@ import {
 import { useLocation, useNavigate } from 'react-router-dom'
 
 import client from '@/api/client'
+import { bucketForTaskStatus, normaliseTaskStatus, partitionHamiltonTasks } from '../../shared/hamiltonTaskLifecycle.js'
+import { canonicalStage } from '../../shared/pipelineStages.js'
+import { Link } from 'react-router-dom'
 import HamiltonAutopilotAuthorization from '@/components/hamilton/HamiltonAutopilotAuthorization'
 import HamiltonAutomationQueue from '@/components/hamilton/HamiltonAutomationQueue'
 import HamiltonHardStopChecklist from '@/components/hamilton/HamiltonHardStopChecklist'
@@ -24,7 +27,16 @@ import { parseLocalDate } from '@/components/shared/dateUtils'
 import { useAuthStore } from '@/stores/authStore'
 
 const HIDDEN_GRANT_STATUSES = new Set(['rejected', 'withdrawn', 'deleted', 'archived', 'expired'])
-const TERMINAL_TASK_STATUSES = new Set(['submitted', 'draft_completed', 'completed', 'cancelled', 'failed'])
+function taskPresentation(task) {
+  if (!task) return { title: 'No unfinished task is recorded', detail: 'Ready for a new task after status is checked.' }
+  const status = normaliseTaskStatus(task.status)
+  const bucket = bucketForTaskStatus(status)
+  if (['queued', 'ready', 'ready_to_start'].includes(status)) return { title: 'Your application task is queued', detail: 'Queued is not the same as running. Open the task for its place and next action.' }
+  if (status === 'waiting_for_admin') return { title: 'This task is waiting for administration', detail: 'Open the task for the requested action. It is not currently progressing on its own.' }
+  if (bucket === 'needs_you') return { title: 'This application needs attention', detail: 'Open the task to see its exact question, sign-in, verification, or review request.' }
+  if (bucket === 'waiting') return { title: 'Your application task is waiting', detail: 'Check its schedule or waiting reason. Do not assume work is running.' }
+  return { title: 'An application task is in progress', detail: 'Open the task for the latest recorded status and any action needed from you.' }
+}
 
 const currency = new Intl.NumberFormat('en-US', {
   style: 'currency',
@@ -71,14 +83,16 @@ function methodLabel(grant) {
 }
 
 function formatPipelineDeadline(grant) {
-  if (!grant?.deadline) return 'No fixed deadline'
+  if (!grant?.deadline) return 'Deadline not provided'
   if (String(grant.deadline).toLowerCase() === 'rolling') return 'Rolling deadline'
   const parsed = parseLocalDate(grant.deadline)
   return parsed ? parsed.toLocaleDateString() : String(grant.deadline)
 }
 
 function statusLabel(status) {
-  return String(status || 'preparing').replace(/_/g, ' ')
+  const stage = canonicalStage(status)
+  const labels = { discovered: 'Source to review', saved: 'Saved source', interested: 'Selected for review', gathering_documents: 'Documents needed', drafting: 'Draft in progress', ready_to_submit: 'Ready for submission steps', submitted: 'Submission recorded', follow_up: 'Follow-up', awarded: 'Award recorded', declined: 'Not awarded', archived: 'Archived' }
+  return labels[stage] || 'Status needs checking'
 }
 
 export default function EndUserPipeline() {
@@ -112,7 +126,8 @@ export default function EndUserPipeline() {
     queryFn: async () => {
       const params = new URLSearchParams({ profile_id: String(profileId) })
       const response = await client.get(`/api/hamilton/automation/tasks?${params.toString()}`)
-      return Array.isArray(response?.tasks) ? response.tasks : []
+      if (!Array.isArray(response?.tasks) && !Array.isArray(response?.current)) throw new Error('Task status could not be checked')
+      return partitionHamiltonTasks(response).current.filter((task) => String(task.profile_id) === String(profileId))
     },
     refetchInterval: 15_000,
     staleTime: 5_000,
@@ -138,7 +153,7 @@ export default function EndUserPipeline() {
 
   const activeTask = useMemo(
     () => (Array.isArray(tasksQuery.data) ? tasksQuery.data : []).find(
-      (task) => !TERMINAL_TASK_STATUSES.has(String(task?.status || '').toLowerCase()),
+      (task) => bucketForTaskStatus(task?.status) !== 'finished',
     ) || null,
     [tasksQuery.data],
   )
@@ -171,7 +186,8 @@ export default function EndUserPipeline() {
 
   const selectedGrant = grants.find((grant) => String(grant.id) === String(selectedGrantId)) || null
   const selectedUrl = grantUrl(selectedGrant)
-  const potentialTotal = grants.reduce((sum, grant) => sum + grantValue(grant), 0)
+  const potentialTotal = grants.filter((grant) => canonicalStage(grant.status) !== 'awarded').reduce((sum, grant) => sum + grantValue(grant), 0)
+  const presentation = taskPresentation(activeTask)
 
   const selectedSources = selectedGrant
     ? [{
@@ -187,7 +203,7 @@ export default function EndUserPipeline() {
     setSelectedGrantId(String(grantId))
     const params = new URLSearchParams(location.search)
     params.set('grant_id', String(grantId))
-    navigate(`/Pipeline?${params.toString()}`, { replace: true })
+    navigate(`/Pipeline?${params.toString()}`)
   }
 
   const taskStatusUnknown = tasksQuery.isLoading || tasksQuery.isError
@@ -199,8 +215,8 @@ export default function EndUserPipeline() {
         <Card className="max-w-lg">
           <CardContent className="p-8 text-center">
             <Sparkles className="mx-auto h-8 w-8 text-primary" />
-            <h1 className="mt-4 text-xl font-semibold">Anya is finishing your funding profile</h1>
-            <p className="mt-2 text-sm text-muted-foreground">Once your profile is ready, accepted funding sources will appear here automatically.</p>
+            <h1 className="mt-4 text-xl font-semibold">No active funding profile is available</h1>
+            <p className="mt-2 text-sm text-muted-foreground">Choose one of your available profiles or open Help to recover access. This screen does not mean profile work is running.</p>
             <Button type="button" className="mt-5" onClick={() => navigate('/Help')}>Ask Anya what is needed</Button>
           </CardContent>
         </Card>
@@ -233,7 +249,7 @@ export default function EndUserPipeline() {
           </div>
           <div className="grid grid-cols-1 gap-3 min-[360px]:grid-cols-2 sm:min-w-[360px]">
             <SummaryTile label="Funding sources" value={String(grants.length)} />
-            <SummaryTile label="Potential funding" value={currency.format(potentialTotal)} />
+            <SummaryTile label="Potential funding, not awarded" value={currency.format(potentialTotal)} />
           </div>
         </div>
 
@@ -250,8 +266,8 @@ export default function EndUserPipeline() {
             <CardContent className="p-10 text-center">
               <FileCheck2 className="mx-auto h-9 w-9 text-muted-foreground" />
               <h2 className="mt-4 text-xl font-semibold text-foreground">No accepted funding sources yet</h2>
-              <p className="mt-2 text-sm text-muted-foreground">GrantFlow will place accepted matches here and prepare them for Hamilton.</p>
-              <Button type="button" variant="outline" className="mt-5" onClick={() => navigate('/Help')}>Ask Anya about your next match</Button>
+              <p className="mt-2 text-sm text-muted-foreground">Begin with Discover Grants, review a source and its requirements, then add a suitable source to your pipeline. A saved bookmark is not an application.</p>
+              <Button type="button" variant="outline" className="mt-5" onClick={() => navigate('/DiscoverGrants')}>Find funding to review</Button>
             </CardContent>
           </Card>
         ) : (
@@ -260,10 +276,10 @@ export default function EndUserPipeline() {
               {activeTask ? (
                 <Card className="border-emerald-300 bg-emerald-50/60">
                   <CardContent className="flex items-start gap-3 p-4 text-sm text-emerald-900">
-                    <Loader2 className="mt-0.5 h-4 w-4 shrink-0 animate-spin" />
+                    <Sparkles className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
                     <div>
-                      <p className="font-semibold">Hamilton is already working on one funding source.</p>
-                      <p className="mt-1">Open the live task below to watch preparation, provide missing information, review the human portal handoff, or cancel before starting another source.</p>
+                      <p className="font-semibold">{presentation.title}</p>
+                      <p className="mt-1">{presentation.detail}</p><Link className="mt-2 inline-flex min-h-11 items-center underline" to={'/HamiltonTask/' + encodeURIComponent(activeTask.id)}>Open current application task</Link>
                     </div>
                   </CardContent>
                 </Card>
@@ -296,7 +312,7 @@ export default function EndUserPipeline() {
                     <div className="grid gap-3 sm:grid-cols-3">
                       <Detail label="Deadline" value={formatPipelineDeadline(selectedGrant)} icon={CalendarClock} />
                       <Detail label="Application method" value={methodLabel(selectedGrant)} icon={ExternalLink} />
-                      <Detail label="Hamilton mode" value={activeTask ? 'Working now' : 'Ready when you are'} icon={Sparkles} />
+                      <Detail label="Hamilton mode" value={taskStatusUnknown ? 'Status unavailable' : presentation.title} icon={Sparkles} />
                     </div>
 
                     <div className="rounded-xl border border-border bg-muted/30 p-4 text-sm text-foreground">
@@ -305,7 +321,7 @@ export default function EndUserPipeline() {
                         <li>Hamilton checks the stored requirements, profile facts, documents, portal, and deadlines.</li>
                         <li>He prepares the fields and documents supported by the available source information.</li>
                         <li>He pauses for missing information, login, CAPTCHA, 2FA, payment, signature, owner approval, or a personal attestation. GrantFlow cannot bypass those steps.</li>
-                        <li>In the controlled beta, Hamilton preserves the finished work and shows the manual handoff. You complete the final external submission and retain its confirmation.</li>
+                        <li>Follow the task's authorized submission mode. Some sources support automation; others require a manual handoff. A draft, download, or button click is not confirmation. Submission is recorded only with supporting evidence.</li>
                       </ol>
                     </div>
 
