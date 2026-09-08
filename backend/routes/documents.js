@@ -1,4 +1,5 @@
 import express from 'express';
+import { withProfileScope } from '../middleware/profileContext.js'
 import crypto from 'crypto';
 import multer from 'multer';
 import fs from 'fs';
@@ -492,6 +493,44 @@ async function buildAccessContext(req) {
   return { ctx, isAdmin, accessibleProfiles }
 }
 
+
+/**
+ * Read ONE document by id with the caller's profile scope baked into the SQL.
+ *
+ * The tenant guard (db/scopedQuery.js) refuses a non-admin SELECT on
+ * `documents` that carries no profile predicate: a plain `WHERE id = ?`
+ * threw "Profile-scoped SELECT on [documents] without required scope
+ * predicate" and every by-id handler answered 500, for the person's OWN
+ * documents as much as anyone else's (prod, 2026-09-07, measured as an end
+ * user). Admins read by id alone (the guard exempts them); a non-admin reads
+ * only inside their accessible profiles, so another profile's document is
+ * simply not found. Exported for the unit test.
+ */
+export async function loadDocumentForContext(req, context, select = '*') {
+  const id = String(req.params?.id ?? '')
+  if (!id) return null
+  if (context?.isAdmin) {
+    return req.db.prepare(`SELECT ${select} FROM documents WHERE id = ?`).get(id)
+  }
+  const ids = [...(context?.accessibleProfiles ?? [])].map(String)
+  if (ids.length > 0) {
+    const ph = ids.map(() => '?').join(', ')
+    const mine = await req.db
+      .prepare(`SELECT ${select} FROM documents WHERE id = ? AND profile_id IN (${ph})`)
+      .get(id, ...ids)
+    if (mine) return mine
+  }
+  // Not inside the caller's scope. Distinguish "exists but not yours" (403,
+  // the contract the receipt-privacy tests pin) from "does not exist" (404)
+  // with an IDENTITY-ONLY read under the guard's explicit bypass — only the
+  // owning profile id comes back, never the content, and ensureDocumentAccess
+  // refuses it on the very next line of every handler.
+  const identity = await withProfileScope({ bypass: true }, () =>
+    req.db.prepare('SELECT id, profile_id FROM documents WHERE id = ?').get(id),
+  )
+  return identity ? { id: identity.id, profile_id: identity.profile_id, __identity_only: true } : null
+}
+
 function ensureAuthenticated(res, context) {
   if (!context.ctx?.userId) {
     res.status(401).json({ error: 'Not authenticated' });
@@ -757,9 +796,7 @@ router.get('/:id', async (req, res) => {
     const context = await buildAccessContext(req);
     if (!ensureAuthenticated(res, context)) return;
 
-    const doc = await req.db
-      .prepare(`SELECT ${DOCUMENT_METADATA_SELECT} FROM documents WHERE id = ?`)
-      .get(req.params.id);
+    const doc = await loadDocumentForContext(req, context, DOCUMENT_METADATA_SELECT);
     if (!ensureDocumentAccess(res, context, doc)) return;
     
     res.json(serializeDocument(doc));
@@ -775,7 +812,7 @@ router.get('/:id/download', async (req, res) => {
     const context = await buildAccessContext(req)
     if (!ensureAuthenticated(res, context)) return
 
-    const doc = await req.db.prepare('SELECT * FROM documents WHERE id = ?').get(req.params.id)
+    const doc = await loadDocumentForContext(req, context, '*')
     if (!ensureDocumentAccess(res, context, doc)) return
     applyPrivateDocumentDownloadHeaders(res, doc)
 
@@ -1272,7 +1309,7 @@ router.put('/:id', async (req, res) => {
     const context = await buildAccessContext(req);
     if (!ensureAuthenticated(res, context)) return;
 
-    const existing = await req.db.prepare('SELECT * FROM documents WHERE id = ?').get(req.params.id);
+    const existing = await loadDocumentForContext(req, context, '*');
     if (!ensureDocumentAccess(res, context, existing)) return;
 
     const fields = Object.keys(req.body ?? {});
@@ -1316,7 +1353,7 @@ router.delete('/:id', async (req, res) => {
     const context = await buildAccessContext(req);
     if (!ensureAuthenticated(res, context)) return;
 
-    const existing = await req.db.prepare('SELECT * FROM documents WHERE id = ?').get(req.params.id);
+    const existing = await loadDocumentForContext(req, context, '*');
     if (!ensureDocumentAccess(res, context, existing)) return;
     if (!(await ensureDocumentDeleteAccess(req, res, context, existing))) return
     if (await manualSubmissionReceiptBinding(req.db, existing.id)) {
@@ -1365,7 +1402,7 @@ router.post('/:id/parse', async (req, res) => {
     const context = await buildAccessContext(req);
     if (!ensureAuthenticated(res, context)) return;
 
-    const document = await req.db.prepare('SELECT * FROM documents WHERE id = ?').get(req.params.id);
+    const document = await loadDocumentForContext(req, context, '*');
     if (!ensureDocumentAccess(res, context, document)) return;
 
     const profileId = normalizeProfileId(document.profile_id);
@@ -1613,7 +1650,7 @@ router.post('/:id/ingest', async (req, res) => {
     const context = await buildAccessContext(req);
     if (!ensureAuthenticated(res, context)) return;
 
-    const document = await req.db.prepare('SELECT * FROM documents WHERE id = ?').get(req.params.id);
+    const document = await loadDocumentForContext(req, context, '*');
     if (!ensureDocumentAccess(res, context, document)) return;
 
     const profileId = normalizeProfileId(document.profile_id);
@@ -1693,7 +1730,7 @@ router.get('/:id/extract', async (req, res) => {
     const context = await buildAccessContext(req);
     if (!ensureAuthenticated(res, context)) return;
 
-    const document = await req.db.prepare('SELECT * FROM documents WHERE id = ?').get(req.params.id);
+    const document = await loadDocumentForContext(req, context, '*');
     if (!ensureDocumentAccess(res, context, document)) return;
 
     const extract = await req.db
@@ -1765,7 +1802,7 @@ router.get('/:id/extract/text', async (req, res) => {
     const context = await buildAccessContext(req);
     if (!ensureAuthenticated(res, context)) return;
 
-    const document = await req.db.prepare('SELECT * FROM documents WHERE id = ?').get(req.params.id);
+    const document = await loadDocumentForContext(req, context, '*');
     if (!ensureDocumentAccess(res, context, document)) return;
 
     const extract = await req.db
