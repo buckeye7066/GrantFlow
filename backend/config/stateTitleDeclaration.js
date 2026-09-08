@@ -57,6 +57,35 @@ function urlTokensOf(value) {
   return ` ${hostAndPath.toLowerCase().replace(/[^a-z]+/g, ' ').trim()} `
 }
 
+/**
+ * The state a row's own SPONSOR names — "Tennessee Department of Disability and
+ * Aging", "Indiana Housing and Community Development Authority".
+ *
+ * A state agency's NAME is a claim the funder makes about ITSELF, which is the
+ * doctrine this file already applies to URLs: a state column is a claim about a
+ * CRAWL, a name is a claim about the row. Measured on prod 2026-09-08, an
+ * Indiana senior was accepted for "Senior Center Grant" (Tennessee Department
+ * of Disability) and "Ohio Homestead Exemption for Seniors and Disabled" — both
+ * stamped national with a NULL state, so every geography gate passed them.
+ *
+ * FULL names only, longest-first, Washington excluded — the same conservatism
+ * as the URL rule, because a two-letter code is a coincidence magnet.
+ * Deliberately requires a GOVERNMENTAL word alongside the name: "New York Life
+ * Foundation" is a national insurer, not a New York agency.
+ */
+const GOVERNMENTAL_RX = /\b(department|division|commission|authority|agency|bureau|office|state of|governor|treasurer|comptroller|exemption|housing finance)\b/i
+
+export function declaredStateFromSponsorName(row) {
+  if (!row || typeof row !== 'object') return null
+  const sponsor = String(row.sponsor ?? '').trim()
+  if (!sponsor || !GOVERNMENTAL_RX.test(sponsor)) return null
+  const hay = ` ${sponsor.toLowerCase().replace(/[^a-z]+/g, ' ').trim()} `
+  for (const { code, name } of URL_STATE_NAMES) {
+    if (hay.includes(` ${name} `)) return isValidState(code) ? code : null
+  }
+  return null
+}
+
 /** The real U.S. state a row declares in its own URLs (url / application_url / source_url / evidence_url / apply_url), or null. */
 export function declaredStateFromUrls(row) {
   if (!row || typeof row !== 'object') return null
@@ -82,4 +111,4 @@ export function declaredStateFromTitle(rowOrTitle) {
   return code && isValidState(code) ? code : null
 }
 
-export default { TITLE_STATE_RX, TITLE_NEAR_STATE_RX, declaredStateFromTitle, declaredStateFromUrls, URL_STATE_NAME_EXCLUDED }
+export default { TITLE_STATE_RX, TITLE_NEAR_STATE_RX, declaredStateFromTitle, declaredStateFromSponsorName, declaredStateFromUrls, URL_STATE_NAME_EXCLUDED }

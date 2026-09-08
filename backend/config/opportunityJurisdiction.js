@@ -34,7 +34,10 @@ import {
   canonicalUsFunderJurisdiction,
   correctedCanonicalUsScope,
 } from './canonicalUsJurisdiction.js'
-import { declaredStateFromTitle as declaredStateCodeFromTitle } from './stateTitleDeclaration.js'
+import {
+  declaredStateFromTitle as declaredStateCodeFromTitle,
+  declaredStateFromSponsorName,
+} from './stateTitleDeclaration.js'
 
 /**
  * Existing consumers ask this authority for the row's declared state. Preserve
@@ -44,7 +47,13 @@ import { declaredStateFromTitle as declaredStateCodeFromTitle } from './stateTit
  */
 export function declaredStateFromTitle(rowOrTitle) {
   const row = typeof rowOrTitle === 'string' ? { title: rowOrTitle } : rowOrTitle
-  return canonicalUsFunderJurisdiction(row)?.state ?? declaredStateCodeFromTitle(rowOrTitle)
+  return canonicalUsFunderJurisdiction(row)?.state
+    ?? declaredStateCodeFromTitle(rowOrTitle)
+    // A state AGENCY's own name is a claim the funder makes about itself, the
+    // same doctrine this file applies to the row's URLs. Without it, rows like
+    // "Senior Center Grant" (Tennessee Department of Disability and Aging)
+    // carry a NULL state, read as national, and reach every state's profiles.
+    ?? declaredStateFromSponsorName(row)
 }
 
 /**
@@ -111,6 +120,13 @@ export const FOREIGN_FUNDER_NAMES = Object.freeze([
 export const FOREIGN_FUNDER_SPONSORS = Object.freeze({
   'energy saving grants': 'GB',
   'tata trusts': 'IN',
+  // Measured on prod 2026-09-08: "Warm Homes Plan" (sponsor "UK Government")
+  // was ACCEPTed at score 25 for a 60+ homeowner in Lagrange, INDIANA. A
+  // sovereign government names its own jurisdiction.
+  'uk government': 'GB',
+  'gov.uk': 'GB',
+  'government of canada': 'CA',
+  'european commission': 'EU',
 })
 
 /**
