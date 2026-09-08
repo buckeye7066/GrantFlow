@@ -117,8 +117,13 @@ test('a lockfile marker cannot bless a damaged dependency cache', () => {
   const workspace = join(root, 'workspace')
   const packageDir = join(workspace, 'node_modules', '@prisma', 'engines')
   const calls = []
-  const install = (command, args) => {
+  const repairStores = []
+  const install = (command, args, options) => {
     calls.push(args)
+    if (options.env.npm_config_store_dir) {
+      repairStores.push(options.env.npm_config_store_dir)
+      assert.ok(existsSync(options.env.npm_config_store_dir))
+    }
     mkdirSync(join(packageDir, 'dist'), {recursive:true})
     writeFileSync(join(packageDir, 'package.json'), JSON.stringify({name:'@prisma/engines',main:'dist/index.js'}))
     writeFileSync(join(packageDir, 'dist/index.js'), 'module.exports = {}')
@@ -133,6 +138,8 @@ test('a lockfile marker cannot bless a damaged dependency cache', () => {
     const result = ensureWorkspaceDependencies(workspace, options)
     assert.equal(calls.length, 2)
     assert.ok(calls[1].includes('--force'))
+    assert.equal(repairStores.length, 1)
+    assert.ok(!existsSync(repairStores[0]))
     assert.deepEqual(result.reused, [])
     assert.deepEqual(result.failed, [])
     assert.ok(existsSync(join(packageDir, 'dist/index.js')))

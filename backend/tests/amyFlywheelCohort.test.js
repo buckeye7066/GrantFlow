@@ -530,7 +530,7 @@ describe('Sam check amy.flywheelCohort', () => {
     })
     res = await check.run({ db, now })
     expect(res.ok).toBe(false)
-    expect(res.summary).toMatch(/1 of 2 synthetic profiles had issues/)
+    expect(res.summary).toMatch(/1\/2 synthetic profiles clean \(target 2; 1 evaluated with issues; 0 not evaluated\)/)
     expect(res.evidence.finding_types.ineligible_match).toBe(1)
 
     // clean complete day → ok with GOAL summary

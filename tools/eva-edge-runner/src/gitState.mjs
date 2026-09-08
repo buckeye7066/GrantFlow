@@ -28,7 +28,8 @@
 import { spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { createRequire } from 'node:module'
-import { existsSync, mkdirSync, readdirSync, lstatSync, realpathSync, readFileSync, writeFileSync, rmSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, lstatSync, realpathSync, readFileSync, writeFileSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import { dirname, join, resolve, sep } from 'node:path'
 import { baseLaunchEnv } from './prereq.mjs'
 
@@ -377,7 +378,12 @@ export function ensureWorkspaceDependencies(workspaceRoot, {
       continue
     }
     const installArgs = missing.length && plan.args[0] === 'pnpm' ? [...plan.args, '--force'] : plan.args
-    const run = exec(plan.command, installArgs, {
+    // A shared pnpm store can reproduce the same missing files even with
+    // --force. Repair from a fresh task-owned store; preserve other apps' stores.
+    const repairStore = missing.length && plan.args[0] === 'pnpm'
+      ? mkdtempSync(join(tmpdir(), 'eva-pnpm-repair-')) : null
+    let run
+    try { run = exec(plan.command, installArgs, {
       cwd: plan.cwd,
       encoding: 'utf8',
       timeout: timeoutMs,
@@ -388,8 +394,10 @@ export function ensureWorkspaceDependencies(workspaceRoot, {
       // shell only on Windows preserves both portability and the injection
       // boundary.
       shell: platform === 'win32',
-      env: baseLaunchEnv(process.env),
-    })
+      env: { ...baseLaunchEnv(process.env), ...(repairStore ? { npm_config_store_dir: repairStore } : {}) },
+    }) } finally {
+      if (repairStore) rmSync(repairStore, { recursive: true, force: true })
+    }
     if (!run || run.status !== 0) {
       result.failed.push({
         path: plan.relative,
