@@ -44,7 +44,7 @@ npm run typecheck    # TypeScript check
 npm run unit         # Vitest unit tests
 npm run test         # profile-metadata check + lint:ci + typecheck + build + unit
 npm run test:all     # + smoke + e2e (Playwright)
-npm run check:prepush  # Pre-push guardrail chain (auth-middleware/profile-guards/profile-metadata/runtime-imports/env-examples checks + lint + typecheck + build)
+npm run check:prepush  # Pre-push guardrail chain. Carries EVERY static gate that Vercel's build:deploy -> release:gates runs before the SPA build (auth-middleware/profile-guards/profile-metadata/runtime-imports/env-examples/native-platforms/deployment-config/profile-scope/safe-sql/secret-scan/corruption-hotspots) + lint + crawler-os:lint + typecheck + build. Keep it that way: on 2026-09-07 profile-scope:check and safe-sql:check ran ONLY inside release:gates, so a prepush-green merge red the Vercel PRODUCTION build twice (main f73cfa90, 58118f5c).
 
 npm run migrate      # Run DB migrations
 npm run db:setup     # migrate + seed
