@@ -14,7 +14,7 @@
 import express from 'express'
 import { ensureAdmin } from '../middleware/auth.js'
 import { standardRateLimiter } from '../middleware/rateLimiting.js'
-import { lookupVisitorIdentity, normalizeIps } from '../services/visitorIdentity.js'
+import { lookupVisitorIdentity, listVisitorSignins, normalizeIps } from '../services/visitorIdentity.js'
 import { createLogger } from '../utils/logger.js'
 
 const log = createLogger('admin-visitor-identity')
@@ -29,6 +29,24 @@ router.get('/', ensureAdmin, standardRateLimiter, async (req, res) => {
     return res.json({ ok: true, asked: ips.length, matched: Object.keys(identities).length, identities })
   } catch (error) {
     log.warn('visitor identity lookup failed', { error: error?.message || String(error) })
+    return res.status(500).json({ ok: false, error: 'lookup failed' })
+  }
+})
+
+/**
+ * GET /api/admin/visitor-identity/signins?hours=24   (admin token)
+ * → { ok, since, hours, count, signins: [{ at, ip, email, name, is_admin,
+ *      profile_id, profile_name, user_agent }] }   newest first
+ */
+router.get('/signins', ensureAdmin, standardRateLimiter, async (req, res) => {
+  const hours = Math.max(1, Math.min(24 * 30, Number(req.query?.hours) || 24))
+  const since = new Date(Date.now() - hours * 3600 * 1000)
+  try {
+    const signins = await listVisitorSignins(req.db, { since, limit: Number(req.query?.limit) || 500 })
+    res.set('Cache-Control', 'no-store')
+    return res.json({ ok: true, since: since.toISOString(), hours, count: signins.length, signins })
+  } catch (error) {
+    log.warn('visitor signins lookup failed', { error: error?.message || String(error) })
     return res.status(500).json({ ok: false, error: 'lookup failed' })
   }
 })

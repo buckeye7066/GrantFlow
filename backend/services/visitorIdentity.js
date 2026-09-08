@@ -97,4 +97,44 @@ export async function lookupVisitorIdentity(db, rawIps, { maxIps = 200, auditLim
   return out
 }
 
-export default { normalizeIps, lookupVisitorIdentity }
+/**
+ * Every sign-in in a time window, newest first — the owner's "list the logins
+ * in order of time" view on the Axiom Visitors dashboard (2026-09-07). One
+ * row per session: when, who (account + profile), from which IP, on what.
+ * Read-only; first-party records only.
+ */
+export async function listVisitorSignins(db, { since, limit = 500 } = {}) {
+  const sinceIso = since instanceof Date ? since.toISOString() : String(since || '')
+  if (!sinceIso) return []
+  const cap = Math.max(1, Math.min(2000, Number(limit) || 500))
+  let rows = []
+  try {
+    rows = await db.prepare(
+      `SELECT s.id, s.created_at AS at, s.ip_address AS ip, s.user_agent, s.profile_id,
+              u.id AS user_id, u.primary_email AS email, u.display_name AS name, u.is_admin,
+              p.display_name AS profile_name
+         FROM user_sessions s
+         JOIN users u ON u.id = s.user_id
+         LEFT JOIN profiles p ON p.id = s.profile_id
+        WHERE s.created_at >= ?
+        ORDER BY s.created_at DESC
+        LIMIT ${cap}`,
+    ).all(sinceIso)
+  } catch {
+    rows = []
+  }
+  return (rows || []).map((r) => ({
+    id: r.id,
+    at: r.at ?? null,
+    ip: r.ip ?? null,
+    user_id: r.user_id ?? null,
+    email: r.email ?? null,
+    name: r.name ?? null,
+    is_admin: r.is_admin === true || Number(r.is_admin) === 1,
+    profile_id: r.profile_id ?? null,
+    profile_name: r.profile_name ?? null,
+    user_agent: r.user_agent ?? null,
+  }))
+}
+
+export default { normalizeIps, lookupVisitorIdentity, listVisitorSignins }
