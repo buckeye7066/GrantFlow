@@ -46,7 +46,11 @@ test('SAM.gov PROGRAM rows with an info_url store for REVIEW instead of failing 
     _embedded: {
       results: [{
         programNumber: '10.766',
-        title: 'Community Facilities Direct Loan and Grant Program',
+        // Title deliberately NOT a loan program: this test guards info_url
+        // handling, and since 2026-09-08 a "Loan and Grant" hybrid is refused
+        // as debt (owner rule NO LOANS), which would mask what is under test.
+        // The hybrid's own contract is pinned in the test below.
+        title: 'Community Facilities Grant Program',
         organizationHierarchy: { name: 'U.S. Department of Agriculture' },
         isActive: true,
         _id: 'fal-10766-abc',
@@ -71,6 +75,39 @@ test('SAM.gov PROGRAM rows with an info_url store for REVIEW instead of failing 
   const match = storage.getMatchesForProfile(store, thesis.profile_id).find((m) => m.opportunity_id === row.id);
   assert.ok(match, 'SAM program was matched to profile');
   assert.equal(match.decision, 'review');
+});
+
+// The hybrid case the fixture above used to carry, pinned on its own so the
+// info_url guard and the NO-LOANS contract cannot mask each other.
+test('a SAM.gov "Loan and Grant" hybrid is REFUSED as debt, even for a profile that allows loans', async () => {
+  const store = createMemoryStore();
+  const samBody = {
+    _embedded: {
+      results: [{
+        programNumber: '10.766',
+        title: 'Community Facilities Direct Loan and Grant Program',
+        organizationHierarchy: { name: 'U.S. Department of Agriculture' },
+        isActive: true,
+        _id: 'fal-10766-abc',
+      }],
+    },
+  };
+  const fetcher = makeOfflineFetcher({ routes: { 'sam.gov/api/prod/sgs': samBody } });
+  // allow_loans: true and it is STILL refused — the owner rule is NO LOANS,
+  // hybrids included, not a per-profile preference.
+  const profile = {
+    id: 'profile_nonprofit_2', name: 'Rural Clinic', type: 'nonprofit',
+    location: { state: 'TN' }, needs: ['capital'], allow_loans: true,
+  };
+  const thesis = buildThesis(profile);
+  await runDiscovery({ store, fetcher }, { thesis, matchProfiles: [thesis], runId: 'sam_hybrid' });
+  const row = storage.listCatalog(store).find((o) => o.source_id === 'sam_gov');
+  const match = row
+    ? storage.getMatchesForProfile(store, thesis.profile_id).find((m) => m.opportunity_id === row.id)
+    : null;
+  // Either the reality gate dropped it at ingest, or the engine refused it —
+  // both are honest refusals; what must never happen is a recommendable verdict.
+  assert.ok(!match || match.decision === 'reject', 'a loan hybrid must never be recommended');
 });
 
 test('inferred concrete applicant categories do not get polluted by broad source fallback categories', () => {

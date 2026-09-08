@@ -59,6 +59,12 @@ const ALLOWED_SHARED_IMPORTS = new Set([
   // keeps need/keyword scanning precision identical across the OS thesis
   // builder and the legacy engine (the phantom-need substring class).
   'backend/services/shared/textMatch.js',
+  // The ONE answer to "is this debt?" (owner rule 2026-09-08: NO LOANS). Six
+  // classifiers previously disagreed — measured, two of them differed on 74 of
+  // 29,138 rows — so the OS ingest flag and the backend admission gate must read
+  // the SAME registry or a row is a loan to one and a grant to the next. Pure,
+  // dependency-free regex tables; imports nothing.
+  'backend/config/loanClassification.js',
   // The ONE question choke point (org/person applicability matrix + canonical
   // fact aliases). Doctrine: every question-asking surface — including the OS
   // project-readiness interview — must run its questions through it, the same

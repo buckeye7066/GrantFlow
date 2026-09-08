@@ -44,6 +44,13 @@ export const FUNDING_SOURCE_ROUTE_PROJECTION = `
        fo.opportunity_type,
        fo.type,
        fo.opportunity_type AS funding_type,
+       -- The loan flag reached NO read path (FundingResultCard's loan banner
+       -- and opportunityTrust's flags.loan could never fire on this surface),
+       -- and opportunity_type AS funding_type shadows the real column, so a
+       -- row typed loan in funding_type was invisible here too. Owner order
+       -- 2026-09-08: NO LOANS -- a gate that cannot see the flag is not a gate.
+       fo.is_loan,
+       fo.funding_type AS funding_type_declared,
        fo.source_trust_tier,
        fo.categories,
        fo.keywords,

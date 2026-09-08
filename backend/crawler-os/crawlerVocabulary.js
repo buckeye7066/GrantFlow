@@ -1,3 +1,4 @@
+import { classifyLoanRisk, LOAN_CLASS } from '../config/loanClassification.js';
 // crawler-os/crawlerVocabulary.js
 //
 // Crawler-side vocabulary helpers. The planner decides WHICH sources should run;
@@ -107,10 +108,16 @@ export function inferFundingFlags(raw = {}, defaults = {}) {
   // combined "Loan and Grant" program -- the applicant can still pursue the
   // grant. We only flag loan-primary instruments (named in the title, or an
   // unambiguous loan instrument) when the title does NOT also offer a grant.
-  const titleGrant = /\bgrants?\b/i.test(title);
+  // A GRANT WORD NO LONGER SUPPRESSES THE LOAN FLAG (owner order 2026-09-08).
+  // `!titleGrant` meant any title containing "grant" shipped is_loan:false —
+  // which is exactly how USDA "Single Family Housing Repair Loans and Grants"
+  // and "Community Facilities Direct Loan and Grant Program" entered the
+  // catalog unflagged. Debt RELIEF is excluded first, so a loan-repayment
+  // program is still never flagged as a loan.
   const titleLoan = /\bloans?\b/i.test(title);
   const loanInstrument = /\b(direct loans?|guaranteed loans?|loan guarantees?|loan program|micro-?loans?|revolving loan fund)\b/i.test(blob);
-  const loanPrimary = !titleGrant && (titleLoan || loanInstrument);
+  const isDebtRelief = classifyLoanRisk({ title, description: blob }) === LOAN_CLASS.DEBT_RELIEF;
+  const loanPrimary = !isDebtRelief && (titleLoan || loanInstrument);
 
   // --- cost-share / match ------------------------------------------------
   // We do NOT infer cost-share from free-text prose. The Grants.gov Search2

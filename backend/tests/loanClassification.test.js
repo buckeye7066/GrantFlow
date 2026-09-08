@@ -151,3 +151,61 @@ describe('wiring — the classifier is actually consulted', () => {
     expect(isLoanExcluded({ title: 'HRSA health workforce programs (scholarships, loan repayment)' })).toBe(false)
   })
 })
+
+// ─────────────────────────────────────────────────────────────────────────────
+// THE SOFTENERS ARE GONE (owner order 2026-09-08: hybrids included)
+//
+// Two documented rules let real debt through, and both keyed on the same idea —
+// that a grant word anywhere rescues a loan:
+//   - aidTypePreferences: any endowment/scholarship/grant word CANCELLED the
+//     loan verdict, so "Community Facilities Direct Loan and Grant Program"
+//     classified as `unknown` and the aid gate never refused it.
+//   - crawlerVocabulary: `!titleGrant` meant any title containing "grant"
+//     shipped is_loan:false, which is how USDA "Single Family Housing Repair
+//     Loans and Grants" entered the catalog unflagged.
+// ─────────────────────────────────────────────────────────────────────────────
+describe('the loan softeners no longer rescue debt', () => {
+  it('aidTypePreferences classifies a grant/loan HYBRID as a loan, not unknown', async () => {
+    const { classifyAidType } = await import('../config/aidTypePreferences.js')
+    expect(classifyAidType({ title: 'Community Facilities Direct Loan and Grant Program' })).toBe('loan')
+    expect(classifyAidType({ title: 'Single Family Housing Repair Loans and Grants' })).toBe('loan')
+  })
+
+  it('…and still calls a pure scholarship a scholarship', async () => {
+    const { classifyAidType } = await import('../config/aidTypePreferences.js')
+    expect(classifyAidType({ title: 'Tennessee HOPE Scholarship' })).toBe('scholarship')
+  })
+
+  it('a loan REPAYMENT program is never classified as a loan by the aid gate', async () => {
+    const { classifyAidType } = await import('../config/aidTypePreferences.js')
+    expect(classifyAidType({ title: 'Health Professional Loan Repayment Program' })).not.toBe('loan')
+  })
+
+  it('crawlerVocabulary flags a hybrid, and still never flags debt relief', async () => {
+    const { inferFundingFlags } = await import('../crawler-os/crawlerVocabulary.js')
+    const hybrid = inferFundingFlags({ title: 'Single Family Housing Repair Loans and Grants', description: '' })
+    expect(hybrid.is_loan).toBe(true)
+    const relief = inferFundingFlags({ title: 'Nurse Corps Loan Repayment Program', description: '' })
+    expect(relief.is_loan).toBe(false)
+  })
+})
+
+describe('the loan flag reaches the surface that renders it', () => {
+  it('the Funding Sources projection selects is_loan and the REAL funding_type', async () => {
+    const src = await import('node:fs').then((fs) =>
+      fs.promises.readFile(new URL('../services/matching/fundingSourceQueries.js', import.meta.url), 'utf8'))
+    // Without these the loan banner in FundingResultCard and opportunityTrust's
+    // flags.loan could never fire on this surface — a gate that cannot see the
+    // flag is not a gate.
+    expect(src).toMatch(/fo\.is_loan/)
+    expect(src).toMatch(/fo\.funding_type AS funding_type_declared/)
+  })
+
+  it('next-step guidance no longer recommends taking on debt', async () => {
+    const src = await import('node:fs').then((fs) =>
+      fs.promises.readFile(new URL('../routes/matching.js', import.meta.url), 'utf8'))
+    for (const banned of ['SBA microloans up to', '504 loans provide', 'SBA-backed loans up to', 'loan guarantees up to']) {
+      expect(src).not.toContain(banned)
+    }
+  })
+})
