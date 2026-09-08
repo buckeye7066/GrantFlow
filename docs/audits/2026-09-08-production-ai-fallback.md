@@ -52,3 +52,30 @@ operation while provider failures occurred; its diagnostic implementation
 checks catalog counts and terminal crawler failures, not model-provider health.
 Do not use that response as proof of crawl quality. Deployment and required CI
 evidence for this repair are recorded on its pull request.
+
+## Follow-up from deployed diagnostics
+
+PR #1634 merged as `45a5e8abaa25cd21a399093576467b3495eb35ce` and was
+confirmed live through Railway and `/api/version`. At 18:58:35 UTC its new logs
+reported an OpenAI JSON parse failure. At 18:58:36 the Anthropic attempt failed
+for insufficient credit with `openai_available: true` and
+`openai_attempted: true`. Another OpenAI parse failure followed at 18:59:30.
+For these requests, OpenAI was attempted; the failure was its unusable response,
+not an absent fallback. These logs do not expose the original finish reason or
+response, so truncation is not yet proven to explain the live failures.
+
+The follow-up explicitly instructs OpenAI to return a complete JSON object and
+adds a single recovery attempt only for SDK-confirmed output truncation. The
+retry doubles the initial output ceiling, capped at 8,192 tokens, and stays
+inside the existing deadline and free-route time reserve. It may consume
+additional tokens; successful recovery combines both requests' token counters.
+The helper never treats a truncated prefix as a complete response, nor repairs
+partial facts by inventing missing fields. Other invalid output still falls
+through to the existing providers. Logs now record a fixed SDK finish reason
+and successful truncation recovery, without exposing model output.
+
+After the owner reported Anthropic billing resolved, provider priority remained
+OpenAI → Anthropic → configured free routes. Railway's variable-name inventory
+showed `OPENAI_API_KEY` and `ANTHROPIC_API_KEY`, but no `FREE_AI_*` or `OLLAMA_*`
+configuration. The free-provider code path exists; a production free endpoint
+and model still need to be connected. No credentials or endpoints were invented.
