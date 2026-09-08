@@ -56,6 +56,9 @@ export async function processCrawlerOsDiscoveryJob({ db, job, signal, deadlineMs
     deadlineMs: Number.isFinite(deadlineMs) ? deadlineMs - 5000 : null,
   })
   const sources = Array.isArray(run?.sources) ? run.sources : []
+  const unavailableSources = sources.filter((source) =>
+    ['fetch_error', 'parse_error', 'error', 'blocked', 'rate_limited'].includes(source.outcome),
+  ).length
   return {
     result_count: persisted?.opportunities ?? 0,
     result_meta: {
@@ -65,7 +68,9 @@ export async function processCrawlerOsDiscoveryJob({ db, job, signal, deadlineMs
       planned: run?.planned ?? 0,
       rejected: run?.rejected ?? 0,
       sources,
-      partial: sources.some((source) => source.reason === 'time_budget_exhausted'),
+      unavailable_sources: unavailableSources,
+      partial: unavailableSources > 0 || sources.some((source) => source.reason === 'time_budget_exhausted')
+        || run?.web_lane?.reason === 'time_budget_exhausted',
       skipped: Boolean(run?.skipped),
       reason: run?.reason ?? null,
       blocked_reason: run?.blocked_reason ?? null,

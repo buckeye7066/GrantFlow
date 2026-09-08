@@ -1,5 +1,5 @@
 import { parseDbTimestamp } from '../../utils/dbTimestamp.js'
-﻿/**
+/**
  * hamiltonAutomationOrchestrator.js
  *
  * Top-level "Automate with Hamilton" entry point. Given a list of selected

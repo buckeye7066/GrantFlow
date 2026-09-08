@@ -964,6 +964,7 @@ export default function DiscoverGrants() {
       career_goals: profileForSearch?.sections?.career_goals?.primary_goal || profileForSearch?.career_goal || null,
       category_query: activeCategoryQuery ?? undefined,
     } : null
+    let searchComplete = true
     try {
       setProfileCompletionHint(null)
       // Show whatever already matches this profile immediately (instant feedback
@@ -988,6 +989,7 @@ export default function DiscoverGrants() {
       // has already been updated and there is nothing to poll for. Polling
       // anyway just adds 12s+ of wasted spinner time before fetchCatalogMatches.
       const synchronous = Boolean(dispatch?.synchronous)
+      if (!synchronous && !jobIds.length) throw new Error('The search did not return a progress receipt. Please try again.')
       const partial = Boolean(dispatch?.partial)
       const stored = Number(dispatch?.stored) || 0
       const matches = Number(dispatch?.matches) || 0
@@ -1007,6 +1009,9 @@ export default function DiscoverGrants() {
           if (isCancelled()) return
           const jobs = await Promise.all(jobIds.map((id) => getCrawlerJob(id)))
           if (isCancelled()) return
+          if (jobs.some((job) => !['queued', 'running', 'completed', 'failed', 'cancelled'].includes(job.status))) {
+            throw new Error('Search progress could not be read. Your existing matches are still available.')
+          }
           if (jobs.some((job) => String(job.profile_id) !== String(pid))) {
             throw new Error('Search progress belongs to a different profile. Please reload the page.')
           }
@@ -1019,16 +1024,19 @@ export default function DiscoverGrants() {
           completed = jobs.every((job) => job.status === 'completed')
           if (completed) {
             if (jobs.some((job) => job.result_meta?.partial)) {
-              toast({ title: 'Search partially completed', description: 'Some sources could not be checked in time. Showing the matches found so far; you can search again to retry.' })
+              searchComplete = false
+              toast({ title: 'Search partially completed', description: 'Some sources could not be checked. Showing the matches found so far; you can search again to retry.' })
             }
             break
           }
           await sleep(DISCOVERY_POLL_MS)
         }
+        searchComplete = searchComplete && completed
         if (!completed) {
           toast({ title: 'Your search is still running', description: 'You can keep working. Return to Find Funding later to see the results.' })
         }
       } else if (synchronous && partial) {
+        searchComplete = false
         // The crawl hit the gateway time budget and is finishing in the
         // background. Show what was found so far instead of a 504/empty state.
         toast({
@@ -1070,7 +1078,7 @@ export default function DiscoverGrants() {
           )
         : rawOpportunities
       setScoreHint(finalResultPayload.score_hint || null)
-      await handleCrawlerResults(opportunities, finalResultPayload)
+      await handleCrawlerResults(opportunities, finalResultPayload, { isCancelled, complete: searchComplete })
     } catch (error) {
       if (isCancelled()) return
       console.error('[DiscoverGrants] Search error:', error)
@@ -1134,7 +1142,8 @@ export default function DiscoverGrants() {
   // earlier handleFindFunding caller and other forward references stay
   // outside the temporal dead zone. Same reasoning for handleAddToPipeline
   // below \u2014 both are used in render-time JSX above their lexical position.
-  async function handleCrawlerResults(opportunities, responsePayload = null) {
+  async function handleCrawlerResults(opportunities, responsePayload = null, { isCancelled = () => false, complete = true } = {}) {
+    if (isCancelled()) return
     const rawOpportunities = Array.isArray(opportunities) ? opportunities : []
     const uniqueOpportunities = dedupeFundingResults(rawOpportunities)
     const collapsedCount = rawOpportunities.length - uniqueOpportunities.length
@@ -1162,6 +1171,7 @@ export default function DiscoverGrants() {
     let attempted = 0
 
     for (const opp of uniqueOpportunities) {
+      if (isCancelled()) return
       // Server-flagged pipeline members are never re-added (they'd only
       // round-trip to an `already` answer).
       if (opp?.already_in_pipeline) { alreadyCount += 1; continue }
@@ -1181,13 +1191,14 @@ export default function DiscoverGrants() {
       }
     }
 
+    if (isCancelled()) return
     // Refresh pipeline once (avoid spamming invalidations during batch add).
     queryClient.invalidateQueries({ queryKey: ['grants'] })
 
     if (uniqueOpportunities.length === 0) {
       toast({
-        title: 'No results found',
-        description: buildZeroResultDescription(profileGaps),
+        title: complete ? 'No results found' : 'No matches available yet',
+        description: complete ? buildZeroResultDescription(profileGaps) : 'The search has not fully completed. Return later to check for more matches.',
       })
     } else {
       const partition = partitionDiscoverResults(uniqueOpportunities)
@@ -1196,11 +1207,11 @@ export default function DiscoverGrants() {
         ? ` Plus ${partition.directoryCount} director${partition.directoryCount === 1 ? 'y' : 'ies'} to search.`
         : ''
       toast({
-        title: 'Search complete',
-        description: `Found ${partition.awardableCount} opportunit${partition.awardableCount === 1 ? 'y' : 'ies'} you can apply to.${dirNote}${collapseNote} ${
+        title: complete ? 'Search complete' : 'Showing matches found so far',
+        description: `Found ${partition.awardableCount} funding opportunit${partition.awardableCount === 1 ? 'y' : 'ies'} to review.${dirNote}${collapseNote} ${
           attempted > 0
-            ? `Auto-added the ${attempted} strongest (score ${AUTO_ADD_SCORE}+): ${addedCount} added, ${alreadyCount} already in pipeline, ${skippedCount} kept out, ${failedCount} failed.`
-            : `None reached the score-${AUTO_ADD_SCORE} auto-add bar — browse the results below and add any you want.`
+            ? `Eligible matches: ${addedCount} added to your pipeline, ${alreadyCount} already there, ${skippedCount} kept out, ${failedCount} could not be added.`
+            : 'Review the eligibility details before adding an opportunity to your pipeline.'
         }`,
       })
     }

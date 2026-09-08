@@ -659,6 +659,9 @@ export async function runProfileDiscoveryLive({ db = getDb(), profileId, fetcher
   // registry source, so it is skipped whenever onlySourceIds narrows the run.
   let webTargetVerification = null;
   signal?.throwIfAborted();
+  if (isWebDiscoveryEnabled() && !onlySources && resolvedDeadline !== null && Date.now() >= resolvedDeadline) {
+    run.web_lane = { skipped: true, reason: 'time_budget_exhausted' };
+  }
   if (isWebDiscoveryEnabled() && !onlySources && (resolvedDeadline === null || Date.now() < resolvedDeadline)) {
     try {
       const [{ runWebDiscoveryLane }, { searchWeb }, { extractOpportunitiesFromPage }, parity] = await Promise.all([

@@ -58,3 +58,18 @@ test('completed discovery keeps a failed catalog refresh visible as an error', a
   await page.getByRole('button', { name: 'Find Funding Opportunities', exact: true }).click()
   await expect(page.getByText('Search failed', { exact: true }).first()).toBeVisible()
 })
+
+test('a partial search never announces complete coverage', async ({ page }) => {
+  await login(page)
+  let profileId
+  await page.route('**/api/real-crawlers/discover-all', async (route) => {
+    profileId = route.request().postDataJSON().profile_id
+    await route.fulfill({ status: 202, json: { success: true, profile_id: profileId, synchronous: false, jobs_enqueued: 1, job_ids: ['fixture-job'] } })
+  })
+  await page.route('**/api/crawlers/jobs/fixture-job', (route) => route.fulfill({ json: { id: 'fixture-job', profile_id: profileId, status: 'completed', result_meta: { partial: true } } }))
+  await page.goto('/DiscoverGrants')
+  await page.getByRole('button', { name: 'Find Funding Opportunities', exact: true }).click()
+  await expect(page.getByRole('button', { name: 'Find Funding Opportunities', exact: true })).toBeEnabled()
+  await expect(page.getByText(/No matches available yet|Showing matches found so far/).first()).toBeVisible()
+  await expect(page.getByText('Search complete', { exact: true })).toHaveCount(0)
+})
