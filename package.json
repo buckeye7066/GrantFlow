@@ -134,8 +134,8 @@
     "test:ux": "node node_modules/playwright/cli.js test -c tests/ux/playwright.config.mjs"
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.123.0",
-    "@aws-sdk/client-textract": "^3.1126.0",
+    "@anthropic-ai/sdk": "^0.124.0",
+    "@aws-sdk/client-textract": "^3.1127.0",
     "@babel/parser": "7.29.8",
     "@capacitor/android": "8.5.1",
     "@capacitor/app": "^8.1.1",
@@ -166,7 +166,7 @@
     "openai": "^7.10.0",
     "pdf-parse": "^1.1.1",
     "pg": "^8.23.0",
-    "playwright": "^1.62.1",
+    "playwright": "^1.63.0",
     "psl": "1.15.0",
     "resend": "^6.26.0",
     "stripe": "^22.6.1",
