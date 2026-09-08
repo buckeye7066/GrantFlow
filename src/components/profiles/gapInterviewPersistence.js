@@ -45,4 +45,59 @@ export async function persistGapAnswers(profileId, sectionUpdates) {
     error.dropped = dropped
     throw error
   }
+
+  // Read the answers BACK. An empty `rejected` only proves the section guard let
+  // the field through — it says nothing about what the row ends up holding. The
+  // same PUT then runs the field mirrors (backend/routes/profiles.js), which
+  // re-derive the deprecated half of every mirrored pair, and on 2026-09-08 that
+  // silently blanked the veteran answer to '' on the way out: a 200, no
+  // rejection, and the same question asked again at the next login, forever.
+  //
+  // Verifying the stored value closes the whole class rather than one mechanism:
+  // whatever erases an answer — a guard, a mirror, a trigger, something added
+  // later — the user is told instead of being put back in the loop.
+  const after = await apiFetch(`/api/profiles/${profileId}/sections`).catch(() => null)
+  const afterRows = Array.isArray(after) ? after : (after?.sections || [])
+  // Only claim an answer was lost when the read-back actually returned the
+  // profile's sections. A failed or empty read means we could not verify, which
+  // is not the same as evidence of loss — reporting it as loss would turn a
+  // transient into a scary dead end.
+  if (afterRows.length > 0) {
+    const stored = {}
+    for (const s of afterRows) stored[s.section_key] = s.data || {}
+    const lost = []
+    for (const [sectionKey, fields] of Object.entries(sectionUpdates || {})) {
+      for (const [field, wrote] of Object.entries(fields)) {
+        if (!answerLanded(stored[sectionKey]?.[field], wrote)) {
+          lost.push(`${sectionKey}.${field}`)
+        }
+      }
+    }
+    if (lost.length > 0) {
+      const error = new Error(
+        `Your answer was not kept: ${lost.join(', ')}. It saved but did not stick, so it would be asked again — please report this.`,
+      )
+      error.code = 'gap_answer_not_persisted'
+      error.dropped = lost
+      throw error
+    }
+  }
+}
+
+/**
+ * Did the value we wrote actually land? Deliberately permissive about shape,
+ * strict about presence: the save path legitimately reshapes some values (long
+ * text is merged sentence-wise by the section guard's dedupeLongText, numbers
+ * round-trip as strings), but it must never come back empty or contradicted.
+ */
+function answerLanded(stored, wrote) {
+  if (typeof wrote === 'boolean') return stored === wrote
+  if (stored === null || stored === undefined) return false
+  if (typeof wrote === 'number') return Number(stored) === wrote
+  const want = String(wrote).trim()
+  if (!want) return true
+  const got = String(stored).trim()
+  // Long text is spliced into whatever the user already had, so containment —
+  // not equality — is the honest check.
+  return got === want || got.includes(want)
 }

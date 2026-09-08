@@ -43,6 +43,7 @@ import NotificationBell from '@/components/notifications/NotificationBell'
 import LoginAnnouncementModal from '@/components/announcements/LoginAnnouncementModal'
 import AppBreadcrumb from '@/components/shared/AppBreadcrumb'
 import EndUserPageGuide from '@/components/guidance/EndUserPageGuide'
+import { shouldShowPageGuide } from '@/lib/pageGuideVisibility'
 import { resumeStorageKey } from '@/lib/resumePath'
 import UserStepCoach from '@/components/guidance/UserStepCoach'
 import GrantLifecyclePhaseIndicator from '@/components/shared/GrantLifecyclePhaseIndicator'
@@ -366,7 +367,7 @@ export default function Layout({ children }) {
               <FreePeriodNotice />
               {!onboardingBusy ? <LoginAnnouncementModal /> : null}
               {!isAdmin ? <OnboardingSequencer endUser /> : null}
-              {!isAdmin ? <EndUserPageGuide /> : null}
+              {shouldShowPageGuide({ isAdmin, activeProfileId }) ? <EndUserPageGuide /> : null}
               {children}
             </div>
           </div>

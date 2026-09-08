@@ -3,6 +3,7 @@ import assert from 'node:assert/strict'
 import { pickDashboardNextAction as next } from '../../src/lib/dashboardNextAction.js'
 import { safeResumePath, resumeStorageKey } from '../../src/lib/resumePath.js'
 import { readScopedNav, writeScopedNav, navPreferenceKey } from '../../src/nav/scopedNavPreferences.js'
+import { shouldShowPageGuide } from '../../src/lib/pageGuideVisibility.js'
 const base = { isSimplified: true, profileId: 'p1', completionPct: 80 }
 const grant = { id: 'g1', profile_id: 'p1', title: 'Test source', status: 'drafting' }
 
@@ -63,4 +64,18 @@ test('resume rejects unsafe URLs and unrelated record or profile IDs', () => {
   assert.equal(safeResumePath('/Pipeline?grant_id=g1', options), '/Pipeline?grant_id=g1')
   assert.notEqual(resumeStorageKey('u1', 'p1'), resumeStorageKey('u2', 'p1'))
   assert.notEqual(resumeStorageKey('u1', 'p1'), resumeStorageKey('u1', 'p2'))
+})
+
+test('the page guide follows the WORKSPACE, not the role', () => {
+  // An end user always gets it.
+  assert.equal(shouldShowPageGuide({ isAdmin: false, activeProfileId: null }), true)
+  assert.equal(shouldShowPageGuide({ isAdmin: false, activeProfileId: 'p1' }), true)
+  // An admin working inside a real profile gets the same guidance that
+  // profile's owner does. Gating on !isAdmin alone made every workflow change
+  // in #1628 invisible to the owner's admin login (report 2026-09-08).
+  assert.equal(shouldShowPageGuide({ isAdmin: true, activeProfileId: 'p1' }), true)
+  // The admin workspace itself has no journey to explain.
+  assert.equal(shouldShowPageGuide({ isAdmin: true, activeProfileId: '__admin__' }), false)
+  assert.equal(shouldShowPageGuide({ isAdmin: true, activeProfileId: null }), false)
+  assert.equal(shouldShowPageGuide({ isAdmin: true, activeProfileId: '' }), false)
 })

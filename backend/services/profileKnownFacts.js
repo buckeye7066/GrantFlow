@@ -270,8 +270,11 @@ export const CANONICAL_FACTS = Object.freeze({
   },
 
   disability: {
-    canonical: 'demographics.disability_status',
+    // The yes/no the user is actually asked lives on health_medical; the
+    // demographics descriptor is the deprecated mirror OUTPUT.
+    canonical: 'health_medical.has_disability',
     aliases: [
+      'demographics.disability_status',
       'health_medical.disability_type', 'family.disability_status', 'demographics.disability',
       'health_medical.chronic_illness', 'health_medical.conditions',
     ],
@@ -280,7 +283,7 @@ export const CANONICAL_FACTS = Object.freeze({
       anyAnswered(ctx, [
         ['demographics', 'disability_status', 'disability'],
         ['family', 'disability_status'],
-        ['health_medical', 'disability_type', 'chronic_illness', 'chronic_illness_type', 'conditions',
+        ['health_medical', 'has_disability', 'disability_type', 'chronic_illness', 'chronic_illness_type', 'conditions',
           'wheelchair_user', 'visual_impairment', 'hearing_impairment'],
         ['medical_history', 'primary_condition'],
       ]) ||

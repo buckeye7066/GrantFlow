@@ -42,16 +42,25 @@ export const FACET_QUESTIONS = Object.freeze([
     type: 'yes_no',
     prompt: 'Do you (or someone in your household you are applying for) have a disability or a long-term health condition?',
     facet: 'disabled',
-    writes: { section: 'demographics', field: 'disability_status', yes: 'Has disability', no: 'No disability' },
+    // CANONICAL target only — demographics.disability_status is the DEPRECATED
+    // half of a mirror pair and was blanked on the next mirror pass whenever the
+    // health_medical per-type flags were stored false (the same erasure that hit
+    // the veteran question). health_medical.has_disability is the yes/no home;
+    // the mirror publishes the demographics descriptor from it.
+    writes: { section: 'health_medical', field: 'has_disability', yes: true, no: false },
   },
   {
     id: 'is_senior',
     type: 'yes_no',
     prompt: 'Are you 60 years old or older?',
     facet: 'senior',
-    // A "no" must persist too ('Under 60'), or the question is re-asked on
-    // every login — the duplicate-qualifier-question class.
-    writes: { section: 'demographics', field: 'age_group', yes: 'Senior 60+', no: 'Under 60' },
+    // CANONICAL target only. demographics.age_group is the DEPRECATED half of a
+    // mirror pair (derived from basic_information.date_of_birth), so an answer
+    // written there is erased the moment a date of birth exists. age_60_plus is
+    // the yes/no home; the mirror publishes age_group from a date of birth when
+    // there is one and from this answer when there is not. A "no" must persist
+    // too, or the question is re-asked on every login.
+    writes: { section: 'demographics', field: 'age_60_plus', yes: true, no: false },
   },
   {
     id: 'is_student',
@@ -65,10 +74,14 @@ export const FACET_QUESTIONS = Object.freeze([
     type: 'yes_no',
     prompt: 'Have you (or the person you are applying for) served in the military?',
     facet: 'veteran',
-    // String values: buildProfileSignals reads demographics.veteran_status as
-    // a STRING ('not a veteran' is recognised as an explicit no), so a boolean
-    // true here silently fed nothing into matching.
-    writes: { section: 'demographics', field: 'veteran_status', yes: 'Veteran', no: 'Not a veteran' },
+    // CANONICAL target only. demographics.veteran_status is the DEPRECATED half
+    // of a mirror pair (shared/profileFieldMirrors.js derives it FROM
+    // military_service.*), so writing the answer there was erased on the very
+    // next mirror pass — military_service.veteran:false forced veteran_status
+    // back to '' and the question was re-asked at every login (2026-09-08,
+    // Anastasia White). Writing the source lets the mirror publish
+    // demographics.veteran_status = 'veteran' | '' for its readers.
+    writes: { section: 'military_service', field: 'veteran', yes: true, no: false },
   },
   {
     id: 'is_caregiver',
@@ -90,29 +103,37 @@ export const GAP_QUESTIONS = Object.freeze({
   // re-asked by the other surfaces — the duplicate-qualifier-question class).
   state: { id: 'state', type: 'text', prompt: 'Which state do you live in (or primarily serve)?', writes: { section: 'basic_information', field: 'state' } },
   city: { id: 'city', type: 'text', prompt: 'What city or town?', writes: { section: 'basic_information', field: 'city' } },
-  zip: { id: 'zip', type: 'text', prompt: 'What is your ZIP code? (this unlocks local funding)', writes: { section: 'basic_information', field: 'zip' } },
+  zip: { id: 'zip', type: 'text', prompt: 'What is your ZIP code? (this unlocks local funding)', writes: { section: 'basic_information', field: 'zip_code' } },
   needCategories: { id: 'needs', type: 'text', prompt: 'What do you most need help with right now? (for example: housing, utilities, medical bills, food, education, disability support, emergency assistance)', writes: { section: 'funding_needs', field: 'need_categories' } },
   // Canonical home is narrative.funding_amount_needed (PROFILE_SCHEMA), which
   // signals/keyword extraction actually read; financial_information was an
   // alias only profileFieldPrompts knew about.
   fundingAmountNeeded: { id: 'funding_amount', type: 'number', prompt: 'Roughly how much funding are you looking for?', writes: { section: 'narrative', field: 'funding_amount_needed' } },
   organizationType: { id: 'org_type', type: 'text', prompt: 'What kind of organization is it? (nonprofit, church, school, business, agency…)', writes: { section: 'organization_details', field: 'organization_type' } },
-  populationServed: { id: 'population', type: 'text', prompt: 'Who do you serve?', writes: { section: 'organization_details', field: 'population_served' } },
-  missionFocus: { id: 'mission', type: 'text', prompt: 'In a sentence, what is your mission or main focus?', writes: { section: 'organization_details', field: 'mission_focus' } },
+  populationServed: { id: 'population', type: 'text', prompt: 'Who do you serve?', writes: { section: 'narrative', field: 'target_population' } },
+  missionFocus: { id: 'mission', type: 'text', prompt: 'In a sentence, what is your mission or main focus?', writes: { section: 'narrative', field: 'mission' } },
   programDescriptions: { id: 'programs', type: 'text', prompt: 'Briefly, what programs or services do you run?', writes: { section: 'programs_services', field: 'program_descriptions' } },
 })
 
-/** True once a FACET question has already been answered (either way) in the data. */
+/**
+ * True once a FACET question has already been answered (either way) in the data.
+ *
+ * `has` counts an explicit boolean `false` as an ANSWER: this reads the field the
+ * question itself writes, so a stored `false` here is the user's own "No" and a
+ * "No" that does not read back as answered re-asks the question at every login.
+ * (The shared fact registry keeps the opposite, stricter rule, because there a
+ * `false` may be a profile-repair default stamp rather than an answer.)
+ */
 function facetAnswered(q, normalized, sections) {
   const sec = sections?.[q.writes.section]
   const data = sec?.answers ?? sec ?? null
   const has = (obj, field) => obj && typeof obj === 'object' &&
     obj[field] !== undefined && obj[field] !== null && String(obj[field]).length > 0
   switch (q.id) {
-    case 'has_disability': return Boolean(normalized?.hasDisabilityNeed) || has(data, 'disability_status')
-    case 'is_senior': return (normalized?.effectiveFacets || []).includes('senior') || has(data, 'age_group')
+    case 'has_disability': return Boolean(normalized?.hasDisabilityNeed) || has(data, 'has_disability')
+    case 'is_senior': return (normalized?.effectiveFacets || []).includes('senior') || has(data, 'age_60_plus')
     case 'is_student': return Boolean(normalized?.isStudent) || has(data, 'is_student')
-    case 'is_veteran': return Boolean(normalized?.isVeteran) || has(data, 'veteran_status')
+    case 'is_veteran': return Boolean(normalized?.isVeteran) || has(data, 'veteran')
     case 'is_caregiver': return Boolean(normalized?.isCaregiver) || has(data, 'caregiver') || has(data, 'is_caregiver')
     case 'is_organization': return has(data, 'applicant_kind') ||
       (normalized?.effectiveFacets || []).some((f) => ['nonprofit', 'business'].includes(f))
