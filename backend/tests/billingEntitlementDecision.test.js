@@ -73,6 +73,9 @@ describe('billing entitlement precedence (service boundary)', () => {
       effectiveTier: { capabilities: { [capabilityKey]: true } },
     })).toEqual({ allowed: true, source: 'tier', reason: null })
 
+    // OWNER ORDER 2026-09-07 (universal entitlement): the policy tier grants
+    // every catalog capability, so the add-on branch needs an explicit
+    // entitlementTier override to stay reachable at this boundary.
     expect(decideFor({
       profile: { status: 'active' },
       paymentAccessStatus: 'admin_waived',
@@ -80,6 +83,7 @@ describe('billing entitlement precedence (service boundary)', () => {
       requiresPayment: true,
       activeAddons: [{ id: 'addon-1', capability_key: capabilityKey }],
       effectiveTier: { capabilities: { [capabilityKey]: false } },
+      entitlementTier: { capabilities: { [capabilityKey]: false } },
     })).toEqual({ allowed: true, source: 'addon', reason: null, addon_id: 'addon-1' })
   })
 })
