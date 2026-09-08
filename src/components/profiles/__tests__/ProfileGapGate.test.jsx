@@ -56,4 +56,26 @@ describe('ProfileGapGate', () => {
     expect(puts[0].url).toContain('/api/profiles/p1/sections/location_focus')
     expect(puts[0].body).toEqual({ data: { state: 'TN' } })
   })
+
+  it('a guard-REJECTED answer is a visible failure, not a silent success (GeneMac is_student class)', async () => {
+    apiFetch.mockImplementation((url, opts) => {
+      if (url.endsWith('/gap-plan')) return Promise.resolve(PLAN)
+      if (url.endsWith('/sections') && !opts) return Promise.resolve([])
+      if (/\/sections\//.test(url) && opts?.method === 'PUT') {
+        // The section PUT answers 200 but lists the dropped field under `rejected`.
+        return Promise.resolve({ ok: true, data: {}, rejected: [{ key: 'state', reason: 'unknown_field' }] })
+      }
+      return Promise.resolve({})
+    })
+    renderGate({ profileId: 'p1', enabled: true })
+
+    fireEvent.change(await screen.findByRole('textbox'), { target: { value: 'TN' } })
+    fireEvent.click(screen.getByText('Save & continue'))
+
+    const alert = await screen.findByTestId('profile-gap-interview-error')
+    expect(alert.textContent).toMatch(/could not be saved/i)
+    expect(alert.textContent).toMatch(/location_focus\.state/)
+    // The interview stays on screen with the answer intact so the user can retry.
+    expect(screen.getByRole('textbox').value).toBe('TN')
+  })
 })

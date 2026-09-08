@@ -197,6 +197,31 @@ describe('LoginGapInterviewLauncher component', () => {
     )
   })
 
+  it('a REJECTED save keeps the dialog open with an error instead of advancing as if it saved', async () => {
+    mockApi({
+      profiles: [{ id: 'p1', display_name: 'Robert' }],
+      plans: { p1: GAPPED_PLAN('state') },
+    })
+    // Override the PUT: 200 OK, but the guard dropped the field.
+    const base = apiFetch.getMockImplementation()
+    apiFetch.mockImplementation((url, opts) => {
+      if (/\/sections\//.test(url) && opts?.method === 'PUT') {
+        return Promise.resolve({ ok: true, data: {}, rejected: [{ key: 'state', reason: 'unknown_field' }] })
+      }
+      return base(url, opts)
+    })
+    renderLauncher()
+
+    fireEvent.change(await screen.findByRole('textbox'), { target: { value: 'TN' } })
+    fireEvent.click(screen.getByText('Save & continue'))
+
+    const alert = await screen.findByTestId('profile-gap-interview-error')
+    expect(alert.textContent).toMatch(/could not be saved/i)
+    // Still on the same profile's dialog — not advanced, not closed.
+    expect(screen.getByTestId('login-gap-interview-dialog')).toBeTruthy()
+    expect(screen.getByRole('textbox').value).toBe('TN')
+  })
+
   it('a close GESTURE (Escape) ends the whole interview — it never opens the next profile', async () => {
     mockApi({
       profiles: [
