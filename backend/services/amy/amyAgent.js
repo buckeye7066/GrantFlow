@@ -572,6 +572,10 @@ export async function runAmyTraining(options = {}) {
   // reaped by this run's own cleanup — the create → crawl → teach → delete
   // contract is completed by the next run instead of abandoned. Bounded by
   // AMY_ORPHAN_ADOPT_LIMIT so a pile-up cannot starve the planned cohort.
+  // Recovery evaluations teach and clean up old runs, but are not members of
+  // this run's declared cohort. An orphan may reuse a planned scenario id;
+  // mixing it into the receipt made a valid 50-member run appear duplicated.
+  const plannedCohortEvaluations = evaluations.slice()
   const adoptedOrphans = { scanned: 0, adopted: [], skipped: [], limit: amyOrphanAdoptLimit() }
   if (!keepProfiles) {
     let survivors = []
@@ -1213,7 +1217,7 @@ export async function runAmyTraining(options = {}) {
     throwIfAmyRunAborted(signal)
     try {
       combined.flywheel_cohort = await recordFlywheelCohort(db, {
-        evaluations,
+        evaluations: plannedCohortEvaluations,
         expectedMembers: expectedCohortMembers,
         runId,
         target: requestedCohortTarget,
