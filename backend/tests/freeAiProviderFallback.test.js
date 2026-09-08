@@ -81,6 +81,7 @@ describe('free AI provider routing', () => {
   it('detects paid-provider credit and quota exhaustion', () => {
     expect(isProviderCreditExhaustion({ status: 429, message: 'rate limited' })).toBe(true)
     expect(isProviderCreditExhaustion(new Error('insufficient_quota: credit balance exhausted'))).toBe(true)
+    expect(isProviderCreditExhaustion({ status: 400, message: 'Your credit balance is too low to access the Anthropic API.' })).toBe(true)
     expect(isProviderCreditExhaustion({ status: 500, message: 'temporary upstream error' })).toBe(false)
   })
 

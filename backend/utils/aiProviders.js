@@ -99,8 +99,29 @@ export async function getAnthropicOptional() {
   }
 }
 
+// Log operational facts only: upstream messages can contain document text,
+// account details, or credentials. Detailed errors remain in the existing
+// return contract for callers that already handle them.
+function providerFailureDiagnostics(error) {
+  const summary = summarizeOpenAIError(error)
+  return {
+    status: summary.status,
+    reason: isLLMTimeout(error)
+      ? 'timed_out'
+      : summary.isAuth
+        ? 'authentication_failed'
+        : isProviderCreditExhaustion(summary)
+          ? 'credit_or_quota_exhausted'
+          : /invalid JSON/i.test(summary.message)
+            ? 'invalid_response'
+            : 'provider_request_failed',
+  }
+}
+
+// Omission uses the server's configured client. Explicit null remains an
+// opt-out for callers that have already tried OpenAI or select Anthropic.
 export async function invokeTextWithFallback({
-  openai = null,
+  openai = getOpenAIOptional(),
   system = null,
   prompt,
   temperature = 0.3,
@@ -120,6 +141,7 @@ export async function invokeTextWithFallback({
     : [{ role: 'user', content: safePrompt }]
 
   let openaiError = null
+  let openaiAttempted = false
   let anthropicError = null
   let timedOut = false
   const configuredFreeRoutes = resolveFreeAiRoutes(freeRoutes)
@@ -136,6 +158,7 @@ export async function invokeTextWithFallback({
 
   // 1) OpenAI (optional)
   if (openai && paidAttemptMs() > 25) {
+    openaiAttempted = true
     try {
       const completion = await withLLMTimeout(
         openai.chat.completions.create({
@@ -151,6 +174,7 @@ export async function invokeTextWithFallback({
     } catch (error) {
       if (isLLMTimeout(error)) timedOut = true
       openaiError = summarizeOpenAIError(error)
+      qualityLog.warn('[aiProviders] OpenAI text call failed', providerFailureDiagnostics(error))
     }
   }
 
@@ -173,7 +197,11 @@ export async function invokeTextWithFallback({
     } catch (error) {
       if (isLLMTimeout(error)) timedOut = true
       anthropicError = error?.message ?? String(error)
-      qualityLog.error('[aiProviders] Anthropic text call failed:', anthropicError)
+      qualityLog.error('[aiProviders] Anthropic text call failed', {
+        ...providerFailureDiagnostics(error),
+        openai_available: Boolean(openai),
+        openai_attempted: openaiAttempted,
+      })
     }
   }
 
@@ -216,7 +244,7 @@ export async function invokeTextWithFallback({
 }
 
 export async function invokeJsonWithFallback({
-  openai = null,
+  openai = getOpenAIOptional(),
   system = null,
   prompt,
   temperature = 0.1,
@@ -229,6 +257,7 @@ export async function invokeJsonWithFallback({
 } = {}) {
   const safePrompt = typeof prompt === 'string' ? prompt : JSON.stringify(prompt ?? '')
   let openaiError = null
+  let openaiAttempted = false
   let anthropicError = null
   let timedOut = false
   const configuredFreeRoutes = resolveFreeAiRoutes(freeRoutes)
@@ -244,6 +273,7 @@ export async function invokeJsonWithFallback({
 
   // 1) OpenAI (optional)
   if (openai && paidAttemptMs() > 25) {
+    openaiAttempted = true
     try {
       const completion = await withLLMTimeout(
         openai.chat.completions.create({
@@ -267,6 +297,7 @@ export async function invokeJsonWithFallback({
     } catch (error) {
       if (isLLMTimeout(error)) timedOut = true
       openaiError = summarizeOpenAIError(error)
+      qualityLog.warn('[aiProviders] OpenAI JSON call failed', providerFailureDiagnostics(error))
     }
   }
 
@@ -300,7 +331,11 @@ export async function invokeJsonWithFallback({
     } catch (error) {
       if (isLLMTimeout(error)) timedOut = true
       anthropicError = error?.message ?? String(error)
-      qualityLog.error('[aiProviders] Anthropic JSON call failed:', anthropicError)
+      qualityLog.error('[aiProviders] Anthropic JSON call failed', {
+        ...providerFailureDiagnostics(error),
+        openai_available: Boolean(openai),
+        openai_attempted: openaiAttempted,
+      })
     }
   }
 
@@ -340,4 +375,3 @@ export async function invokeJsonWithFallback({
     freeRouteErrors: freeResult.freeRouteErrors,
   }
 }
-

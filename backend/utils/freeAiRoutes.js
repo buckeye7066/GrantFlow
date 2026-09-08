@@ -116,7 +116,7 @@ export function isProviderCreditExhaustion(error) {
     error?.message ?? error?.error?.message ?? error?.response?.data?.error?.message ?? error ?? '',
   )
   return status === 402 || status === 429 ||
-    /insufficient[_ -]?quota|credit(?:s)? (?:balance )?(?:exhausted|depleted|expired)|billing|payment required|spend limit|quota exceeded|rate limit/i.test(message)
+    /insufficient[_ -]?quota|credit(?:s)? (?:balance )?(?:exhausted|depleted|expired|is too low)|billing|payment required|spend limit|quota exceeded|rate limit/i.test(message)
 }
 
 function clientFor(route, env = currentFreeAiEnv()) {
