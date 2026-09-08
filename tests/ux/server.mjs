@@ -15,6 +15,9 @@ Object.assign(process.env, {
   NODE_ENV: 'test', SMOKE_MODE: 'true', GRANTFLOW_TEST_RUNNER: '1', DB_AUTO_MIGRATE: 'true',
   // Multiple authorized fixture accounts share one loopback IP. Production defaults are unchanged.
   AUTH_PASSWORD_RATE_LIMIT: '100', API_AUTH_RATE_LIMIT_MAX: '300',
+  // The expanded journeys exceed 600 combined requests/minute. Their shared
+  // IP must not consume the emergency bucket before later accounts can log in.
+  GLOBAL_API_RATE_LIMIT_MAX: '6000',
   SQLITE_DB_PATH: path.join(runtime, 'test.sqlite'), DB_PROVIDER: 'sqlite', DB_DIALECT: 'sqlite',
   DATA_DIR: runtime, UPLOADS_DIR: path.join(runtime, 'uploads'),
   ANYA_AUTONOMOUS_ENABLED: 'false', NATIONAL_PROGRAMS_CRAWLER_ENABLED: 'false',
