@@ -208,10 +208,15 @@ describe('runWebDiscoveryLane', () => {
     expect(res.search_unavailable_queries).toBe(1)
   })
 
-  it('breadth budgets default to 20 queries and honour the env overrides (2026-08-03 recall audit)', async () => {
+  it('breadth budgets default to 28 queries and honour the env overrides (2026-08-03 recall audit)', async () => {
     // Measured 2026-08-03: at the old cap of 14, all 34 real prod profiles
     // truncated their query pool (2,531 built vs 476 run — 81% suppressed).
-    // The default is now 20 and env-tunable; caller opts still win.
+    // RAISED 20 -> 28 on 2026-09-08: the bridge now carries occupation, income
+    // band, geographic qualifiers, immigration status, licensure and
+    // first-generation status into CORE queries, and `.slice(0, max)` truncates
+    // from the END — so holding the cap at 20 would have paid for the new
+    // queries by silently cutting eight that already ran. Env-tunable; caller
+    // opts still win.
     const richThesis = {
       ...thesis,
       is_student: true,
@@ -232,12 +237,12 @@ describe('runWebDiscoveryLane', () => {
     }
     try {
       delete process.env.WEB_LANE_MAX_QUERIES
-      expect(await run()).toBe(20)
+      expect(await run()).toBe(28)
       process.env.WEB_LANE_MAX_QUERIES = '5'
       expect(await run()).toBe(5)
       // Garbage never disables the budget (the Number(null)-is-finite class).
       process.env.WEB_LANE_MAX_QUERIES = 'banana'
-      expect(await run()).toBe(20)
+      expect(await run()).toBe(28)
     } finally {
       delete process.env.WEB_LANE_MAX_QUERIES
     }
