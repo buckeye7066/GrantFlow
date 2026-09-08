@@ -1,10 +1,9 @@
 /**
  * Dashboard "next action" policy.
  *
- * The simplified (end-user) workspace hides Discovery, Automations and Saved
- * Grants from navigation. The person's OWN profile page (ProfileDetail) is
- * visible to them since 2026-09-07 ("he can't see his profile to finish
- * filling it out"); only the MyProfiles LIST stays hidden. A Dashboard call-to-action
+ * Since 2026-09-07 the end-user sidebar carries the full non-admin tool set
+ * (Find Funding, Work, the person's own profile). Only Automations and the
+ * MyProfiles LIST stay hidden, so a CTA may point anywhere else. A Dashboard call-to-action
  * that routes an end user to one of those pages is a dead-end, so the
  * simplified branch here only ever lands on pages an end user can actually see
  * (their Pipeline, or Ask Anya).
@@ -17,9 +16,7 @@
 // CTA must never point at any of these. Exported so the guard test can assert
 // the policy mechanically.
 export const HIDDEN_END_USER_ROUTES = Object.freeze([
-  'DiscoverGrants',
   'Automation',
-  'SavedGrants',
   'MyProfiles',
 ])
 
@@ -41,9 +38,7 @@ export function pickDashboardNextAction({
       : { key: 'complete_profile', label: 'Complete your profile for better matches', route: 'MyProfiles' }
   }
   if (savedCount === 0 && activeCount === 0) {
-    return isSimplified
-      ? { key: 'find_funding', label: 'Ask Anya to find funding for you', route: 'Help' }
-      : { key: 'discover', label: 'Discover grants matched to your profile', route: 'DiscoverGrants' }
+    return { key: 'discover', label: 'Discover grants matched to your profile', route: 'DiscoverGrants' }
   }
   if (urgentCount > 0) {
     return {
@@ -53,9 +48,7 @@ export function pickDashboardNextAction({
     }
   }
   if (savedCount > 0 && activeCount === 0) {
-    return isSimplified
-      ? { key: 'open_pipeline', label: 'Open your pipeline', route: 'Pipeline' }
-      : { key: 'move_saved', label: 'Move saved grants into your pipeline', route: 'SavedGrants' }
+    return { key: 'move_saved', label: 'Move saved grants into your pipeline', route: 'SavedGrants' }
   }
   return null
 }

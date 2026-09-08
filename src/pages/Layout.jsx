@@ -49,6 +49,8 @@ import { LanguageSwitcher } from '@/i18n/LanguageSwitcher.jsx'
 import { apiFetch } from '@/api/client'
 import { createPageUrl } from '@/utils'
 import { useAuthStore } from '@/stores/authStore'
+import { useTierEntitlements } from '@/hooks/useTierEntitlements'
+import { isRealProfileId } from '@/api/profileIdGuards'
 import { useSettingsStore } from '@/stores/settingsStore'
 import { useFeatureFlags } from '@/lib/featureFlags'
 import { setLastVisitedPath } from '@/lib/lastVisitedPreferences'
@@ -69,7 +71,7 @@ function navItemUrl(item, activeProfileId) {
   return item.url
 }
 
-function NavGroupCollapsible({ group, location, isOpen, onToggle, user, activeProfileId = null }) {
+function NavGroupCollapsible({ group, location, isOpen, onToggle, user, activeProfileId = null, capabilities = null }) {
   const preferences = useSettingsStore((state) => state.preferences)
   const { t } = useLanguage()
   const isAdmin = hasFullAdminWorkspace(user)
@@ -77,6 +79,10 @@ function NavGroupCollapsible({ group, location, isOpen, onToggle, user, activePr
   const visibleItems = group.items.filter((item) => {
     if (item.isAdminOnly && !isAdmin) return false
     if (item.requiresIncognitoEnabled && !preferences?.custom_preferences?.incognitoEnabled) return false
+    // Tier-appropriate tools (owner 2026-09-07): an item that needs a
+    // capability is hidden only when the profile's entitlement says NO.
+    // While entitlements are still loading, or for admins, it stays visible.
+    if (item.requiresCapability && !isAdmin && capabilities && capabilities[item.requiresCapability] === false) return false
     return true
   })
 
@@ -139,9 +145,13 @@ export default function Layout({ children }) {
   // Admins get every nav group expanded on first render (the "old view": all
   // tabs visible); their own collapse choices persist from then on. End users
   // keep the compact simplified nav untouched.
+  // Every group open on first render for BOTH shells: an end user with the
+  // full tool set must never find Find Funding or Work folded away.
   const [navGroupsOpen, toggleNavGroup] = useNavGroupsOpen(
-    isAdmin ? NAV_GROUPS.map((group) => group.groupId) : null,
+    (isAdmin ? NAV_GROUPS : END_USER_NAV_GROUPS).map((group) => group.groupId),
   )
+  const endUserEntitlements = useTierEntitlements(!isAdmin && isRealProfileId(activeProfileId) ? activeProfileId : null)
+  const navCapabilities = !isAdmin && !endUserEntitlements.loading ? endUserEntitlements.capabilities : null
   const showAdminGroup = isAdmin || showAdvancedTools
   const navigationGroups = isAdmin
     ? NAV_GROUPS.filter((group) => group.groupId !== 'admin' || showAdminGroup)
@@ -235,6 +245,7 @@ export default function Layout({ children }) {
                 key={group.groupId}
                 group={group}
                 activeProfileId={activeProfileId}
+                capabilities={navCapabilities}
                 location={location}
                 isOpen={navGroupsOpen.has(group.groupId)}
                 onToggle={toggleNavGroup}

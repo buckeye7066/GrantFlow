@@ -39,6 +39,7 @@ import PersonalizationPanel from "@/components/dashboard/PersonalizationPanel"
 import ReminderCenterCard from "@/components/dashboard/ReminderCenterCard"
 import PipelineActionsCard from "@/components/dashboard/PipelineActionsCard"
 import NextStepHero from "@/components/dashboard/NextStepHero"
+import { END_USER_ROUTE_NAMES } from "@/nav/endUserNavConfig"
 import ResumeWhereYouLeftOff from "@/components/dashboard/ResumeWhereYouLeftOff"
 import ContinueCard from "@/components/dashboard/ContinueCard"
 import StartHereCard from "@/components/dashboard/StartHereCard"
@@ -51,7 +52,7 @@ import { Star, User, CheckCircle2, ArrowRight } from "lucide-react"
 import { Progress } from "@/components/ui/progress"
 import { calculateProfileCompletion } from "@/utils/profileCompletion"
 
-const END_USER_DASHBOARD_PATHS = new Set(['/Calendar', '/Help', '/ItemFunding', '/Pipeline', '/ProfileDetail'])
+const END_USER_DASHBOARD_PATHS = new Set(END_USER_ROUTE_NAMES.map((name) => `/${name}`))
 
 /** Resolves last-visited page from preferences (source of truth) or localStorage (fallback). */
 function DashboardContinueOrStart({ profilesLength, urgentDeadlines, activeGrants, hasGrants, isSimplified = false }) {
