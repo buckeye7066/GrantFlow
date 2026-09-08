@@ -29,19 +29,22 @@ export const SECTION_METADATA = {
         "name": "first_name",
         "label": "First name",
         "format": "text",
-        "help": "Applicant's legal first/given name. Auto-derived from the full name when left blank."
+        "deprecated": true,
+        "help": "Applicant's legal first/given name. Auto-derived from the full name when left blank. Deprecated: duplicate question, hidden from intake/edit; the canonical field is Basic information > Full name (parsed automatically) and this value is mirrored from it on save (any stored value is preserved)."
       },
       {
         "name": "middle_name",
         "label": "Middle name",
         "format": "text",
-        "help": "Applicant's middle name(s), if any. Auto-derived from the full name when left blank."
+        "deprecated": true,
+        "help": "Applicant's middle name(s), if any. Auto-derived from the full name when left blank. Deprecated: duplicate question, hidden from intake/edit; the canonical field is Basic information > Full name (parsed automatically) and this value is mirrored from it on save (any stored value is preserved)."
       },
       {
         "name": "last_name",
         "label": "Last name",
         "format": "text",
-        "help": "Applicant's legal last/family name. Auto-derived from the full name when left blank."
+        "deprecated": true,
+        "help": "Applicant's legal last/family name. Auto-derived from the full name when left blank. Deprecated: duplicate question, hidden from intake/edit; the canonical field is Basic information > Full name (parsed automatically) and this value is mirrored from it on save (any stored value is preserved)."
       },
       {
         "name": "email",
@@ -141,7 +144,8 @@ export const SECTION_METADATA = {
         "name": "age",
         "label": "Age",
         "format": "text",
-        "help": "Age in years when captured directly (intake/quick-fill). date_of_birth is preferred for age-based eligibility; this is accepted so directly-entered age is never silently dropped."
+        "deprecated": true,
+        "help": "Age in years when captured directly (intake/quick-fill). date_of_birth is preferred for age-based eligibility; this is accepted so directly-entered age is never silently dropped. Deprecated: duplicate question, hidden from intake/edit; the canonical field is Basic information > Date of birth and this value is mirrored from it on save (any stored value is preserved)."
       },
       {
         "name": "gender",
@@ -233,7 +237,8 @@ export const SECTION_METADATA = {
         "name": "current_school",
         "label": "Current school",
         "format": "text",
-        "help": "Quick-intake school name when captured before the education section is completed; education.current_institution remains the canonical education field."
+        "deprecated": true,
+        "help": "Quick-intake school name when captured before the education section is completed; education.current_institution remains the canonical education field. Deprecated: duplicate question, hidden from intake/edit; the canonical field is Education > Current institution and this value is mirrored from it on save (any stored value is preserved)."
       },
       {
         "name": "location",
@@ -279,13 +284,15 @@ export const SECTION_METADATA = {
         "name": "population_served",
         "label": "Population served",
         "format": "long_text",
-        "help": "Who the organization serves (Anya interview answer). Drafting only; not scored."
+        "deprecated": true,
+        "help": "Who the organization serves (Anya interview answer). Drafting only; not scored. Deprecated: duplicate question, hidden from intake/edit; the canonical field is Story & goals > Target population and this value is mirrored from it on save (any stored value is preserved)."
       },
       {
         "name": "mission_focus",
         "label": "Mission / main focus",
         "format": "long_text",
-        "help": "One-sentence mission or main focus (Anya interview answer). Drafting only; not scored."
+        "deprecated": true,
+        "help": "One-sentence mission or main focus (Anya interview answer). Drafting only; not scored. Deprecated: duplicate question, hidden from intake/edit; the canonical field is Story & goals > Mission and this value is mirrored from it on save (any stored value is preserved)."
       },
       {
         "name": "ein",
@@ -321,37 +328,44 @@ export const SECTION_METADATA = {
         "name": "mission",
         "label": "Mission",
         "format": "text",
-        "help": "Organization mission statement or concise purpose."
+        "deprecated": true,
+        "help": "Organization mission statement or concise purpose. Deprecated: duplicate question, hidden from intake/edit; the canonical field is Story & goals > Mission and this value is mirrored from it on save (any stored value is preserved)."
       },
       {
         "name": "sam_gov_registered",
         "label": "SAM.gov registered",
-        "format": "text",
+        "format": "boolean_tri",
         "help": "Required for all federal grants."
       },
       {
         "name": "grants_gov_account",
         "label": "Grants.gov account active",
-        "format": "text",
+        "format": "boolean_tri",
         "help": "Increases eligibility for federal opportunities."
       },
       {
         "name": "era_commons_account",
         "label": "eRA Commons account (NIH/health research)",
-        "format": "text",
+        "format": "boolean_tri",
         "help": "NIH eRA Commons account for health research grants."
       },
       {
         "name": "sam_exclusions_passed",
         "label": "SAM exclusions check passed",
-        "format": "text",
+        "format": "boolean_tri",
         "help": "Not debarred from federal contracts."
       },
       {
         "name": "audited_financials",
         "label": "Audited financials available",
-        "format": "text",
+        "format": "boolean_tri",
         "help": "Audited financial statements available."
+      },
+      {
+        "name": "charitable_solicitation_registered",
+        "label": "Charitable solicitation registered",
+        "format": "boolean_tri",
+        "help": "True if registered for charitable solicitation in the applicable state(s)."
       },
       {
         "name": "nicra_rate",
@@ -398,79 +412,91 @@ export const SECTION_METADATA = {
       {
         "name": "cert_8a",
         "label": "8(a) certified",
-        "format": "text",
+        "format": "boolean_tri",
         "help": "SBA program for disadvantaged businesses."
       },
       {
         "name": "cert_hubzone",
         "label": "Hubzone certified",
-        "format": "text",
+        "format": "boolean_tri",
         "help": "True if HUBZone certified."
       },
       {
         "name": "cert_sdvosb",
         "label": "Service-Disabled veteran-owned small business (SDVOSB)",
-        "format": "text",
+        "format": "boolean_tri",
         "help": "True if SDVOSB certified."
       },
       {
         "name": "cert_mbe",
         "label": "Minority business enterprise (MBE)",
-        "format": "text",
+        "format": "boolean_tri",
         "help": "True if MBE certified."
       },
       {
         "name": "cert_wbe",
         "label": "Women business enterprise (WBE)",
-        "format": "text",
+        "format": "boolean_tri",
         "help": "True if WBE certified."
+      },
+      {
+        "name": "cert_dbe",
+        "label": "Disadvantaged business enterprise (DBE)",
+        "format": "boolean_tri",
+        "help": "True if certified Disadvantaged Business Enterprise (DBE)."
+      },
+      {
+        "name": "cert_sbe",
+        "label": "Small business enterprise (SBE)",
+        "format": "boolean_tri",
+        "help": "True if certified Small Business Enterprise (SBE)."
       },
       {
         "name": "cert_sbir_sttr",
         "label": "SBIR/STTR eligible",
-        "format": "text",
+        "format": "boolean_tri",
         "help": "True if eligible for SBIR/STTR programs."
       },
       {
         "name": "in_opportunity_zone",
         "label": "Opportunity zone location",
-        "format": "text",
+        "format": "boolean_tri",
         "help": "Economically distressed community eligible for tax incentives."
       },
       {
         "name": "in_qct",
         "label": "Qualified census tract (QCT)",
-        "format": "text",
+        "format": "boolean_tri",
         "help": "HUD-designated low-income area."
       },
       {
         "name": "in_epa_ej_area",
         "label": "EPA environmental justice area",
-        "format": "text",
+        "format": "boolean_tri",
         "help": "True if located in an EPA Environmental Justice area."
       },
       {
         "name": "in_usda_persistent_poverty_county",
         "label": "USDA persistent-poverty county",
-        "format": "text",
+        "format": "boolean_tri",
         "help": "True if located in a USDA persistent-poverty county."
       },
       {
         "name": "in_appalachian_region",
         "label": "Appalachian region",
-        "format": "text",
+        "format": "boolean_tri",
         "help": "Served by Appalachian Regional Commission."
       },
       {
         "name": "broadband_unserved",
         "label": "Broadband-Unserved (fcc map block)",
-        "format": "text",
+        "format": "boolean_tri",
         "help": "No high-speed internet — USDA ReConnect and NTIA grants."
       },
       {
         "name": "in_fema_disaster_area",
         "label": "FEMA disaster declaration area",
-        "format": "text",
+        "format": "boolean_tri",
         "help": "True if located in a FEMA disaster declaration area."
       },
       {
@@ -590,6 +616,15 @@ export const SECTION_METADATA = {
         "help": "Number of people in the household (whole number)."
       },
       {
+        "name": "credit_score",
+        "label": "Credit score",
+        "format": "text",
+        "integer": true,
+        "min": 300,
+        "max": 850,
+        "help": "Your current credit score (300-850) when you know it. A score of 700 or above unlocks credit-based and non-loan financial programs; leave blank if unknown."
+      },
+      {
         "name": "financial_need_level",
         "label": "Financial need level",
         "format": "enum",
@@ -628,7 +663,8 @@ export const SECTION_METADATA = {
         "name": "unemployed",
         "label": "Currently unemployed",
         "format": "boolean_tri",
-        "help": "Legacy/current intake flag indicating the applicant is unemployed. Prefer Employment status / Employment > Current status when a specific status is known."
+        "deprecated": true,
+        "help": "Legacy/current intake flag indicating the applicant is unemployed. Prefer Employment status / Employment > Current status when a specific status is known. Deprecated: duplicate question, hidden from intake/edit; the canonical field is Financial information > Employment status (unemployed_seeking) and this value is mirrored from it on save (any stored value is preserved)."
       },
       {
         "name": "displaced_worker",
@@ -720,16 +756,17 @@ export const SECTION_METADATA = {
     "description": "Track public benefits to strengthen eligibility profiling for specific funds.",
     "fields": [
       {
-        "name": "medicaid_recipient_self",
-        "label": "Medicaid recipient self",
-        "format": "boolean_tri",
-        "help": "True if the applicant personally receives Medicaid."
-      },
+          "name": "medicaid_recipient_self",
+          "label": "Medicaid — you or someone in your household",
+          "format": "boolean_tri",
+          "help": "True if the applicant OR someone in their household receives this benefit. This is the canonical stored field: the section guard rewrites the legacy spelling (medicaid_enrolled) onto this key on every save, so this is where an answer lands. The legacy key is derived from it (shared/profileFieldMirrors.js) so its readers keep seeing the truth."
+        },
       {
         "name": "medicaid_recipient_household",
         "label": "Medicaid recipient household",
         "format": "boolean_tri",
-        "help": "True if someone in the applicant's household receives Medicaid."
+        "deprecated": true,
+        "help": "True if someone in the applicant's household receives Medicaid. Deprecated: duplicate question, hidden from intake/edit; the canonical field is Government assistance > Medicaid enrolled and this value is mirrored from it on save (any stored value is preserved)."
       },
       {
         "name": "medicaid_waiver_program",
@@ -750,76 +787,82 @@ export const SECTION_METADATA = {
         ]
       },
       {
-        "name": "medicare_recipient_self",
-        "label": "Medicare recipient self",
-        "format": "boolean_tri",
-        "help": "True if the applicant personally receives Medicare."
-      },
+          "name": "medicare_recipient_self",
+          "label": "Medicare — you or someone in your household",
+          "format": "boolean_tri",
+          "help": "True if the applicant OR someone in their household receives this benefit. This is the canonical stored field: the section guard rewrites the legacy spelling (medicare_recipient) onto this key on every save, so this is where an answer lands. The legacy key is derived from it (shared/profileFieldMirrors.js) so its readers keep seeing the truth."
+        },
       {
         "name": "medicare_recipient_household",
         "label": "Medicare recipient household",
         "format": "boolean_tri",
-        "help": "True if someone in the applicant's household receives Medicare."
+        "deprecated": true,
+        "help": "True if someone in the applicant's household receives Medicare. Deprecated: duplicate question, hidden from intake/edit; the canonical field is Government assistance > Medicare recipient and this value is mirrored from it on save (any stored value is preserved)."
       },
       {
-        "name": "ssi_recipient_self",
-        "label": "SSI recipient self",
-        "format": "boolean_tri",
-        "help": "True if the applicant personally receives SSI."
-      },
+          "name": "ssi_recipient_self",
+          "label": "SSI — you or someone in your household",
+          "format": "boolean_tri",
+          "help": "True if the applicant OR someone in their household receives this benefit. This is the canonical stored field: the section guard rewrites the legacy spelling (ssi_recipient) onto this key on every save, so this is where an answer lands. The legacy key is derived from it (shared/profileFieldMirrors.js) so its readers keep seeing the truth."
+        },
       {
         "name": "ssi_recipient_household",
         "label": "SSI recipient household",
         "format": "boolean_tri",
-        "help": "True if someone in the applicant's household receives SSI."
+        "deprecated": true,
+        "help": "True if someone in the applicant's household receives SSI. Deprecated: duplicate question, hidden from intake/edit; the canonical field is Government assistance > SSI recipient and this value is mirrored from it on save (any stored value is preserved)."
       },
       {
-        "name": "ssdi_recipient_self",
-        "label": "SSDI recipient self",
-        "format": "boolean_tri",
-        "help": "True if the applicant personally receives SSDI."
-      },
+          "name": "ssdi_recipient_self",
+          "label": "SSDI — you or someone in your household",
+          "format": "boolean_tri",
+          "help": "True if the applicant OR someone in their household receives this benefit. This is the canonical stored field: the section guard rewrites the legacy spelling (ssdi_recipient) onto this key on every save, so this is where an answer lands. The legacy key is derived from it (shared/profileFieldMirrors.js) so its readers keep seeing the truth."
+        },
       {
         "name": "ssdi_recipient_household",
         "label": "SSDI recipient household",
         "format": "boolean_tri",
-        "help": "True if someone in the applicant's household receives SSDI."
+        "deprecated": true,
+        "help": "True if someone in the applicant's household receives SSDI. Deprecated: duplicate question, hidden from intake/edit; the canonical field is Government assistance > SSDI recipient and this value is mirrored from it on save (any stored value is preserved)."
       },
       {
-        "name": "snap_recipient_self",
-        "label": "SNAP recipient self",
-        "format": "boolean_tri",
-        "help": "True if the applicant personally receives SNAP."
-      },
+          "name": "snap_recipient_self",
+          "label": "SNAP (food assistance) — you or someone in your household",
+          "format": "boolean_tri",
+          "help": "True if the applicant OR someone in their household receives this benefit. This is the canonical stored field: the section guard rewrites the legacy spelling (snap_recipient) onto this key on every save, so this is where an answer lands. The legacy key is derived from it (shared/profileFieldMirrors.js) so its readers keep seeing the truth."
+        },
       {
         "name": "snap_recipient_household",
         "label": "SNAP recipient household",
         "format": "boolean_tri",
-        "help": "True if someone in the applicant's household receives SNAP."
+        "deprecated": true,
+        "help": "True if someone in the applicant's household receives SNAP. Deprecated: duplicate question, hidden from intake/edit; the canonical field is Government assistance > SNAP recipient and this value is mirrored from it on save (any stored value is preserved)."
       },
       {
-        "name": "tanf_recipient_self",
-        "label": "TANF recipient self",
-        "format": "boolean_tri",
-        "help": "True if the applicant personally receives TANF."
-      },
+          "name": "tanf_recipient_self",
+          "label": "TANF — you or someone in your household",
+          "format": "boolean_tri",
+          "help": "True if the applicant OR someone in their household receives this benefit. This is the canonical stored field: the section guard rewrites the legacy spelling (tanf_recipient) onto this key on every save, so this is where an answer lands. The legacy key is derived from it (shared/profileFieldMirrors.js) so its readers keep seeing the truth."
+        },
       {
         "name": "tanf_recipient_household",
         "label": "TANF recipient household",
         "format": "boolean_tri",
-        "help": "True if someone in the applicant's household receives TANF."
+        "deprecated": true,
+        "help": "True if someone in the applicant's household receives TANF. Deprecated: duplicate question, hidden from intake/edit; the canonical field is Government assistance > TANF recipient and this value is mirrored from it on save (any stored value is preserved)."
       },
       {
-        "name": "section8_recipient_self",
-        "label": "Section 8 recipient self",
-        "format": "boolean_tri",
-        "help": "True if the applicant personally receives Section 8 housing assistance."
-      },
+          "name": "section8_recipient_self",
+          "label": "Section 8 housing — you or someone in your household",
+          "format": "boolean_tri",
+          "help": "True if the applicant OR someone in their household receives this benefit. This is the canonical stored field: the section guard rewrites the legacy spelling (section8_housing) onto this key on every save, so this is where an answer lands. The legacy key is derived from it (shared/profileFieldMirrors.js) so its readers keep seeing the truth."
+        },
       {
         "name": "section8_recipient_household",
         "label": "Section 8 recipient household",
         "format": "boolean_tri",
-        "help": "True if someone in the applicant's household receives Section 8 housing assistance."
+        "deprecated": true,
+        "help": "True if someone in the applicant's household receives Section 8 housing assistance. Deprecated: duplicate question, hidden from intake/edit; the canonical field is Government assistance > Section 8 housing and this value is mirrored from it on save (any stored value is preserved)."
       },
       {
         "name": "other_programs",
@@ -828,47 +871,54 @@ export const SECTION_METADATA = {
         "help": "Comma-separated list of other benefits or programs."
       },
       {
-        "name": "medicaid_enrolled",
-        "label": "Medicaid enrolled",
-        "format": "boolean_tri",
-        "help": "Legacy field mapped to Medicaid recipient self/household during save."
-      },
+          "name": "medicaid_enrolled",
+          "label": "Medicaid enrolled",
+          "format": "boolean_tri",
+          "help": "Legacy spelling. Deprecated: duplicate question, hidden from intake/edit. The section guard rewrites it onto medicaid_recipient_self during save, and it is mirrored back from medicaid_recipient_self (self OR household) so every reader of this key sees the answer (any stored value is preserved).",
+          "deprecated": true
+        },
       {
-        "name": "medicare_recipient",
-        "label": "Medicare recipient",
-        "format": "boolean_tri",
-        "help": "Legacy field mapped to Medicare recipient self/household during save."
-      },
+          "name": "medicare_recipient",
+          "label": "Medicare recipient",
+          "format": "boolean_tri",
+          "help": "Legacy spelling. Deprecated: duplicate question, hidden from intake/edit. The section guard rewrites it onto medicare_recipient_self during save, and it is mirrored back from medicare_recipient_self (self OR household) so every reader of this key sees the answer (any stored value is preserved).",
+          "deprecated": true
+        },
       {
-        "name": "ssi_recipient",
-        "label": "SSI recipient",
-        "format": "boolean_tri",
-        "help": "Legacy field mapped to SSI recipient self/household during save."
-      },
+          "name": "ssi_recipient",
+          "label": "SSI recipient",
+          "format": "boolean_tri",
+          "help": "Legacy spelling. Deprecated: duplicate question, hidden from intake/edit. The section guard rewrites it onto ssi_recipient_self during save, and it is mirrored back from ssi_recipient_self (self OR household) so every reader of this key sees the answer (any stored value is preserved).",
+          "deprecated": true
+        },
       {
-        "name": "ssdi_recipient",
-        "label": "SSDI recipient",
-        "format": "boolean_tri",
-        "help": "Legacy field mapped to SSDI recipient self/household during save."
-      },
+          "name": "ssdi_recipient",
+          "label": "SSDI recipient",
+          "format": "boolean_tri",
+          "help": "Legacy spelling. Deprecated: duplicate question, hidden from intake/edit. The section guard rewrites it onto ssdi_recipient_self during save, and it is mirrored back from ssdi_recipient_self (self OR household) so every reader of this key sees the answer (any stored value is preserved).",
+          "deprecated": true
+        },
       {
-        "name": "snap_recipient",
-        "label": "SNAP recipient",
-        "format": "boolean_tri",
-        "help": "Legacy field mapped to SNAP recipient self/household during save."
-      },
+          "name": "snap_recipient",
+          "label": "SNAP recipient",
+          "format": "boolean_tri",
+          "help": "Legacy spelling. Deprecated: duplicate question, hidden from intake/edit. The section guard rewrites it onto snap_recipient_self during save, and it is mirrored back from snap_recipient_self (self OR household) so every reader of this key sees the answer (any stored value is preserved).",
+          "deprecated": true
+        },
       {
-        "name": "tanf_recipient",
-        "label": "TANF recipient",
-        "format": "boolean_tri",
-        "help": "Legacy field mapped to TANF recipient self/household during save."
-      },
+          "name": "tanf_recipient",
+          "label": "TANF recipient",
+          "format": "boolean_tri",
+          "help": "Legacy spelling. Deprecated: duplicate question, hidden from intake/edit. The section guard rewrites it onto tanf_recipient_self during save, and it is mirrored back from tanf_recipient_self (self OR household) so every reader of this key sees the answer (any stored value is preserved).",
+          "deprecated": true
+        },
       {
-        "name": "section8_housing",
-        "label": "Section 8 housing",
-        "format": "boolean_tri",
-        "help": "Legacy field mapped to Section 8 recipient self/household during save."
-      }
+          "name": "section8_housing",
+          "label": "Section 8 housing",
+          "format": "boolean_tri",
+          "help": "Legacy spelling. Deprecated: duplicate question, hidden from intake/edit. The section guard rewrites it onto section8_recipient_self during save, and it is mirrored back from section8_recipient_self (self OR household) so every reader of this key sees the answer (any stored value is preserved).",
+          "deprecated": true
+        }
     ]
   },
   "health_medical": {
@@ -915,7 +965,7 @@ export const SECTION_METADATA = {
       {
         "name": "consent_for_studies",
         "label": "Consent to view research studies/trials",
-        "format": "text",
+        "format": "boolean_tri",
         "help": "True if the user opts in to seeing research studies or trials."
       },
       {
@@ -928,19 +978,19 @@ export const SECTION_METADATA = {
       {
         "name": "dialysis_patient",
         "label": "Dialysis patient",
-        "format": "text",
+        "format": "boolean_tri",
         "help": "True if on dialysis."
       },
       {
         "name": "organ_transplant",
         "label": "Organ transplant recipient",
-        "format": "text",
+        "format": "boolean_tri",
         "help": "True if transplant recipient or candidate."
       },
       {
         "name": "hiv_aids",
         "label": "Living with HIV/AIDS",
-        "format": "text",
+        "format": "boolean_tri",
         "help": "True if HIV/AIDS is explicitly stated."
       },
       {
@@ -952,13 +1002,13 @@ export const SECTION_METADATA = {
       {
         "name": "amputee",
         "label": "Amputee",
-        "format": "text",
+        "format": "boolean_tri",
         "help": "True if amputee."
       },
       {
         "name": "neurodivergent",
         "label": "Neurodivergent",
-        "format": "text",
+        "format": "boolean_tri",
         "help": "True if neurodivergent (autism/ADHD/etc.) is stated."
       },
       {
@@ -1115,7 +1165,7 @@ export const SECTION_METADATA = {
       {
         "name": "letter_support_needed",
         "label": "Support letter needed",
-        "format": "text",
+        "format": "boolean_tri",
         "help": "True if a letter of medical necessity or support letter is needed."
       },
       {
@@ -1141,7 +1191,7 @@ export const SECTION_METADATA = {
       {
         "name": "fiscal_sponsor",
         "label": "Uses a fiscal sponsor",
-        "format": "text",
+        "format": "boolean_tri",
         "help": "True if operating under a fiscal sponsor."
       },
       {
@@ -1153,8 +1203,9 @@ export const SECTION_METADATA = {
       {
         "name": "sam_registered",
         "label": "SAM.gov registered",
-        "format": "text",
-        "help": "True if SAM.gov registration is confirmed."
+        "format": "boolean_tri",
+        "deprecated": true,
+        "help": "True if SAM.gov registration is confirmed. Deprecated: duplicate question, hidden from intake/edit; the canonical field is Organization details > SAM.gov registered and this value is mirrored from it on save (any stored value is preserved)."
       },
       {
         "name": "insurance_coverage",
@@ -1229,25 +1280,25 @@ export const SECTION_METADATA = {
       {
         "name": "african_american",
         "label": "African american / black",
-        "format": "text",
+        "format": "boolean_tri",
         "help": "True if Black/African American identity stated."
       },
       {
         "name": "hispanic_latino",
         "label": "Hispanic / latino",
-        "format": "text",
+        "format": "boolean_tri",
         "help": "True if Hispanic/Latino identity stated."
       },
       {
         "name": "asian_american",
         "label": "Asian american / pacific islander",
-        "format": "text",
+        "format": "boolean_tri",
         "help": "True if Asian/AAPI identity stated."
       },
       {
         "name": "native_american",
         "label": "Native american / alaska native",
-        "format": "text",
+        "format": "boolean_tri",
         "help": "True if Native American/Indigenous identity stated."
       },
       {
@@ -1259,7 +1310,7 @@ export const SECTION_METADATA = {
       {
         "name": "lgbtq",
         "label": "Identifies as LGBTQ+",
-        "format": "text",
+        "format": "boolean_tri",
         "help": "True if LGBTQ+ identity stated."
       },
       {
@@ -1281,7 +1332,8 @@ export const SECTION_METADATA = {
         "name": "immigrant_status",
         "label": "Immigration status (legacy)",
         "format": "text",
-        "help": "Legacy/current intake immigration-status field. Canonical matching also reads Demographics > Immigration status, and this key is preserved so imported or seeded profiles render without hiding evidence."
+        "deprecated": true,
+        "help": "Legacy/current intake immigration-status field. Canonical matching also reads Demographics > Immigration status, and this key is preserved so imported or seeded profiles render without hiding evidence. Deprecated: duplicate question, hidden from intake/edit; the canonical field is Demographics > Immigration status and this value is mirrored from it on save (any stored value is preserved)."
       },
       {
         "name": "ethnicity",
@@ -1293,7 +1345,8 @@ export const SECTION_METADATA = {
         "name": "heritage",
         "label": "Heritage / ancestry",
         "format": "text",
-        "help": "Heritage or ancestry (freeform)."
+        "deprecated": true,
+        "help": "Heritage or ancestry (freeform). Deprecated: duplicate question, hidden from intake/edit; the canonical field is Demographics > Ethnicity and this value is mirrored from it on save (any stored value is preserved)."
       },
       {
         "name": "languages",
@@ -1311,31 +1364,36 @@ export const SECTION_METADATA = {
         "name": "citizenship",
         "label": "Citizenship",
         "format": "text",
-        "help": "Citizenship status or country."
+        "deprecated": true,
+        "help": "Citizenship status or country. Deprecated: duplicate question, hidden from intake/edit; the canonical field is Demographics > Immigration status and this value is mirrored from it on save (any stored value is preserved)."
       },
       {
         "name": "us_citizen",
         "label": "Us citizen",
         "format": "text",
-        "help": "True if US citizen."
+        "deprecated": true,
+        "help": "True if US citizen. Deprecated: duplicate question, hidden from intake/edit; the canonical field is Demographics > Immigration status (us_citizen) and this value is mirrored from it on save (any stored value is preserved)."
       },
       {
         "name": "disability_status",
         "label": "Disability status (high level)",
         "format": "text",
-        "help": "High-level disability status descriptor."
+        "deprecated": true,
+        "help": "High-level disability status descriptor. Deprecated: duplicate question, hidden from intake/edit; the canonical field is Health & medical > Disability types and this value is mirrored from it on save (any stored value is preserved)."
       },
       {
         "name": "veteran_status",
         "label": "Veteran status (high level)",
         "format": "text",
-        "help": "High-level veteran status descriptor."
+        "deprecated": true,
+        "help": "High-level veteran status descriptor. Deprecated: duplicate question, hidden from intake/edit; the canonical field is Military service > Veteran / Active duty / National guard / Disabled veteran and this value is mirrored from it on save (any stored value is preserved)."
       },
       {
         "name": "age_group",
         "label": "Age group",
         "format": "text",
-        "help": "Age group (e.g., youth, young adult, senior)."
+        "deprecated": true,
+        "help": "Age group (e.g., youth, young adult, senior). Deprecated: duplicate question, hidden from intake/edit; the canonical field is Basic information > Date of birth and this value is mirrored from it on save (any stored value is preserved)."
       },
       {
         "name": "white_caucasian",
@@ -1353,56 +1411,60 @@ export const SECTION_METADATA = {
       {
         "name": "good_credit_score",
         "label": "Good credit score (700+)",
-        "format": "text",
-        "help": "Qualifies for financial literacy programs and non-loan support."
+        "format": "boolean_tri",
+        "deprecated": true,
+        "help": "Qualifies for financial literacy programs and non-loan support. Deprecated: duplicate question, hidden from intake/edit; the canonical field is Financial information > Credit score (700 or above) and this value is mirrored from it on save (any stored value is preserved)."
       },
       {
         "name": "religious_denomination",
         "label": "Religious denomination",
         "format": "text",
-        "help": "e.g., Baptist, Methodist, Catholic, Lutheran — denominational scholarships available."
+        "deprecated": true,
+        "help": "e.g., Baptist, Methodist, Catholic, Lutheran — denominational scholarships available. Deprecated: duplicate question, hidden from intake/edit; the canonical field is Demographics > Religious affiliation and this value is mirrored from it on save (any stored value is preserved)."
       },
       {
         "name": "jewish_heritage",
         "label": "Jewish heritage",
-        "format": "text",
+        "format": "boolean_tri",
         "help": "Extensive funding from Jewish federations, Hillel, and synagogues."
       },
       {
         "name": "irish_heritage",
         "label": "Irish heritage",
-        "format": "text",
+        "format": "boolean_tri",
         "help": "Hibernian societies, Irish cultural organizations."
       },
       {
         "name": "italian_heritage",
         "label": "Italian heritage",
-        "format": "text",
+        "format": "boolean_tri",
         "help": "True if Italian heritage."
       },
       {
         "name": "greek_heritage",
         "label": "Greek heritage",
-        "format": "text",
+        "format": "boolean_tri",
         "help": "AHEPA, Hellenic societies."
       },
       {
         "name": "armenian_heritage",
         "label": "Armenian heritage",
-        "format": "text",
+        "format": "boolean_tri",
         "help": "True if Armenian heritage."
       },
       {
         "name": "appalachian_heritage",
         "label": "Appalachian heritage",
-        "format": "text",
-        "help": "True if Appalachian heritage."
+        "format": "boolean_tri",
+        "deprecated": true,
+        "help": "True if Appalachian heritage. Deprecated: duplicate question, hidden from intake/edit; the canonical field is Location focus > Located in Appalachian region and this value is mirrored from it on save (any stored value is preserved)."
       },
       {
         "name": "gender",
         "label": "Gender",
         "format": "text",
-        "help": "High-level demographic gender value when live or imported data stores it in demographics; Basic information > Gender remains supported for contact/intake display."
+        "deprecated": true,
+        "help": "High-level demographic gender value when live or imported data stores it in demographics; Basic information > Gender remains supported for contact/intake display. Deprecated: duplicate question, hidden from intake/edit; the canonical field is Basic information > Gender and this value is mirrored from it on save (any stored value is preserved)."
       },
       {
         "name": "geographic_qualifiers",
@@ -1456,13 +1518,13 @@ export const SECTION_METADATA = {
       {
         "name": "widow_widower",
         "label": "Widow / widower",
-        "format": "text",
+        "format": "boolean_tri",
         "help": "True if widowed."
       },
       {
         "name": "grandparent_raising_grandchildren",
         "label": "Grandparent raising grandchildren",
-        "format": "text",
+        "format": "boolean_tri",
         "help": "True if grandparent raising grandchildren."
       },
       {
@@ -1475,7 +1537,8 @@ export const SECTION_METADATA = {
         "name": "homeless",
         "label": "Experiencing homelessness",
         "format": "boolean_tri",
-        "help": "True if homeless or housing insecure."
+        "deprecated": true,
+        "help": "True if homeless or housing insecure. Deprecated: duplicate question, hidden from intake/edit; the canonical field is Housing > Housing status (homeless) and this value is mirrored from it on save (any stored value is preserved)."
       },
       {
         "name": "domestic_violence_survivor",
@@ -1498,7 +1561,7 @@ export const SECTION_METADATA = {
       {
         "name": "formerly_incarcerated",
         "label": "Formerly incarcerated / returning citizen",
-        "format": "text",
+        "format": "boolean_tri",
         "help": "True if formerly incarcerated."
       },
       {
@@ -1512,13 +1575,15 @@ export const SECTION_METADATA = {
         "name": "family_caregiver",
         "label": "Family caregiver",
         "format": "boolean_tri",
-        "help": "True if the applicant provides regular care for family members."
+        "deprecated": true,
+        "help": "True if the applicant provides regular care for family members. Deprecated: duplicate question, hidden from intake/edit; the canonical field is Family life > Primary caregiver (non-parent) and this value is mirrored from it on save (any stored value is preserved)."
       },
       {
         "name": "household_size",
         "label": "Household size",
         "format": "text",
-        "help": "Number of people in the household when captured in family context."
+        "deprecated": true,
+        "help": "Number of people in the household when captured in family context. Deprecated: duplicate question, hidden from intake/edit; the canonical field is Financial information > Household size and this value is mirrored from it on save (any stored value is preserved)."
       }
     ]
   },
@@ -1536,19 +1601,19 @@ export const SECTION_METADATA = {
       {
         "name": "active_duty_military",
         "label": "Active duty military",
-        "format": "text",
+        "format": "boolean_tri",
         "help": "True if active duty."
       },
       {
         "name": "national_guard",
         "label": "National guard / reserve",
-        "format": "text",
+        "format": "boolean_tri",
         "help": "True if National Guard or Reserve."
       },
       {
         "name": "disabled_veteran",
         "label": "Disabled veteran",
-        "format": "text",
+        "format": "boolean_tri",
         "help": "True if disabled veteran."
       },
       {
@@ -1616,7 +1681,7 @@ export const SECTION_METADATA = {
       {
         "name": "law_enforcement",
         "label": "Law enforcement / corrections",
-        "format": "text",
+        "format": "boolean_tri",
         "help": "True if law enforcement or corrections officer."
       },
       {
@@ -1652,13 +1717,13 @@ export const SECTION_METADATA = {
       {
         "name": "minority_owned_business",
         "label": "Minority-Owned business",
-        "format": "text",
+        "format": "boolean_tri",
         "help": "True if minority-owned business."
       },
       {
         "name": "women_owned_business",
         "label": "Women-Owned business",
-        "format": "text",
+        "format": "boolean_tri",
         "help": "True if women-owned business."
       },
       {
@@ -1676,7 +1741,7 @@ export const SECTION_METADATA = {
       {
         "name": "truck_driver",
         "label": "Truck driver / transportation worker",
-        "format": "text",
+        "format": "boolean_tri",
         "help": "True if truck driver or transportation worker."
       },
       {
@@ -1695,19 +1760,19 @@ export const SECTION_METADATA = {
       {
         "name": "rural_resident",
         "label": "Rural resident",
-        "format": "text",
+        "format": "boolean_tri",
         "help": "True if rural resident or served area is rural."
       },
       {
         "name": "appalachian_region",
         "label": "Located in Appalachian region",
-        "format": "text",
+        "format": "boolean_tri",
         "help": "True if located in or serving Appalachia."
       },
       {
         "name": "urban_underserved",
         "label": "Urban underserved community",
-        "format": "text",
+        "format": "boolean_tri",
         "help": "True if located in or serving an underserved urban area."
       },
       {
@@ -1844,13 +1909,13 @@ export const SECTION_METADATA = {
       {
         "name": "first_generation_college_student",
         "label": "First-Generation college student",
-        "format": "text",
+        "format": "boolean_tri",
         "help": "First in your family to attend college."
       },
       {
         "name": "dual_enrollment",
         "label": "Dual enrollment / early college",
-        "format": "text",
+        "format": "boolean_tri",
         "help": "True if enrolled in dual enrollment or early college program."
       },
       {
@@ -1862,7 +1927,7 @@ export const SECTION_METADATA = {
       {
         "name": "rotc_jrotc",
         "label": "ROTC / JROTC participation",
-        "format": "text",
+        "format": "boolean_tri",
         "help": "Military training — ROTC scholarships available."
       },
       {
@@ -1920,6 +1985,7 @@ export const SECTION_METADATA = {
         "name": "current_status",
         "label": "Current status",
         "format": "enum",
+        "deprecated": true,
         "options": [
           "student",
           "not_in_labor_force",
@@ -1929,7 +1995,7 @@ export const SECTION_METADATA = {
           "self_employed",
           "retired"
         ],
-        "help": "Current employment status."
+        "help": "Current employment status. Deprecated: duplicate question, hidden from intake/edit; the canonical field is Financial information > Employment status and this value is mirrored from it on save (any stored value is preserved)."
       },
       {
         "name": "career_goal",
@@ -2020,7 +2086,8 @@ export const SECTION_METADATA = {
         "name": "household_size",
         "label": "Household size",
         "format": "text",
-        "help": "Household size when known."
+        "deprecated": true,
+        "help": "Household size when known. Deprecated: duplicate question, hidden from intake/edit; the canonical field is Financial information > Household size and this value is mirrored from it on save (any stored value is preserved)."
       },
       {
         "name": "responsibilities",
@@ -2192,17 +2259,19 @@ export const SECTION_METADATA = {
         "name": "focus_areas",
         "label": "Focus areas",
         "format": "tags",
+        "deprecated": true,
         "vocabulary": "focus",
         "allow_custom": true,
-        "help": "Focus areas relevant to the applicant or project. Choose from the suggested list; add a custom value only if none fit."
+        "help": "Focus areas relevant to the applicant or project. Choose from the suggested list; add a custom value only if none fit. Deprecated: duplicate question, hidden from intake/edit; the canonical field is Programs & services > Focus areas and this value is mirrored from it on save (any stored value is preserved)."
       },
       {
         "name": "supports",
         "label": "Support needs",
         "format": "tags",
+        "deprecated": true,
         "vocabulary": "needs",
         "allow_custom": true,
-        "help": "Support needs relevant to the applicant. Choose from the suggested list; add a custom value only if none fit."
+        "help": "Support needs relevant to the applicant. Choose from the suggested list; add a custom value only if none fit. Deprecated: duplicate question, hidden from intake/edit; the canonical field is Health & medical > Support needs and this value is mirrored from it on save (any stored value is preserved)."
       }
     ]
   },
@@ -2221,8 +2290,9 @@ export const SECTION_METADATA = {
         "name": "personal_statement",
         "label": "Personal statement",
         "format": "prose",
+        "deprecated": true,
         "scored": false,
-        "help": "Long-form personal statement. Used for drafting — not used for match scoring."
+        "help": "Long-form personal statement. Used for drafting — not used for match scoring. Deprecated: duplicate question, hidden from intake/edit; the canonical field is Story & goals > Personal statement and this value is mirrored from it on save (any stored value is preserved)."
       },
       {
         "name": "statement_of_need",
@@ -2235,8 +2305,9 @@ export const SECTION_METADATA = {
         "name": "goals",
         "label": "Goals",
         "format": "prose",
+        "deprecated": true,
         "scored": false,
-        "help": "What you hope to achieve with this funding. Used for drafting — not used for match scoring."
+        "help": "What you hope to achieve with this funding. Used for drafting — not used for match scoring. Deprecated: duplicate question, hidden from intake/edit; the canonical field is Story & goals > Goals and this value is mirrored from it on save (any stored value is preserved)."
       },
       {
         "name": "career_goals",

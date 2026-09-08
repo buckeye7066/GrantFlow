@@ -1578,6 +1578,7 @@ export default function ProfileDetail() {
               essays={profile?.sections?.find((section) => section.section_key === "essays")?.data ?? {}}
               onSaveField={handleInlineSaveField}
               isSaving={savingSectionKey === "essays"}
+              profileId={profileId}
             />
             <ProfileMemoryPanel profileId={profileId} />
           </TabsContent>

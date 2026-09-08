@@ -254,6 +254,13 @@ export const PROFILE_SCHEMA = {
     fields: {
       household_income: { type: 'number|null', default: null, description: 'Annual household income (USD) if known.' },
       household_size: { type: 'number|null', default: null, description: 'Number of people in the household (integer).' },
+      credit_score: {
+        type: 'number|null',
+        default: null,
+        scored: false,
+        description:
+          'Credit score (300–850) when the applicant knows it. The canonical answer behind the legacy demographics.good_credit_score toggle (700+), which is now derived from it (shared/profileFieldMirrors.js). Unscored: it selects credit-based / financial-empowerment programs, it is not an eligibility data point.',
+      },
       financial_need_level: {
         type: 'string',
         format: 'enum',

@@ -20,6 +20,7 @@
 import { safeParseJSON } from '../utils/safeJson.js'
 import { guardProfileSectionForWrite } from '../utils/guardedProfileSectionWrite.js'
 import { syncProfileFieldsFromSection } from '../utils/profileSectionSync.js'
+import { applyProfileFieldMirrors } from './profileFieldMirrors.js'
 import { deriveNamePartsIntoBasicInfo } from '../../shared/nameParsing.js'
 
 /**
@@ -90,6 +91,16 @@ export async function setProfileSectionField(db, {
     // Non-fatal — the section is the source of truth; the mirror is a convenience.
   }
 
+  // One question, one field: derive the hidden legacy duplicates (Demographics >
+  // Veteran status from Military service, Financial > Unemployed from Employment
+  // status, …) so every reader of a deprecated key sees the canonical answer.
+  let mirrored = []
+  try {
+    mirrored = (await applyProfileFieldMirrors(db, profileId, { updatedBy })).changed
+  } catch {
+    // Non-fatal — the boot backfill re-derives every profile.
+  }
+
   return {
     ok: true,
     accepted: true,
@@ -97,6 +108,7 @@ export async function setProfileSectionField(db, {
     field,
     saved: guardedData,
     rejected: guarded.rejected || [],
+    mirrored,
   }
 }
 

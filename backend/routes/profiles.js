@@ -49,6 +49,7 @@ import { redactProfileMemoryForProfile } from '../services/profileMemoryReposito
 import { resolveCommittedCollege } from '../services/college/committedCollege.js'
 import { syncProfileFieldsFromSection, syncDisplayNameToBasicInformation } from '../utils/profileSectionSync.js'
 import { deriveNamePartsIntoBasicInfo } from '../../shared/nameParsing.js'
+import { applyProfileFieldMirrors } from '../services/profileFieldMirrors.js'
 import { guardProfileSectionPayload, SECTION_METADATA } from '../utils/profileSuggestionGuards.js'
 import { normalizeProfileSectionData } from '../services/profileHelpers.js'
 import { normalizeProfile } from '../services/profileNormalizer.js'
@@ -3381,6 +3382,20 @@ router.put('/:id/sections/:sectionKey', async (req, res) => {
 
   await upsert.run(id, sectionKey, JSON.stringify(guardedData), updated_by ?? null)
 
+  // One question, one field (owner order 2026-09-08): the duplicate legacy
+  // questions are hidden from the form, so derive them from the canonical
+  // answer the user just saved (Demographics > Veteran status from Military
+  // service, Financial > Unemployed from Employment status, Government
+  // assistance self/household from the plain field, …). Every reader of a
+  // deprecated key keeps seeing the truth. Non-fatal: the boot backfill
+  // (`profile_field_mirror_backfill`) re-derives every profile.
+  let mirrored = []
+  try {
+    mirrored = (await applyProfileFieldMirrors(req.db, id, { updatedBy: updated_by ?? null })).changed
+  } catch (mirrorErr) {
+    console.warn('[profiles] Field mirror derivation failed for %s/%s:', id, sanitizeLogValue(sectionKey), mirrorErr?.message)
+  }
+
   // v4: Sync key section fields (state, zip, veteran, disability) to profiles table
   // so shallow reads in matching and Anya work correctly.
   try {
@@ -3464,6 +3479,7 @@ router.put('/:id/sections/:sectionKey', async (req, res) => {
     data: safeParseJSON(section.data, {}),
     saved: safeParseJSON(section.data, {}),
     rejected: guardedPayload.rejected,
+    mirrored,
     updated_at: section.updated_at,
     updated_by: section.updated_by,
   })
