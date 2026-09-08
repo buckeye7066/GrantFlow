@@ -6445,7 +6445,7 @@ export async function enforceAdminReinterviewSuppression(db) {
  * 2026-09-07). #1608 repairs this at onboarding/complete for NEW users
  * (services/accountDisplayName.js); this boot net repairs every EXISTING
  * user the same way, so the rule holds regardless of which code path minted
- * the account (kathydaniel1975 / allmonkey915 / holliet52 in prod).
+ * the account (three live prod accounts carried the stub on 2026-09-07).
  *
  * THE RULE
  * --------

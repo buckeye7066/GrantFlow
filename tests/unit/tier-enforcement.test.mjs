@@ -238,8 +238,13 @@ test('tier enforcement is backend-authoritative (pipeline automation, item fundi
     const adminToken = await loginEmailOtp({ port, email: adminEmail, profileId: null })
     const userToken = await loginEmailOtp({ port, email: userEmail, profileId })
 
-    // PIPELINE_AUTOMATION: deny non-admin tier.
-    const pipelineDenied = await fetchJson(`http://127.0.0.1:${port}/api/crawlers/jobs`, {
+    // PIPELINE_AUTOMATION: OWNER ORDER 2026-09-07 ("make these changes global
+    // and permanent" — "(highest non-admin tier)"): every non-admin profile in
+    // good payment standing holds the highest non-admin tier's capabilities,
+    // regardless of the tier it is billed at. This used to assert 403
+    // tier_or_addon_required for the 'test_low' assigned tier; the assigned
+    // tier no longer decides capabilities, so the paid user is ALLOWED.
+    const pipelineAllowed = await fetchJson(`http://127.0.0.1:${port}/api/crawlers/jobs`, {
       method: 'POST',
       headers: { Authorization: `Bearer ${userToken}` },
       body: JSON.stringify({
@@ -248,19 +253,31 @@ test('tier enforcement is backend-authoritative (pipeline automation, item fundi
         parameters: { organization_id: null, limit: 1 },
       }),
     })
-    assert.equal(pipelineDenied.status, 403)
-    assert.equal(pipelineDenied.json?.error, 'tier_or_addon_required')
-    assert.equal(pipelineDenied.json?.capability, 'enable_pipeline_automation')
+    assert.ok([200, 201].includes(pipelineAllowed.status), `pipeline (universal tier): ${JSON.stringify(pipelineAllowed.json)}`)
 
-    // Move the single payment authority out of good standing. The effective
-    // small-organization tier includes item funding and document AI, so these
-    // capabilities must now be refused specifically because payment is not
-    // active — not because of the unrelated assigned test tier.
+    // Move the single payment authority out of good standing. The universal
+    // entitlement tier includes every capability, so each one must now be
+    // refused specifically because payment is not active — the payment
+    // prerequisite is untouched by the universal tier.
     const paymentDb = new Database(dbPath)
     paymentDb.pragma('busy_timeout = 5000')
     paymentDb.prepare('UPDATE profile_pricing SET access_status = ? WHERE profile_id = ?')
       .run('past_due', profileId)
     paymentDb.close()
+
+    // PIPELINE_AUTOMATION: refused on lapsed payment even under the universal tier.
+    const pipelineUnpaid = await fetchJson(`http://127.0.0.1:${port}/api/crawlers/jobs`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${userToken}` },
+      body: JSON.stringify({
+        type: 'pipeline_automation',
+        profile_id: profileId,
+        parameters: { organization_id: null, limit: 1 },
+      }),
+    })
+    assert.equal(pipelineUnpaid.status, 402)
+    assert.equal(pipelineUnpaid.json?.error, 'payment_required')
+    assert.equal(pipelineUnpaid.json?.capability, 'enable_pipeline_automation')
 
     // ITEM_FUNDING: deny non-admin tier.
     const itemDenied = await fetchJson(`http://127.0.0.1:${port}/api/crawlers/jobs`, {
@@ -294,8 +311,8 @@ test('tier enforcement is backend-authoritative (pipeline automation, item fundi
       .run('active_paid', profileId)
     restoreDb.close()
 
-    // A durable add-on independently unlocks the named capability without
-    // changing the account's tier.
+    // A durable add-on is still recorded and honored (it is redundant for a
+    // catalog capability under the universal tier, but must never break access).
     const addonDb = new Database(dbPath)
     addonDb.pragma('busy_timeout = 5000')
     addonDb.prepare(`

@@ -6616,7 +6616,8 @@ describe('boot summary telemetry — a BOUNDED sweep must report a numeric `scan
 // ─────────────────────────────────────────────────────────────────────────────
 // INVARIANT: a non-admin account name is the person's profile name, not the
 // signup stub (owner order 2026-09-07, "make these changes global and
-// permanent"; the GeneMac / kathydaniel1975 / allmonkey915 / holliet52 class).
+// permanent"; the class of live accounts still named by their signup stub).
+// Fixture names below are SYNTHETIC: the privacy tripwire bans real profile names.
 // ─────────────────────────────────────────────────────────────────────────────
 describe('enforceAccountDisplayNameSync', () => {
   function makeUsersDb() {
@@ -6658,77 +6659,77 @@ describe('enforceAccountDisplayNameSync', () => {
 
   it('replaces a placeholder (email local part / phone stub) with the single profile name', async () => {
     const db = makeUsersDb()
-    user(db, 'u-kathy', 'kathydaniel1975', 'kathydaniel1975@gmail.com')
-    profile(db, 'p-kathy', 'u-kathy', 'Kathy Marie Daniel')
+    user(db, 'u-one', 'mqostrander1975', 'mqostrander1975@example.com')
+    profile(db, 'p-one', 'u-one', 'Marta Quill Ostrander')
     user(db, 'u-phone', 'User 0123', null, { phone: '+15555550123' })
-    profile(db, 'p-phone', 'u-phone', 'Hollie Machelle Knox')
+    profile(db, 'p-phone', 'u-phone', 'Petra Lindqvist')
     // A soft-deleted twin does not make the user a two-profile user.
-    profile(db, 'p-kathy-old', 'u-kathy', 'Old Kathy', { status: 'deleted' })
-    profile(db, 'p-kathy-older', 'u-kathy', 'Older Kathy', { deletedAt: '2026-01-01T00:00:00Z' })
+    profile(db, 'p-one-old', 'u-one', 'Old Name', { status: 'deleted' })
+    profile(db, 'p-one-older', 'u-one', 'Older Name', { deletedAt: '2026-01-01T00:00:00Z' })
 
     const res = await enforceAccountDisplayNameSync(db)
     expect(res.ok).toBe(true)
     expect(res.scanned).toBe(2)
     expect(res.repaired).toBe(2)
-    expect(nameOf(db, 'u-kathy')).toBe('Kathy Marie Daniel')
-    expect(nameOf(db, 'u-phone')).toBe('Hollie Machelle Knox')
+    expect(nameOf(db, 'u-one')).toBe('Marta Quill Ostrander')
+    expect(nameOf(db, 'u-phone')).toBe('Petra Lindqvist')
   })
 
   it('never touches a name the person chose', async () => {
     const db = makeUsersDb()
-    user(db, 'u-gene', 'Gene McNabb', 'mcnabbwg@yahoo.com')
-    profile(db, 'p-gene', 'u-gene', 'GeneMac')
+    user(db, 'u-chosen', 'Oren Tallis', 'otallis@example.com')
+    profile(db, 'p-chosen', 'u-chosen', 'OrenT')
     const res = await enforceAccountDisplayNameSync(db)
     expect(res.repaired).toBe(0)
     expect(res.scanned).toBe(0)
-    expect(nameOf(db, 'u-gene')).toBe('Gene McNabb')
+    expect(nameOf(db, 'u-chosen')).toBe('Oren Tallis')
   })
 
   it('skips a user who owns two or more live profiles (no single name to pick)', async () => {
     const db = makeUsersDb()
-    user(db, 'u-two', 'allmonkey915', 'allmonkey915@gmail.com')
-    profile(db, 'p-a', 'u-two', 'Avanell Lea Leamon')
-    profile(db, 'p-b', 'u-two', 'Leamon Family Farm')
+    user(db, 'u-two', 'bfarrow915', 'bfarrow915@example.com')
+    profile(db, 'p-a', 'u-two', 'Bexley Farrow')
+    profile(db, 'p-b', 'u-two', 'Farrow Family Farm')
     const res = await enforceAccountDisplayNameSync(db)
     expect(res.repaired).toBe(0)
-    expect(nameOf(db, 'u-two')).toBe('allmonkey915')
+    expect(nameOf(db, 'u-two')).toBe('bfarrow915')
   })
 
   it('never touches an admin account, and never copies a stub onto a stub', async () => {
     const db = makeUsersDb()
-    user(db, 'u-admin', 'buckeye7066', 'buckeye7066@gmail.com', { admin: 1 })
+    user(db, 'u-admin', 'ownerlogin', 'owner@example.com', { admin: 1 })
     profile(db, 'p-admin', 'u-admin', 'Owner Profile')
     user(db, 'u-stub', 'someone', 'someone@example.com')
     profile(db, 'p-stub', 'u-stub', 'New User')
     const res = await enforceAccountDisplayNameSync(db)
     expect(res.repaired).toBe(0)
     expect(res.scanned).toBe(0)
-    expect(nameOf(db, 'u-admin')).toBe('buckeye7066')
+    expect(nameOf(db, 'u-admin')).toBe('ownerlogin')
     expect(nameOf(db, 'u-stub')).toBe('someone')
   })
 
   it('is idempotent — a second run repairs 0', async () => {
     const db = makeUsersDb()
-    user(db, 'u-kathy', 'kathydaniel1975', 'kathydaniel1975@gmail.com')
-    profile(db, 'p-kathy', 'u-kathy', 'Kathy Marie Daniel')
+    user(db, 'u-one', 'mqostrander1975', 'mqostrander1975@example.com')
+    profile(db, 'p-one', 'u-one', 'Marta Quill Ostrander')
     expect((await enforceAccountDisplayNameSync(db)).repaired).toBe(1)
     const again = await enforceAccountDisplayNameSync(db)
     expect(again.repaired).toBe(0)
     expect(again.scanned).toBe(0)
-    expect(nameOf(db, 'u-kathy')).toBe('Kathy Marie Daniel')
+    expect(nameOf(db, 'u-one')).toBe('Marta Quill Ostrander')
   })
 
   it('ENFORCE_ACCOUNT_NAME_SYNC=0 is count-only: reports the candidate, repairs 0', async () => {
     const db = makeUsersDb()
-    user(db, 'u-kathy', 'kathydaniel1975', 'kathydaniel1975@gmail.com')
-    profile(db, 'p-kathy', 'u-kathy', 'Kathy Marie Daniel')
+    user(db, 'u-one', 'mqostrander1975', 'mqostrander1975@example.com')
+    profile(db, 'p-one', 'u-one', 'Marta Quill Ostrander')
     process.env.ENFORCE_ACCOUNT_NAME_SYNC = '0'
     const res = await enforceAccountDisplayNameSync(db)
     expect(res.countOnly).toBe(true)
     expect(res.scanned).toBe(1)
     expect(res.wouldRepair).toBe(1)
     expect(res.repaired).toBe(0)
-    expect(nameOf(db, 'u-kathy')).toBe('kathydaniel1975')
+    expect(nameOf(db, 'u-one')).toBe('mqostrander1975')
   })
 
   it('degrades silently when the ownership columns are absent (minimal schemas)', async () => {
