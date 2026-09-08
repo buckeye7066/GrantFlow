@@ -55,11 +55,28 @@
 import { isProposalEligibleOpportunity } from '../../../shared/opportunityFundability.js'
 import { isFundableOpportunity } from '../../config/fundingResultFilters.js'
 import { SCORE_SCALE_ID } from '../../config/matchThresholds.js'
+import { captureRealityEvidence, realLegFromCapture } from './rescoreRealityCapture.js'
+import { refreshFourTruthProof, hasPositiveFourTruthProof, failedFourTruths } from '../../crawler-os/fundingTruthPolicy.js'
 import { createLogger } from '../../utils/logger.js'
 import { NEED_FIRST_SCORING_VERSION } from './needFirstScoringAdapter.js'
 import { PROFILE_SIGNAL_VERSION } from '../../config/profileSignalVersion.js'
 
 const log = createLogger('catalog-rescore')
+
+/**
+ * A stand-in REAL leg, used ONLY to evaluate the other three truths BEFORE
+ * spending a network fetch. Never persisted: the capture path replaces it with
+ * real captured evidence, and a row failing any other truth is not written at
+ * all. `passed: false` so it can never be mistaken for proof if it escaped.
+ */
+const PROVISIONAL_REAL_LEG = Object.freeze({
+  passed: false,
+  gate: 'catalog_rescore.precheck',
+  reality_status: null,
+  evidence_url: null,
+  evidence_captured_at: null,
+  content_hash_present: false,
+})
 
 export const CATALOG_RESCORE_MATCHER_VERSION = 'catalog-rescore-link'
 export const CATALOG_RESCORE_KV_KEY = 'catalog_rescore_cursor'
@@ -233,6 +250,13 @@ export async function runCatalogRescoreSweep(db, opts = {}) {
   // When the fleet still carries stub explains, inventory walks compete with
   // provenance refresh under the 20s boot budget (prod 2026-08-08: 2754 stubs
   // still open after #1184). Prefer drain; optionally raise the wall clock.
+  // Each publish costs ONE real fetch, so it is bounded like every other
+  // network-spending sweep in this repo. Small by default: a boot must not turn
+  // into a crawl.
+  let captureBudgetLeft = Number.isFinite(opts.captureBudget)
+    ? opts.captureBudget
+    : envInt(process.env.CATALOG_RESCORE_CAPTURE_BUDGET, 25)
+
   const explainDrainTimeBudgetMs = Number.isFinite(opts.explainDrainTimeBudgetMs)
     ? opts.explainDrainTimeBudgetMs
     : envInt(process.env.CATALOG_RESCORE_EXPLAIN_TIME_BUDGET_MS, 90000)
@@ -247,6 +271,10 @@ export async function runCatalogRescoreSweep(db, opts = {}) {
   const { assessProfileConfiguration } = deps.assessProfileConfiguration
     ? { assessProfileConfiguration: deps.assessProfileConfiguration }
     : await import('../profile/profileConfiguration.js')
+  // Injectable so the sweep's own tests exercise sweep logic, not the network.
+  // Production default is the real capture: an ACCEPT without capture-time proof
+  // is deleted by the integrity net, so "no capture" must mean "no publish".
+  const captureEvidence = deps.captureRealityEvidence ?? captureRealityEvidence
   const { pointerKindSql } = await import('../../config/opportunityKindClasses.js')
 
   const isPg = (db?.dialect || 'sqlite') === 'postgres'
@@ -282,6 +310,21 @@ export async function runCatalogRescoreSweep(db, opts = {}) {
     inventory_paused_for_explain_drain: false,
     convergence_errors: 0,
     cycles_reopened: 0,
+    // Capture-time proof accounting: an ACCEPT the integrity net would delete
+    // is never written, so `awaiting_reality_capture` is the honest backlog and
+    // must be readable rather than looking like "the engine refused".
+    captures_attempted: 0,
+    captures_ok: 0,
+    captures_transient: 0,
+    captures_environment: 0,
+    awaiting_reality_capture: 0,
+    capture_budget_exhausted: 0,
+    // Rows the engine ACCEPTED that the four-truth contract cannot publish, by
+    // WHICH truth blocked them. Measured today this is almost entirely
+    // `profile_qualifies`: the catalog row states no applicant types and no
+    // eligibility prose, so no amount of reality verification can publish it.
+    unpublishable: 0,
+    blocked_by_truth: {},
     truncated: false,
     examples: [],
   }
@@ -538,13 +581,95 @@ export async function runCatalogRescoreSweep(db, opts = {}) {
           if (summary.examples.length < 5) summary.examples.push(`${opp.title} (ACCEPT ${score})`)
           continue
         }
+
+        // CAPTURE-TIME PROOF, or we do not publish (2026-09-08).
+        //
+        // This sweep used to write the ACCEPT here with no `four_truth_proof`,
+        // and `enforcePersistedMatchDecisionIntegrity` deleted every one later
+        // in the SAME boot (`removed_unproven_direct_accepts`) — proven by
+        // running all 70 enforcers over a live 32-row lane: 32 -> 0, nothing
+        // else touched them. The lane therefore sat at 0 fleet-wide forever
+        // while its cursor advanced through cycles 2-4, doing full work whose
+        // entire output was destroyed before the boot finished.
+        //
+        // There is no honest shortcut. Measured over all 20,407 active
+        // non-pointer rows: content hash coverage is ZERO, so no row can
+        // support a REAL leg from stored state, and `refreshFourTruthProof`
+        // returns null without a previous proof rather than manufacture one.
+        // The catalog omits the hash BY DESIGN (osOppToLiveRow refuses to stamp
+        // last_verified_at because fetching a LISTING page is not verification
+        // of THIS opportunity's target). So publishing "real funding you can
+        // apply to" means something has to read the page.
+        //
+        // DO NOT "fix" a future deletion by exempting this lane from the
+        // integrity net: that net is right, and the defect was that a writer
+        // publishing direct funding was never required to carry proof.
+        // ORDER MATTERS: the other three truths are FREE and the REAL leg costs
+        // a network fetch, so prove the free ones first. Measured 2026-09-08 on
+        // one real profile: of 33 engine ACCEPTs, ZERO state
+        // `entity_types_allowed`, 1 carries eligibility prose, 3 earn the
+        // `applicant_type` signal. So `profile_qualifies` is what actually
+        // blocks publication, not reality — fetching first would spend the whole
+        // budget on rows that were never publishable.
+        const provisionalProof = refreshFourTruthProof(
+          { four_truth_proof: { direct_funding: true, real: PROVISIONAL_REAL_LEG } },
+          {
+            canonical: decision,
+            opportunity: opp,
+            needsDefaulted: ctx?.thesis?.needs_defaulted,
+            refreshedBy: 'catalog_rescore_precheck',
+          },
+        )
+        const blockedTruths = failedFourTruths(provisionalProof).filter((t) => t !== 'real')
+        if (blockedTruths.length > 0) {
+          // Record WHICH truth blocked it. "The catalog states no applicant
+          // types for N rows" is a DATA-QUALITY backlog; "the engine refused" is
+          // a relevance verdict. Those must never look alike again.
+          for (const t of blockedTruths) {
+            summary.blocked_by_truth[t] = (summary.blocked_by_truth[t] ?? 0) + 1
+          }
+          summary.unpublishable += 1
+          continue
+        }
+
+        if (captureBudgetLeft <= 0) { summary.capture_budget_exhausted += 1; continue }
+        captureBudgetLeft -= 1
+        summary.captures_attempted += 1
+        const capture = await captureEvidence(opp)
+        if (capture.environment) summary.captures_environment += 1
+        else if (capture.transient) summary.captures_transient += 1
+        const realLeg = realLegFromCapture(opp, capture)
+        if (!realLeg) {
+          // Unproven: leave the pair for a later pass. A transient/environment
+          // failure is a fact about our egress, never about the row, so nothing
+          // is withdrawn and no verdict is recorded either way.
+          summary.awaiting_reality_capture += 1
+          continue
+        }
+        summary.captures_ok += 1
+        const fourTruthProof = refreshFourTruthProof(
+          { four_truth_proof: { direct_funding: true, real: realLeg } },
+          {
+            canonical: decision,
+            opportunity: opp,
+            needsDefaulted: ctx?.thesis?.needs_defaulted,
+            refreshedBy: 'catalog_rescore_capture',
+          },
+        )
+        if (!hasPositiveFourTruthProof({ match_explain: { four_truth_proof: fourTruthProof } })) {
+          // The page is real, but one of the other three truths does not hold.
+          // The integrity net would delete this row, so do not write it.
+          summary.awaiting_reality_capture += 1
+          continue
+        }
+
         try {
           const evaluatedAt = new Date().toISOString()
           const confidence = Number.isFinite(Number(decision?.confidence)) ? Number(decision.confidence) : null
           const reasons = Array.isArray(decision?.reasons)
             ? decision.reasons
             : (Array.isArray(decision?.matchedNeeds) ? decision.matchedNeeds : [])
-          const explain = canonicalExplain(decision, evaluatedAt)
+          const explain = { ...canonicalExplain(decision, evaluatedAt), four_truth_proof: fourTruthProof }
           // A row that ALREADY exists under a DIFFERENT lane (institution-link,
           // county-crisis-need-link, crawler-os, ...) is not this sweep's to
           // rebrand — see staleMatchExplainRefresh.js's header comment for the

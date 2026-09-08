@@ -48,6 +48,9 @@ function makeDb() {
       state TEXT, is_national INTEGER, opportunity_kind TEXT, source TEXT,
       source_url TEXT, application_url TEXT,
       is_directory_resource INTEGER, excluded_from_grant_scoring INTEGER,
+      -- The four-truth contract reads these for profile_qualifies; a row that
+      -- states neither can never be published however real its page is.
+      entity_types_allowed TEXT, eligibility_text TEXT, reality_status TEXT,
       profile_id TEXT, is_active INTEGER DEFAULT 1,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP
     );
@@ -83,16 +86,24 @@ function addOpp(db, over = {}) {
     // A fundable SIGNAL (the #1133 chain refuses signal-less rows): real
     // fixtures carry an apply URL unless a test removes it on purpose.
     application_url: 'https://example.org/apply',
+    // Stated applicant evidence: without it `profile_qualifies` cannot pass and
+    // NOTHING is publishable — which is the real-world backlog, not the case
+    // these tests are about. Tests that want the blocked case clear it.
+    entity_types_allowed: JSON.stringify(['individual']),
+    // Production rows carry a gate verdict (18,244 of 20,407 are VERIFIED or
+    // ROLLING); the REAL leg needs it alongside a fresh capture.
+    reality_status: 'VERIFIED',
     is_active: 1,
     created_at: `2026-02-01T00:00:${String(oppSeq % 60).padStart(2, '0')}Z`,
     ...over,
   }
   db.prepare(
     `INSERT INTO funding_opportunities
-      (id, title, sponsor, opportunity_kind, application_url, source_url, is_active, created_at, is_directory_resource, excluded_from_grant_scoring)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      (id, title, sponsor, opportunity_kind, application_url, source_url, is_active, created_at, is_directory_resource, excluded_from_grant_scoring, entity_types_allowed, eligibility_text, reality_status)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run(o.id, o.title, o.sponsor, o.opportunity_kind, o.application_url ?? null, o.source_url ?? null,
-    o.is_active, o.created_at, o.is_directory_resource ?? null, o.excluded_from_grant_scoring ?? null)
+    o.is_active, o.created_at, o.is_directory_resource ?? null, o.excluded_from_grant_scoring ?? null,
+    o.entity_types_allowed ?? null, o.eligibility_text ?? null, o.reality_status ?? null)
   return o
 }
 
@@ -108,6 +119,7 @@ function stubEngine() {
       explanation: verdict,
       reasons: [`current-${verdict}`],
       matchedNeeds: verdict === 'accept' ? ['education'] : [],
+      eligible: verdict === 'accept' ? 'yes' : 'no',
       scoreScaleId: 'data_point_test_v1',
       scoringPolicyVersion: 'policy-test-v1',
       matcherVersion: 'matcher-test-v1',
@@ -115,12 +127,37 @@ function stubEngine() {
       match_explain: {
         nested_evidence: { source: 'test', retained: true },
         scoreBreakdown: { total: score },
+        // refreshFourTruthProof reads matchedNeeds/matchedSignals from HERE, not
+        // the top level — the shape computeMatchDecision actually returns. (A
+        // second `match_explain` key earlier in this literal was silently
+        // discarded: last key wins.)
+        matchedNeeds: verdict === 'accept' ? ['education'] : [],
+        matchedSignals: verdict === 'accept' ? ['applicant_type'] : [],
       },
     }
   }
 }
 
-const baseDeps = () => ({ computeMatchDecision: stubEngine() })
+/**
+ * The minimum shape a canonical ACCEPT must carry to be PUBLISHABLE: the
+ * four-truth contract reads eligibility and matchedSignals/matchedNeeds, and a
+ * decision missing them is refused as `profile_qualifies` — correctly, because
+ * an unproven direct ACCEPT is deleted by enforcePersistedMatchDecisionIntegrity.
+ */
+const provableAccept = (score, extra = {}) => ({
+  decision: 'accept',
+  score,
+  eligible: 'yes',
+  match_explain: { matchedNeeds: ['education'], matchedSignals: ['applicant_type'] },
+  ...extra,
+})
+
+const captureOk = async () => ({
+  attempted: true, captured: true, transient: false, environment: false, status: 200,
+  contentHash: 'sha256:test', fetchedAt: '2026-09-08T05:00:00.000Z',
+  evidenceUrl: 'https://example.org/apply', reason: null,
+})
+const baseDeps = () => ({ computeMatchDecision: stubEngine(), captureRealityEvidence: captureOk })
 
 function matches(db, version = CATALOG_RESCORE_MATCHER_VERSION) {
   return db.prepare('SELECT * FROM profile_opportunity_matches WHERE matcher_version = ? ORDER BY id').all(version)
@@ -284,7 +321,7 @@ describe('what never reaches the engine', () => {
     addOpp(db, { title: 'Eldercare referral', opportunity_kind: 'referral' })
     addOpp(db, { title: 'School portal pointer', opportunity_kind: 'school_portal' })
     let engineCalls = 0
-    const deps = { computeMatchDecision: () => { engineCalls += 1; return { decision: 'accept', score: 90 } } }
+    const deps = { computeMatchDecision: () => { engineCalls += 1; return provableAccept(90) }, captureRealityEvidence: captureOk }
     const res = await runCatalogRescoreSweep(db, { writeEnabled: true, deps })
     expect(engineCalls).toBe(0)
     expect(res.scanned).toBe(0)
@@ -299,7 +336,7 @@ describe('what never reaches the engine', () => {
     addOpp(db, { title: 'Excluded-from-scoring row', opportunity_kind: null, excluded_from_grant_scoring: 1 })
     addOpp(db, { title: 'HOPE Scholarship' })
     let engineCalls = 0
-    const deps = { computeMatchDecision: () => { engineCalls += 1; return { decision: 'accept', score: 90 } } }
+    const deps = { computeMatchDecision: () => { engineCalls += 1; return provableAccept(90) }, captureRealityEvidence: captureOk }
     const res = await runCatalogRescoreSweep(db, { writeEnabled: true, deps })
     expect(res.not_fundable).toBe(2)
     expect(engineCalls).toBe(1)
@@ -324,7 +361,7 @@ describe('what never reaches the engine', () => {
     addOpp(db, { title: 'Signal-less row', application_url: null })
     addOpp(db, { title: 'HOPE Scholarship' })
     let engineCalls = 0
-    const deps = { computeMatchDecision: () => { engineCalls += 1; return { decision: 'accept', score: 90 } } }
+    const deps = { computeMatchDecision: () => { engineCalls += 1; return provableAccept(90) }, captureRealityEvidence: captureOk }
     const res = await runCatalogRescoreSweep(db, { writeEnabled: true, deps })
     expect(res.not_fundable).toBe(2)
     expect(engineCalls).toBe(1)
@@ -425,8 +462,14 @@ describe('convergence', () => {
             scoreScaleId: 'data_point_test_v1',
             scoringPolicyVersion: 'policy-test-v1',
             matcherVersion: 'matcher-test-v1',
-            match_explain: { verdict_evidence: verdict },
+            eligible: verdict === 'accept' ? 'yes' : 'no',
+            match_explain: {
+              verdict_evidence: verdict,
+              matchedNeeds: verdict === 'accept' ? ['education'] : [],
+              matchedSignals: verdict === 'accept' ? ['applicant_type'] : [],
+            },
           }),
+          captureRealityEvidence: captureOk,
         }
 
         await runCatalogRescoreSweep(db, { writeEnabled: true, deps })
@@ -463,11 +506,15 @@ describe('convergence', () => {
           scoringPolicyVersion: `policy-v${revision}`,
           matcherVersion: `engine-v${revision}`,
           evaluatedAt: `2026-08-0${revision}T12:00:00.000Z`,
+          eligible: 'yes',
           match_explain: {
             nested_evidence: { revision, retained: true },
             scoreBreakdown: { total: revision === 1 ? 12 : 19 },
+            matchedNeeds: ['education'],
+            matchedSignals: ['applicant_type'],
           },
         }),
+        captureRealityEvidence: captureOk,
       }
 
       await runCatalogRescoreSweep(db, { writeEnabled: true, deps })
@@ -686,12 +733,125 @@ describe('honest reporting', () => {
     const deps = {
       computeMatchDecision: (profile, opp) => {
         if (/Explodes/.test(opp.title)) throw new Error('boom')
-        return { decision: 'accept', score: 80 }
+        return provableAccept(80)
       },
+      captureRealityEvidence: captureOk,
     }
     const res = await runCatalogRescoreSweep(db, { writeEnabled: true, deps })
     expect(res.unscorable).toBe(1)
     expect(res.linked).toBe(1)
+    db.close()
+  })
+})
+
+// ─────────────────────────────────────────────────────────────────────────────
+// AN ACCEPT WE CANNOT PROVE IS NEVER WRITTEN (2026-09-08)
+//
+// This sweep used to write ACCEPT rows carrying no four_truth_proof, and
+// `enforcePersistedMatchDecisionIntegrity` deleted every one later in the SAME
+// boot (`removed_unproven_direct_accepts`). Proven against prod by running all
+// 70 enforcers over a live 32-row lane: 32 -> 0, nothing else touched them. The
+// lane therefore sat at ZERO fleet-wide forever while its cursor advanced
+// through cycles 2-4 — full work every boot, output destroyed before the boot
+// ended, and the artifact said `{ok:true, repaired:0, scanned:3000}`.
+//
+// So: prove it or do not write it. And say WHICH truth blocked it, because
+// "the catalog states no applicant types for N rows" is a data-quality backlog
+// while "the engine refused" is a relevance verdict, and those two looked
+// identical for as long as this bug existed.
+// ─────────────────────────────────────────────────────────────────────────────
+describe('publishability — prove it or do not write it', () => {
+  it('never writes an engine ACCEPT the four-truth contract cannot prove, and names the truth that blocked it', async () => {
+    const db = makeDb()
+    addProfile(db, 'p1')
+    // The real-world shape: measured on prod, 0 of 33 accepts for one profile
+    // stated entity_types_allowed and only 1 carried eligibility prose.
+    addOpp(db, { title: 'Unprovable Scholarship', entity_types_allowed: null, eligibility_text: null })
+    const res = await runCatalogRescoreSweep(db, { writeEnabled: true, deps: baseDeps() })
+
+    expect(res.adjudicated).toBe(1)
+    expect(res.rejected_by_engine).toBe(0)   // the ENGINE said yes
+    expect(res.unpublishable).toBe(1)        // the CONTRACT said no
+    expect(res.blocked_by_truth.profile_qualifies).toBe(1)
+    expect(matches(db)).toHaveLength(0)
+    db.close()
+  })
+
+  it('does not spend a network fetch on a row that fails a FREE truth', async () => {
+    const db = makeDb()
+    addProfile(db, 'p1')
+    addOpp(db, { title: 'Unprovable Scholarship', entity_types_allowed: null, eligibility_text: null })
+    let fetches = 0
+    const deps = {
+      computeMatchDecision: stubEngine(),
+      captureRealityEvidence: async () => { fetches += 1; return captureOk() },
+    }
+    const res = await runCatalogRescoreSweep(db, { writeEnabled: true, deps })
+    // The other three truths are free; reality costs a fetch. Checking them
+    // first is what keeps the budget for rows that can actually publish.
+    expect(fetches).toBe(0)
+    expect(res.captures_attempted).toBe(0)
+    expect(res.unpublishable).toBe(1)
+    db.close()
+  })
+
+  it('writes a provable ACCEPT WITH its four_truth_proof, so the integrity net keeps it', async () => {
+    const db = makeDb()
+    addProfile(db, 'p1')
+    addOpp(db, { title: 'Provable Scholarship' })
+    const res = await runCatalogRescoreSweep(db, { writeEnabled: true, deps: baseDeps() })
+
+    expect(res.linked).toBe(1)
+    expect(res.captures_ok).toBe(1)
+    const row = matches(db)[0]
+    const explain = JSON.parse(row.match_explain_json)
+    expect(explain.four_truth_proof).toBeTruthy()
+    expect(explain.four_truth_proof.all_passed).toBe(true)
+    expect(explain.four_truth_proof.real.content_hash_present).toBe(true)
+    db.close()
+  })
+
+  it('a transient capture failure leaves the pair for later — it is never a verdict about the row', async () => {
+    const db = makeDb()
+    addProfile(db, 'p1')
+    addOpp(db, { title: 'Provable Scholarship' })
+    const deps = {
+      computeMatchDecision: stubEngine(),
+      captureRealityEvidence: async () => ({
+        attempted: true, captured: false, transient: true, environment: true,
+        status: 403, contentHash: null, fetchedAt: null, evidenceUrl: 'https://x', reason: 'blocked_by_host',
+      }),
+    }
+    const res = await runCatalogRescoreSweep(db, { writeEnabled: true, deps })
+    expect(res.awaiting_reality_capture).toBe(1)
+    expect(res.captures_environment).toBe(1)
+    expect(matches(db)).toHaveLength(0)
+    db.close()
+  })
+})
+
+describe('the last line of defence', () => {
+  // The precheck plus a correct capture should make this unreachable — which is
+  // exactly why it is tested. If a future change to rescoreRealityCapture drops
+  // its reality precondition, a "successful" capture on a row the gate never
+  // rated would build a REAL leg with a null reality_status. The final proof
+  // check is what stops that row reaching the store, where the integrity net
+  // would silently delete it again.
+  it('refuses a captured row whose REAL leg still cannot satisfy the four-truth predicate', async () => {
+    const db = makeDb()
+    addProfile(db, 'p1')
+    addOpp(db, { title: 'Unrated Scholarship', reality_status: null })
+    const deps = {
+      computeMatchDecision: stubEngine(),
+      // A capture module that forgot the reality precondition.
+      captureRealityEvidence: captureOk,
+    }
+    const res = await runCatalogRescoreSweep(db, { writeEnabled: true, deps })
+    // The capture "succeeded", so it is counted as one — and the row is STILL
+    // refused, by the final proof check rather than by the capture.
+    expect(res.captures_ok).toBe(1)
+    expect(res.awaiting_reality_capture).toBe(1)
+    expect(matches(db)).toHaveLength(0)
     db.close()
   })
 })
