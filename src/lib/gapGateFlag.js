@@ -2,9 +2,11 @@
  * gapGateFlag — the ONE source of truth for whether Anya's profile gap
  * interview ("gap gate") is enabled.
  *
- * DEFAULT ON: the interview runs everywhere (login launcher + profile
- * Overview mount) unless the build explicitly opts out with
- * VITE_GAP_GATE_ENABLED=false.
+ * DEFAULT ON: the interview runs where the person asks for it (the profile
+ * Overview mount and the explicit ResetOnboardingFlow sequence) unless the
+ * build opts out with VITE_GAP_GATE_ENABLED=false. It is no longer mounted
+ * globally at login (owner order 2026-09-07): it covered every page at
+ * sign-in before the person could see where to go.
  *
  * History: the gate originally shipped dark (required VITE_GAP_GATE_ENABLED
  * === 'true', which was unset in prod, so it never ran). This flips the

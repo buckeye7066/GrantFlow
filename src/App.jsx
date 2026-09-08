@@ -6,7 +6,6 @@ import { Toaster } from '@/components/ui/toaster'
 import SessionExpiredDialog from '@/components/auth/SessionExpiredDialog'
 import HamiltonToastBridge from '@/components/hamilton/HamiltonToastBridge'
 import HamiltonAuthPrimingToast from '@/components/hamilton/HamiltonAuthPrimingToast'
-import LoginGapInterviewLauncher from '@/components/profiles/LoginGapInterviewLauncher'
 import ProfileCompletionGate from '@/components/onboarding/ProfileCompletionGate'
 import MobileUpdateWatcher from '@/components/mobile/MobileUpdateWatcher'
 import client from '@/api/client';
@@ -100,13 +99,13 @@ function App() {
           a local notification, and puts the install button one tap away.
           Renders null on the web and until an update is actually found. */}
       <MobileUpdateWatcher />
-      {/* ResetOnboardingFlow (mounted via OnboardingSequencer in Layout.jsx)
-          renders its OWN LoginGapInterviewLauncher instance, sequenced
-          explicitly after the video and before the guided tour, while
-          guidedCycleTourStatus === 'pending_reinterview'. Suppress this
-          global instance during that window so the two don't double-mount;
-          it resumes its normal recurring behavior once that finishes. */}
-      {guidedCycleTourStatus !== 'pending_reinterview' && <LoginGapInterviewLauncher />}
+      {/* Anya's login-time gap interview is NOT mounted globally any more.
+          Owner order 2026-09-07 ("take away the anya interview initially"): it
+          covered every page at sign-in and asked a senior whether he was a
+          student before he could see where to go. The interview still runs
+          where the person asks for it: the profile Overview mount
+          (ProfileOverview.jsx) and the explicit ResetOnboardingFlow sequence,
+          which renders its own LoginGapInterviewLauncher. */}
       {/* BLOCKING profile-completion gate: while a non-admin's profile is
           missing data points required for its type, Anya asks the numbered
           questions ("1 of N" … "N of N") before the user can proceed. Renders
