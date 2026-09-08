@@ -25,7 +25,16 @@ test('the simplified (end-user) Dashboard never routes to a hidden surface', () 
 })
 
 test('every simplified end-user CTA lands on a visible page', () => {
-  const allowed = new Set(['Help', 'Pipeline', 'Calendar', 'Dashboard', 'ItemFunding'])
+  // Since #1616 the end-user sidebar carries the full non-admin tool set
+  // (src/nav/endUserNavConfig.js) — that module pulls in lucide-react and the
+  // '@/utils' alias, so it cannot be imported under node:test; this is the
+  // sidebar's route list minus the hidden ones. Keep it in step with
+  // END_USER_ROUTE_NAMES when the sidebar changes.
+  const allowed = new Set([
+    'Dashboard', 'Calendar', 'ProfileDetail',
+    'DiscoverGrants', 'SavedGrants', 'FundingResults', 'ItemFunding',
+    'Pipeline', 'Help',
+  ])
   for (const scenario of scenarios) {
     const action = pickDashboardNextAction({ ...scenario, isSimplified: true })
     if (!action) continue
