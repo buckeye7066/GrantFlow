@@ -28,7 +28,7 @@
 import { spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { createRequire } from 'node:module'
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, lstatSync, realpathSync, readFileSync, writeFileSync, rmSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, lstatSync, realpathSync, readFileSync, statSync, writeFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve, sep } from 'node:path'
 import { baseLaunchEnv } from './prereq.mjs'
@@ -394,10 +394,12 @@ export function missingDependencyEntrypoints(dependencyDir) {
       ? [pkg.bin]
       : (pkg.bin && typeof pkg.bin === 'object' ? Object.values(pkg.bin) : [])
     for (const target of bins) {
-      if (typeof target === 'string' && target.trim() && !existsSync(resolve(dir, target))) broken = true
+      if (typeof target === 'string' && target.trim()) {
+        try { if (!statSync(resolve(dir, target)).isFile()) broken = true } catch { broken = true }
+      }
     }
     for (const target of declaredRuntimeExportTargets(pkg.exports)) {
-      if (!existsSync(resolve(dir, target))) broken = true
+      try { if (!statSync(resolve(dir, target)).isFile()) broken = true } catch { broken = true }
     }
     if (broken) missing.push(pkg.name || label)
   }

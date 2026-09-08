@@ -203,6 +203,30 @@ test('dependency validation checks export-only packages and unreadable installed
   } finally { rmSync(root, { recursive: true, force: true }) }
 })
 
+test('dependency validation rejects directories at declared bin and export file targets', () => {
+  const root = mkdtempSync(join(tmpdir(), 'eva-directory-entrypoints-'))
+  const dependencyDir = join(root, 'node_modules')
+  try {
+    const binPackage = join(dependencyDir, 'directory-bin')
+    const exportPackage = join(dependencyDir, 'directory-export')
+    mkdirSync(join(binPackage, 'cli'), { recursive: true })
+    mkdirSync(join(exportPackage, 'dist'), { recursive: true })
+    writeFileSync(join(binPackage, 'package.json'), JSON.stringify({
+      name: 'directory-bin',
+      bin: './cli',
+    }))
+    writeFileSync(join(exportPackage, 'package.json'), JSON.stringify({
+      name: 'directory-export',
+      exports: { '.': './dist' },
+    }))
+
+    assert.deepEqual(
+      missingDependencyEntrypoints(dependencyDir).sort(),
+      ['directory-bin', 'directory-export'],
+    )
+  } finally { rmSync(root, { recursive: true, force: true }) }
+})
+
 test('dependency validation accepts a legitimate type-only package with an empty main', () => {
   const root = mkdtempSync(join(tmpdir(), 'eva-type-only-package-'))
   const dependencyDir = join(root, 'node_modules')
