@@ -1,4 +1,5 @@
-import { isValidState, normalizeState } from '../utils/stateNormalization.js'
+import { isValidState, normalizeState, stateFullName } from '../utils/stateNormalization.js'
+import { US_STATE_CODES } from '../../shared/usStateCodes.js'
 
 /**
  * A locator title states its place as `"<Place>, XX — <what it is>"`. Only that
@@ -20,6 +21,55 @@ export const TITLE_STATE_RX = /,\s*([A-Za-z]{2})\s*(?:—|–|-{1,2})\s/
  */
 export const TITLE_NEAR_STATE_RX = /\bnear\s+[A-Za-z][A-Za-z.'\-\s]*?,\s*([A-Za-z]{2})\s*$/
 
+
+/**
+ * A row's OWN URL can declare its place as plainly as its title does:
+ * `help.sengov.com/posts/assistance-programs-madison-county-kentucky-and-richmond`,
+ * `domore24delaware.org/fundraisers/...`. Prod 2026-09-07: an Indiana senior's
+ * pipeline held a Kentucky county listing and a Delaware charity because
+ * their state column was NULL and "missing is neutral" let them through.
+ *
+ * Only a FULL state name, as a whole token of the host or path (separators
+ * `-`, `_`, `.`, `/`), counts - never a two-letter code (a coincidence magnet)
+ * and never "washington" (Washington County / D.C. / George Washington).
+ * Longest names match first so "west virginia" is never read as Virginia.
+ */
+export const URL_STATE_NAME_EXCLUDED = Object.freeze(new Set(['WA']))
+
+const URL_STATE_NAMES = Object.freeze(
+  US_STATE_CODES
+    .filter((code) => !URL_STATE_NAME_EXCLUDED.has(code))
+    .map((code) => ({ code, name: String(stateFullName(code) || '').toLowerCase() }))
+    .filter((x) => x.name)
+    .sort((a, b) => b.name.length - a.name.length),
+)
+
+function urlTokensOf(value) {
+  const raw = String(value || '').trim()
+  if (!raw) return ''
+  let hostAndPath = raw
+  try {
+    const u = new URL(raw)
+    hostAndPath = `${u.hostname} ${u.pathname}`
+  } catch {
+    hostAndPath = raw.replace(/^https?:\/\//i, '').split(/[?#]/)[0]
+  }
+  return ` ${hostAndPath.toLowerCase().replace(/[^a-z]+/g, ' ').trim()} `
+}
+
+/** The real U.S. state a row declares in its own URLs (url / application_url / source_url / evidence_url / apply_url), or null. */
+export function declaredStateFromUrls(row) {
+  if (!row || typeof row !== 'object') return null
+  for (const field of ['url', 'application_url', 'source_url', 'evidence_url', 'apply_url']) {
+    const tokens = urlTokensOf(row[field])
+    if (!tokens) continue
+    for (const { code, name } of URL_STATE_NAMES) {
+      if (tokens.includes(` ${name} `)) return isValidState(code) ? code : null
+    }
+  }
+  return null
+}
+
 /** The real U.S. state a row declares in its own title, or null. */
 export function declaredStateFromTitle(rowOrTitle) {
   const title = typeof rowOrTitle === 'string'
@@ -32,4 +82,4 @@ export function declaredStateFromTitle(rowOrTitle) {
   return code && isValidState(code) ? code : null
 }
 
-export default { TITLE_STATE_RX, TITLE_NEAR_STATE_RX, declaredStateFromTitle }
+export default { TITLE_STATE_RX, TITLE_NEAR_STATE_RX, declaredStateFromTitle, declaredStateFromUrls, URL_STATE_NAME_EXCLUDED }

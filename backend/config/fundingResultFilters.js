@@ -729,6 +729,7 @@ export function isRelevantGeo(row, { states = null } = {}) {
     : resolved
   const restrictiveEvidence = jurisdiction.source === 'canonical_funder' ||
     jurisdiction.source === 'declared_title' ||
+    jurisdiction.source === 'declared_url' ||
     (jurisdiction.source === 'stored_state' && explicitlyRegional)
   if (
     restrictiveEvidence &&
@@ -740,7 +741,9 @@ export function isRelevantGeo(row, { states = null } = {}) {
       ? `canonical_funder_out_of_state:${jurisdiction.rule_id}`
       : jurisdiction.source === 'declared_title'
         ? 'declared_place_out_of_state'
-        : 'persisted_state_out_of_state'
+        : jurisdiction.source === 'declared_url'
+          ? 'declared_url_place_out_of_state'
+          : 'persisted_state_out_of_state'
     return {
       relevant: false,
       reason: `${prefix}:${jurisdiction.state}`,
