@@ -161,12 +161,15 @@ export function summarizeEvaPortfolioQa(data, { now = null, staleMs = LIMITS.DEF
   const blockedApps = appRuns
     .filter((a) => a.app_status !== 'tested')
     .map((a) => ({ program: a.display_name || a.app_id, status: a.app_status, reason: a.blocker_reason || null }))
+  const testingComplete = blockedApps.length === 0 && notTested.length === 0 &&
+    journeysTotal > 0 && journeysPassed + journeysFailed === journeysTotal
 
   // Headline: overall status must never be "all clear" when data is stale/missing.
   let headline
   if (!run && heartbeatState === 'missing') headline = 'Portfolio testing has never reported and no runner heartbeat was received.'
   else if (!run) headline = 'No EVA portfolio run has been received; runner is alive but has not uploaded results.'
   else if (runStale) headline = `Last portfolio run is STALE (${Math.round(runAgeMs / 3600000)}h old) — results below are from the last upload, not overnight.`
+  else if (!testingComplete) headline = `Portfolio testing is incomplete: ${journeysPassed} passed, ${journeysFailed} failed; ${statusCounts.blocked} apps blocked, ${statusCounts.startup_failed} startup-failed, ${statusCounts.not_run + notTested.length} not run.`
   else if (journeysFailed > 0) headline = `${journeysFailed} user journey${journeysFailed === 1 ? '' : 's'} failed across ${statusCounts.tested} tested program${statusCounts.tested === 1 ? '' : 's'}.`
   else headline = `All ${journeysPassed} executed user journeys passed across ${statusCounts.tested} program${statusCounts.tested === 1 ? '' : 's'}.`
 
@@ -190,6 +193,7 @@ export function summarizeEvaPortfolioQa(data, { now = null, staleMs = LIMITS.DEF
     unautomated_features: unautomated.slice(0, 25),
     lifecycle: bucket,
     actionable,
+    testing_complete: testingComplete,
     resolved: resolvedList,
     blocked_apps: blockedApps,
   }

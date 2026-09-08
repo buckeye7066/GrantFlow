@@ -48,6 +48,27 @@ afterEach(() => {
 })
 
 describe('summarizeEvaPortfolioQa freshness', () => {
+  it.each(['blocked', 'startup_failed', 'not_run'])('reports incomplete testing when an app is %s and no journey failed', async (app_status) => {
+    await persistRun(db, runPayload('incomplete', [
+      { app_id: 'factory-deck', display_name: 'Factory Deck', app_status, duration_ms: 1, journeys: [] },
+    ]), { idempotencyKey: 'incomplete' })
+    const summary = summarizeEvaPortfolioQa(await defaultLoadEvaPortfolioQa(db))
+    expect(summary.headline).toMatch(/incomplete/i)
+    expect(summary.headline).not.toMatch(/All .*passed/)
+    expect(renderEvaSection(summary).html).not.toContain('background:#dcfce7')
+  })
+
+  it('reports incomplete testing when executed journeys pass but an expected app is absent', () => {
+    const now = new Date().toISOString()
+    const summary = summarizeEvaPortfolioQa({
+      run: { completed_at: now, journeys_total: 1, journeys_passed: 1, journeys_failed: 0 },
+      appRuns: [{ app_id: 'grantflow', app_status: 'tested' }],
+      expectedAppIds: ['grantflow', 'factory-deck'],
+    })
+    expect(summary.headline).toMatch(/incomplete/i)
+    expect(summary.headline).toContain('1 passed')
+  })
+
   it('reports NONE when nothing has ever run', async () => {
     const data = await defaultLoadEvaPortfolioQa(db, {})
     const summary = summarizeEvaPortfolioQa(data, {})
@@ -131,6 +152,17 @@ describe('EVA section rendering', () => {
 })
 
 describe('buildOwnerReport integrates EVA', () => {
+  it('does not label an all-blocked fresh portfolio clear in the email subject', async () => {
+    await persistRun(db, runPayload('blocked-subject', [
+      { app_id: 'factory-deck', app_status: 'blocked', journeys: [] },
+    ]), { idempotencyKey: 'blocked-subject' })
+    const report = buildOwnerReport({ id: 'sam-1', health_score: 100, findings: [], repair_plan: [] }, {
+      eva: await defaultLoadEvaPortfolioQa(db),
+    })
+    expect(report.subject).toContain('user-tests incomplete')
+    expect(report.subject).not.toContain('user-journeys clear')
+  })
+
   it('includes the EVA section and reflects functional findings in the subject', async () => {
     await persistRun(db, runPayload('r1', [
       { app_id: 'grantflow', display_name: 'GrantFlow', app_status: 'tested', duration_ms: 1, journeys: [fail({ name: 'Save journey' })] },

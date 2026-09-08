@@ -166,10 +166,12 @@ test('repaired portfolio manifests preserve their current repository contracts',
 
   const factory = manifestById('factory-deck')
   assert.equal(factory.repo, 'buckeye7066/local-ai-factory')
-  assert.deepEqual(factory.nightly_critical_journeys, ['app-identifies-itself'])
-  assert.deepEqual(factory.weekly_full_journeys, ['app-identifies-itself'])
-  assert.equal(factory.journeys.some((journey) => journey.id === 'demo-mode-visible'), false)
-  assert.equal(factory.coverage.some((item) => (item.journeys || []).includes('demo-mode-visible')), false)
+  assert.ok(factory.nightly_critical_journeys.includes('demo-mode-visible'), 'a current check must retain the historical finding id so a real pass can close it')
+  assert.ok(factory.weekly_full_journeys.includes('demo-mode-visible'))
+  const factoryDemo = factory.journeys.find((journey) => journey.id === 'demo-mode-visible')
+  assert.ok(factoryDemo?.steps.every((step) => ['goto', 'waitForSelector'].includes(step.action)), 'checking the offline demo control must never click or start a Factory run')
+  assert.ok(factoryDemo?.assert.some((check) => check.selector.includes('input[type=') && check.value === 'Offline demo'), 'the journey must check the actual offline-demo control')
+  assert.ok(factory.coverage.some((item) => (item.journeys || []).includes('demo-mode-visible')))
 
   const geneMap = manifestById('genemap-discovery')
   assert.equal(geneMap.node_engine, '>=24', 'the runner must enforce GeneMap current package Node engine before launch')

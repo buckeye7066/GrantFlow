@@ -17,14 +17,40 @@ const STUDENT_THESIS = {
   interest_terms: ['nursing', 'biology'],
 };
 
-test('persistent shortfalls reserve half the live search budget for fresh ground', () => {
+test('persistent shortfalls put fresh ground inside the early execution window while retaining anchors', () => {
   const thesis = { ...STUDENT_THESIS, schools: ['Example University'],
     learned_gaps: { classes: ['low_results', 'result_floor_shortfall'] } };
   const first = buildWebQueries(thesis, { max: 28, seed: 0, year: 2026 });
   const next = buildWebQueries(thesis, { max: 28, seed: 14, year: 2026 });
   assert.equal(first.length, 28);
-  assert.deepEqual(first.slice(0, 14), next.slice(0, 14));
+  assert.deepEqual(first.slice(0, 2), [
+    'scholarship grant funding student',
+    'education grant funding student',
+  ], 'highest-signal anchors lead the first run');
+  assert.deepEqual(next.slice(0, 2), first.slice(0, 2), 'highest-signal anchors stay fixed');
+  assert.ok(
+    next.slice(0, 6).some((query) => !first.slice(0, 6).includes(query)),
+    'a later retry reaches a fresh query before a full SERP can fill the 44-page queue',
+  );
   assert.ok(next.filter((query) => !first.includes(query)).length >= 10);
+});
+
+test('persistent shortfalls interleave breadth even when the full query plan fits its budget', () => {
+  const thesis = {
+    applicant_types: ['nonprofit'],
+    is_org: true,
+    needs: ['youth'],
+    location: { state: 'TN', city: 'Nashville' },
+    learned_gaps: { classes: ['low_results'] },
+  };
+  const first = buildWebQueries(thesis, { max: 28, seed: 0, year: 2026 });
+  const next = buildWebQueries(thesis, { max: 28, seed: 5, year: 2026 });
+  assert.equal(first.length, 9, 'fixture stays below the 28-query budget');
+  assert.deepEqual(next.slice(0, 2), first.slice(0, 2), 'highest-signal anchors stay fixed');
+  assert.ok(
+    next.slice(0, 6).some((query) => !first.slice(0, 6).includes(query)),
+    'the page-bound execution window must still rotate',
+  );
 });
 
 test('a student profile gets scholarship-flavored queries', () => {

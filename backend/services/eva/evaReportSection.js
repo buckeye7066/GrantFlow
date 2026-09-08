@@ -130,8 +130,9 @@ export function renderEvaSection(summary) {
   // ---- HTML ---------------------------------------------------------------
   const h = []
   h.push('<h2 style="margin:24px 0 8px;font-size:16px;color:#0f172a">Portfolio User-Journey Tests</h2>')
-  const headlineBg = s.journeys_failed > 0 || s.freshness !== 'fresh' ? '#fef3c7' : '#dcfce7'
-  const headlineBorder = s.journeys_failed > 0 || s.freshness !== 'fresh' ? '#fcd34d' : '#86efac'
+  const needsAttention = s.journeys_failed > 0 || s.freshness !== 'fresh' || s.testing_complete === false
+  const headlineBg = needsAttention ? '#fef3c7' : '#dcfce7'
+  const headlineBorder = needsAttention ? '#fcd34d' : '#86efac'
   h.push(`<p style="margin:0 0 8px;padding:10px 12px;background:${headlineBg};border:1px solid ${headlineBorder};border-radius:6px;color:#0f172a">${safe(s.headline)}${s.freshness === 'stale' ? ' <strong>(STALE RESULTS)</strong>' : ''}</p>`)
   h.push('<table style="border-collapse:collapse;font-size:13px;margin:0 0 12px"><tbody>')
   h.push(`<tr><td style="padding:2px 10px 2px 0;color:#475569">Apps</td><td style="padding:2px 0">${s.apps_expected} expected · <strong>${s.apps_tested} tested</strong> · ${s.apps_blocked} blocked · ${s.apps_startup_failed} startup-failed · ${s.apps_not_run} not run</td></tr>`)

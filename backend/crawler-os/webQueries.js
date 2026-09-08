@@ -99,6 +99,13 @@ function rotate(arr, offset) {
   return arr.slice(k).concat(arr.slice(0, k));
 }
 
+export const PERSISTENT_QUERY_ANCHOR_COUNT = 2;
+
+export function hasPersistentQueryShortfall(thesis = {}) {
+  const classes = Array.isArray(thesis.learned_gaps?.classes) ? thesis.learned_gaps.classes : [];
+  return classes.some((gap) => gap === 'low_results' || gap === 'result_floor_shortfall');
+}
+
 /**
  * buildWebQueries — produce deduped, profile-relevant open-web funding queries.
  *
@@ -811,17 +818,38 @@ export function buildWebQueries(thesis = {}, opts = {}) {
   });
   const priority = unique([...forced, ...core]);
   const broadening = unique(extra);
-  if (priority.length + broadening.length <= max) return [...priority, ...rotate(broadening, seed)];
   // A continuing shortfall must meaningfully explore. Keeping max-1 queries
   // fixed left a live 28-query retry spending 27 searches on the same ground.
   // Retain the highest-priority half and rotate the remaining budget, including
   // overflow core queries. Admission and eligibility do not change.
-  const needsBreadth = (thesis.learned_gaps?.classes || [])
-    .some((gap) => gap === 'low_results' || gap === 'result_floor_shortfall');
-  const fixedCount = Math.min(priority.length, max - 1, needsBreadth ? Math.ceil(max / 2) : max - 1);
+  const needsBreadth = hasPersistentQueryShortfall(thesis);
+  const fitsQueryBudget = priority.length + broadening.length <= max;
+  if (fitsQueryBudget && !needsBreadth) return [...priority, ...rotate(broadening, seed)];
+  const fixedCount = fitsQueryBudget
+    ? priority.length
+    : Math.min(priority.length, max - 1, needsBreadth ? Math.ceil(max / 2) : max - 1);
   const head = priority.slice(0, fixedCount);
   const pool = [...priority.slice(fixedCount), ...broadening];
-  return [...head, ...rotate(pool, seed).slice(0, max - head.length)];
+  const selectedBreadth = rotate(pool, seed).slice(0, max - head.length);
+  if (!needsBreadth) return [...head, ...selectedBreadth];
+
+  // The page queue can fill before the query budget does (44 pages at eight
+  // hits/query reaches only six queries). Keep the two strongest anchors first,
+  // then put one already-budgeted rotating query ahead of every two remaining
+  // priority queries. This changes only execution order for a persistent
+  // shortfall; it adds no provider calls/pages and changes no admission gate.
+  const anchors = head.slice(0, PERSISTENT_QUERY_ANCHOR_COUNT);
+  const remainingPriority = head.slice(anchors.length);
+  const interleaved = [...anchors];
+  let priorityIndex = 0;
+  let breadthIndex = 0;
+  while (priorityIndex < remainingPriority.length || breadthIndex < selectedBreadth.length) {
+    if (breadthIndex < selectedBreadth.length) interleaved.push(selectedBreadth[breadthIndex++]);
+    for (let i = 0; i < 2 && priorityIndex < remainingPriority.length; i += 1) {
+      interleaved.push(remainingPriority[priorityIndex++]);
+    }
+  }
+  return interleaved;
 }
 
-export default { buildWebQueries };
+export default { buildWebQueries, hasPersistentQueryShortfall, PERSISTENT_QUERY_ANCHOR_COUNT };

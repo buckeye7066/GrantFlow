@@ -330,33 +330,87 @@ export function discoverFrozenDependencyPlans(root, { maxDepth = 3 } = {}) {
 }
 
 /** Install dependencies in the EVA clone, keyed by its exact lockfile. */
+const NODE_RUNTIME_EXPORT_CONDITIONS = new Set([
+  'default', 'import', 'require', 'node', 'node-addons', 'module-sync',
+])
+
+function declaredRuntimeExportTargets(value, targets = new Set(), condition = null) {
+  if (condition && !condition.startsWith('.') && !NODE_RUNTIME_EXPORT_CONDITIONS.has(condition)) return targets
+  if (typeof value === 'string') {
+    if (value.startsWith('./') && !value.includes('*')) targets.add(value)
+    return targets
+  }
+  if (Array.isArray(value)) {
+    for (const item of value) declaredRuntimeExportTargets(item, targets, condition)
+    return targets
+  }
+  if (value && typeof value === 'object') {
+    const keys = Object.keys(value)
+    // Validate the package's root import surface. Optional subpath exports are
+    // not startup requirements and some published packages retain stale legacy
+    // subpaths that a clean package-manager install reproduces byte-for-byte.
+    if (keys.some((key) => key.startsWith('.'))) {
+      if (Object.hasOwn(value, '.')) declaredRuntimeExportTargets(value['.'], targets, '.')
+      return targets
+    }
+    for (const [key, item] of Object.entries(value)) declaredRuntimeExportTargets(item, targets, key)
+  }
+  return targets
+}
+
 export function missingDependencyEntrypoints(dependencyDir) {
   if (!existsSync(dependencyDir)) return []
-  const root = realpathSync(dependencyDir)
+  let root
+  try { root = realpathSync(dependencyDir) } catch { return ['node_modules'] }
   const require = createRequire(join(root, '__eva_probe.cjs'))
   const missing = []
-  const inspect = (dir) => {
-    try {
-      // Workspace links legitimately point at unbuilt source packages. Only
-      // inspect installed packages within this node_modules cache.
-      const actual = realpathSync(dir)
-      if (!actual.startsWith(root + sep)) return
-      const pkg = JSON.parse(readFileSync(join(dir, 'package.json'), 'utf8'))
-      if (typeof pkg.main !== 'string' || pkg.exports) return
+  const inspect = (dir, label) => {
+    let actual
+    try { actual = realpathSync(dir) } catch {
+      missing.push(label)
+      return
+    }
+    // Workspace links legitimately point at unbuilt source packages. Only
+    // inspect installed packages within this node_modules cache. A link whose
+    // target disappeared cannot qualify for this exemption: realpath failed
+    // above, so a moved absolute cache link forces repair.
+    if (!actual.startsWith(root + sep)) return
+    let pkg
+    try { pkg = JSON.parse(readFileSync(join(dir, 'package.json'), 'utf8')) } catch {
+      missing.push(label)
+      return
+    }
+    let broken = false
+    // `exports` supersedes `main`; validating both rejects healthy packages
+    // whose compatibility main is intentionally absent. Empty `main` is also
+    // common in @types packages and declares no runtime entrypoint.
+    if (pkg.exports == null && typeof pkg.main === 'string' && pkg.main.trim()) {
       try {
         const entry = require.resolve(resolve(dir, pkg.main))
-        if (!existsSync(entry)) missing.push(pkg.name || dir)
-      } catch { missing.push(pkg.name || dir) }
-    } catch { /* not a package directory */ }
+        if (!existsSync(entry)) broken = true
+      } catch { broken = true }
+    }
+    const bins = typeof pkg.bin === 'string'
+      ? [pkg.bin]
+      : (pkg.bin && typeof pkg.bin === 'object' ? Object.values(pkg.bin) : [])
+    for (const target of bins) {
+      if (typeof target === 'string' && target.trim() && !existsSync(resolve(dir, target))) broken = true
+    }
+    for (const target of declaredRuntimeExportTargets(pkg.exports)) {
+      if (!existsSync(resolve(dir, target))) broken = true
+    }
+    if (broken) missing.push(pkg.name || label)
   }
-  for (const name of readdirSync(dependencyDir)) {
+  let names
+  try { names = readdirSync(dependencyDir) } catch { return ['node_modules'] }
+  for (const name of names) {
     if (name.startsWith('.')) continue
     const dir = join(dependencyDir, name)
     if (name.startsWith('@')) {
-      try { for (const child of readdirSync(dir)) inspect(join(dir, child)) } catch { /* not a scope */ }
-    } else inspect(dir)
+      try { for (const child of readdirSync(dir)) inspect(join(dir, child), `${name}/${child}`) } catch { missing.push(name) }
+    } else inspect(dir, name)
   }
-  return missing
+  return [...new Set(missing)]
 }
 
 export function ensureWorkspaceDependencies(workspaceRoot, {

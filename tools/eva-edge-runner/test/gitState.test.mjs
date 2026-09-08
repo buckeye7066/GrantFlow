@@ -32,6 +32,7 @@ import {
   runGit,
   runGitProcess,
   ensureWorkspaceDependencies,
+  missingDependencyEntrypoints,
 } from '../src/gitState.mjs'
 
 const SHA_A = 'a'.repeat(40)
@@ -144,6 +145,115 @@ test('a lockfile marker cannot bless a damaged dependency cache', () => {
     assert.deepEqual(result.failed, [])
     assert.ok(existsSync(join(packageDir, 'dist/index.js')))
   } finally { rmSync(root, {recursive:true,force:true}) }
+})
+
+test('a lockfile marker cannot bless concurrently when its declared CLI entrypoint is missing', () => {
+  const root = mkdtempSync(join(tmpdir(), 'eva-missing-bin-'))
+  const workspace = join(root, 'workspace')
+  const packageDir = join(workspace, 'node_modules', 'concurrently')
+  const binEntry = join(packageDir, 'dist', 'bin', 'concurrently.js')
+  const calls = []
+  const install = () => {
+    calls.push('install')
+    mkdirSync(dirname(binEntry), { recursive: true })
+    writeFileSync(join(packageDir, 'package.json'), JSON.stringify({
+      name: 'concurrently',
+      main: 'index.js',
+      exports: { '.': './index.js' },
+      bin: { concurrently: './dist/bin/concurrently.js', conc: './dist/bin/concurrently.js' },
+    }))
+    writeFileSync(join(packageDir, 'index.js'), 'module.exports = {}')
+    writeFileSync(binEntry, '#!/usr/bin/env node\n')
+    return { status: 0 }
+  }
+  try {
+    mkdirSync(workspace, { recursive: true })
+    writeFileSync(join(workspace, 'package-lock.json'), '{}\n')
+    const options = { dataDir: join(root, 'data'), appId: 'factory', exec: install }
+    ensureWorkspaceDependencies(workspace, options)
+    rmSync(binEntry)
+
+    const result = ensureWorkspaceDependencies(workspace, options)
+
+    assert.equal(calls.length, 2, 'the missing CLI forces reinstall despite the ready marker')
+    assert.deepEqual(result.reused, [])
+    assert.deepEqual(result.failed, [])
+    assert.ok(existsSync(binEntry))
+  } finally { rmSync(root, { recursive: true, force: true }) }
+})
+
+test('dependency validation checks export-only packages and unreadable installed manifests', () => {
+  const root = mkdtempSync(join(tmpdir(), 'eva-declared-entrypoints-'))
+  const dependencyDir = join(root, 'node_modules')
+  try {
+    const exportOnly = join(dependencyDir, 'export-only')
+    const unreadable = join(dependencyDir, 'unreadable-manifest')
+    mkdirSync(exportOnly, { recursive: true })
+    mkdirSync(unreadable, { recursive: true })
+    writeFileSync(join(exportOnly, 'package.json'), JSON.stringify({
+      name: 'export-only',
+      exports: { '.': { import: './dist/index.js' } },
+    }))
+    writeFileSync(join(unreadable, 'package.json'), '{broken json')
+
+    assert.deepEqual(
+      missingDependencyEntrypoints(dependencyDir).sort(),
+      ['export-only', 'unreadable-manifest'],
+    )
+  } finally { rmSync(root, { recursive: true, force: true }) }
+})
+
+test('dependency validation accepts a legitimate type-only package with an empty main', () => {
+  const root = mkdtempSync(join(tmpdir(), 'eva-type-only-package-'))
+  const dependencyDir = join(root, 'node_modules')
+  const packageDir = join(dependencyDir, '@types', 'd3-array')
+  try {
+    mkdirSync(packageDir, { recursive: true })
+    writeFileSync(join(packageDir, 'package.json'), JSON.stringify({
+      name: '@types/d3-array',
+      main: '',
+      types: 'index.d.ts',
+    }))
+    writeFileSync(join(packageDir, 'index.d.ts'), 'export function max(values: Iterable<number>): number\n')
+
+    assert.deepEqual(missingDependencyEntrypoints(dependencyDir), [])
+  } finally { rmSync(root, { recursive: true, force: true }) }
+})
+
+test('a lockfile marker cannot bless a package link whose old cache target disappeared', () => {
+  const root = mkdtempSync(join(tmpdir(), 'eva-dangling-package-'))
+  const workspace = join(root, 'workspace')
+  const packageDir = join(workspace, 'node_modules', 'linked-package')
+  const oldTarget = join(root, 'old-eva-cache', 'linked-package')
+  const calls = []
+  const install = () => {
+    calls.push('install')
+    rmSync(packageDir, { recursive: true, force: true })
+    mkdirSync(packageDir, { recursive: true })
+    writeFileSync(join(packageDir, 'package.json'), JSON.stringify({ name: 'linked-package', main: 'index.js' }))
+    writeFileSync(join(packageDir, 'index.js'), 'module.exports = {}')
+    return { status: 0 }
+  }
+  try {
+    mkdirSync(workspace, { recursive: true })
+    writeFileSync(join(workspace, 'package-lock.json'), '{}\n')
+    const options = { dataDir: join(root, 'data'), appId: 'factory', exec: install }
+    ensureWorkspaceDependencies(workspace, options)
+
+    rmSync(packageDir, { recursive: true, force: true })
+    mkdirSync(oldTarget, { recursive: true })
+    writeFileSync(join(oldTarget, 'package.json'), JSON.stringify({ name: 'linked-package', main: 'index.js' }))
+    writeFileSync(join(oldTarget, 'index.js'), 'module.exports = {}')
+    symlinkSync(oldTarget, packageDir, process.platform === 'win32' ? 'junction' : 'dir')
+    rmSync(join(root, 'old-eva-cache'), { recursive: true, force: true })
+
+    const result = ensureWorkspaceDependencies(workspace, options)
+
+    assert.equal(calls.length, 2, 'the dangling package link forces reinstall despite the ready marker')
+    assert.deepEqual(result.reused, [])
+    assert.deepEqual(result.failed, [])
+    assert.ok(existsSync(join(packageDir, 'index.js')))
+  } finally { rmSync(root, { recursive: true, force: true }) }
 })
 
 // A fake spawnSync-shaped exec driven by a table of `git <args>` → result.
