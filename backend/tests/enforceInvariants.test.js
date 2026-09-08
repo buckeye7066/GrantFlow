@@ -6747,3 +6747,87 @@ describe('enforceAccountDisplayNameSync', () => {
     expect(res.skipped).toBe('users_or_profiles_columns_missing')
   })
 })
+
+// ─────────────────────────────────────────────────────────────────────────────
+// A SWEEP THAT WROTE NOTHING MUST SAY WHY (2026-09-08)
+//
+// Companion to the blindness detector above. `scanned === bound` tells you a
+// sweep MIGHT be structurally blind; it never tells you WHICH link in the chain
+// dropped the work. Measured in prod 2026-09-08: `catalog_rescore_convergence`
+// reported `{ok:true, repaired:0, scanned:3000}` on every boot — scanned exactly
+// equal to CATALOG_RESCORE_PAIR_BUDGET — while `catalog-rescore-link` held ZERO
+// rows fleet-wide across cursor cycles 2-4 and 34 profiles. Replaying the
+// sweep's OWN path (loadProfileContext -> passesFundabilityGate ->
+// computeMatchDecision) returned 31 ACCEPTs in 800 rows for one real profile.
+//
+// The counters that would have named the drop point ALL EXIST — the sweep
+// computes `upserted`, `not_fundable`, `rejected_by_engine`, `review`,
+// `convergence_errors`, `foreign_lane_skipped` — and the persisted artifact
+// hand-picks `{name, ok, repaired, scanned}` and DISCARDS them. So the only
+// artifact Sam, Anya and an operator can read is byte-identical between "the
+// engine refused all 3000" and "we wrote 31 and something ate them".
+//
+// The fix surfaces counts that already exist. It widens no bound and weakens
+// no guard.
+// ─────────────────────────────────────────────────────────────────────────────
+describe('boot summary telemetry — a sweep that wrote NOTHING must carry its reason', () => {
+  it('projects the diagnostic counters a zero-write sweep needs, not just repaired/scanned', async () => {
+    const { __testables } = await import('../startup/enforceInvariants.js')
+    const project = __testables.projectPersistedStep
+    expect(typeof project).toBe('function')
+
+    const projected = project({
+      name: 'catalog_rescore_convergence',
+      ok: true,
+      repaired: 0,
+      scanned: 3000,
+      adjudicated: 1200,
+      notFundable: 1800,
+      rejectedByEngine: 1100,
+      review: 69,
+      upserted: 0,
+      convergenceErrors: 3000,
+      foreignLaneSkipped: 0,
+      enforced: true,
+      truncated: true,
+    })
+
+    // The blindness signal is preserved.
+    expect(projected.scanned).toBe(3000)
+    expect(projected.repaired).toBe(0)
+    // …and the reason it wrote nothing is now readable.
+    expect(projected.upserted).toBe(0)
+    expect(projected.convergenceErrors).toBe(3000)
+    expect(projected.adjudicated).toBe(1200)
+    expect(projected.notFundable).toBe(1800)
+    expect(projected.rejectedByEngine).toBe(1100)
+    expect(projected.foreignLaneSkipped).toBe(0)
+    expect(projected.truncated).toBe(true)
+  })
+
+  it('omits the diagnostic keys entirely for a step that does not emit them', async () => {
+    const { __testables } = await import('../startup/enforceInvariants.js')
+    const projected = __testables.projectPersistedStep({ name: 'sticky_deletes', ok: true, repaired: 4, scanned: 9 })
+    expect(projected).toEqual({ name: 'sticky_deletes', ok: true, repaired: 4, scanned: 9 })
+    expect('upserted' in projected).toBe(false)
+    expect('convergenceErrors' in projected).toBe(false)
+  })
+
+  it('the catalog rescore step reports upserted and convergence errors, so a silent no-op is visible', async () => {
+    const mod = await import('../startup/enforceInvariants.js')
+    const sweep = await import('../services/matching/catalogRescoreSweep.js')
+    const original = sweep.runCatalogRescoreSweep
+    // The exact prod shape: budget fully spent, engine adjudicated, nothing written.
+    const fake = async () => ({
+      ok: true, write_enabled: true, scanned: 3000, adjudicated: 1200, not_fundable: 1800,
+      rejected_by_engine: 1100, review: 69, linked: 0, updated: 0, upserted: 0,
+      convergence_errors: 3000, foreign_lane_skipped: 0, truncated: true, examples: [],
+    })
+    const step = await mod.__testables.summarizeCatalogRescore(fake)
+    expect(step.scanned).toBe(3000)
+    expect(step.upserted).toBe(0)
+    expect(step.convergenceErrors).toBe(3000)
+    expect(step.foreignLaneSkipped).toBe(0)
+    expect(original).toBeTypeOf('function')
+  })
+})
