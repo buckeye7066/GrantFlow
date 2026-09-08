@@ -81,6 +81,7 @@ import {
 import { buildPersistedMatchExplain } from '../services/matching/matchExplainPersistence.js'
 import { hasFarmIdentity } from '../services/eligibility/farmIdentity.js'
 import { persistHamiltonTaskTruthSnapshot } from '../services/hamilton/hamiltonTaskTruthSnapshot.js'
+import { isPlaceholderAccountName, syncAccountDisplayName } from '../services/accountDisplayName.js'
 
 const log = createLogger('startup:enforceInvariants')
 
@@ -6432,6 +6433,104 @@ export async function enforceAdminReinterviewSuppression(db) {
 }
 
 /**
+ * INVARIANT: AN ACCOUNT NAME IS THE PERSON'S PROFILE NAME, NOT A SIGNUP STUB
+ * (owner order 2026-09-07 — "make these changes global and permanent").
+ *
+ * THE BUG THIS CLOSES
+ * -------------------
+ * Signup mints `users.display_name` from the email local part ("mcnabbwg") or
+ * a phone stub ("User 0123"). The profile the person then fills in carries
+ * their real name ("GeneMac"). The header showed the stub while an admin saw
+ * the profile name, and both believed there were two profiles (prod,
+ * 2026-09-07). #1608 repairs this at onboarding/complete for NEW users
+ * (services/accountDisplayName.js); this boot net repairs every EXISTING
+ * user the same way, so the rule holds regardless of which code path minted
+ * the account (kathydaniel1975 / allmonkey915 / holliet52 in prod).
+ *
+ * THE RULE
+ * --------
+ * For every NON-ADMIN user whose account name is a PLACEHOLDER
+ * (isPlaceholderAccountName: empty, "New User", the email local part, a
+ * phone stub) and who owns EXACTLY ONE non-deleted profile with a real
+ * display_name, the account name becomes that profile's name — through the
+ * SAME syncAccountDisplayName the onboarding route uses, so a chosen name is
+ * never overwritten and the placeholder test is never re-implemented here.
+ *   - Admins are NEVER touched.
+ *   - A user with two or more live profiles is skipped: there is no single
+ *     name to pick, and guessing would mislabel the account.
+ *   - A profile whose own display_name is itself a placeholder contributes
+ *     nothing (nothing is copied from a stub to a stub).
+ *
+ * Bounded (`ACCOUNT_NAME_SYNC_LIMIT`, default 500 repairs per boot) and
+ * idempotent: a repaired user no longer has a placeholder name, so it leaves
+ * the candidate set. `ENFORCE_ACCOUNT_NAME_SYNC=0` makes the step count-only.
+ * Degrades silently on schemas without the users/profiles ownership columns.
+ */
+export async function enforceAccountDisplayNameSync(db) {
+  return runInvariant('account_display_name_sync', async () => {
+    const limit = Math.max(1, Number.parseInt(process.env.ACCOUNT_NAME_SYNC_LIMIT || '', 10) || 500)
+    const countOnly = _parseBoolEnv(process.env.ENFORCE_ACCOUNT_NAME_SYNC) === false
+    const isPg = (db?.dialect || 'sqlite') === 'postgres'
+    // is_admin is BOOLEAN on Postgres but INTEGER 0/1 on SQLite.
+    const nonAdmin = isPg ? 'COALESCE(u.is_admin, FALSE) IS NOT TRUE' : 'COALESCE(u.is_admin, 0) = 0'
+    const profileCols = await listProfileColumns(db)
+    const liveProfile = [
+      "COALESCE(p.status, 'active') <> 'deleted'",
+      profileCols.has('deleted_at') ? 'p.deleted_at IS NULL' : null,
+      "COALESCE(p.display_name, '') <> ''",
+    ].filter(Boolean).join(' AND ')
+
+    let rows
+    try {
+      rows = await db.prepare(
+        `SELECT u.id AS user_id, u.display_name AS account_name,
+                u.primary_email, u.primary_phone,
+                COUNT(p.id) AS profile_count,
+                MIN(p.display_name) AS profile_name
+           FROM users u
+           JOIN profiles p ON p.user_id = u.id AND ${liveProfile}
+          WHERE ${nonAdmin}
+          GROUP BY u.id, u.display_name, u.primary_email, u.primary_phone
+         HAVING COUNT(p.id) = 1`,
+      ).all()
+    } catch (err) {
+      const msg = String(err?.message || err).toLowerCase()
+      if (msg.includes('no such table') || msg.includes('no such column') || msg.includes('does not exist')) {
+        return { scanned: 0, repaired: 0, skipped: 'users_or_profiles_columns_missing' }
+      }
+      throw err
+    }
+
+    const candidates = []
+    for (const row of rows || []) {
+      const identity = { email: row.primary_email, phone: row.primary_phone }
+      if (!isPlaceholderAccountName(row.account_name, identity)) continue
+      const profileName = String(row.profile_name || '').trim()
+      // Never copy a stub onto a stub: the profile name must be a real name.
+      if (!profileName || isPlaceholderAccountName(profileName, identity)) continue
+      if (profileName === String(row.account_name || '').trim()) continue
+      candidates.push({ userId: String(row.user_id), from: row.account_name, to: profileName })
+    }
+
+    if (countOnly) {
+      return { scanned: candidates.length, repaired: 0, wouldRepair: candidates.length, countOnly: true }
+    }
+
+    let repaired = 0
+    for (const c of candidates.slice(0, limit)) {
+      try {
+        const r = await syncAccountDisplayName(db, c.userId, c.to)
+        if (r?.updated) repaired += 1
+      } catch { /* per-row best effort; the row stays a candidate next boot */ }
+    }
+    if (repaired > 0) {
+      log.info('replaced placeholder account names with the owner\'s profile name', { repaired })
+    }
+    return { scanned: candidates.length, repaired }
+  })
+}
+
+/**
  * INVARIANT: AMY SYNTHETIC PROFILES EXPIRE (owner directive 2026-07-06 —
  * "make sure those profiles are getting deleted afterwards").
  *
@@ -11692,6 +11791,10 @@ export async function runEnforceInvariants(db, { logger = log } = {}) {
   // never sits in 'pending_reinterview' — a secondary admin login must not
   // re-open Anya's interview. Cheap single UPDATE on users.
   steps.push(await enforceAdminReinterviewSuppression(db))
+  // Identity net (owner order 2026-09-07): a non-admin account still named by
+  // its signup stub (email local part / phone stub) takes the name of the ONE
+  // live profile it owns, via the same sync onboarding/complete uses.
+  steps.push(await enforceAccountDisplayNameSync(db))
   // Agent-data hygiene net: an EXPIRED Amy synthetic training profile never
   // outlives the boot — the run-scoped end-of-run cleanup silently no-ops when
   // discovery skips/errors (empty crawled-id list), so without this net
@@ -11856,6 +11959,7 @@ export const __testables = {
   resolveSelfHealRequeueCap,
   SELF_HEAL_REQUEUE_CAP_DEFAULT,
   enforceAdminReinterviewSuppression,
+  enforceAccountDisplayNameSync,
   enforceLeadContactPlausibility,
   enforceJohnDraftPlausibility,
   enforceProfileResultFloor,

@@ -186,6 +186,24 @@ export function tierById(id) {
   return TIER_BY_ID[id] || null
 }
 
+/**
+ * The highest NON-ADMIN tier in the catalog: the most expensive tier, and on a
+ * price tie the one with the most capabilities. Admins are not a tier (they
+ * bypass entitlement entirely), so this is the ceiling any customer can hold.
+ * Today: large_org (every capability on). Consumed by the entitlement choke
+ * point as the UNIVERSAL entitlement policy (owner order 2026-09-07); billing
+ * amounts still follow the profile type and are never derived from this.
+ */
+export function highestNonAdminTier() {
+  const capCount = (t) => Object.values(t.capabilities || {}).filter(Boolean).length
+  return TIERS.reduce((best, t) => {
+    if (!best) return t
+    if (t.monthly_cents > best.monthly_cents) return t
+    if (t.monthly_cents === best.monthly_cents && capCount(t) > capCount(best)) return t
+    return best
+  }, null)
+}
+
 /** The organization tier selected by a given seat (login) count. */
 export function orgTierForSeats(seatCount) {
   const n = Math.max(0, Math.floor(Number(seatCount) || 0))

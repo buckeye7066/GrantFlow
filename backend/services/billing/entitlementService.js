@@ -1,11 +1,36 @@
 import { randomUUID } from 'node:crypto'
 import { CAPABILITY_KEYS } from '../../../shared/tierCatalog.js'
 import { computeEffectiveBilling, ensureBillingAccount, mapAccountRow } from '../billingAccounts.js'
-import { tierById } from '../../../shared/tierCatalog.js'
+import { tierById, highestNonAdminTier } from '../../../shared/tierCatalog.js'
 import { isFreeWeekActive } from '../../../shared/freeWeek.js'
 import { decideBillingEntitlement } from './entitlementDecision.js'
 
 const CAPABILITIES = Object.freeze(Object.values(CAPABILITY_KEYS))
+
+/**
+ * UNIVERSAL ENTITLEMENT POLICY (owner order 2026-09-07, "make these changes
+ * global and permanent"; context: "is genemac on the highest tier? he should
+ * be." / "(highest non-admin tier)").
+ *
+ * Every non-admin profile is ENTITLED to every capability of the highest
+ * non-admin tier, by default, with no add-on. Until 2026-09-07 the tier used
+ * for `tierAllows` was the BILLED tier, which is derived from the profile TYPE
+ * (an individual derives 'individual', whose pipeline automation is off), so
+ * an end user was locked out of Hamilton unless an admin hand-granted an
+ * add-on per profile — the one-off prod write this constant replaces.
+ *
+ * What this does NOT change:
+ *   - what anyone is BILLED: `effectiveBilling` (net_monthly_cents, would_owe,
+ *     pro bono, free period, invoices) still follows the profile type and is
+ *     reported unchanged as `tier_id`;
+ *   - the payment prerequisite (`requiresPayment` / paymentAccessStatus);
+ *   - admins (source 'admin') and suspended/blocked/banned/deleted profiles;
+ *   - the authority-unavailable fail-closed path.
+ * Enforced HERE, at the one choke point every gate reads through
+ * (tierGating.js, middleware/entitlements.js, Anya's plan block, the Billing
+ * overview) — never per call site.
+ */
+export const UNIVERSAL_ENTITLEMENT_TIER = Object.freeze(highestNonAdminTier())
 const CAPABILITY_SET = new Set(CAPABILITIES)
 const ADDON_SOURCES = new Set(['admin', 'stripe', 'service_purchase', 'promotion', 'migration'])
 
@@ -143,6 +168,9 @@ async function loadEntitlementAuthority(db, profileId, now) {
     account,
     effectiveBilling,
     effectiveTier,
+    // Capabilities come from the universal policy tier; `effectiveTier` above
+    // stays the BILLED tier so invoices and the reported tier_id never move.
+    entitlementTier: UNIVERSAL_ENTITLEMENT_TIER,
     paymentAccessStatus,
     activeAddons,
     promotionActive,
@@ -162,12 +190,16 @@ export function buildEntitlementDecisionInput(authority, key) {
     : authority?.requiresPayment && !authority?.paymentAccessStatus
       ? 'not_active'
       : authority?.paymentAccessStatus
+  // `tierAllows` reads the UNIVERSAL entitlement tier (see the constant above),
+  // never the billed `effectiveTier`: every non-admin profile holds the highest
+  // non-admin tier's capabilities while being billed per its profile type.
+  const entitlementTier = authority?.entitlementTier || UNIVERSAL_ENTITLEMENT_TIER
   return {
     paymentAccessStatus,
     input: {
       profileStatus: authority?.profile?.status,
       paymentAccessStatus,
-      tierAllows: authority?.effectiveTier?.capabilities?.[key] === true,
+      tierAllows: entitlementTier?.capabilities?.[key] === true,
       activeAddons: authority?.activeAddons || [],
       promotionActive: authority?.promotionActive === true,
       capabilityKey: key,
@@ -189,6 +221,7 @@ function decisionFromAuthority(profileId, key, authority) {
     profile_id: String(profileId),
     capability: key,
     tier_id: authority.effectiveTier?.id || authority.effectiveBilling?.tier_id || null,
+    entitlement_tier_id: (authority.entitlementTier || UNIVERSAL_ENTITLEMENT_TIER)?.id || null,
     assigned_tier_id: authority.account?.tier?.id || authority.account?.tier_id || null,
     billing_basis: authority.effectiveBilling?.basis || null,
     profile_status: authority.profile.status || null,
