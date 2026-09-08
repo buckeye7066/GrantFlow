@@ -7,7 +7,6 @@ import { isRealProfileId } from "@/api/profileIdGuards"
 
 const DISMISS_KEY = "grantflow:pro-bono-banner-dismissed"
 const PDF_URL = `${(import.meta.env.BASE_URL ?? "/").replace(/\/+$/, "")}/docs/Payment_sheet_Grantflow.pdf`
-const PRO_BONO_DURATION_DAYS = 30
 
 /**
    * ProBonoBanner
@@ -42,20 +41,18 @@ export default function ProBonoBanner() {
 
                                                       const billing = profile?.billing ?? {}
 
-                                                            // Prefer an explicit end date; fall back to start + duration
+                                                            // Only an EXPLICIT end date can announce an ending. Pro bono is an
+                                                            // admin-only flag with no built-in term (billing_accounts.is_pro_bono,
+                                                            // #1597); deriving an end from profile.created_at + 30 days told a
+                                                            // live pro bono client "Your pro bono arrangement has ended" and that
+                                                            // charges now apply — false on both counts (prod, 2026-09-07).
                                                             let endDate = null
         if (billing.pro_bono_end_date) {
                 endDate = new Date(billing.pro_bono_end_date)
-        } else {
-                const startRaw = billing.pro_bono_started_at ?? billing.pro_bono_start_date ?? profile?.created_at
-                if (startRaw) {
-                          const start = new Date(startRaw)
-                          endDate = new Date(start.getTime() + PRO_BONO_DURATION_DAYS * 86_400_000)
-                }
         }
 
                                                       if (!endDate || Number.isNaN(endDate.getTime())) {
-                                                              return { daysRemaining: PRO_BONO_DURATION_DAYS, endDateLabel: "" }
+                                                              return { daysRemaining: null, endDateLabel: "" }
                                                       }
 
                                                       const now = new Date()
@@ -65,8 +62,10 @@ export default function ProBonoBanner() {
         return { daysRemaining: days, endDateLabel: label }
   }, [isProBono, profile])
 
-  // Don't show for admins, dismissed users, or non-pro-bono
+  // Don't show for admins, dismissed users, non-pro-bono, or a pro bono
+  // arrangement with no declared end date (nothing is ending).
   if (dismissed || !isProBono || activeProfileId === "__admin__") return null
+  if (daysRemaining === null) return null
 
   const tierName = profile?.billing?.tier?.name || profile?.billing?.tier_id || "your current tier"
 
