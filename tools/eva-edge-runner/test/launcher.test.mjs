@@ -18,6 +18,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import {
+  createOutputRing,
   PROTECTED_PORT_HOLDERS,
   DEFAULT_KILLABLE_PROCESSES,
   normalizeProcessName,
@@ -32,6 +33,14 @@ import {
   resetDisposableRoot,
   resolveDisposableLaunchEnv,
 } from '../src/launcher.mjs'
+
+test('startup evidence retains the exception before a long stack trace', () => {
+  const ring = createOutputRing()
+  ring.push('Error: @prisma/client did not initialize yet. Please run prisma generate.\n')
+  ring.push(Array.from({ length: 20 }, (_, i) => `    at ModuleJob.run (loader.js:${i}:25)`).join('\n'))
+  assert.match(ring.diagnostic(), /^Error: @prisma\/client did not initialize/)
+  assert.ok(ring.diagnostic().length <= 400)
+})
 import { mkdtempSync, writeFileSync, readFileSync, existsSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'

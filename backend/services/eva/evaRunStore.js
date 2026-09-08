@@ -305,8 +305,11 @@ export async function getAppRunsForRun(db, runRowId) {
 
 export async function getActionableFindings(db, { limit = 100 } = {}) {
   return db.prepare(
-    `SELECT * FROM eva_findings
-     WHERE lifecycle_state NOT IN ('resolved')
+    `SELECT * FROM (
+       SELECT *, COUNT(*) OVER (PARTITION BY app_id, journey_id) AS failure_variants,
+         ROW_NUMBER() OVER (PARTITION BY app_id, journey_id ORDER BY last_seen_at DESC, updated_at DESC, fingerprint) AS journey_rank
+       FROM eva_findings WHERE lifecycle_state NOT IN ('resolved')
+     ) current_findings WHERE journey_rank = 1
      ORDER BY
        CASE severity WHEN 'critical' THEN 0 WHEN 'high' THEN 1 WHEN 'medium' THEN 2 WHEN 'low' THEN 3 ELSE 4 END,
        last_seen_at DESC
@@ -317,7 +320,10 @@ export async function getActionableFindings(db, { limit = 100 } = {}) {
 export async function getRecentlyResolved(db, { sinceIso, limit = 50 } = {}) {
   if (sinceIso) {
     return db.prepare(
-      `SELECT * FROM eva_findings WHERE lifecycle_state = 'resolved' AND resolved_at >= ? ORDER BY resolved_at DESC LIMIT ?`,
+      `SELECT * FROM (
+         SELECT *, ROW_NUMBER() OVER (PARTITION BY app_id, journey_id ORDER BY resolved_at DESC, fingerprint) AS journey_rank
+         FROM eva_findings WHERE lifecycle_state = 'resolved' AND resolved_at >= ?
+       ) resolved_journeys WHERE journey_rank = 1 ORDER BY resolved_at DESC LIMIT ?`,
     ).all(String(sinceIso), Number(limit))
   }
   return db.prepare(

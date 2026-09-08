@@ -81,6 +81,7 @@ RUN node /tmp/pw/node_modules/playwright/cli.js install --with-deps chromium \
 
 COPY --from=builder /app/node_modules ./node_modules
 COPY --from=builder /app/backend ./backend
+COPY --from=builder /app/qa ./qa
 
 # Backend runtime imports shared modules and selected frontend configuration.
 COPY --from=builder /app/shared ./shared

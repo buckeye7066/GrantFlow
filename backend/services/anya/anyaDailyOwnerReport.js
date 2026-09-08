@@ -23,6 +23,7 @@ import { sendEmail as defaultSendEmail } from '../email.js'
 import { ADMIN_EMAIL } from '../../config/constants.js'
 import { maskSecrets, latestRun as defaultLatestRun, getRun as defaultGetRun } from '../sam/samAuditStore.js'
 import { summarizeCrawlerResearch } from '../amy/crawlerCompetitiveResearch.js'
+import { cohortCounts, cohortSummary } from '../amy/cohortSummary.js'
 import { defaultLoadEvaPortfolioQa, summarizeEvaPortfolioQa } from '../eva/evaSummary.js'
 import { renderEvaSection } from '../eva/evaReportSection.js'
 import { createLogger } from '../../utils/logger.js'
@@ -300,9 +301,9 @@ export function summarizeAmyFlywheel(amy, { now = new Date() } = {}) {
   const cohortLine = cohortStale
     ? staleEvidenceLine('Amy flywheel cohort', cohortAgeMs, OWNER_AMY_STALE_MS)
     : day
-      ? `${day.clean}/${day.evaluated} synthetic profiles clean (target ${day.target}, ${day.issues} with issues) on ${day.day}`
+      ? cohortSummary(day)
       : 'No cohort data for today yet.'
-  const goal = Boolean(day && day.complete && day.all_clean)
+  const goal = Boolean(day && day.complete && day.all_clean && !cohortCounts(day).inconsistent && cohortCounts(day).unevaluated === 0)
 
   const edits = []
   const tuning = report.tuning || {}

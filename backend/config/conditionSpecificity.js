@@ -36,6 +36,7 @@
  * Pure predicates, no I/O.
  */
 
+import { normalizeConditionTerm as normalizeDiagnosisTerm } from './conditionTerms.js'
 import {
   GENERIC_HEALTH_DESCRIPTORS,
   GENERIC_CONDITION_WORDS,
@@ -62,7 +63,7 @@ export const NAMED_CONDITION_FLAGS = Object.freeze({
 
 /** Normalize one candidate condition string; return null when it is not a NAME. */
 function normalizeConditionTerm(value) {
-  const raw = String(value ?? '')
+  const raw = normalizeDiagnosisTerm(value)
     .toLowerCase()
     .replace(/_/g, ' ')
     .replace(/\s+/g, ' ')

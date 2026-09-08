@@ -22,9 +22,9 @@ test('scheduled task invokes only the installed bootstrap from a trusted PowerSh
 
 test('installer validates a staged bootstrap before changing the installed task target', () => {
   assert.match(installer, /-Destination \$installCandidate/)
-  assert.match(installer, /-File \$installCandidate -PrepareOnly/)
+  assert.match(installer, /Start-Process[\s\S]*installCandidate[\s\S]*PrepareOnly/)
   assert.doesNotMatch(installer, /-Destination \$installedBootstrap -Force/)
-  const prepare = installer.indexOf('-File $installCandidate -PrepareOnly')
+  const prepare = installer.indexOf('$prepare = Start-Process')
   const register = installer.indexOf('Register-ScheduledTask')
   assert.ok(prepare >= 0 && register > prepare)
   assert.match(bootstrap, /if \(\$PrepareOnly\)[\s\S]*installation was not prepared[\s\S]*exit 3/)

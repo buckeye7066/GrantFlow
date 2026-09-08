@@ -58,6 +58,7 @@ export function startupFailedAppResult({ app, manifest, launch = {}, baseUrl = n
   const drift = Array.isArray(launch.portDrift) ? launch.portDrift : []
   const blocked = Array.isArray(launch.blockedPorts) ? launch.blockedPorts : []
   const reason = [
+    tail ? `Startup error: ${tail}` : '',
     `app did not answer its readiness probe at ${probeUrl} within the readiness timeout`,
     `(start_command: ${manifest?.start_command})`,
     exited ? '— the start_command exited' : '',
@@ -69,7 +70,7 @@ export function startupFailedAppResult({ app, manifest, launch = {}, baseUrl = n
           .map((b) => `${b.port} (${b.blockedBy.map((p) => p.name).filter(Boolean).join(', ') || 'unknown'})`)
           .join('; ')}; EVA does not kill shared infrastructure it did not start — move this app to a free port`
       : '',
-    tail ? `— last output: ${tail}` : '— the process printed nothing',
+    tail ? '' : '— the process printed nothing',
   ]
     .filter(Boolean)
     .join(' ')

@@ -141,6 +141,7 @@ export function summarizeEvaPortfolioQa(data, { now = null, staleMs = LIMITS.DEF
         first_seen: f.first_seen_at,
         last_seen: f.last_seen_at,
         recurrence_count: Number(f.recurrence_count) || 1,
+        historical_variants: Math.max(0, Number(f.failure_variants || 1) - 1),
         last_passing_run: f.last_passing_at || null,
         evidence: parseJson(d.evidence_json, []).map((e) => ({ kind: e.kind, ref: e.ref })),
         route: f.route_or_control || null,

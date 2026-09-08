@@ -12,6 +12,11 @@ const __dirname = dirname(fileURLToPath(import.meta.url))
 const MANIFEST_DIR = join(__dirname, '..', '..', 'qa', 'manifests')
 
 describe('EVA manifest totality', () => {
+  it('ships the registry and manifests in the production runtime image', () => {
+    const dockerfile = readFileSync(join(__dirname, '..', '..', 'Dockerfile'), 'utf8')
+    const runtime = dockerfile.slice(dockerfile.lastIndexOf('FROM '))
+    expect(runtime).toMatch(/COPY --from=builder \/app\/qa \.\/qa/)
+  })
   const registry = loadRegistry({ force: true })
 
   it('every registry app has a manifest file', () => {

@@ -7,6 +7,7 @@
  */
 
 import { createHash } from 'crypto'
+import { normalizeConditionTerm } from '../config/conditionTerms.js'
 import { resolveApplicantType } from './profileHelpers.js'
 import { NAMED_CONDITION_FLAGS } from '../config/conditionSpecificity.js'
 
@@ -937,7 +938,7 @@ export function normalizeProfile(rawProfile, sections = null, signals = null, do
   const collectNamedCondition = (value) => {
     if (Array.isArray(value)) { value.forEach(collectNamedCondition); return }
     for (const part of String(value ?? '').split(/[,;\n/]+/)) {
-      const t = part.trim()
+      const t = normalizeConditionTerm(part)
       if (t) namedHealthConditions.push(t)
     }
   }

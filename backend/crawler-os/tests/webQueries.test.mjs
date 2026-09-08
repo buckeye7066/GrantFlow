@@ -17,6 +17,16 @@ const STUDENT_THESIS = {
   interest_terms: ['nursing', 'biology'],
 };
 
+test('persistent shortfalls reserve half the live search budget for fresh ground', () => {
+  const thesis = { ...STUDENT_THESIS, schools: ['Example University'],
+    learned_gaps: { classes: ['low_results', 'result_floor_shortfall'] } };
+  const first = buildWebQueries(thesis, { max: 28, seed: 0, year: 2026 });
+  const next = buildWebQueries(thesis, { max: 28, seed: 14, year: 2026 });
+  assert.equal(first.length, 28);
+  assert.deepEqual(first.slice(0, 14), next.slice(0, 14));
+  assert.ok(next.filter((query) => !first.includes(query)).length >= 10);
+});
+
 test('a student profile gets scholarship-flavored queries', () => {
   const qs = buildWebQueries(STUDENT_THESIS, { year: 2026, max: 8, seed: 0 });
   assert.ok(qs.length > 0);

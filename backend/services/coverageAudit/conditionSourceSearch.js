@@ -48,6 +48,7 @@
 import { appendGapCandidates, isRealFundingHit, isOutOfStateGovHit } from '../webParityBenchmark.js'
 import { conditionCoverageKey } from '../coverageEvidenceService.js'
 import { createLogger } from '../../utils/logger.js'
+import { normalizeConditionTerm } from '../../config/conditionTerms.js'
 
 const log = createLogger('service:conditionSourceSearch')
 
@@ -82,7 +83,7 @@ export const MAX_CANDIDATES_PER_CONDITION = 3
  * benchmark's noise list already knows is never a funder.
  */
 export function buildConditionQueries(condition) {
-  const c = String(condition || '').trim()
+  const c = normalizeConditionTerm(condition)
   if (!c) return []
   return [
     `${c} patient assistance program financial help`,
