@@ -38,6 +38,7 @@ import {
 import { canonicalizeProfileTypeId } from '../../shared/profileTypeOptions.js'
 import { resolveZipLocation } from '../services/geo/zipCountyResolver.js'
 import { upsertProfileSections } from '../services/profileSectionWriter.js'
+import { syncAccountDisplayName } from '../services/accountDisplayName.js'
 import { ensureAuth } from '../middleware/auth.js'
 import { isProductionEnvironment } from '../utils/environment.js'
 import { createLogger } from '../utils/logger.js'
@@ -437,6 +438,19 @@ router.post('/complete', async (req, res) => {
     // -------------------------------------------------------------------
     const sections = patch.sections ?? {}
     await upsertProfileSections(req.db, profileId, sections, 'anya-onboarding')
+
+    // Keep the account name in step with the profile's real name. Signup
+    // minted users.display_name from the email local part, so the header
+    // said "mcnabbwg" while the admin saw "GeneMac" and both believed there
+    // were two profiles (2026-09-07). A name the person chose is never touched.
+    const profileName = String(patch.display_name ?? '').trim()
+    if (profileName) {
+      try {
+        await syncAccountDisplayName(req.db, user.id, profileName)
+      } catch (err) {
+        qualityLog.warn('[onboarding/complete] account display_name sync failed', err?.message || err)
+      }
+    }
 
     // -------------------------------------------------------------------
     // 4) Mark the user as having completed onboarding so the legacy gates
