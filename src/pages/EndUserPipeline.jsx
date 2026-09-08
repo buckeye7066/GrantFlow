@@ -228,7 +228,7 @@ export default function EndUserPipeline() {
             </div>
             <h1 className="text-3xl font-bold tracking-tight text-foreground">Your funding pipeline</h1>
             <p className="mt-2 max-w-3xl text-sm text-muted-foreground md:text-base">
-              Choose one funding source. Hamilton prepares supported fields and documents until the packet is ready or a hard stop needs you.
+              Pick one funding source below. GrantFlow fills in what it can from your profile and tells you when it needs something only you can provide.
             </p>
           </div>
           <div className="grid grid-cols-1 gap-3 min-[360px]:grid-cols-2 sm:min-w-[360px]">

@@ -38,6 +38,7 @@ import PipelineStatusCard from "@/components/dashboard/PipelineStatusCard"
 import PersonalizationPanel from "@/components/dashboard/PersonalizationPanel"
 import ReminderCenterCard from "@/components/dashboard/ReminderCenterCard"
 import PipelineActionsCard from "@/components/dashboard/PipelineActionsCard"
+import NextStepHero from "@/components/dashboard/NextStepHero"
 import ResumeWhereYouLeftOff from "@/components/dashboard/ResumeWhereYouLeftOff"
 import ContinueCard from "@/components/dashboard/ContinueCard"
 import StartHereCard from "@/components/dashboard/StartHereCard"
@@ -299,10 +300,21 @@ export default function Dashboard() {
     staleTime: 30_000,
   })
 
+  // GET /api/auth/me answers { user, profiles, active_profile_id }. This query
+  // used to read `currentUser.profile_id` and `currentUser.role`, neither of
+  // which exists on that shape, so an end user's profile never loaded and the
+  // home page said "Profile 0% - 0 of 5 sections filled" over a complete
+  // profile (2026-09-07).
+  const endUserProfileId =
+    currentUser?.active_profile_id ??
+    currentUser?.user?.active_profile_id ??
+    currentUser?.user?.profile_id ??
+    currentUser?.profile_id ??
+    null
   const { data: profileDetail, isLoading: isLoadingProfileDetail } = useQuery({
-    queryKey: ["dashboard-profile", currentUser?.profile_id],
-    queryFn: () => getProfile(currentUser.profile_id),
-    enabled: Boolean(currentUser?.role === "user" && currentUser.profile_id),
+    queryKey: ["dashboard-profile", endUserProfileId],
+    queryFn: () => getProfile(endUserProfileId),
+    enabled: Boolean(currentUser) && !hasFullAdminWorkspace(currentUser) && Boolean(endUserProfileId),
     staleTime: 30_000,
   })
 
@@ -609,6 +621,9 @@ export default function Dashboard() {
       <div className="mx-auto flex max-w-7xl flex-col gap-8">
         <div className="grid gap-6 lg:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]">
           <div className="space-y-6">
+            {isSimplified ? (
+              <NextStepHero grants={activeGrants} today={today} isLoading={isLoadingGrants} />
+            ) : (
             <div className="relative overflow-hidden rounded-3xl border border-border/70 bg-card/90 p-6 shadow-lg md:p-8">
               <div className="absolute -right-12 -top-12 h-52 w-52 rounded-full bg-gradient-to-br from-primary/20 via-primary/15 to-transparent blur-3xl" />
               <div className="relative flex flex-col gap-6 lg:flex-row lg:items-center lg:justify-between">
@@ -667,12 +682,14 @@ export default function Dashboard() {
               </div>
             </div>
 
+            )}
+
             <PipelineStatusCard
               stats={pipelineError ? undefined : pipelineStats}
               isLoading={isLoadingPipeline}
               hasError={Boolean(pipelineError)}
             />
-            <PipelineActionsCard activeProfileId={activeProfileId} isSimplified={isSimplified} />
+            {!isSimplified ? <PipelineActionsCard activeProfileId={activeProfileId} isSimplified={isSimplified} /> : null}
           </div>
 
           <div className="space-y-6">
