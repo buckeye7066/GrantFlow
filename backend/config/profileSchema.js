@@ -99,6 +99,9 @@ export const PROFILE_SCHEMA = {
       website: { type: 'string', default: '', description: 'Website or online profile URL (org site, portfolio, etc.).' },
       address: { type: 'object|string', default: '', description: 'Mailing address (street + city/state/ZIP if available).' },
       academic_status: { type: 'object', default: {}, description: 'Structured academic details extracted from profile intake.' },
+      // Anya's interview answer ("applying for an organization or yourself?"):
+      // 'organization' | 'individual'. facetAnswered reads it. NOT scored.
+      applicant_kind: { type: 'string', scored: false, default: '', description: "Anya interview answer: 'organization' or 'individual'. Declared so the answer can be saved; the profile type itself stays primary_type. NOT scored." },
       demographics: { type: 'object', default: {}, description: 'Structured demographic details extracted from profile intake.' },
       city: { type: 'string', default: '', description: 'City of residence or primary organizational location.' },
       state: { type: 'string', default: '', description: '2-letter US state abbreviation (e.g., TN, CA) for eligibility filtering.' },
@@ -139,6 +142,8 @@ export const PROFILE_SCHEMA = {
       annual_budget: { type: 'number|null', default: null, description: 'Annual operating budget (USD) if known.' },
       staff_count: { type: 'number|null', default: null, description: 'Number of staff (FTE or headcount) if known.' },
       mission: { type: 'string', format: 'prose', scored: false, default: '', description: 'Organization mission statement or concise purpose. DRAFTING ONLY (Hamilton reads it); not scored or mined.' },
+      population_served: { type: 'string', format: 'prose', scored: false, default: '', description: 'Who the organization serves (Anya interview answer; profileNormalizer.populationServed reads it). DRAFTING ONLY; not scored.' },
+      mission_focus: { type: 'string', format: 'prose', scored: false, default: '', description: 'One-sentence mission or main focus (Anya interview answer; profileNormalizer.missionFocus reads it). DRAFTING ONLY; not scored.' },
       notes: { type: 'string', format: 'prose', scored: false, default: '', description: 'Additional org context (service area, programs, awards, etc.). DRAFTING ONLY; not scored or mined.' },
       // --- Compliance & Registrations ---
       sam_gov_registered: { type: 'boolean', default: false, description: 'True if registered in SAM.gov; required for ALL federal grants.' },
@@ -682,6 +687,11 @@ export const PROFILE_SCHEMA = {
       efc_sai_band: { type: 'string', default: '', description: 'Expected Family Contribution (EFC) / Student Aid Index (SAI) band (e.g., $0, $1-3000, $3001-6000) for need-based targeting.' },
       first_generation_college_student: { type: 'boolean', default: false, description: 'True if the student is the first in their immediate family to attend college; unlocks first-gen scholarships and TRIO programs.' },
       dual_enrollment: { type: 'boolean', default: false, description: 'True if the student is dual-enrolled in high school and college courses simultaneously.' },
+      // Anya's interview answer ("currently a student, or planning to enroll soon?").
+      // profileNormalizer reads it to derive isStudent. NOT scored (#1067 denominator
+      // trap). Declared here because the section guard rejected it as unknown_field
+      // and the interview re-asked the same question forever (prod, 2026-09-07).
+      is_student: { type: 'boolean', scored: false, default: false, description: 'True when the applicant is currently a student or planning to enroll soon (Anya interview answer). NOT scored.' },
       // FACT TIMELINE (owner rule 2026-09-07): a funder anchors awards to WHEN
       // a fact was true — alumni of a high school, students ENTERING a college.
       // The high school attended is a PAST institution once its class has
@@ -776,6 +786,7 @@ export const PROFILE_SCHEMA = {
       },
       keywords: { type: 'array<string>', default: [], description: 'Keywords/tags (strings).' },
       notes: { type: 'string', format: 'prose', scored: false, default: '', description: 'Additional program/service notes. DRAFTING ONLY; not scored or mined.' },
+      program_descriptions: { type: 'string', format: 'prose', scored: false, default: '', description: 'Brief description of the programs or services run (Anya interview answer). DRAFTING ONLY; not scored.' },
     },
   },
 

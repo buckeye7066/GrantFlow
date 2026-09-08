@@ -106,6 +106,12 @@ export const SECTION_METADATA = {
         "help": "5-digit ZIP code for local/county/state eligibility and matching."
       },
       {
+        "name": "applicant_kind",
+        "label": "Applying as",
+        "format": "text",
+        "help": "Anya interview answer: 'organization' or 'individual'. Not scored."
+      },
+      {
         "name": "county",
         "label": "County",
         "format": "text",
@@ -268,6 +274,18 @@ export const SECTION_METADATA = {
         "label": "Organization type",
         "format": "text",
         "help": "Type of applicant organization (e.g., nonprofit, church, school, small business)."
+      },
+      {
+        "name": "population_served",
+        "label": "Population served",
+        "format": "long_text",
+        "help": "Who the organization serves (Anya interview answer). Drafting only; not scored."
+      },
+      {
+        "name": "mission_focus",
+        "label": "Mission / main focus",
+        "format": "long_text",
+        "help": "One-sentence mission or main focus (Anya interview answer). Drafting only; not scored."
       },
       {
         "name": "ein",
@@ -1836,6 +1854,12 @@ export const SECTION_METADATA = {
         "help": "True if enrolled in dual enrollment or early college program."
       },
       {
+        "name": "is_student",
+        "label": "Currently a student (or enrolling soon)",
+        "format": "boolean_tri",
+        "help": "Anya interview answer; drives the student facet. Not scored."
+      },
+      {
         "name": "rotc_jrotc",
         "label": "ROTC / JROTC participation",
         "format": "text",
@@ -2031,6 +2055,12 @@ export const SECTION_METADATA = {
         "vocabulary": "focus",
         "allow_custom": true,
         "help": "Pick the focus areas the matcher should use for this profile. Choose from the suggested list; add a custom value only if none fit."
+      },
+      {
+        "name": "program_descriptions",
+        "label": "Programs or services you run",
+        "format": "long_text",
+        "help": "Brief description of the programs or services run (Anya interview answer). Drafting only; not scored."
       },
       {
         "name": "interests",
