@@ -21,6 +21,7 @@
  */
 
 import { createOutlookProvider } from '../john/johnOutlookProvider.js'
+import { weeklyDigestFailure } from './weeklyDigestFailure.js'
 import { getJohnConfig } from '../john/johnOutreachSafety.js'
 import { resolveProfileContacts, sendBroadcast } from '../comms/commsService.js'
 // The SINGLE canonical "did this actually reach the funder" predicate — never
@@ -307,14 +308,14 @@ export function buildDigest({ displayName, signals, now = new Date() }) {
  *
  * `_sendBroadcast` is injectable for unit tests only.
  */
-export async function runHamiltonWeeklyDigest(db, { now = new Date(), force = false, profileIds = null, _sendBroadcast = sendBroadcast } = {}) {
+export async function runHamiltonWeeklyDigest(db, { now = new Date(), force = false, profileIds = null, _sendBroadcast = sendBroadcast, _createOutlookProvider = createOutlookProvider } = {}) {
   if (!force && !isWeeklyDigestEnabled()) return { ran: false, reason: 'disabled' }
 
   const mode = weeklyDigestDeliveryMode()
   let provider = null
   let config = null
   if (mode === 'draft') {
-    provider = createOutlookProvider()
+    provider = _createOutlookProvider()
     if (provider.notConfigured) {
       log.warn('weekly digest skipped — Outlook provider not configured')
       return { ran: false, reason: 'outlook_not_configured' }
@@ -336,6 +337,11 @@ export async function runHamiltonWeeklyDigest(db, { now = new Date(), force = fa
   }
 
   let drafted = 0, sent = 0, skippedNoEmail = 0, errors = 0
+  const failures = []
+  const recordFailure = (profileId, error) => {
+    errors += 1
+    if (failures.length < 50) failures.push(weeklyDigestFailure(profileId, mode, error))
+  }
   for (const p of profiles || []) {
     try {
       const contacts = await resolveProfileContacts(db, p.id)
@@ -357,9 +363,12 @@ export async function runHamiltonWeeklyDigest(db, { now = new Date(), force = fa
           kind: 'weekly_digest',
         })
         if ((r?.sent_email ?? 0) > 0) sent += 1
-        else { errors += 1; log.warn('digest send failed', { profile_id: p.id, error: r?.recipients?.[0]?.error || r?.error || 'no_email_sent' }) }
+        if ((r?.sent_email ?? 0) === 0 || Number(r?.failed) > 0) {
+          recordFailure(p.id, { code: (r?.sent_email ?? 0) > 0 ? 'DIGEST_PARTIAL_SEND' : 'DIGEST_SEND_FAILED' })
+          log.warn('digest send incomplete', { profile_id: p.id, sent_email: r?.sent_email ?? 0, failed: r?.failed ?? 0 })
+        }
       } else {
-        await provider.createDraft({
+        const draft = await provider.createDraft({
           toEmail: emails,
           toName: contacts.display_name || undefined,
           subject: digest.subject,
@@ -369,15 +378,20 @@ export async function runHamiltonWeeklyDigest(db, { now = new Date(), force = fa
           replyTo: config.replyTo || fromAlias,
           displayName: displayNameHdr,
         })
+        if (draft?.ok !== true || !draft?.provider_draft_id) {
+          const error = new Error('Provider did not return a verified draft identifier')
+          error.code = 'DIGEST_DRAFT_UNVERIFIED'
+          throw error
+        }
         drafted += 1
       }
     } catch (err) {
-      errors += 1
-      log.warn(`digest ${mode} failed`, { profile_id: p.id, error: err?.message })
+      recordFailure(p.id, err)
+      log.warn(`digest ${mode} failed`, { profile_id: p.id, code: err?.code || 'DIGEST_DELIVERY_FAILED', status: err?.status ?? null })
     }
   }
 
-  const summary = { ran: true, mode, drafted, sent, skipped_no_email: skippedNoEmail, profiles: (profiles || []).length, errors, at: now.toISOString() }
+  const summary = { ran: true, mode, drafted, sent, skipped_no_email: skippedNoEmail, profiles: (profiles || []).length, errors, failures, failures_truncated: Math.max(0, errors - failures.length), at: now.toISOString() }
   log.info('weekly digest complete', summary)
   return summary
 }

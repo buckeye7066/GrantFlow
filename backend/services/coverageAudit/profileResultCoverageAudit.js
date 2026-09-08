@@ -842,6 +842,10 @@ async function runProfileCoverageSweepInner(db, { autoheal, maxHeal, limit, star
               added_total: added,
             },
           })
+          // Commit each observed outcome before starting the next expensive
+          // crawl. A restart must not erase completed attempts and repeatedly
+          // select the same profiles, starving never-tried profiles.
+          await floorApi.writeFloorLedger(db, floorLedger)
           const entry = floorLedger.profiles?.[a.profile_id]
           if (entry?.exhausted_at) {
             const { describeExhaustion } = await import('../../config/profileResultFloor.js')

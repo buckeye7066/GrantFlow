@@ -7,13 +7,17 @@
   "node_engine": ">=24",
   "start_command": "pnpm dev",
   "stop_command": "taskkill-by-port",
-  "readiness_probe": { "type": "http", "path": "/readyz", "port": 3000, "timeout_ms": 60000, "warm_paths": ["/@vite/client"] },
-  "base_url": "http://127.0.0.1:5173",
+  "readiness_probe": { "type": "http", "path": "/readyz", "port": 45102, "timeout_ms": 60000, "warm_paths": ["/@vite/client"] },
+  "base_url": "http://127.0.0.1:45202",
   "test_target": "disposable-local-instance",
   "required_env": ["CORS_ORIGINS", "SKIP_LLM_KEY_CHECK", "ADMIN_EMAILS"],
   "launch_env": {
     "NODE_ENV": "development",
-    "CORS_ORIGINS": "http://localhost:5173,http://127.0.0.1:5173",
+    "PORT": "45102",
+    "HOST": "127.0.0.1",
+    "VITE_PORT": "45202",
+    "VITE_API_URL": "http://127.0.0.1:45102",
+    "CORS_ORIGINS": "http://localhost:45202,http://127.0.0.1:45202",
     "SKIP_LLM_KEY_CHECK": "1",
     "DISABLE_MODEL_PUBLICATION": "1",
     "ADMIN_EMAILS": "eva-admin@example.com"
@@ -35,7 +39,7 @@
   ],
   "allowlist": {
     "hosts": ["localhost", "127.0.0.1", "::1"],
-    "ports": [5173, 3000],
+    "ports": [45202, 45102],
     "routes": ["/Login", "/PrivacyPolicy", "/readyz", "/api/auth/*"],
     "file_roots": [".eva-tmp/genemap-discovery"],
     "processes": ["node", "pnpm"]

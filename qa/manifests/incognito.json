@@ -4,10 +4,10 @@
   "repo": "buckeye7066/incognito",
   "local_path": "~/incognito",
   "runtime_type": "web",
-  "start_command": "npm run dev",
+  "start_command": "npm run dev -- --host 127.0.0.1 --port 45201 --strictPort",
   "stop_command": "taskkill-by-port",
-  "readiness_probe": { "type": "http", "path": "/", "port": 5173, "timeout_ms": 60000, "warm_paths": ["/@vite/client"], "$warm_comment": "Measured 2026-08-15 (run evarun_77b7a395…): app-startup and create-vault PASSED while the FIRST journey navigation hit a 30s goto timeout — Vite answered the listen probe, then cold-transformed the module graph under the journey (the exact FSN class). /@vite/client must serve a stable non-empty body before readiness so journeys never race the transform pipeline." },
-  "base_url": "http://127.0.0.1:5173",
+  "readiness_probe": { "type": "http", "path": "/", "port": 45201, "timeout_ms": 60000, "warm_paths": ["/@vite/client"], "$warm_comment": "Measured 2026-08-15 (run evarun_77b7a395…): app-startup and create-vault PASSED while the FIRST journey navigation hit a 30s goto timeout — Vite answered the listen probe, then cold-transformed the module graph under the journey (the exact FSN class). /@vite/client must serve a stable non-empty body before readiness so journeys never race the transform pipeline." },
+  "base_url": "http://127.0.0.1:45201",
   "test_target": "disposable-local-instance",
   "required_env": [],
   "seed_command": "none (local-first, fully offline; no backend, no DB, no keys needed)",
@@ -24,7 +24,7 @@
   ],
   "allowlist": {
     "hosts": ["localhost", "127.0.0.1", "::1"],
-    "ports": [5173],
+    "ports": [45201],
     "routes": ["/"],
     "file_roots": [".eva-tmp/incognito"],
     "processes": ["node", "npm", "vite"]
@@ -47,10 +47,10 @@
   "journeys": [
     {
       "id": "app-identifies-itself",
-      "name": "Vault gate loads and identifies Incognito (note: use http://localhost:5173 explicitly — Windows ::1 ordering quirk)",
+      "name": "Vault gate loads and identifies Incognito (note: use the isolated EVA base URL)",
       "severity": "critical",
       "steps": [
-        { "action": "goto", "url": "http://localhost:5173/" },
+        { "action": "goto", "url": "/" },
         { "action": "waitForSelector", "selector": "body" }
       ],
       "assert": [{ "type": "text_visible", "selector": "body", "value": "Incognito" }],
@@ -62,7 +62,7 @@
       "name": "A new vault can be created offline with a synthetic master password",
       "severity": "high",
       "steps": [
-        { "action": "goto", "url": "http://localhost:5173/" },
+        { "action": "goto", "url": "/" },
         { "action": "waitForSelector", "selector": "input[type=password]" },
         { "action": "fill", "selector": "input[placeholder='Master password']", "value": "EvaFixturePass123!" },
         { "action": "fill", "selector": "input[placeholder='Confirm master password']", "value": "EvaFixturePass123!" },

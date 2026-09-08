@@ -322,8 +322,11 @@ test('EVA tests an isolated origin/main snapshot while leaving dirty feature wor
     realGit(source, ['init', '-b', 'main'])
     realGit(source, ['config', 'user.email', 'eva@example.test'])
     realGit(source, ['config', 'user.name', 'EVA Test'])
+    // The fixture commits exact LF bytes on every platform; a Windows host's
+    // global autocrlf setting must not change the isolation assertions.
+    writeFileSync(join(source, '.gitattributes'), 'app.txt text eol=lf\n')
     writeFileSync(join(source, 'app.txt'), 'main-v1\n')
-    realGit(source, ['add', 'app.txt'])
+    realGit(source, ['add', '.gitattributes', 'app.txt'])
     realGit(source, ['commit', '-m', 'main v1'])
     realGit(source, ['remote', 'add', 'origin', origin])
     realGit(source, ['push', '-u', 'origin', 'main'])

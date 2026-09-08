@@ -229,3 +229,49 @@ describe('weekly digest — "what happened this week" delta section (2026-07-05)
     expect(text).toMatch(/\+3 more/)
   })
 })
+
+
+describe('weekly digest failure evidence', () => {
+  it('records provider status and failed profile without retaining sensitive provider text', async () => {
+    const error = Object.assign(new Error('Bearer private-token email person@example.org'), { code: 'JOHN_OUTLOOK_DRAFT_FAILED', status: 403, detail: 'client_secret=private-secret' })
+    const summary = await runHamiltonWeeklyDigest(fakeDb(), {
+      force: true, profileIds: ['p1'],
+      _createOutlookProvider: () => ({ createDraft: vi.fn(async () => { throw error }) }),
+    })
+    expect(summary.errors).toBe(1)
+    expect(summary.drafted).toBe(0)
+    expect(summary.failures[0]).toMatchObject({ profile_id: 'p1', mode: 'draft', code: 'JOHN_OUTLOOK_DRAFT_FAILED', status: 403 })
+    expect(summary.failures[0].next_action).toContain('Mail.ReadWrite')
+    expect(JSON.stringify(summary)).not.toMatch(/private-token|person@example|private-secret/)
+  })
+  it('does not count a successful-looking provider response without a draft identifier', async () => {
+    const summary = await runHamiltonWeeklyDigest(fakeDb(), {
+      force: true, profileIds: ['p1'],
+      _createOutlookProvider: () => ({ createDraft: vi.fn(async () => ({ ok: true, provider_draft_id: null })) }),
+    })
+    expect(summary.drafted).toBe(0)
+    expect(summary.errors).toBe(1)
+    expect(summary.failures[0].code).toBe('DIGEST_DRAFT_UNVERIFIED')
+  })
+  it('preserves confirmed drafts and never invokes sending in draft mode', async () => {
+    const broadcast = vi.fn()
+    const summary = await runHamiltonWeeklyDigest(fakeDb(), {
+      force: true, profileIds: ['p1'], _sendBroadcast: broadcast,
+      _createOutlookProvider: () => ({ createDraft: vi.fn(async () => ({ ok: true, provider_draft_id: 'fixture-draft' })) }),
+    })
+    expect(summary.drafted).toBe(1)
+    expect(summary.errors).toBe(0)
+    expect(summary.failures).toEqual([])
+    expect(broadcast).not.toHaveBeenCalled()
+  })
+  it('reports partial sends as incomplete without hiding the successful recipient', async () => {
+    process.env.HAMILTON_WEEKLY_DIGEST_DELIVERY = 'send'
+    const summary = await runHamiltonWeeklyDigest(fakeDb(), {
+      force: true, profileIds: ['p1'],
+      _sendBroadcast: vi.fn(async () => ({ sent_email: 1, failed: 1 })),
+    })
+    expect(summary.sent).toBe(1)
+    expect(summary.errors).toBe(1)
+    expect(summary.failures[0].code).toBe('DIGEST_PARTIAL_SEND')
+  })
+})

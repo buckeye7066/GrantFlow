@@ -1,0 +1,46 @@
+name: Anya report regressions
+on:
+  pull_request:
+    paths:
+      - 'backend/crawler-os/**'
+      - 'backend/services/coverageAudit/**'
+      - 'backend/services/hamilton/**'
+      - 'backend/server.js'
+      - 'qa/**'
+      - 'tools/eva-edge-runner/**'
+      - 'tests/unit/weekly-digest-failure.test.mjs'
+      - 'tests/unit/coverage-sweep-freshness.test.mjs'
+      - '.github/workflows/anya-report-regressions.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'backend/crawler-os/**'
+      - 'backend/services/coverageAudit/**'
+      - 'backend/services/hamilton/**'
+      - 'backend/server.js'
+      - 'qa/**'
+      - 'tools/eva-edge-runner/**'
+      - 'tests/unit/weekly-digest-failure.test.mjs'
+      - 'tests/unit/coverage-sweep-freshness.test.mjs'
+      - '.github/workflows/anya-report-regressions.yml'
+permissions:
+  contents: read
+jobs:
+  report-regressions:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-2022]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 24.19.0
+      - name: Architecture boundary, query rotation, interrupted sweep, and safe digest evidence
+        run: node --test backend/crawler-os/tests/legacy-crawler-ban.test.mjs backend/crawler-os/tests/webQueries.test.mjs tests/unit/coverage-sweep-freshness.test.mjs tests/unit/weekly-digest-failure.test.mjs
+      - name: EVA launch, isolation, prerequisites, and manifest contracts
+        working-directory: tools/eva-edge-runner
+        run: npm test

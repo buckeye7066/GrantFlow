@@ -68,6 +68,7 @@ export function createOutlookProvider({
       const text = await safeText(res)
       const err = new Error(`Outlook token request failed: ${res.status}`)
       err.code = 'JOHN_OUTLOOK_TOKEN_FAILED'
+      err.status = res.status
       err.detail = redact(text)
       throw err
     }
@@ -213,6 +214,7 @@ export function createOutlookProvider({
       const text = await safeText(res)
       const err = new Error(`Outlook draft creation failed: ${res.status}`)
       err.code = 'JOHN_OUTLOOK_DRAFT_FAILED'
+      err.status = res.status
       err.detail = redact(text)
       throw err
     }

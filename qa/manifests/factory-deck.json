@@ -6,12 +6,14 @@
   "runtime_type": "web",
   "start_command": "pnpm dev",
   "stop_command": "taskkill-by-port",
-  "readiness_probe": { "type": "http", "path": "/api/health", "port": 5179, "timeout_ms": 90000, "warm_paths": ["/@vite/client"] },
-  "base_url": "http://127.0.0.1:5190",
+  "readiness_probe": { "type": "http", "path": "/api/health", "port": 45106, "timeout_ms": 90000, "warm_paths": ["/@vite/client"] },
+  "base_url": "http://127.0.0.1:45206",
   "test_target": "disposable-local-instance",
   "required_env": ["PORT", "WORKSPACE_ROOT", "FACTORY_DATA_DIR"],
   "launch_env": {
-    "PORT": "5179",
+    "PORT": "45106",
+    "FACTORY_UI_PORT": "45206",
+    "FACTORY_API_PROXY_PORT": "45106",
     "WORKSPACE_ROOT": ".eva-tmp/factory-deck/workspaces",
     "FACTORY_DATA_DIR": ".eva-tmp/factory-deck/data",
     "FACTORY_FREE_ENABLED": "0",
@@ -32,7 +34,7 @@
   ],
   "allowlist": {
     "hosts": ["localhost", "127.0.0.1", "::1"],
-    "ports": [5179, 5190],
+    "ports": [45106, 45206],
     "routes": ["/", "/api/health"],
     "file_roots": [".eva-tmp/factory-deck"],
     "processes": ["node", "pnpm"]
