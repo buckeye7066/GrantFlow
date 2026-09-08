@@ -35,6 +35,7 @@
  */
 
 import { RE_PROCEDURAL_NOTICE_TITLE } from '../services/opportunityNormalizer.js'
+import { countyAwardMismatch } from './countyDeclaration.js'
 import { hostnameOf, detectForeignOpportunity } from './opportunityJurisdiction.js'
 import { resolvedUsOpportunityJurisdiction } from './canonicalUsJurisdiction.js'
 import { isPointerKind } from './opportunityKindClasses.js'
@@ -696,7 +697,7 @@ export function passesEligibility(row, facts = {}) {
  * explicitly non-national; explicit national scope wins over a stale crawl
  * state. Missing evidence stays neutral.
  */
-export function isRelevantGeo(row, { states = null } = {}) {
+export function isRelevantGeo(row, { states = null, county = null } = {}) {
   const foreign = detectForeignOpportunity(row)
   if (foreign.foreign) {
     return {
@@ -748,6 +749,21 @@ export function isRelevantGeo(row, { states = null } = {}) {
       relevant: false,
       reason: `${prefix}:${jurisdiction.state}`,
       jurisdiction,
+    }
+  }
+  // A row that names ITSELF after a county is a single-county award; it
+  // qualifies only for a profile that lives there (owner rule 2026-09-07:
+  // "franklin county should not qualify, he does not live in franklin
+  // county"). State-agnostic on purpose: in-state or with no state at all,
+  // Franklin County is never LaGrange County. MISSING = NEUTRAL both ways.
+  const countyVerdict = countyAwardMismatch(row, county)
+  if (countyVerdict.mismatch) {
+    return {
+      relevant: false,
+      reason: `declared_county_out_of_area:${countyVerdict.declared[0]}`,
+      jurisdiction,
+      declared_counties: countyVerdict.declared,
+      profile_county: countyVerdict.profile,
     }
   }
   return { relevant: true, reason: null, jurisdiction }

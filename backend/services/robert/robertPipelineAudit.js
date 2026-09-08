@@ -62,6 +62,7 @@
  */
 
 import { canonicalOpportunityKey } from '../../crawler-os/contract.js'
+import { resolveProfileCountyAnchor } from '../../config/crisisNeedRecall.js'
 import { programIdentityKey, sameProgram, programTokens } from "../../config/programIdentity.js"
 import { isPointerKind, pointerKindSql } from '../../config/opportunityKindClasses.js'
 import { classifyLocatorKindFromRow } from '../sources/locatorUrlKind.js'
@@ -253,7 +254,15 @@ export function deriveProfileFacts(row, sections, { profileId = null } = {}) {
   // DENIALS ("we do not need housing assistance") — the veteran-gate class
   // this repo has shipped twice.
   const needs = declaredNeedsFrom(row, sectionMap)
-
+  // County: the profile's CORROBORATED anchor only (declared county + state,
+  // or a ZIP county confirmed by the declared city). A county-named award
+  // qualifies only for the profile that lives there; no anchor = neutral.
+  const countyAnchor = resolveProfileCountyAnchor({
+    county: basic?.county ?? sectionMap.location_focus?.county ?? null,
+    state: basic?.state ?? basic?.state_code ?? sectionMap.location_focus?.state ?? null,
+    zip: basic?.zip_code ?? basic?.zip ?? basic?.postal_code ?? null,
+    city: basic?.city ?? null,
+  })
   return {
     profileId: String(profileId ?? row?.id ?? ''),
     displayName: row?.display_name ?? null,
@@ -261,6 +270,7 @@ export function deriveProfileFacts(row, sections, { profileId = null } = {}) {
     sections: sectionMap,
     applicantType,
     states,
+    countyAnchor,
     needs,
     protectedProfile: PROTECTED_PROFILE_NAME_RX.test(String(row?.display_name ?? '')),
   }
@@ -582,12 +592,17 @@ export function gateQualifies(row, facts) {
 
   // Geography. MISSING = NEUTRAL: a profile with no declared state loses
   // nothing, because `isRelevantGeo` only acts on positive restrictive evidence.
-  const geo = isRelevantGeo(row, { states: facts.states })
+  const geo = isRelevantGeo(row, { states: facts.states, county: facts.countyAnchor?.county ?? null })
   if (geo && geo.relevant === false) {
     return {
       pass: false,
       reason: REJECTION_REASONS.PROFILE_MISMATCH,
-      evidence: { gate: 'geo', detail: geo.reason, profile_states: facts.states },
+      evidence: {
+        gate: 'geo',
+        detail: geo.reason,
+        profile_states: facts.states,
+        profile_county: facts.countyAnchor?.county ?? null,
+      },
     }
   }
 
