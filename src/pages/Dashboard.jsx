@@ -51,7 +51,7 @@ import { Star, User, CheckCircle2, ArrowRight } from "lucide-react"
 import { Progress } from "@/components/ui/progress"
 import { calculateProfileCompletion } from "@/utils/profileCompletion"
 
-const END_USER_DASHBOARD_PATHS = new Set(['/Calendar', '/Help', '/ItemFunding', '/Pipeline'])
+const END_USER_DASHBOARD_PATHS = new Set(['/Calendar', '/Help', '/ItemFunding', '/Pipeline', '/ProfileDetail'])
 
 /** Resolves last-visited page from preferences (source of truth) or localStorage (fallback). */
 function DashboardContinueOrStart({ profilesLength, urgentDeadlines, activeGrants, hasGrants, isSimplified = false }) {
@@ -126,7 +126,9 @@ function EngagementRow({ profileDetail, activeGrants, urgentDeadlines, isSimplif
   const nextAction = resolvedAction
     ? {
         label: resolvedAction.label,
-        url: createPageUrl(resolvedAction.route),
+        url: resolvedAction.usesActiveProfile && profileDetail?.id
+          ? createPageUrl(resolvedAction.route, { id: profileDetail.id })
+          : createPageUrl(resolvedAction.route),
         icon: NEXT_ACTION_ICONS[resolvedAction.key] || Target,
       }
     : null

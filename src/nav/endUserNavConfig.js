@@ -5,6 +5,7 @@ import {
   LayoutDashboard,
   Leaf,
   LifeBuoy,
+  UserRound,
 } from 'lucide-react'
 
 import { createPageUrl } from '@/utils'
@@ -31,6 +32,17 @@ export const END_USER_NAV_GROUPS = Object.freeze([
         routeName: 'Calendar',
         url: createPageUrl('Calendar'),
         icon: Calendar,
+      },
+      {
+        // The person's OWN profile page (owner order 2026-09-07: "he can't see
+        // his profile to finish filling it out"). The end-user shell had no
+        // way to reach it. `usesActiveProfile` makes the layout append
+        // `?id=<active profile>` at render time.
+        title: 'My Profile',
+        routeName: 'ProfileDetail',
+        url: createPageUrl('ProfileDetail'),
+        icon: UserRound,
+        usesActiveProfile: true,
       },
     ],
   },
