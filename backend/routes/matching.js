@@ -1339,7 +1339,7 @@ const SUCCESS_ARCHETYPES = [
   { keywords: ['solar', 'wind energy', 'clean energy', 'energy efficiency', 'weatherization', 'green building', 'ev charging', 'electric vehicle'],
     steps: [
       { label: 'Get a professional energy audit', category: 'documentation', why: 'DOE and utility programs require documented energy baseline and savings projections' },
-      { label: 'Explore DOE Loan Programs Office (LPO) eligibility', category: 'financial_aid', why: 'LPO offers loan guarantees up to $400B for clean energy projects' },
+      { label: 'Explore DOE clean-energy GRANT and cost-share programs', category: 'financial_aid', why: 'Grant and cost-share funding for clean energy projects (loan guarantees are excluded: owner rule NO LOANS, 2026-09-08)' },
       { label: 'Apply for IRA/Inflation Reduction Act tax credits', category: 'financial', why: 'ITC (30%) and PTC cover solar, wind, EV, and efficiency — stackable with grants' },
       { label: 'Check state renewable portfolio standard incentives', category: 'planning', why: 'SRECs, rebates, and net metering vary by state and significantly affect project economics' },
     ],
@@ -1582,7 +1582,7 @@ const SUCCESS_ARCHETYPES = [
       { label: 'Obtain a sales tax permit / reseller certificate', category: 'legal', why: 'Required in states with sales tax before collecting tax on online sales' },
       { label: 'Register your business entity (LLC or S-Corp)', category: 'legal', why: 'Separates personal and business liability — required for most business grants' },
       { label: 'Set up a bookkeeping system (QuickBooks, Wave)', category: 'financial', why: 'Grant applications require profit/loss statements and balance sheets' },
-      { label: 'Explore SBA microloans and community-based lending', category: 'financial_aid', why: 'SBA microloans up to $50K are designed for small and online businesses' },
+      { label: 'Explore SBA grant programs and community business support', category: 'financial_aid', why: 'Grant-based small-business support (SBA microloans are debt and are excluded: owner rule NO LOANS, 2026-09-08)' },
     ],
   },
 
@@ -1612,7 +1612,7 @@ const SUCCESS_ARCHETYPES = [
       { label: 'Obtain a retail business license and sales tax permit', category: 'legal', why: 'Required before you can sell goods to the public and collect sales tax' },
       { label: 'Secure a commercial lease with favorable terms', category: 'planning', why: 'Negotiate tenant improvement allowances — some landlords contribute to buildout costs' },
       { label: 'Get commercial property insurance and liability coverage', category: 'insurance', why: 'Covers inventory damage, customer injuries, and theft — required by most leases' },
-      { label: 'Explore SBA Community Advantage loans for underserved areas', category: 'financial_aid', why: 'Mission-focused lenders provide SBA-backed loans up to $350K for community businesses' },
+      { label: 'Explore underserved-area business GRANT programs', category: 'financial_aid', why: 'Mission-focused grant funding for community businesses (SBA-backed loans are debt and are excluded: owner rule NO LOANS, 2026-09-08)' },
     ],
   },
 
@@ -1650,7 +1650,7 @@ const SUCCESS_ARCHETYPES = [
     steps: [
       { label: 'Obtain required EPA and OSHA permits', category: 'compliance', why: 'Environmental and workplace safety permits are required before production begins' },
       { label: 'Explore MEP (Manufacturing Extension Partnership) resources', category: 'planning', why: 'NIST-funded MEP centers in every state provide free technical assistance and grant guidance' },
-      { label: 'Apply for SBA 504 loans for equipment and facilities', category: 'financial_aid', why: '504 loans provide long-term fixed-rate financing with only 10% down for equipment' },
+      { label: 'Apply for equipment and facilities GRANT programs', category: 'financial_aid', why: 'Grant funding for equipment and facilities (SBA 504 is debt and is excluded: owner rule NO LOANS, 2026-09-08)' },
       { label: 'Get product liability insurance', category: 'insurance', why: 'Covers defective product claims — required by most distributors and retailers' },
     ],
   },

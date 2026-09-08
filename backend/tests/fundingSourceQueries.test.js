@@ -69,6 +69,12 @@ function createCanonicalDb({ withDismissals = true, withMatchConfidence = true }
       record_origin TEXT,
       description TEXT,
       eligibility_bullets TEXT DEFAULT '[]',
+      -- Both exist in schema.sql (is_loan since migration 029) and in prod; the
+      -- fixture was minimal. The Funding Sources projection reads them so the
+      -- loan banner can fire on this surface (owner rule 2026-09-08: NO LOANS —
+      -- a gate that cannot see the flag is not a gate).
+      is_loan INTEGER DEFAULT 0,
+      funding_type TEXT,
       amount_min REAL,
       amount_max REAL,
       deadline TEXT,

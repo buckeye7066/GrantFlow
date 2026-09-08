@@ -39,12 +39,25 @@ test('inferFundingFlags flags a loan-PRIMARY instrument (loan named in title, no
   assert.equal(flags.is_loan, true);
 });
 
-test('inferFundingFlags does NOT flag a combined "Loan and Grant" program as a loan (a grant is available)', () => {
-  // Flagging this as a loan would hard-reject it for default profiles and hide a
-  // grant the applicant can actually pursue.
+// CONTRACT REVERSED 2026-09-08 by owner decision: NO LOANS, hybrids INCLUDED.
+// This test previously asserted the opposite — that a combined "Loan and Grant"
+// program is not a loan, on the reasoning that the applicant can pursue the
+// grant half. Measured, that reasoning hands debt to whoever qualifies for the
+// loan half and not the grant half: USDA "Single Family Housing Repair Loans
+// and Grants" is a grant at 62+ and a LOAN otherwise. 159 catalog rows have
+// this shape; refusing them costs exactly 1 surfaced row.
+test('inferFundingFlags DOES flag a combined "Loan and Grant" program as a loan', () => {
   const flags = inferFundingFlags({
     title: 'Community Facilities Direct Loan and Grant Program',
     summary: 'Applicants must provide matching funds / local match.',
+  });
+  assert.equal(flags.is_loan, true);
+});
+
+test('…but a loan REPAYMENT program is still never flagged — that is money TO the applicant', () => {
+  const flags = inferFundingFlags({
+    title: 'Nurse Corps Loan Repayment Program',
+    summary: 'Pays up to 85% of unpaid nursing education debt.',
   });
   assert.equal(flags.is_loan, false);
 });

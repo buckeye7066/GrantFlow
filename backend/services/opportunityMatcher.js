@@ -40,6 +40,7 @@ import { isDismissed as isPipelineDismissed } from './pipelineDismissals.js'
 import { classifyFundingResult, RESULT_BUCKETS } from '../config/fundingResultFilters.js'
 import { CANONICAL_RESCORE_MATCHER_VERSION } from '../config/matchSurfacing.js'
 import { declaredNeedsFrom, evaluateDeclaredNeedCoverage } from './pipelinePrecision.js'
+import { classifyLoanRisk, loanRefusalReason } from '../config/loanClassification.js'
 import { createLogger } from '../utils/logger.js'
 
 // Directory-style / referral resources must ALWAYS survive filtering (mission
@@ -424,6 +425,34 @@ async function admitToPipeline(db, profileContext, opportunity, ctx = {}) {
           threshold,
           decision: 'REJECT',
           needCoverage,
+        }, decision?.score ?? null)
+      }
+    }
+
+    // ── Gate 1.95: NO LOANS (owner rule 2026-09-08) ────────────────────────
+    // A loan is an obligation, not funding. This was previously enforced only
+    // as a side effect inside makeDecision, keyed on `on.isLoan` — which reads
+    // `funding_opportunities.is_loan`, a column measured TRUE on 0 of 29,138
+    // active rows because the canonical inserter never writes it. So the rule
+    // had no reliable enforcer at admission. It is a NAMED gate now.
+    //
+    // `classifyLoanRisk` is the single registry replacing six disagreeing
+    // classifiers; DEBT RELIEF (loan repayment/forgiveness — money TO the
+    // applicant) is deliberately NOT refused.
+    {
+      const loanReason = loanRefusalReason(opportunity)
+      if (loanReason) {
+        if (!quiet) log.info(
+          `[opportunityMatcher] Gate:NO_LOANS suppressed "${opportunity?.title}" — a loan is an obligation, not funding`,
+        )
+        return denied('live_reject', {
+          saved: false,
+          reason: 'Loans are not funding: this opportunity is a debt instrument, not an award',
+          gate: 'NO_LOANS',
+          matchPercentage: null,
+          threshold,
+          decision: 'REJECT',
+          loanClass: classifyLoanRisk(opportunity),
         }, decision?.score ?? null)
       }
     }

@@ -1,3 +1,4 @@
+import { classifyLoanRisk, LOAN_CLASS } from './loanClassification.js'
 /**
  * aidTypePreferences.js — which KINDS of aid a profile is willing to accept.
  *
@@ -82,8 +83,16 @@ export function classifyAidType(award = {}) {
   // — for profiles that never declared any preference at all. The engine's own
   // loan normalizer deliberately exempts mixed loan+grant programs for the
   // same reason; this mirrors it. A PURE loan title still classifies 'loan'.
-  const grantSide = ENDOWMENT_RX.test(text) || SCHOLARSHIP_RX.test(text) || GRANT_RX.test(text)
-  if (LOAN_RX.test(text) && !LOAN_NEGATIONS.test(text) && !grantSide) return 'loan'
+  // HYBRIDS ARE NO LONGER RESCUED BY A GRANT WORD (owner order 2026-09-08:
+  // NO LOANS, hybrids included). This previously returned 'unknown' for
+  // "Community Facilities Direct Loan and Grant Program" and USDA "Single
+  // Family Housing Repair Loans and Grants" — a grant at 62+, a LOAN otherwise
+  // — so a real debt path reached applicants who had declared no preference.
+  // `classifyLoanRisk` is now the single authority and it refuses hybrids;
+  // debt RELIEF (loan repayment/forgiveness — money TO the applicant) is
+  // classified separately and is never refused.
+  if (classifyLoanRisk({ title: text }) === LOAN_CLASS.LOAN) return 'loan'
+  if (LOAN_RX.test(text) && !LOAN_NEGATIONS.test(text)) return 'loan'
   if (ENDOWMENT_RX.test(text)) return 'endowment'
   if (SCHOLARSHIP_RX.test(text)) return 'scholarship'
   if (GRANT_RX.test(text)) return 'grant'
