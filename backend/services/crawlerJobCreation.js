@@ -174,6 +174,19 @@ export async function createCrawlerJob(db, options) {
 
   // Check for existing job with same idempotency key (unless explicitly skipped)
   if (!skipIdempotencyCheck) {
+    if (type === 'crawler_os_discovery') {
+      // Keep the canonical key available for the next scan. Giving each rerun
+      // a new suffix makes subsequent clicks miss that active job, spawning
+      // duplicate fleets (or colliding within the same millisecond). Archive
+      // only terminal discovery keys; preserve every historical job and let
+      // the UNIQUE index arbitrate concurrent creators of the stable key.
+      await db.prepare(`
+        UPDATE crawler_jobs
+        SET idempotency_key = idempotency_key || ':' || id
+        WHERE idempotency_key = ? AND type = ? AND profile_id = ?
+          AND status IN ('completed', 'failed', 'cancelled')
+      `).run(idempotencyKey, type, profileId)
+    }
     const existing = await db
       .prepare('SELECT * FROM crawler_jobs WHERE idempotency_key = ? AND status IN (?, ?)')
       .get(idempotencyKey, 'queued', 'running')

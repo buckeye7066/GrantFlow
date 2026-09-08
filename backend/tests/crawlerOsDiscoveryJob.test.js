@@ -37,6 +37,13 @@ describe('durable canonical discovery', () => {
       db.prepare("UPDATE crawler_jobs SET status = 'completed'").run()
       const next = await enqueueCrawlerOsDiscovery(db, 'profile-a')
       expect(next.job_ids).not.toEqual(first.job_ids)
+      const [joined, concurrentJoin] = await Promise.all([
+        enqueueCrawlerOsDiscovery(db, 'profile-a'), enqueueCrawlerOsDiscovery(db, 'profile-a'),
+      ])
+      expect(joined.job_ids).toEqual(next.job_ids)
+      expect(concurrentJoin.job_ids).toEqual(next.job_ids)
+      expect(joined.jobs_enqueued + concurrentJoin.jobs_enqueued).toBe(0)
+      expect(db.prepare("SELECT COUNT(*) AS count FROM crawler_jobs WHERE profile_id = 'profile-a'").get().count).toBe(2)
       const other = await enqueueCrawlerOsDiscovery(db, 'profile-b')
       expect(other.job_ids).not.toEqual(next.job_ids)
     } finally { db.close() }
