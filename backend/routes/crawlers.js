@@ -80,6 +80,7 @@ function computeIdempotencyKey({ type, profileId, organizationId, parameters }) 
 // Some crawler types are explicitly profile-scoped and cannot run without a profile context.
 // Enforce this at request time so we don't create guaranteed-to-fail jobs that pollute diagnostics.
 const TYPES_REQUIRING_PROFILE = new Set([
+  'crawler_os_discovery',
   'local',
   'scholarship',
   'item_search',

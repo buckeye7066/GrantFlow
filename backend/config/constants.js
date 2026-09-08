@@ -91,6 +91,7 @@ export const CRAWLER_JOB_TYPES = [
   'avatar_lookup',
   'clinical_trials',
   'comprehensive',
+  'crawler_os_discovery',
   'curated_benefits',
   'document_ingest',
   'ecf_benefits',

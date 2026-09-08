@@ -31,7 +31,9 @@
  */
 
 /** Bump on ANY change to the files below (date + counter). */
-export const PROFILE_SIGNAL_VERSION = '2026.09.07-3'
+// Re-score prior fleet matches that could have replaced the full primary
+// profile with a context-light thesis (crawlerOsService, 2026-09-08).
+export const PROFILE_SIGNAL_VERSION = '2026.09.08-1'
 
 /** Repo-relative files whose content decides what the engine believes about a profile. */
 export const PROFILE_SIGNAL_DERIVATION_FILES = Object.freeze([

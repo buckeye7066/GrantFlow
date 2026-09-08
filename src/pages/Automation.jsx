@@ -86,6 +86,7 @@ function safeFormat(value, pattern, fallback = "") {
 // Crawler OS (Robert) and must never surface in the Automation Control Center.
 // The canonical retired list lives in shared/supersededCrawlerTypes.js.
 const JOB_LABELS = {
+  crawler_os_discovery: "Funding discovery",
   portal_check: "Portal award check",
   avatar_lookup: "AI avatar lookup",
   document_ingest: "Document enrichment",
@@ -103,6 +104,7 @@ const JOB_LABELS = {
 // would create the exact class of permanently-stuck job this panel exists to
 // surface, not fix.
 const DISPATCHABLE_JOB_TYPES = new Set([
+  "crawler_os_discovery",
   "avatar_lookup",
   "document_ingest",
   "pipeline_automation",

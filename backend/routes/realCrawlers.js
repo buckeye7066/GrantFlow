@@ -3,10 +3,10 @@ import { ensureAuth, ensureAdmin } from '../middleware/auth.js'
 import { standardRateLimiter } from '../middleware/rateLimiting.js'
 import {
   runCrawler,
-  triggerAutoDiscoveryCrawlers,
   stampLastDiscoveryAt,
   loadCrawlerOsProfileResults,
 } from '../services/crawlerOsCompatibility.js'
+import { enqueueCrawlerOsDiscovery } from '../services/crawlerOsDiscoveryJob.js'
 import { runProfileDiscoveryLive, isWebDiscoveryEnabled } from '../services/crawlerOsService.js'
 import { ensureProfileAccess } from '../utils/accessControl.js'
 import { requireTierCapability, TIER_CAPABILITIES } from '../utils/tierGating.js'
@@ -775,94 +775,25 @@ router.post('/run-multiple', ensureAuth, async (req, res) => {
   })
 })
 
-/**
- * Run the full profile-scoped Crawler OS discovery path synchronously.
- * POST /api/real-crawlers/discover-all
- *
- * This is a compatibility alias over triggerAutoDiscoveryCrawlers, whose
- * post-cutover contract executes runProfileDiscoveryLive before resolving. It
- * therefore reports persisted counts and per-source receipts; it does not claim
- * that retired crawler jobs were enqueued or are still running in background.
- */
-router.post('/discover-all', ensureAuth, async (req, res) => {
-  const profileId = req.body?.profile_id
-
-  if (!profileId) {
-    return res.status(400).json({
-      error: 'Profile ID required',
-      message: 'discover-all requires a profile_id.',
-    })
-  }
-
-  if (!(await ensureProfileAccess(req, res, String(profileId)))) return
-
+/** Queue the canonical profile scan; never hold the proxy open for live crawling. */
+router.post('/discover-all', ensureAuth, standardRateLimiter, async (req, res) => {
+  const profileId = typeof req.body?.profile_id === 'string' ? req.body.profile_id.trim() : ''
+  if (!profileId) return res.status(400).json({ error: 'Profile ID required' })
+  if (!(await ensureProfileAccess(req, res, profileId))) return
   try {
-    const summary = await triggerAutoDiscoveryCrawlers(req.db, String(profileId), {
-      requestedBy: 'discover-all',
-      trigger: 'on_demand_discover_all',
-    })
-
-    if (summary?.error) {
-      routeLogger.error(`[RealCrawlers] discover-all Crawler OS failure for ${profileId}: ${summary.error}`)
-      return res.status(500).json({
-        success: false,
-        error: 'discover-all failed',
-        message: String(summary.error),
-        profile_id: String(profileId),
-        engine: summary?.engine || 'crawler-os',
-        synchronous: true,
-        jobs_enqueued: 0,
-        crawler_types: [],
-        stored: 0,
-        matches: 0,
-        sources: [],
-        source_receipts: [],
-      })
-    }
-
-    const sources = Array.isArray(summary?.sources) ? summary.sources : []
-    const crawlerTypes = Array.isArray(summary?.crawler_types)
-      ? summary.crawler_types
-      : [...new Set(sources.map((source) => source?.source_id || source?.id).filter(Boolean))]
-    const stored = Number(summary?.stored ?? summary?.opportunities ?? 0) || 0
-    const matches = Number(summary?.matches ?? 0) || 0
-
-    routeLogger.info(
-      `[RealCrawlers] discover-all completed synchronously for ${profileId}: stored=${stored}, matches=${matches}, sources=${sources.length}`,
-    )
-
-    return res.json({
-      success: true,
-      profile_id: String(profileId),
-      engine: summary?.engine || 'crawler-os',
-      synchronous: summary?.synchronous === true,
-      // Deprecated compatibility fields stay present, but a synchronous run
-      // truthfully enqueues no background jobs.
-      jobs_enqueued: 0,
-      crawler_types: crawlerTypes,
-      stored,
-      matches,
-      planned: Number(summary?.planned ?? 0) || 0,
-      rejected: Number(summary?.rejected ?? 0) || 0,
-      recommendations: Number(summary?.recommendations ?? 0) || 0,
-      sources,
-      source_receipts: sources,
-    })
+    const summary = await enqueueCrawlerOsDiscovery(req.db, profileId)
+    return res.status(202).json(summary)
   } catch (error) {
-    routeLogger.error('[RealCrawlers] discover-all failed:', error)
+    routeLogger.error('[RealCrawlers] discover-all enqueue failed:', error)
     return res.status(500).json({
       success: false,
       error: 'discover-all failed',
-      message: error?.message || String(error),
-      profile_id: String(profileId),
+      message: 'Could not start the funding search. Please try again.',
+      profile_id: profileId,
       engine: 'crawler-os',
-      synchronous: true,
+      synchronous: false,
       jobs_enqueued: 0,
-      crawler_types: [],
-      stored: 0,
-      matches: 0,
-      sources: [],
-      source_receipts: [],
+      job_ids: [],
     })
   }
 })

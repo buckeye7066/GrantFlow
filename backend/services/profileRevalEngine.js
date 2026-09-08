@@ -97,8 +97,8 @@ const REVAL_JOB_TYPE = 'anya_match_scout'
  * `expected_complete_by`, and without this a caller would report a re-crawl
  * that never happened.
  *
- * `discovery: false` everywhere is not a defect in this module: since the
- * Crawler OS cutover there is NO enqueue-able discovery job type at all.
+ * `discovery: false` everywhere is not a defect in this module: this module continues to enqueue catalog re-scoring. The separate
+ * crawler_os_discovery job powers /real-crawlers/discover-all.
  * Profile-facing discovery runs SYNCHRONOUSLY through
  * `crawlerOsCompatibility.triggerAutoDiscoveryCrawlers -> runProfileDiscoveryLive`
  * (see shared/supersededCrawlerTypes.js header). Wiring the reval trigger to

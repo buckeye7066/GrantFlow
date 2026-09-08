@@ -23,7 +23,8 @@ import {
 import { createPageUrl } from '@/utils'
 
 /**
- * The end-user (non-admin) sidebar.
+ * The end-user (non-admin) sidebar. Everyday destinations stay visible;
+ * isSecondary tools remain accessible through the group disclosure (2026-09-08).
  *
  * Owner order 2026-09-07: an end user "should see these options (keeping
  * nonadmin tools only)" — the Find Funding group, its advanced tools, and the
@@ -65,18 +66,18 @@ export const END_USER_NAV_GROUPS = Object.freeze([
     icon: Search,
     items: [
       { title: 'Discover Grants', i18nKey: 'nav.discoverGrants', routeName: 'DiscoverGrants', url: createPageUrl('DiscoverGrants'), icon: Search },
-      { title: 'No-Cost Green Home Upgrades', i18nKey: 'nav.greenHomePrograms', routeName: 'GreenHomePrograms', url: createPageUrl('GreenHomePrograms'), icon: Leaf },
+      { title: 'No-Cost Green Home Upgrades', i18nKey: 'nav.greenHomePrograms', routeName: 'GreenHomePrograms', isSecondary: true, url: createPageUrl('GreenHomePrograms'), icon: Leaf },
       { title: 'Saved Grants', i18nKey: 'nav.savedGrants', routeName: 'SavedGrants', url: createPageUrl('SavedGrants'), icon: Star },
-      { title: 'Funding Results', i18nKey: 'nav.fundingResults', routeName: 'FundingResults', url: createPageUrl('FundingResults'), icon: Search },
-      { title: 'Smart Matcher', i18nKey: 'nav.smartMatcher', routeName: 'SmartMatcher', url: createPageUrl('SmartMatcher'), icon: Brain },
-      { title: 'Profile Matcher', i18nKey: 'nav.profileMatcher', routeName: 'ProfileMatcher', url: createPageUrl('ProfileMatcher'), icon: Target },
-      { title: 'Funding Opportunities', i18nKey: 'nav.fundingOpportunities', routeName: 'FundingOpportunities', url: createPageUrl('FundingOpportunities'), icon: Layers },
-      { title: 'Item Requests', routeName: 'ItemFunding', url: createPageUrl('ItemFunding'), icon: HandCoins, requiresCapability: 'itemFunding' },
-      { title: 'Funder', i18nKey: 'nav.funder', routeName: 'Funder', url: createPageUrl('Funder'), icon: HandCoins },
-      { title: 'Data Sources', i18nKey: 'nav.dataSources', routeName: 'DataSources', url: createPageUrl('DataSources'), icon: Database },
-      { title: 'Source Directory', i18nKey: 'nav.sourceDirectory', routeName: 'SourceDirectory', url: createPageUrl('SourceDirectory'), icon: DatabaseZap },
-      { title: 'NOFO Parser', i18nKey: 'nav.nofoParser', routeName: 'NOFOParser', url: createPageUrl('NOFOParser'), icon: FileStack, isAdvanced: true, requiresCapability: 'documentAI' },
-      { title: 'AI Grant Scorer', i18nKey: 'nav.aiGrantScorer', routeName: 'AIGrantScorer', url: createPageUrl('AIGrantScorer'), icon: Brain, isAdvanced: true, requiresCapability: 'documentAI' },
+      { title: 'Funding Results', i18nKey: 'nav.fundingResults', routeName: 'FundingResults', isSecondary: true, url: createPageUrl('FundingResults'), icon: Search },
+      { title: 'Smart Matcher', i18nKey: 'nav.smartMatcher', routeName: 'SmartMatcher', isSecondary: true, url: createPageUrl('SmartMatcher'), icon: Brain },
+      { title: 'Profile Matcher', i18nKey: 'nav.profileMatcher', routeName: 'ProfileMatcher', isSecondary: true, url: createPageUrl('ProfileMatcher'), icon: Target },
+      { title: 'Funding Opportunities', i18nKey: 'nav.fundingOpportunities', routeName: 'FundingOpportunities', isSecondary: true, url: createPageUrl('FundingOpportunities'), icon: Layers },
+      { title: 'Item Requests', routeName: 'ItemFunding', isSecondary: true, url: createPageUrl('ItemFunding'), icon: HandCoins, requiresCapability: 'itemFunding' },
+      { title: 'Funder', i18nKey: 'nav.funder', routeName: 'Funder', isSecondary: true, url: createPageUrl('Funder'), icon: HandCoins },
+      { title: 'Data Sources', i18nKey: 'nav.dataSources', routeName: 'DataSources', isSecondary: true, url: createPageUrl('DataSources'), icon: Database },
+      { title: 'Source Directory', i18nKey: 'nav.sourceDirectory', routeName: 'SourceDirectory', isSecondary: true, url: createPageUrl('SourceDirectory'), icon: DatabaseZap },
+      { title: 'NOFO Parser', i18nKey: 'nav.nofoParser', routeName: 'NOFOParser', isSecondary: true, url: createPageUrl('NOFOParser'), icon: FileStack, isAdvanced: true, requiresCapability: 'documentAI' },
+      { title: 'AI Grant Scorer', i18nKey: 'nav.aiGrantScorer', routeName: 'AIGrantScorer', isSecondary: true, url: createPageUrl('AIGrantScorer'), icon: Brain, isAdvanced: true, requiresCapability: 'documentAI' },
     ],
   },
   {
@@ -86,11 +87,11 @@ export const END_USER_NAV_GROUPS = Object.freeze([
     icon: Kanban,
     items: [
       { title: 'Pipeline', i18nKey: 'nav.pipeline', routeName: 'Pipeline', url: createPageUrl('Pipeline'), icon: Kanban },
-      { title: 'Process with Hamilton', i18nKey: 'nav.processWithHamilton', routeName: 'HamiltonProcessing', url: createPageUrl('HamiltonProcessing'), icon: Sparkles, requiresCapability: 'pipelineAutomation' },
+      { title: 'Process with Hamilton', i18nKey: 'nav.processWithHamilton', routeName: 'HamiltonProcessing', isSecondary: true, url: createPageUrl('HamiltonProcessing'), icon: Sparkles, requiresCapability: 'pipelineAutomation' },
       { title: 'Applications', i18nKey: 'nav.applications', routeName: 'Applications', url: createPageUrl('Applications'), icon: ClipboardList },
-      { title: 'Proposals', i18nKey: 'nav.proposals', routeName: 'Proposals', url: createPageUrl('Proposals'), icon: FileText },
+      { title: 'Proposals', i18nKey: 'nav.proposals', routeName: 'Proposals', isSecondary: true, url: createPageUrl('Proposals'), icon: FileText },
       { title: 'Documents', i18nKey: 'nav.documents', routeName: 'Documents', url: createPageUrl('Documents'), icon: FolderOpen },
-      { title: 'Printable Application', i18nKey: 'nav.printableApplication', routeName: 'PrintableApplication', url: createPageUrl('PrintableApplication'), icon: FileText },
+      { title: 'Printable Application', i18nKey: 'nav.printableApplication', routeName: 'PrintableApplication', isSecondary: true, url: createPageUrl('PrintableApplication'), icon: FileText },
     ],
   },
   {

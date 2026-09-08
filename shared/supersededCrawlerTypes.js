@@ -4,10 +4,11 @@
  * GrantFlow's grant DISCOVERY was moved to the "Crawler OS" (agent codename
  * "Robert"). The old per-type discovery crawlers are retired: the dispatcher
  * short-circuits them at runtime and no code path should persist a new
- * crawler_jobs row for one of these types anymore. Profile-facing discovery
- * still works because it runs synchronously through the Crawler OS compat shim
- * (crawlerOsCompatibility.triggerAutoDiscoveryCrawlers → runProfileDiscoveryLive);
- * it just no longer enqueues legacy job rows.
+ * crawler_jobs row for one of these types anymore. Interactive discovery uses
+ * crawler_os_discovery, a durable job around the canonical engine. Scheduled
+ * callers can still use the synchronous compatibility shim; neither path
+ * re-enables a retired crawler.
+
  *
  * This list is imported by:
  *   - backend/services/crawlerDispatcher.js (runtime short-circuit)

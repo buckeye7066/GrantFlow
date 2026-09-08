@@ -33,6 +33,7 @@
 
 import { ensureAgentSubsystemTables } from '../utils/ensureAgentSubsystemTables.js'
 import { PAGE_FACT_MIGRATION_COLUMNS } from '../crawler-os/pageFacts.js'
+import { CRAWLER_JOB_TYPES } from '../config/constants.js'
 
 /**
  * Wraps a single invariant step in a try/catch that logs but never
@@ -142,40 +143,6 @@ export async function ensureOrganizationsSoftDeleteColumns(db, { logger = consol
  * Keep this list in sync with backend/services/crawlerJobCreation.js
  * VALID_TYPES.
  */
-const CRAWLER_JOB_TYPES = [
-  'local',
-  'scholarship',
-  'curated_benefits',
-  'health_resources',
-  'comprehensive',
-  'national',
-  'item_search',
-  'item_gift_search',
-  'avatar_lookup',
-  'document_ingest',
-  'pipeline_automation',
-  'profile_enrichment',
-  'national_zip_scan',
-  'portal_check',
-  'government_funding',
-  'student_grants',
-  'student_bridge_funding',
-  'ecf_benefits',
-  // Alias autoDiscoveryCrawlers enqueues (dispatcher maps ecf_hcbs → ecf_benefits).
-  'ecf_hcbs',
-  'special_needs',
-  'local_funding',
-  'item_matching',
-  'anya_match_scout',
-  // Org/nonprofit private-foundation (Form 990) + opted-in clinical-trials
-  // discovery — both relevance-gated in autoDiscoveryCrawlers.
-  'foundation_990',
-  'clinical_trials',
-  // Live profile-driven acquisition (federal APIs + local web) — enqueued by
-  // autoDiscoveryCrawlers, runs liveFederalSearch + liveWebSearch and ingests.
-  'live_search',
-]
-
 export async function ensureCrawlerJobsTypeCheck(db, { logger = console } = {}) {
   if (db?.dialect === 'sqlite') return ensureCrawlerJobsTypeCheckSqlite(db, { logger })
   if (db?.dialect !== 'postgres') return true

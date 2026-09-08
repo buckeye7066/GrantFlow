@@ -331,3 +331,20 @@ test('null deadlineMs does NOT skip sources (Number(null)===0 trap)', async () =
   assert.equal(exhausted.length, 0, 'null deadline must not exhaust the budget');
   assert.ok(r.sources.some((s) => s.outcome !== 'skipped' || s.reason !== 'time_budget_exhausted'));
 });
+
+
+test('a deadline reached inside a multi-request source stops later requests with a partial receipt', async () => {
+  let time = 1000;
+  let calls = 0;
+  const offline = makeOfflineFetcher();
+  const d = { store: createMemoryStore(), env: {}, clock: () => time, fetcher: {
+    async fetch(url, init) { calls += 1; const result = await offline.fetch(url, init); time = 2000; return result; },
+  } };
+  const thesis = buildThesis(SAMPLE_VFD_PROFILE);
+  const result = await runDiscovery(d, { thesis, onlySourceIds: ['grants_gov'], deadlineMs: 1500 });
+  assert.equal(calls, 1);
+  const source = result.sources.find((row) => row.source_id === 'grants_gov');
+  assert.equal(source.reason, 'time_budget_exhausted');
+  assert.equal(source.fetched, 1);
+  assert.ok(result.stored > 0, 'completed request evidence and opportunities must survive');
+});

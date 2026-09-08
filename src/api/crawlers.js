@@ -11,7 +11,7 @@ export async function listCrawlerJobs(params = {}) {
 }
 
 export async function getCrawlerJob(id) {
-  return apiFetch(`/api/crawlers/jobs/${id}`)
+  return apiFetch(`/api/crawlers/jobs/${encodeURIComponent(id)}`)
 }
 
 export async function createCrawlerJob(payload) {
@@ -214,18 +214,8 @@ export async function runRealCrawler({
 }
 
 /**
- * Fire the FULL relevance-gated discovery fleet for a profile, in the BACKGROUND.
- * Reuses the canonical relevance selector server-side (POST
- * /api/real-crawlers/discover-all → triggerAutoDiscoveryCrawlers), so only the
- * crawlers relevant to THIS profile type are dispatched (a corporation never
- * gets student crawlers; a student never gets military/fire crawlers).
- *
- * Returns the honest enqueued summary { jobs_enqueued, crawler_types } so the UI
- * can report exactly how many relevant crawlers were dispatched. profile_id is
- * required — throws early if missing.
- * @param {Object} opts
- * @param {string} opts.profileId - Required. Profile ID to discover for.
- * @returns {Promise<{ success: boolean, profile_id: string, jobs_enqueued: number, crawler_types: string[] }>}
+ * Queue or join the canonical profile scan. job_ids identifies the durable work;
+ * jobs_enqueued counts newly created jobs and can be zero when joining a scan.
  */
 export async function discoverAllForProfile({ profileId }) {
   const pid = typeof profileId === 'string' ? profileId.trim() : null
