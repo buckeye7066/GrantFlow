@@ -114,7 +114,7 @@ describe('interview writes survive guardProfileSectionPayload', () => {
  *     same way whenever the health_medical per-type flags were stored false.
  * In both cases the PUT answered 200 with an empty `rejected`, so nothing could
  * tell that the answer had evaporated — the user was asked the same question at
- * every single login (Anastasia White, 2026-09-08).
+ * every single login (owner report, 2026-09-08).
  *
  * So this walks the WHOLE path — section guard -> field mirrors -> the real
  * buildProfileGapPlan entry point — against profile shapes that really occur,

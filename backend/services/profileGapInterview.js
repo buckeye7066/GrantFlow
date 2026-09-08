@@ -78,8 +78,8 @@ export const FACET_QUESTIONS = Object.freeze([
     // of a mirror pair (shared/profileFieldMirrors.js derives it FROM
     // military_service.*), so writing the answer there was erased on the very
     // next mirror pass — military_service.veteran:false forced veteran_status
-    // back to '' and the question was re-asked at every login (2026-09-08,
-    // Anastasia White). Writing the source lets the mirror publish
+    // back to '' and the question was re-asked at every login (owner report
+    // 2026-09-08). Writing the source lets the mirror publish
     // demographics.veteran_status = 'veteran' | '' for its readers.
     writes: { section: 'military_service', field: 'veteran', yes: true, no: false },
   },
