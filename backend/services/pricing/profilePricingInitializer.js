@@ -24,12 +24,15 @@
  * `access_status='admin_waived'` and the admin notification is suppressed.
  */
 
+import { randomUUID } from 'node:crypto'
+
 import { withProfileScope } from '../../middleware/profileContext.js'
 import {
   ACCESS_STATUS,
   ADMIN_NOTIFICATION_STATUS,
   ADMIN_NOTIFICATION_TYPE,
   PAYMENT_ACCESS_EVENT,
+  PRICING_CATALOG_VERSION,
   PRICING_ENV_KEYS,
   QUOTE_STATUS,
   SERVICE_AGREEMENT_VERSION,
@@ -490,12 +493,36 @@ export async function adminWaiveProfile(db, profileId, { actor }) {
     return { ok: false, error: 'pricing_tables_not_installed' }
   }
   return withProfileScope({ bypass: true }, async () => {
-    await db.prepare(
-      `UPDATE ${PROFILE_PRICING_TABLE}
-        SET access_status = ?, admin_review_required = 0, payment_required = 0,
-            agreement_required = 0, updated_at = ?
-       WHERE profile_id = ?`,
-    ).run(ACCESS_STATUS.ADMIN_WAIVED, nowIso(), profileId)
+    const existing = await loadProfilePricing(db, profileId)
+    if (existing) {
+      await db.prepare(
+        `UPDATE ${PROFILE_PRICING_TABLE}
+          SET access_status = ?, admin_review_required = 0, payment_required = 0,
+              agreement_required = 0, updated_at = ?
+         WHERE profile_id = ?`,
+      ).run(ACCESS_STATUS.ADMIN_WAIVED, nowIso(), profileId)
+    } else {
+      // A profile that never completed quote-based onboarding has no pricing
+      // row. The waive must still land — a no-op UPDATE here left the admin's
+      // own remedy silently doing nothing (prod, 2026-09-07).
+      const now = nowIso()
+      await db.prepare(
+        `INSERT INTO ${PROFILE_PRICING_TABLE}
+          (id, profile_id, user_id, quote_id, pricing_catalog_version, client_category,
+           payment_required, agreement_required, access_status, admin_review_required,
+           discount_eligible, created_at, updated_at)
+         VALUES (?, ?, ?, NULL, ?, ?, 0, 0, ?, 0, 0, ?, ?)`,
+      ).run(
+        `pp_${randomUUID()}`,
+        profileId,
+        (await db.prepare('SELECT user_id FROM profiles WHERE id = ? LIMIT 1').get(profileId))?.user_id || null,
+        PRICING_CATALOG_VERSION,
+        'admin_waived',
+        ACCESS_STATUS.ADMIN_WAIVED,
+        now,
+        now,
+      )
+    }
     const pricing = await loadProfilePricing(db, profileId)
     await recordPaymentAccessEvent(db, {
       userId: pricing?.user_id || null,

@@ -15,6 +15,7 @@
  */
 
 import { withProfileScope } from '../../middleware/profileContext.js'
+import { resolveProfileBillingAccess } from '../billing/entitlementService.js'
 import {
   ACCESS_STATUS,
   PRICING_ENV_KEYS,
@@ -276,10 +277,42 @@ async function tableExists(db, table) {
 }
 
 /**
- * Loads pricing + latest agreement from the DB and runs `decideAccess`.
+ * Statuses the pricing gate set on purpose. Billing never overrides these —
+ * an admin who blocked or expired a profile's pricing meant it.
+ */
+const PRICING_HARD_BLOCKS = new Set([ACCESS_STATUS.BLOCKED, ACCESS_STATUS.EXPIRED])
+
+/**
+ * Pure: fold the billing authority's answer into a pricing-gate decision.
+ *
+ * Only a blocked, authenticated, non-admin decision can be lifted, and only
+ * when billing says nothing is owed (pro bono, free period, Free Week, $0
+ * tier). A pricing row that was explicitly blocked/expired stays blocked.
+ */
+export function applyBillingAccess(decision, billing, { pricing } = {}) {
+  if (!decision || decision.authenticated !== true || decision.is_admin === true) return decision
+  if (decision.access_granted === true) return decision
+  if (!billing || billing.allowed !== true) return decision
+  if (pricing && PRICING_HARD_BLOCKS.has(String(pricing.access_status || ''))) return decision
+  return {
+    ...decision,
+    access_granted: true,
+    blocking_reason: null,
+    payment_required: false,
+    agreement_required: false,
+    payment_status: billing.basis || 'free_tier',
+    checkout_available: false,
+    access_source: 'billing',
+    billing_basis: billing.basis || null,
+  }
+}
+
+/**
+ * Loads pricing + latest agreement from the DB and runs `decideAccess`, then
+ * lets the billing authority lift the block when nothing is owed.
  * Used by /api/access-gate/status.
  */
-export async function getAccessStatus(db, { principal, profileId } = {}) {
+export async function getAccessStatus(db, { principal, profileId, now = new Date() } = {}) {
   // No DB or migrations not run → admin always allowed; non-admin blocked.
   if (!db || !(await tableExists(db, PROFILE_PRICING_TABLE))) {
     const isAdmin = isCanonicalAdmin(principal)
@@ -326,7 +359,17 @@ export async function getAccessStatus(db, { principal, profileId } = {}) {
   }
   const pricing = profileId ? await getProfilePricing(db, profileId) : null
   const agreement = pricing ? await getLatestServiceAgreement(db, profileId) : null
-  const decision = decideAccess({ principal, pricing, agreement })
+  let decision = decideAccess({ principal, pricing, agreement })
+  if (
+    decision.authenticated === true &&
+    decision.is_admin !== true &&
+    decision.access_granted !== true &&
+    profileId &&
+    !(pricing && PRICING_HARD_BLOCKS.has(String(pricing.access_status || '')))
+  ) {
+    const billing = await resolveProfileBillingAccess(db, { profileId, now })
+    decision = applyBillingAccess(decision, billing, { pricing })
+  }
   return {
     ...decision,
     profile_id: profileId || null,

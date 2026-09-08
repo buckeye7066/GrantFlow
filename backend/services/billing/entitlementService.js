@@ -211,6 +211,59 @@ function unavailableDecision(profileId, key) {
   }
 }
 
+const BLOCKED_PROFILE_STATUSES = new Set(['suspended', 'blocked', 'banned', 'deleted'])
+
+function billingAccessBasis(authority, now) {
+  if (authority?.effectiveBilling?.is_pro_bono) return 'pro_bono'
+  if (authority?.effectiveBilling?.free_week) return 'free_week'
+  const freeUntilMs = Date.parse(authority?.account?.free_until || '')
+  if (Number.isFinite(freeUntilMs) && freeUntilMs > now.getTime()) return 'free_period'
+  return 'free_tier'
+}
+
+/**
+ * Page-level access from the billing authority alone.
+ *
+ * The pricing-driven gate (profile_pricing + service_agreements) only exists
+ * for profiles that completed quote-based onboarding. Every other profile is
+ * governed by billing_accounts: a pro bono flag, an owner-granted free period,
+ * the global Free Week switch, or a $0 tier means nothing is owed, so nothing
+ * stands between the user and the workspace. Returns `{ allowed: false }`
+ * (never throws) when the authority is unavailable so callers fail closed.
+ */
+export async function resolveProfileBillingAccess(db, { profileId, now = new Date() } = {}) {
+  if (!db || !profileId) return { allowed: false, reason: 'entitlement_authority_unavailable', unavailable: true }
+  let authority
+  try {
+    authority = await loadEntitlementAuthority(db, profileId, now)
+  } catch {
+    return { allowed: false, reason: 'entitlement_authority_unavailable', unavailable: true }
+  }
+  if (!authority?.profile) return { allowed: false, reason: 'profile_not_found' }
+  const profileStatus = asLower(authority.profile.status)
+  if (BLOCKED_PROFILE_STATUSES.has(profileStatus)) {
+    return { allowed: false, reason: `profile_${profileStatus}`, profile_status: profileStatus }
+  }
+  if (authority.requiresPayment !== false) {
+    return {
+      allowed: false,
+      reason: 'payment_required',
+      profile_status: profileStatus,
+      tier_id: authority.effectiveTier?.id || authority.effectiveBilling?.tier_id || null,
+      net_monthly_cents: Number(authority.effectiveBilling?.net_monthly_cents || 0),
+    }
+  }
+  return {
+    allowed: true,
+    reason: null,
+    basis: billingAccessBasis(authority, now),
+    profile_status: profileStatus,
+    tier_id: authority.effectiveTier?.id || authority.effectiveBilling?.tier_id || null,
+    net_monthly_cents: Number(authority.effectiveBilling?.net_monthly_cents || 0),
+    promotion_active: authority.promotionActive === true,
+  }
+}
+
 export async function resolveProfileEntitlement(db, {
   profileId,
   capabilityKey,
