@@ -281,6 +281,17 @@ const RE_PROPUBLICA_ORG = /^https?:\/\/projects\.propublica\.org\/nonprofits\/or
  * scholarship page elsewhere on the host makes no claim here and keeps its
  * ordinary read.
  */
+/**
+ * A blog / CMS category index on ANY host: `/category/government-grants/`,
+ * `/tag/hardship/`, `/topics/...`. An application page is never a category
+ * index; the index LISTS posts (a pointer by construction). Prod 2026-09-07:
+ * "Legit Hardship Grants" at livingtricky.com/category/government-grants/
+ * sat in a senior's pipeline as a leaf application. Host-specific rules above
+ * still win (hud.gov/topics is a BENEFIT prefix and is matched first).
+ */
+const RE_CATEGORY_INDEX_PATH =
+  /^https?:\/\/[^/?#]+\/(?:[a-z0-9-]+\/)?(?:category|categories|tag|tags|topic|topics)\/[^?#]*$/i
+
 const RE_SCHOLARSHIPS_COM_CATEGORY =
   /^https?:\/\/(?:www\.)?scholarships\.com\/financial-aid\/college-scholarships\/(?:[a-z0-9-]+\/)*scholarships-by-[a-z0-9-]+(?:\/|[?#]|$)/i
 
@@ -343,6 +354,9 @@ export function classifyLocatorKindFromUrl(url) {
   if (RE_SCHOLARSHIPS_COM_CATEGORY.test(u)) {
     return { kind: 'directory', reason: 'scholarships_com_category' }
   }
+  if (RE_CATEGORY_INDEX_PATH.test(u)) {
+    return { kind: 'directory', reason: 'category_index_path' }
+  }
   return null
 }
 
@@ -383,6 +397,12 @@ export const LOCATOR_URL_LIKE_PREFILTERS = Object.freeze([
   ...DIRECTORY_HOSTS.map((h) => `%${h}/%`),
   '%projects.propublica.org/nonprofits/organizations/%',
   '%scholarships.com/financial-aid/college-scholarships/%',
+  '%/category/%',
+  '%/categories/%',
+  '%/tag/%',
+  '%/tags/%',
+  '%/topic/%',
+  '%/topics/%',
   // One prefilter per path rule (state-gov AND org registries) — derived from
   // the registries so a new entry can never be silently orphaned from the
   // sweeps' candidate scans (the fix-cycle-3 gate finding, kept true by the

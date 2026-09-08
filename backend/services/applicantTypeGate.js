@@ -520,6 +520,33 @@ function evaluateOneBucket(profileBucket, explicitTypes, oppText, softenStructur
   return { decision: 'pass', reason: null }
 }
 
+
+/**
+ * ORGANIZATION-ATTRIBUTE ELIGIBILITY BULLETS. A funder's bullet list states
+ * requirements; a bullet that IS an organization attribute ("registered
+ * 501(c)(3) nonprofit organization", "nonprofit organization as recognized by
+ * the IRS") bars an individual or farm applicant even though it never says
+ * "only" or "must be" (the phrasings INSTITUTION_ONLY_PATTERNS require).
+ * Prod 2026-09-07: "Franklin County Foundation Grant" carried exactly those
+ * two bullets and sat in an Indiana senior's pipeline as a leaf application.
+ * BULLETS ONLY, never prose, and any bullet that names a person-shaped
+ * applicant keeps the row neutral (a mixed program is not institution-only).
+ */
+const ORG_ATTRIBUTE_BULLET_RX =
+  /^(?:an?\s+|the\s+)?(?:registered\s+|recognized\s+|active\s+|current\s+|valid\s+|qualified\s+|irs[- ]recognized\s+)?(?:501\s*\(?\s*c\s*\)?\s*\(?\s*3\s*\)?|nonprofit|non-profit|not-for-profit|tax-exempt)\b[^.]{0,80}?\b(?:organizations?|nonprofits?|charit(?:y|ies)|entit(?:y|ies)|status|agenc(?:y|ies)|institutions?)\b/i
+const PERSON_SHAPED_BULLET_RX =
+  /\b(?:individuals?|persons?|people|residents?|students?|famil(?:y|ies)|households?|seniors?|veterans?|patients?|homeowners?|renters?|tenants?|citizens?|adults?|children|parents?|caregivers?)\b/i
+
+export function organizationAttributeBulletsBar(opportunity) {
+  const bullets = safeParseArrayField(opportunity?.eligibility_bullets, [])
+    .map((b) => String(b ?? '').trim())
+    .filter(Boolean)
+  if (bullets.length === 0) return null
+  if (bullets.some((b) => PERSON_SHAPED_BULLET_RX.test(b))) return null
+  const hit = bullets.find((b) => ORG_ATTRIBUTE_BULLET_RX.test(b))
+  return hit ? { bullet: hit } : null
+}
+
 export function evaluateApplicantTypeEligibility(opportunity, profileApplicantType, context = {}) {
   const buckets = resolveProfileBuckets(profileApplicantType, context)
   if (buckets.size === 0) {
@@ -553,6 +580,15 @@ export function evaluateApplicantTypeEligibility(opportunity, profileApplicantTy
   // applicant can never be the applicant — so it may only be returned when the
   // opportunity is hostile to EVERY identity the profile can prove. Any single
   // identity that passes carries the whole profile.
+  const bulletBar = organizationAttributeBulletsBar(opportunity)
+  if (bulletBar && [...buckets].every((b) => b === 'individual' || b === 'farm')) {
+    return {
+      decision: 'mismatch',
+      reason: 'institution_only_bullets_exclude_individual',
+      matched_bucket: [...buckets][0],
+      bullet: bulletBar.bullet,
+    }
+  }
   let firstMismatch = null
   let firstReview = null
   for (const b of buckets) {

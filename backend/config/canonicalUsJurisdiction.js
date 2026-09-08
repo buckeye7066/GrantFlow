@@ -8,7 +8,7 @@
  * Missing evidence is neutral.
  */
 
-import { declaredStateFromTitle } from './stateTitleDeclaration.js'
+import { declaredStateFromTitle, declaredStateFromUrls } from './stateTitleDeclaration.js'
 import { isValidState, normalizeState } from '../utils/stateNormalization.js'
 
 const URL_FIELDS = Object.freeze([
@@ -143,6 +143,23 @@ export function resolvedUsOpportunityJurisdiction(row = {}) {
     }
   }
 
+  // The row's OWN URL is a declaration the row makes about itself, one rung
+  // below a title declaration and above the crawl-stamped state column. A
+  // program that says it is national is never narrowed by a state name in
+  // its host or path.
+  const explicitlyNational = row.is_national === true || row.is_national === 1
+  const declaredByUrl = explicitlyNational ? null : declaredStateFromUrls(row)
+  if (declaredByUrl && isValidState(declaredByUrl)) {
+    return {
+      state: declaredByUrl,
+      is_national: false,
+      confirmed: true,
+      source: 'declared_url',
+      rule_id: null,
+      evidence: 'url_state_declaration',
+      stored_state: normalizeState(row.state) || null,
+    }
+  }
   const stored = normalizeState(row.state)
   if (stored && isValidState(stored)) {
     return {
