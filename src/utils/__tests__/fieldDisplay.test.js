@@ -14,8 +14,11 @@ describe("formatFieldLabel", () => {
   it("reads labels from SECTION_METADATA only", () => {
     expect(formatFieldLabel("education", "gpa")).toBe("GPA")
     expect(formatFieldLabel("education", "act_score")).toBe("ACT score")
-    expect(formatFieldLabel("government_assistance", "ssdi_recipient_self")).toBe("SSDI recipient self")
-    expect(formatFieldLabel("government_assistance", "section8_recipient_self")).toBe("Section 8 recipient self")
+    // `<base>_recipient_self` is the CANONICAL benefit question (the section
+    // guard rewrites the legacy spelling onto it), so its label is the human
+    // one: "you or someone in your household".
+    expect(formatFieldLabel("government_assistance", "ssdi_recipient_self")).toBe("SSDI — you or someone in your household")
+    expect(formatFieldLabel("government_assistance", "section8_recipient_self")).toBe("Section 8 housing — you or someone in your household")
     expect(formatFieldLabel("health_medical", "hiv_aids")).toBe("Living with HIV/AIDS")
     expect(formatFieldLabel("occupation", "ems_worker")).toBe("EMS/First responder")
     expect(formatFieldLabel("narrative", "primary_goal")).toBe("Primary goal")

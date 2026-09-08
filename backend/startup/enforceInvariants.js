@@ -82,6 +82,7 @@ import { buildPersistedMatchExplain } from '../services/matching/matchExplainPer
 import { hasFarmIdentity } from '../services/eligibility/farmIdentity.js'
 import { persistHamiltonTaskTruthSnapshot } from '../services/hamilton/hamiltonTaskTruthSnapshot.js'
 import { isPlaceholderAccountName, syncAccountDisplayName } from '../services/accountDisplayName.js'
+import { applyProfileFieldMirrors } from '../services/profileFieldMirrors.js'
 
 const log = createLogger('startup:enforceInvariants')
 
@@ -6531,6 +6532,97 @@ export async function enforceAccountDisplayNameSync(db) {
 }
 
 /**
+ * ONE QUESTION, ONE FIELD — owner order 2026-09-08 ("several fields in the
+ * different profile sections ask for the same information; make sure nothing
+ * is doubled up"). The duplicate questions are now `deprecated` in
+ * SECTION_METADATA (hidden from every intake/edit surface) and
+ * `shared/profileFieldMirrors.js` derives each hidden legacy key from the
+ * canonical answer, so the 5–45 readers of every legacy key keep seeing the
+ * truth. The per-call gate is the section save; this is the net: every live
+ * profile is re-derived each boot, and — `seedCanonical` — an answer that only
+ * exists in a hidden legacy field (from the old form) is copied ONCE into the
+ * canonical field the user can still see, so nobody is asked again for
+ * something they already told us. Idempotent (a derived profile produces no
+ * patch next boot). `ENFORCE_PROFILE_FIELD_MIRRORS=0` makes it count-only;
+ * `PROFILE_FIELD_MIRROR_LIMIT` (default 500) bounds writes per boot.
+ */
+export async function enforceProfileFieldMirrorBackfill(db) {
+  return runInvariant('profile_field_mirror_backfill', async () => {
+    const limit = Math.max(1, Number.parseInt(process.env.PROFILE_FIELD_MIRROR_LIMIT || '', 10) || 500)
+    const countOnly = _parseBoolEnv(process.env.ENFORCE_PROFILE_FIELD_MIRRORS) === false
+    const profileCols = await listProfileColumns(db)
+    const liveProfile = [
+      "COALESCE(p.status, 'active') <> 'deleted'",
+      profileCols.has('deleted_at') ? 'p.deleted_at IS NULL' : null,
+    ].filter(Boolean).join(' AND ')
+
+    let rows
+    try {
+      rows = await db.prepare(
+        `SELECT DISTINCT p.id
+           FROM profiles p
+           JOIN profile_sections ps ON ps.profile_id = p.id
+          WHERE ${liveProfile}
+          ORDER BY p.id`,
+      ).all()
+    } catch (err) {
+      const msg = String(err?.message || err).toLowerCase()
+      if (msg.includes('no such table') || msg.includes('no such column') || msg.includes('does not exist')) {
+        return { scanned: 0, repaired: 0, skipped: 'profiles_or_sections_missing' }
+      }
+      throw err
+    }
+
+    const { deriveProfileFieldMirrors } = await import('../../shared/profileFieldMirrors.js')
+    const { loadProfileSections } = await import('../services/profileFieldMirrors.js')
+    let scanned = 0
+    let repaired = 0
+    let wouldRepair = 0
+    let seeded = 0
+    let fieldsWritten = 0
+    let truncated = false
+    for (const row of rows || []) {
+      const profileId = String(row.id)
+      scanned += 1
+      let sections
+      try {
+        sections = await loadProfileSections(db, profileId)
+      } catch {
+        continue
+      }
+      const { patches, applied } = deriveProfileFieldMirrors(sections, { seedCanonical: true })
+      if (Object.keys(patches).length === 0) continue
+      if (countOnly) {
+        wouldRepair += 1
+        continue
+      }
+      if (repaired >= limit) {
+        truncated = true
+        break
+      }
+      try {
+        const r = await applyProfileFieldMirrors(db, profileId, {
+          seedCanonical: true,
+          updatedBy: 'profile_field_mirror_backfill',
+          sections,
+        })
+        if (r.changed.length > 0) {
+          repaired += 1
+          fieldsWritten += r.changed.reduce((n, c) => n + c.fields.length, 0)
+          seeded += applied.filter((a) => a.direction === 'reverse').length
+        }
+      } catch { /* per-profile best effort; the profile stays a candidate next boot */ }
+    }
+    if (repaired > 0) {
+      log.info('re-derived hidden duplicate profile fields from their canonical answers', { repaired, fieldsWritten, seeded })
+    }
+    return countOnly
+      ? { scanned, repaired: 0, wouldRepair, countOnly: true }
+      : { scanned, repaired, fieldsWritten, seeded, truncated }
+  })
+}
+
+/**
  * INVARIANT: AMY SYNTHETIC PROFILES EXPIRE (owner directive 2026-07-06 —
  * "make sure those profiles are getting deleted afterwards").
  *
@@ -11795,6 +11887,10 @@ export async function runEnforceInvariants(db, { logger = log } = {}) {
   // its signup stub (email local part / phone stub) takes the name of the ONE
   // live profile it owns, via the same sync onboarding/complete uses.
   steps.push(await enforceAccountDisplayNameSync(db))
+  // One question, one field (owner order 2026-09-08): duplicate profile questions
+  // are hidden, so every profile's legacy keys are re-derived from the canonical
+  // answers each boot, and a legacy-only answer seeds the canonical field once.
+  steps.push(await enforceProfileFieldMirrorBackfill(db))
   // Agent-data hygiene net: an EXPIRED Amy synthetic training profile never
   // outlives the boot — the run-scoped end-of-run cleanup silently no-ops when
   // discovery skips/errors (empty crawled-id list), so without this net
@@ -11960,6 +12056,7 @@ export const __testables = {
   SELF_HEAL_REQUEUE_CAP_DEFAULT,
   enforceAdminReinterviewSuppression,
   enforceAccountDisplayNameSync,
+  enforceProfileFieldMirrorBackfill,
   enforceLeadContactPlausibility,
   enforceJohnDraftPlausibility,
   enforceProfileResultFloor,

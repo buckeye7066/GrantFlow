@@ -171,3 +171,116 @@ test('getFieldHelp returns empty string for an unknown field', () => {
 test('getFieldHelp returns empty string for an unknown section', () => {
   assert.equal(getFieldHelp('unknown_section', 'full_name'), '')
 })
+
+// ─────────────────────────────────────────────────────────────────────────────
+// One question, one field (owner order 2026-09-08) + the boolean-format trap.
+// ─────────────────────────────────────────────────────────────────────────────
+import {
+  PROFILE_FIELD_MIRROR_RULES,
+  mirrorTargets,
+} from '../../shared/profileFieldMirrors.js'
+
+const metaField = (sectionKey, name) => (SECTION_METADATA[sectionKey]?.fields ?? []).find((f) => f.name === name)
+
+test('every PROFILE_SCHEMA boolean field is declared boolean_tri in SECTION_METADATA (the guard rejects a Switch value on format text)', () => {
+  const bad = []
+  for (const [sectionKey, section] of Object.entries(PROFILE_SCHEMA)) {
+    for (const [name, meta] of Object.entries(section?.fields ?? {})) {
+      if (!meta || typeof meta !== 'object' || meta.type !== 'boolean') continue
+      const f = metaField(sectionKey, name)
+      if (!f) bad.push(`${sectionKey}.${name}:missing`)
+      else if (f.format !== 'boolean_tri') bad.push(`${sectionKey}.${name}:${f.format}`)
+    }
+  }
+  assert.deepEqual(bad, [])
+})
+
+test('every mirror target is a deprecated (hidden) field and every mirror source is live', () => {
+  const targetsNotHidden = mirrorTargets().filter((id) => {
+    const [s, n] = id.split('.')
+    return !metaField(s, n)?.deprecated
+  })
+  assert.deepEqual(targetsNotHidden, [])
+  const sourcesNotLive = []
+  for (const rule of PROFILE_FIELD_MIRROR_RULES) {
+    for (const [s, n] of rule.sources) {
+      const f = metaField(s, n)
+      if (!f || f.deprecated) sourcesNotLive.push(`${s}.${n}`)
+    }
+  }
+  assert.deepEqual(sourcesNotLive, [])
+})
+
+test('a deprecated field is either fed by a mirror rule or on the explicit no-mirror list', () => {
+  // Fields hidden from the form whose value is derived by something OTHER than
+  // a mirror rule, or is a legacy intake mirror with no canonical twin.
+  const NO_MIRROR_ALLOWED = new Set([
+    'basic_information.first_name', // deriveNamePartsIntoBasicInfo (full_name)
+    'basic_information.middle_name',
+    'basic_information.last_name',
+    'basic_information.location', // legacy quick-intake blob
+    'basic_information.keywords', // programs_services.keywords is canonical (intake mirror)
+    'basic_information.interests',
+    'basic_information.profile_type', // profiles.primary_type column is canonical
+    // household variants: "you or someone in your household" is the ONE question now
+    'government_assistance.medicaid_recipient_household',
+    'government_assistance.medicare_recipient_household',
+    'government_assistance.ssi_recipient_household',
+    'government_assistance.ssdi_recipient_household',
+    'government_assistance.snap_recipient_household',
+    'government_assistance.tanf_recipient_household',
+    'government_assistance.section8_recipient_household',
+  ])
+  const targets = new Set(mirrorTargets())
+  const orphans = []
+  for (const [sectionKey, section] of Object.entries(SECTION_METADATA)) {
+    for (const f of section.fields ?? []) {
+      if (!f.deprecated) continue
+      const id = `${sectionKey}.${f.name}`
+      if (!targets.has(id) && !NO_MIRROR_ALLOWED.has(id)) orphans.push(id)
+    }
+  }
+  assert.deepEqual(orphans, [])
+})
+
+test('the credit score is a real, bounded, answerable field in Financial information', () => {
+  const f = metaField('financial_information', 'credit_score')
+  assert.ok(f, 'financial_information.credit_score declared')
+  assert.equal(f.integer, true)
+  assert.equal(f.min, 300)
+  assert.equal(f.max, 850)
+  assert.ok(!f.deprecated)
+  assert.ok(PROFILE_SCHEMA.financial_information.fields.credit_score, 'declared in PROFILE_SCHEMA too')
+  assert.equal(metaField('demographics', 'good_credit_score')?.deprecated, true, 'the 700+ toggle is derived, not asked')
+})
+
+test('no two LIVE questions that can face the same profile type share a label', () => {
+  const normalize = (label) => String(label || '').toLowerCase().replace(/\s*\(.*?\)\s*/g, ' ').replace(/[^a-z0-9]+/g, ' ').trim()
+  const GENERIC = new Set(['notes', 'status', 'type', 'applications', 'goals'])
+  const audience = (section, f) => {
+    const list = f.applies_to ?? section.applies_to
+    return Array.isArray(list) && list.length > 0 ? new Set(list) : null // null = every type
+  }
+  const overlap = (a, b) => !a || !b || [...a].some((type) => b.has(type))
+  const byLabel = new Map()
+  for (const [sectionKey, section] of Object.entries(SECTION_METADATA)) {
+    for (const f of section.fields ?? []) {
+      if (f.deprecated) continue
+      const key = normalize(f.label)
+      if (!key || GENERIC.has(key)) continue
+      if (!byLabel.has(key)) byLabel.set(key, [])
+      byLabel.get(key).push({ id: `${sectionKey}.${f.name}`, sectionKey, audience: audience(section, f) })
+    }
+  }
+  const duplicates = []
+  for (const [label, entries] of byLabel) {
+    for (let i = 0; i < entries.length; i += 1) {
+      for (let j = i + 1; j < entries.length; j += 1) {
+        const a = entries[i]
+        const b = entries[j]
+        if (a.sectionKey !== b.sectionKey && overlap(a.audience, b.audience)) duplicates.push([label, a.id, b.id])
+      }
+    }
+  }
+  assert.deepEqual(duplicates, [])
+})

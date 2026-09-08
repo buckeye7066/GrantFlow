@@ -71,6 +71,7 @@ import {
   enforceGrantScoreBackfill,
   enforceIndividualMatchAwardCeiling,
   enforceAccountDisplayNameSync,
+  enforceProfileFieldMirrorBackfill,
   getRelevanceFloor,
   __resetFloorCache,
   RELEVANCE_FLOOR,
@@ -1226,7 +1227,11 @@ describe('enforceInvariants — runner', () => {
     // + account_display_name_sync (2026-09-07, owner order "make these changes
     //   global and permanent"): a non-admin account named by its signup stub
     //   takes the name of the ONE live profile it owns.
-    expect(summary.ran).toBe(69)
+    // + profile_field_mirror_backfill (2026-09-08, owner order "make sure nothing
+    //   is doubled up"): duplicate questions are hidden; every hidden legacy key
+    //   is re-derived from its canonical answer, and a legacy-only answer seeds
+    //   the canonical field once.
+    expect(summary.ran).toBe(70)
     expect(summary.failed).toBe(0)
     expect(summary.steps.map((s) => s.name)).toEqual([
       'sticky_deletes',
@@ -1364,6 +1369,9 @@ describe('enforceInvariants — runner', () => {
       // A non-admin account still carrying its signup stub (email local part /
       // phone stub) takes the name of the ONE live profile it owns.
       'account_display_name_sync',
+      // Duplicate questions are hidden; the hidden legacy keys are derived from
+      // the canonical answers (shared/profileFieldMirrors.js) for every profile.
+      'profile_field_mirror_backfill',
       'amy_synthetic_expiry',
       'lead_contact_plausibility',
       // The mailbox residue of a bad lead: a draft already addressed to the

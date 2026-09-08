@@ -930,6 +930,7 @@ export const SECTION_CONFIG = {
       { name: "annual_income", label: "Annual income (USD)", component: Input, props: { type: "number", min: 0 } },
       { name: "household_income", label: "Household income (USD)", component: Input, props: { type: "number", min: 0 } },
       { name: "household_size", label: "Household size", component: Input, props: { type: "number", min: 1 } },
+      { name: "credit_score", label: "Credit score", component: Input, props: { type: "number", min: 300, max: 850, step: 1, placeholder: "300–850 (leave blank if unknown)" }, description: "700 or above unlocks credit-based and non-loan financial programs." },
       { name: "financial_need_level", label: "Financial need level", component: Input, props: { placeholder: "e.g. high, moderate" } },
       { name: "low_income", label: "Low income household", type: "boolean" },
       { name: "unemployed", label: "Currently unemployed", type: "boolean" },
