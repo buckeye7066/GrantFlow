@@ -106,16 +106,39 @@ function providerFailureDiagnostics(error) {
   const summary = summarizeOpenAIError(error)
   return {
     status: summary.status,
+    ...(error?.jsonFinishReason ? { finish_reason: error.jsonFinishReason } : {}),
     reason: isLLMTimeout(error)
       ? 'timed_out'
-      : summary.isAuth
-        ? 'authentication_failed'
-        : isProviderCreditExhaustion(summary)
-          ? 'credit_or_quota_exhausted'
-          : /invalid JSON/i.test(summary.message)
-            ? 'invalid_response'
-            : 'provider_request_failed',
+      : error?.jsonFinishReason === 'length'
+        ? 'output_truncated'
+        : summary.isAuth
+          ? 'authentication_failed'
+          : isProviderCreditExhaustion(summary)
+            ? 'credit_or_quota_exhausted'
+            : /invalid JSON/i.test(summary.message)
+              ? 'invalid_response'
+              : 'provider_request_failed',
   }
+}
+
+function jsonCompletionError(choice) {
+  const error = new Error('OpenAI returned invalid JSON')
+  // Use SDK-defined labels only; never put model output in diagnostics.
+  error.jsonFinishReason = ['stop', 'length', 'tool_calls', 'content_filter', 'function_call'].includes(choice?.finish_reason)
+    ? choice.finish_reason : 'unknown'
+  return error
+}
+
+function combineCompletionUsage(first, second) {
+  if (!first) return second ?? null
+  if (!second) return first
+  // Detailed cache/reasoning breakdowns describe individual requests. Return
+  // the aggregate billing counters when recovery made two requests.
+  const total = {}
+  for (const key of ['prompt_tokens', 'completion_tokens', 'total_tokens']) {
+    if (Number.isFinite(first[key]) && Number.isFinite(second[key])) total[key] = first[key] + second[key]
+  }
+  return total
 }
 
 // Omission uses the server's configured client. Explicit null remains an
@@ -275,25 +298,41 @@ export async function invokeJsonWithFallback({
   if (openai && paidAttemptMs() > 25) {
     openaiAttempted = true
     try {
-      const completion = await withLLMTimeout(
-        openai.chat.completions.create({
-          model: openaiModel || process.env.OPENAI_MODEL || process.env.ANYA_OPENAI_MODEL || 'gpt-4o-mini',
-          temperature,
-          max_tokens: maxTokens,
-          response_format: { type: 'json_object' },
-          messages: [
-            ...(system ? [{ role: 'system', content: String(system) }] : []),
-            { role: 'user', content: safePrompt },
-          ],
-        }),
-        { timeoutMs: paidAttemptMs(), label: 'OpenAI JSON generation' },
-      )
-      const rawText = String(completion?.choices?.[0]?.message?.content ?? '').trim()
-      const parsed = isLikelyJson(rawText) ? safeParseJSON(rawText, null) : tryParseJsonLoose(rawText)
-      if (!parsed || typeof parsed !== 'object') {
-        throw new Error('OpenAI returned invalid JSON')
+      const messages = [
+        { role: 'system', content: [system ? String(system) : null, 'Return ONLY a complete, valid JSON object (no markdown, no prose).'].filter(Boolean).join('\n\n') },
+        { role: 'user', content: safePrompt },
+      ]
+      let outputLimit = maxTokens
+      let usage = null
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        const completion = await withLLMTimeout(
+          openai.chat.completions.create({
+            model: openaiModel || process.env.OPENAI_MODEL || process.env.ANYA_OPENAI_MODEL || 'gpt-4o-mini',
+            temperature,
+            max_tokens: outputLimit,
+            response_format: { type: 'json_object' },
+            messages,
+          }),
+          { timeoutMs: paidAttemptMs(), label: 'OpenAI JSON generation' },
+        )
+        usage = combineCompletionUsage(usage, completion?.usage)
+        const choice = completion?.choices?.[0]
+        if (choice?.finish_reason === 'length') {
+          const retryLimit = Math.min(8192, Math.floor(Number(maxTokens) * 2))
+          if (attempt === 0 && retryLimit > Number(outputLimit) && paidAttemptMs() > 1000) {
+            qualityLog.warn('[aiProviders] OpenAI JSON response truncated; retrying once', { max_tokens: outputLimit, retry_max_tokens: retryLimit })
+            outputLimit = retryLimit
+            continue
+          }
+          throw jsonCompletionError(choice)
+        }
+        if (choice?.finish_reason && choice.finish_reason !== 'stop') throw jsonCompletionError(choice)
+        const rawText = String(choice?.message?.content ?? '').trim()
+        const parsed = isLikelyJson(rawText) ? safeParseJSON(rawText, null) : tryParseJsonLoose(rawText)
+        if (!parsed || typeof parsed !== 'object') throw jsonCompletionError(choice)
+        if (attempt > 0) qualityLog.info('[aiProviders] OpenAI JSON truncation recovered', { attempts: attempt + 1 })
+        return { ok: true, provider: 'openai', json: parsed, raw: rawText, usage, openaiError: null, anthropicError: null }
       }
-      return { ok: true, provider: 'openai', json: parsed, raw: rawText, usage: completion?.usage ?? null, openaiError: null, anthropicError: null }
     } catch (error) {
       if (isLLMTimeout(error)) timedOut = true
       openaiError = summarizeOpenAIError(error)
