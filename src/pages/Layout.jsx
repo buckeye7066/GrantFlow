@@ -62,7 +62,14 @@ import {
 import { useLanguage } from '@/i18n'
 import { hasFullAdminWorkspace } from '@/lib/workspaceAccess'
 
-function NavGroupCollapsible({ group, location, isOpen, onToggle, user }) {
+function navItemUrl(item, activeProfileId) {
+  if (item?.usesActiveProfile && activeProfileId && activeProfileId !== '__admin__') {
+    return `${item.url}?id=${encodeURIComponent(String(activeProfileId))}`
+  }
+  return item.url
+}
+
+function NavGroupCollapsible({ group, location, isOpen, onToggle, user, activeProfileId = null }) {
   const preferences = useSettingsStore((state) => state.preferences)
   const { t } = useLanguage()
   const isAdmin = hasFullAdminWorkspace(user)
@@ -104,7 +111,7 @@ function NavGroupCollapsible({ group, location, isOpen, onToggle, user }) {
                       : 'hover:bg-sidebar-accent hover:text-sidebar-accent-foreground'
                   } ${item.isAdvanced ? 'pl-6 text-xs' : ''}`}
                 >
-                  <Link to={item.url} className="flex items-center gap-3 px-3 py-2.5">
+                  <Link to={navItemUrl(item, activeProfileId)} className="flex items-center gap-3 px-3 py-2.5">
                     <item.icon className="h-4 w-4 shrink-0" />
                     <span className="font-medium">{item.i18nKey ? t(item.i18nKey) : item.title}</span>
                   </Link>
@@ -227,6 +234,7 @@ export default function Layout({ children }) {
               <NavGroupCollapsible
                 key={group.groupId}
                 group={group}
+                activeProfileId={activeProfileId}
                 location={location}
                 isOpen={navGroupsOpen.has(group.groupId)}
                 onToggle={toggleNavGroup}

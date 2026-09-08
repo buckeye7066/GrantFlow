@@ -1,8 +1,10 @@
 /**
  * Dashboard "next action" policy.
  *
- * The simplified (end-user) workspace hides Discovery, Automations, Saved
- * Grants, and the profile editor from navigation. A Dashboard call-to-action
+ * The simplified (end-user) workspace hides Discovery, Automations and Saved
+ * Grants from navigation. The person's OWN profile page (ProfileDetail) is
+ * visible to them since 2026-09-07 ("he can't see his profile to finish
+ * filling it out"); only the MyProfiles LIST stays hidden. A Dashboard call-to-action
  * that routes an end user to one of those pages is a dead-end, so the
  * simplified branch here only ever lands on pages an end user can actually see
  * (their Pipeline, or Ask Anya).
@@ -35,7 +37,7 @@ export function pickDashboardNextAction({
 } = {}) {
   if (completionPct < 40) {
     return isSimplified
-      ? { key: 'finish_profile', label: 'Ask Anya to finish your profile', route: 'Help' }
+      ? { key: 'finish_profile', label: 'Finish filling in your profile', route: 'ProfileDetail', usesActiveProfile: true }
       : { key: 'complete_profile', label: 'Complete your profile for better matches', route: 'MyProfiles' }
   }
   if (savedCount === 0 && activeCount === 0) {
