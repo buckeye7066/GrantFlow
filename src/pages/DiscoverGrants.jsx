@@ -4,7 +4,7 @@ import { useSearchParams, useNavigate, Link } from 'react-router-dom';
 import { getProfile, listProfiles } from '@/api/profiles';
 import { listProfileFundingSources } from '@/api/matching';
 import client, { apiFetch } from '@/api/client';
-import { discoverAllForProfile, fetchCrawlerStatus } from '@/api/crawlers';
+import { discoverAllForProfile, getCrawlerJob } from '@/api/crawlers';
 import { createPageUrl } from '@/utils';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
@@ -528,6 +528,9 @@ export default function DiscoverGrants() {
   // previous profile stops touching state / issuing stale-keyed queries.
   useEffect(() => {
     pollCancelRef.current = { cancelled: true, token: pollCancelRef.current.token + 1 }
+    discoveringRef.current = false
+    setIsSearching(false)
+    setDiscovery(null)
     setSearchResults([]);
     setLastGoodCatalog([]);
     setMatchedSourceCount(0);
@@ -961,6 +964,7 @@ export default function DiscoverGrants() {
       career_goals: profileForSearch?.sections?.career_goals?.primary_goal || profileForSearch?.career_goal || null,
       category_query: activeCategoryQuery ?? undefined,
     } : null
+    let searchComplete = true
     try {
       setProfileCompletionHint(null)
       // Show whatever already matches this profile immediately (instant feedback
@@ -972,27 +976,18 @@ export default function DiscoverGrants() {
         .refetchQueries({ queryKey: ['discover-catalog', effectiveProfileId, debouncedMinMatchScore], exact: true })
         .catch(() => {})
 
-      // Dispatch the FULL, profile-aware crawler fleet to the background
-      // dispatcher. The server-side relevance selector runs ONLY the crawlers
-      // appropriate for THIS profile (local + comprehensive + government always;
-      // scholarship/student only for students; health/clinical-trials only with
-      // health indicators + consent; foundation/990 for orgs \u2014 never mismatched
-      // crawlers), and each runs to COMPLETION server-side. No synchronous
-      // request to hit the gateway 504, and no time budget that returns partial
-      // results \u2014 slow-but-complete, using the full profile.
-      // NOTE: do NOT swallow errors here. A failed/timed-out discovery must
-      // surface as a "Search failed" toast (handled by the outer catch) instead
-      // of silently falling through to the misleading "we haven't searched yet"
-      // empty state. discoverAllForProfile now runs the live, gateway-budgeted
-      // Crawler OS path which returns a completed synchronous result.
+      // The durable job runs the canonical profile planner. Follow this exact
+      // job, never historical profile-wide counters that can hide a failure.
+      if (isCancelled()) return
       const dispatch = await discoverAllForProfile({ profileId: pid })
-      const enqueued = Number(dispatch?.jobs_enqueued) || 0
+      if (isCancelled()) return
+      const jobIds = Array.isArray(dispatch?.job_ids) ? dispatch.job_ids : []
+      const enqueued = jobIds.length || Number(dispatch?.jobs_enqueued) || 0
       const crawlerTypes = Array.isArray(dispatch?.crawler_types) ? dispatch.crawler_types : []
-      // synchronous=true means the OS shim ran the entire profile discovery
-      // INSIDE the request \u2014 by the time we see this response the catalog
-      // has already been updated and there is nothing to poll for. Polling
-      // anyway just adds 12s+ of wasted spinner time before fetchCatalogMatches.
+      // Older servers may still return a synchronous result during a rolling
+      // deployment. Only durable receipts have a job to poll.
       const synchronous = Boolean(dispatch?.synchronous)
+      if (!synchronous && !jobIds.length) throw new Error('The search did not return a progress receipt. Please try again.')
       const partial = Boolean(dispatch?.partial)
       const stored = Number(dispatch?.stored) || 0
       const matches = Number(dispatch?.matches) || 0
@@ -1001,45 +996,55 @@ export default function DiscoverGrants() {
       }
 
       if (enqueued > 0 && !synchronous) {
+        if (!jobIds.length) throw new Error('The search did not return a progress receipt. Please try again.')
         toast({
-          title: 'Searching funding sources matched to your profile',
-          description: `Running ${enqueued} relevant crawler${enqueued === 1 ? '' : 's'}${crawlerTypes.length ? ` (${crawlerTypes.slice(0, 6).join(', ')}${crawlerTypes.length > 6 ? '\u2026' : ''})` : ''}. Matches appear below as each finishes \u2014 this can take a few minutes.`,
+          title: dispatch.existing ? 'Your funding search is already running' : 'Searching for funding',
+          description: 'We are checking sources for your profile. You can leave this page and return to your results.',
         })
-        // Poll: refetch the catalog so new matches stream into the merged list,
-        // and watch the job counters until this run's crawlers have drained.
         const start = Date.now()
-        let sawRunning = false
+        let completed = false
         while (Date.now() - start < DISCOVERY_MAX_WAIT_MS) {
+          if (isCancelled()) return
+          const jobs = await Promise.all(jobIds.map((id) => getCrawlerJob(id)))
+          if (isCancelled()) return
+          if (jobs.some((job) => !['queued', 'running', 'completed', 'failed', 'cancelled'].includes(job.status))) {
+            throw new Error('Search progress could not be read. Your existing matches are still available.')
+          }
+          if (jobs.some((job) => String(job.profile_id) !== String(pid))) {
+            throw new Error('Search progress belongs to a different profile. Please reload the page.')
+          }
+          const failed = jobs.find((job) => job.status === 'failed' || job.status === 'cancelled')
+          if (failed) throw new Error('The funding search could not finish. Your existing matches are still available. Please try again.')
+          const blocked = jobs.find((job) => job.result_meta?.skipped)
+          if (blocked) throw new Error(blocked.result_meta.blocked_reason || 'Update your profile before searching for funding.')
+          const running = jobs.filter((job) => job.status === 'queued' || job.status === 'running').length
+          setDiscovery((d) => d ? { ...d, running } : d)
+          completed = jobs.every((job) => job.status === 'completed')
+          if (completed) {
+            if (jobs.some((job) => job.result_meta?.partial)) {
+              searchComplete = false
+              toast({ title: 'Search partially completed', description: 'Some sources could not be checked. Showing the matches found so far; you can search again to retry.' })
+            }
+            break
+          }
           await sleep(DISCOVERY_POLL_MS)
-          // The user may have switched profiles or unmounted while we slept;
-          // stop touching state and stop issuing stale-keyed heavy queries.
-          if (isCancelled()) break
-          const status = await fetchCrawlerStatus(pid).catch(() => null)
-          if (isCancelled()) break
-          await queryClient
-            .refetchQueries({ queryKey: ['discover-catalog', effectiveProfileId, debouncedMinMatchScore], exact: true })
-            .catch(() => {})
-          if (isCancelled()) break
-          const running = Number(status?.running) || 0
-          if (running > 0) sawRunning = true
-          setDiscovery((d) => (d ? { ...d, running } : d))
-          // Done once the dispatched jobs have finished (we saw them running and
-          // they drained), with a short grace window in case status lags.
-          if (running === 0 && (sawRunning || Date.now() - start > 8000)) break
+        }
+        searchComplete = searchComplete && completed
+        if (!completed) {
+          toast({ title: 'Your search is still running', description: 'You can keep working. Return to Find Funding later to see the results.' })
         }
       } else if (synchronous && partial) {
-        // The crawl hit the gateway time budget and is finishing in the
-        // background. Show what was found so far instead of a 504/empty state.
+        searchComplete = false
         toast({
-          title: 'Search is taking longer than usual',
-          description: 'We’re still searching in the background and have shown the matches found so far. Check back in a minute or run the search again for more.',
+          title: 'Search partially completed',
+          description: 'Some sources could not be checked. Showing the matches found so far; you can search again to retry.',
         })
       } else if (synchronous) {
         toast({
           title: 'Searched funding sources matched to your profile',
           description: stored > 0 || matches > 0
-            ? `Crawler OS found ${stored} new opportunit${stored === 1 ? 'y' : 'ies'} and scored ${matches} match${matches === 1 ? '' : 'es'}${crawlerTypes.length ? ` across ${crawlerTypes.length} source${crawlerTypes.length === 1 ? '' : 's'}` : ''}.`
-            : 'Crawler OS finished. Pulling the latest matches now.',
+            ? `Reviewed ${stored} opportunit${stored === 1 ? 'y' : 'ies'} and scored ${matches} match${matches === 1 ? '' : 'es'}${crawlerTypes.length ? ` across ${crawlerTypes.length} source${crawlerTypes.length === 1 ? '' : 's'}` : ''}.`
+            : 'Search finished. Loading your latest matches.',
         })
       }
 
@@ -1051,7 +1056,7 @@ export default function DiscoverGrants() {
       // existing pipeline/store logic (auto-add high-confidence matches, populate
       // the FundingResults store, final summary toast). Honors any broadened
       // slider via effectiveMinMatchScore.
-      const finalPayload = await fetchCatalogMatches(pid, effectiveMinMatchScore).catch(() => null)
+      const finalPayload = await fetchCatalogMatches(pid, effectiveMinMatchScore)
       if (isCancelled()) return
       const finalResultPayload = normalizeDiscoverResultPayload(finalPayload)
       const rawOpportunities = Array.isArray(finalResultPayload.opportunities)
@@ -1069,8 +1074,9 @@ export default function DiscoverGrants() {
           )
         : rawOpportunities
       setScoreHint(finalResultPayload.score_hint || null)
-      await handleCrawlerResults(opportunities, finalResultPayload)
+      await handleCrawlerResults(opportunities, finalResultPayload, { isCancelled, complete: searchComplete })
     } catch (error) {
+      if (isCancelled()) return
       console.error('[DiscoverGrants] Search error:', error)
       const profileHint = getProfileContextIncompleteHint(error)
       if (profileHint) {
@@ -1094,8 +1100,8 @@ export default function DiscoverGrants() {
       if (!isCancelled()) {
         setIsSearching(false)
         setDiscovery(null)
+        discoveringRef.current = false
       }
-      discoveringRef.current = false
     }
 
   }, [effectiveProfileId, selectedProfileId, minMatchScore, debouncedMinMatchScore, categoryQuery, profileForSearch, queryClient, toast, selectedProfile])
@@ -1132,7 +1138,8 @@ export default function DiscoverGrants() {
   // earlier handleFindFunding caller and other forward references stay
   // outside the temporal dead zone. Same reasoning for handleAddToPipeline
   // below \u2014 both are used in render-time JSX above their lexical position.
-  async function handleCrawlerResults(opportunities, responsePayload = null) {
+  async function handleCrawlerResults(opportunities, responsePayload = null, { isCancelled = () => false, complete = true } = {}) {
+    if (isCancelled()) return
     const rawOpportunities = Array.isArray(opportunities) ? opportunities : []
     const uniqueOpportunities = dedupeFundingResults(rawOpportunities)
     const collapsedCount = rawOpportunities.length - uniqueOpportunities.length
@@ -1160,6 +1167,7 @@ export default function DiscoverGrants() {
     let attempted = 0
 
     for (const opp of uniqueOpportunities) {
+      if (isCancelled()) return
       // Server-flagged pipeline members are never re-added (they'd only
       // round-trip to an `already` answer).
       if (opp?.already_in_pipeline) { alreadyCount += 1; continue }
@@ -1179,13 +1187,14 @@ export default function DiscoverGrants() {
       }
     }
 
+    if (isCancelled()) return
     // Refresh pipeline once (avoid spamming invalidations during batch add).
     queryClient.invalidateQueries({ queryKey: ['grants'] })
 
     if (uniqueOpportunities.length === 0) {
       toast({
-        title: 'No results found',
-        description: buildZeroResultDescription(profileGaps),
+        title: complete ? 'No results found' : 'No matches available yet',
+        description: complete ? buildZeroResultDescription(profileGaps) : 'The search has not fully completed. Return later to check for more matches.',
       })
     } else {
       const partition = partitionDiscoverResults(uniqueOpportunities)
@@ -1194,11 +1203,11 @@ export default function DiscoverGrants() {
         ? ` Plus ${partition.directoryCount} director${partition.directoryCount === 1 ? 'y' : 'ies'} to search.`
         : ''
       toast({
-        title: 'Search complete',
-        description: `Found ${partition.awardableCount} opportunit${partition.awardableCount === 1 ? 'y' : 'ies'} you can apply to.${dirNote}${collapseNote} ${
+        title: complete ? 'Search complete' : 'Showing matches found so far',
+        description: `Found ${partition.awardableCount} funding opportunit${partition.awardableCount === 1 ? 'y' : 'ies'} to review.${dirNote}${collapseNote} ${
           attempted > 0
-            ? `Auto-added the ${attempted} strongest (score ${AUTO_ADD_SCORE}+): ${addedCount} added, ${alreadyCount} already in pipeline, ${skippedCount} kept out, ${failedCount} failed.`
-            : `None reached the score-${AUTO_ADD_SCORE} auto-add bar — browse the results below and add any you want.`
+            ? `Eligible matches: ${addedCount} added to your pipeline, ${alreadyCount} already there, ${skippedCount} kept out, ${failedCount} could not be added.`
+            : 'Review the eligibility details before adding an opportunity to your pipeline.'
         }`,
       })
     }
@@ -2129,15 +2138,8 @@ export default function DiscoverGrants() {
           <Alert className="mb-4 border-blue-200 bg-blue-50">
             <Loader2 className="h-4 w-4 animate-spin text-blue-600" />
             <AlertDescription className="text-blue-900">
-              Searching {discovery.enqueued} funding source{discovery.enqueued === 1 ? '' : 's'} matched to your profile
-              {Array.isArray(discovery.crawlerTypes) && discovery.crawlerTypes.length > 0
-                ? ` (${discovery.crawlerTypes.slice(0, 6).join(', ')}${discovery.crawlerTypes.length > 6 ? '\u2026' : ''})`
-                : ''}
-              {typeof discovery.running === 'number' && discovery.running > 0
-                ? ` \u2014 ${discovery.running} still running.`
-                : ' \u2014 wrapping up.'}{' '}
-              New matches appear below as each finishes; this can take a few minutes.{' '}
-              <strong>You can leave this page</strong> - the search keeps running on our servers and results are saved to your catalog and pipeline automatically.
+              Searching funding sources for your profile. This can take several minutes.
+              You can keep working and return to your results later.
             </AlertDescription>
           </Alert>
         )}

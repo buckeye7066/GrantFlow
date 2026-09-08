@@ -57,7 +57,7 @@ function makeStubFetcher() {
   return {
     async fetch(url) {
       const body = String(url).includes('api.grants.gov') ? GRANTS_GOV_BODY : '{}'
-      return { ok: true, status: 200, finalUrl: url, contentHash: 'hash', body, fetchedAt: new Date().toISOString() }
+      return { ok: true, status: 200, finalUrl: url, contentHash: 'hash', body, fetchedAt: '2026-09-08T00:00:00.000Z' }
     },
   }
 }
@@ -123,6 +123,24 @@ describe('cross-profile matching (Robert charter)', () => {
     expect(targetRows).toEqual([
       expect.objectContaining({ profile_id: 'p-a', matcher_version: 'crawler-os' }),
     ])
+  }, 20000)
+
+  it('keeps the full primary profile when fleet theses omit it or contain duplicate stale stubs', async () => {
+    const db = makeDb()
+    seedTwoNonprofits(db)
+    db.prepare('INSERT INTO profile_sections VALUES (?, ?, ?)').run('p-a', 'basic_information', JSON.stringify({ mission: 'Rural equipment and community facilities', state: 'TN', city: 'Cleveland' }))
+    const own = await runProfileDiscoveryLive({ db, profileId: 'p-a', fetcher: makeStubFetcher(), dryRun: true })
+    expect(own.run.recommendations.length + own.run.research_leads.length).toBeGreaterThan(0)
+    const stale = await buildThesisForProfile(db, 'p-a')
+    const other = await buildThesisForProfile(db, 'p-b')
+    const primaryMatches = (result) => [...result.run.recommendations, ...result.run.research_leads]
+    for (const profiles of [[other], [stale, stale, other, other]]) {
+      const fleet = await runProfileDiscoveryLive({ db, profileId: 'p-a', fetcher: makeStubFetcher(), matchProfiles: profiles, dryRun: true })
+      expect(fleet.persisted.matches).toBeGreaterThan(0)
+      expect(primaryMatches(fleet)).toEqual(primaryMatches(own))
+      expect(fleet.persisted.matches).toBe(own.persisted.matches * 2)
+    }
+    db.close()
   }, 20000)
 
   it('a single-profile call writes NO cross-matches (back-compat)', async () => {

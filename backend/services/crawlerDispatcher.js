@@ -11,6 +11,7 @@ import { resolveProfileForId } from '../utils/profileResolver.js'
 import { prepareContextForSnapshot, restoreContextFromSnapshot } from './snapshotSerialization.js'
 import { processProfileEnrichmentJob } from './profileEnrichment.js'
 import { processAnyaMatchScoutJob } from './anyaMatchScout.js'
+import { processCrawlerOsDiscoveryJob } from './crawlerOsDiscoveryJob.js'
 import { logFailedJob, determineSeverity } from './deadLetterQueue.js'
 import { updateJobHeartbeat, maybeCleanupStaleRunningJobs } from './crawlerConcurrencyGuard.js'
 import { runPortalCheck, markDeadPortalLinks } from './portalCheckService.js'
@@ -185,6 +186,7 @@ async function processPortalCheckJob({ db, job }) {
 // longer reachable from the runtime. Document ingest, avatar lookup, pipeline
 // automation, profile enrichment, Anya match scout, and portal checks still run.
 const HANDLERS = {
+  crawler_os_discovery: processCrawlerOsDiscoveryJob,
   avatar_lookup: processAvatarLookupJob,
   document_ingest: processDocumentIngestionJob,
   pipeline_automation: processPipelineAutomationJob,

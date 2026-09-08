@@ -533,8 +533,9 @@ export async function overlayLiveAmountKnowledge(db, recommendations, idRemap) {
   return { checked: recs.length, enriched };
 }
 
-export async function runProfileDiscoveryLive({ db = getDb(), profileId, fetcher, floor, dryRun = false, matchProfiles = null, onlySourceIds = null, crawlerType = null, deadlineMs = null, timeBudgetMs = null, extraSeedPages = null, extraQueries = null } = {}) {
+export async function runProfileDiscoveryLive({ db = getDb(), profileId, fetcher, floor, dryRun = false, matchProfiles = null, onlySourceIds = null, crawlerType = null, deadlineMs = null, timeBudgetMs = null, extraSeedPages = null, extraQueries = null, signal = null } = {}) {
   if (!profileId) throw new Error('runProfileDiscoveryLive: profileId is required');
+  signal?.throwIfAborted();
   const ctx = await loadProfileContext(db, profileId);
   // Lifecycle guard: never crawl a deleted/archived/merged profile (no-op, no writes).
   const profileStatus = String(ctx?.profile?.status ?? '').trim().toLowerCase();
@@ -579,7 +580,7 @@ export async function runProfileDiscoveryLive({ db = getDb(), profileId, fetcher
   // and the promotion lane canonically rescores before anything reaches a
   // pipeline.
   Object.defineProperty(thesis, '_profileContext', {
-    value: { profile: ctx?.profile ?? null, sections: ctx?.sections ?? null, signals: ctx?.signals ?? null },
+    value: ctx,
     enumerable: false,
   });
   // Close the learning loop ON THE CRAWL PATH. The learned-gap attach used to
@@ -597,7 +598,17 @@ export async function runProfileDiscoveryLive({ db = getDb(), profileId, fetcher
   // discovering profile is PRIMARY; others get additive 'crawler-os-xmatch'.
   // Single-profile callers (the user-facing /run route) pass nothing → exact
   // legacy behavior.
-  const effMatchProfiles = Array.isArray(matchProfiles) && matchProfiles.length > 0 ? matchProfiles : [thesis];
+  // The scheduled fleet passes context-light theses. Never replace the freshly
+  // loaded primary context with one of those stubs, or omit the primary when
+  // the caller's snapshot predates it. Keep each other profile only once.
+  const seenProfiles = new Set([String(thesis.profile_id)]);
+  const effMatchProfiles = [thesis];
+  for (const candidate of Array.isArray(matchProfiles) ? matchProfiles : []) {
+    const id = candidate?.profile_id;
+    if (id === null || id === undefined || seenProfiles.has(String(id))) continue;
+    seenProfiles.add(String(id));
+    effMatchProfiles.push(candidate);
+  }
   const crossProfile = effMatchProfiles.length > 1;
   const store = createMemoryStore();
   // SAME-DOMAIN source URL overrides (the autonomous half of source repair):
@@ -612,6 +623,12 @@ export async function runProfileDiscoveryLive({ db = getDb(), profileId, fetcher
     const urlOverrides = await loadSourceUrlOverrides(db);
     if (urlOverrides.length > 0) liveFetcher = makeOverrideRewritingFetcher(liveFetcher, urlOverrides);
   } catch { /* overrides are an enhancement, never a crawl blocker */ }
+  if (signal) {
+    const underlying = liveFetcher;
+    liveFetcher = { fetch: (url, init = {}) => underlying.fetch(url, {
+      ...init, signal: init.signal ? AbortSignal.any([init.signal, signal]) : signal,
+    }) };
+  }
   const onlySources = Array.isArray(onlySourceIds) && onlySourceIds.length > 0 ? onlySourceIds : null;
   // TRAP: Number(null) === 0 and Number.isFinite(0) — treating a missing
   // deadline as epoch would skip EVERY source as time_budget_exhausted.
@@ -641,7 +658,11 @@ export async function runProfileDiscoveryLive({ db = getDb(), profileId, fetcher
   // different, unbounded discovery mechanism that is not keyed to any one
   // registry source, so it is skipped whenever onlySourceIds narrows the run.
   let webTargetVerification = null;
-  if (isWebDiscoveryEnabled() && !onlySources) {
+  signal?.throwIfAborted();
+  if (isWebDiscoveryEnabled() && !onlySources && resolvedDeadline !== null && Date.now() >= resolvedDeadline) {
+    run.web_lane = { skipped: true, reason: 'time_budget_exhausted' };
+  }
+  if (isWebDiscoveryEnabled() && !onlySources && (resolvedDeadline === null || Date.now() < resolvedDeadline)) {
     try {
       const [{ runWebDiscoveryLane }, { searchWeb }, { extractOpportunitiesFromPage }, parity] = await Promise.all([
         import('../crawler-os/webLane.js'),
@@ -759,6 +780,7 @@ export async function runProfileDiscoveryLive({ db = getDb(), profileId, fetcher
     }
   }
 
+  signal?.throwIfAborted();
   if (dryRun) {
     // Read-only preview: report what discovery FOUND/MATCHED in the memory store
     // without touching the live tables. Mirrors persistRun's return shape.

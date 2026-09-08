@@ -31,7 +31,10 @@
  */
 
 /** Bump on ANY change to the files below (date + counter). */
-export const PROFILE_SIGNAL_VERSION = '2026.09.07-3'
+// Re-score prior fleet matches that could have replaced the full primary
+// profile with a context-light thesis; also restore uploaded document context
+// after correcting the documents query (2026-09-08).
+export const PROFILE_SIGNAL_VERSION = '2026.09.08-2'
 
 /** Repo-relative files whose content decides what the engine believes about a profile. */
 export const PROFILE_SIGNAL_DERIVATION_FILES = Object.freeze([
@@ -50,6 +53,6 @@ export const PROFILE_SIGNAL_DERIVATION_FILES = Object.freeze([
  * sha256 over the LF-normalized concatenation of the files above, pinned by
  * `scripts/pin-signal-version.mjs`. The test recomputes it.
  */
-export const PROFILE_SIGNAL_DERIVATION_HASH = '060133e3c367b64fc0108cb78f61be66eb497cc3663d721a39d6a54654f6781b'
+export const PROFILE_SIGNAL_DERIVATION_HASH = '316636578e07897290b6b62910b6790cd1e98a62a7a8bad3210eed20de6b7d16'
 
 export default { PROFILE_SIGNAL_VERSION, PROFILE_SIGNAL_DERIVATION_FILES, PROFILE_SIGNAL_DERIVATION_HASH }

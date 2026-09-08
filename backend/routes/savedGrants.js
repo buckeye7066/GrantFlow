@@ -57,7 +57,7 @@ const FO_PROJECTION_FULL = `
   fo.application_url,
   fo.apply_url,
   fo.source_url,
-  fo.url,
+  COALESCE(fo.apply_url, fo.application_url, fo.source_url) AS url,
   fo.link_status,
   fo.source,
   fo.source_category,

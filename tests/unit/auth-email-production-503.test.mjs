@@ -63,7 +63,7 @@ function startServer(extraEnv = {}) {
 
   const ready = (async () => {
     const port = await reservePort()
-    child = spawn(process.execPath, ['backend/server.js'], {
+    child = spawn(process.execPath, ['--import', './tests/fixtures/resend-transport.mjs', 'backend/server.js'], {
       cwd: path.resolve('.'),
       env: {
         ...baseEnv,

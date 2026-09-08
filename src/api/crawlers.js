@@ -11,7 +11,7 @@ export async function listCrawlerJobs(params = {}) {
 }
 
 export async function getCrawlerJob(id) {
-  return apiFetch(`/api/crawlers/jobs/${id}`)
+  return apiFetch(`/api/crawlers/jobs/${encodeURIComponent(id)}`)
 }
 
 export async function createCrawlerJob(payload) {
@@ -214,52 +214,18 @@ export async function runRealCrawler({
 }
 
 /**
- * Fire the FULL relevance-gated discovery fleet for a profile, in the BACKGROUND.
- * Reuses the canonical relevance selector server-side (POST
- * /api/real-crawlers/discover-all → triggerAutoDiscoveryCrawlers), so only the
- * crawlers relevant to THIS profile type are dispatched (a corporation never
- * gets student crawlers; a student never gets military/fire crawlers).
- *
- * Returns the honest enqueued summary { jobs_enqueued, crawler_types } so the UI
- * can report exactly how many relevant crawlers were dispatched. profile_id is
- * required — throws early if missing.
- * @param {Object} opts
- * @param {string} opts.profileId - Required. Profile ID to discover for.
- * @returns {Promise<{ success: boolean, profile_id: string, jobs_enqueued: number, crawler_types: string[] }>}
+ * Queue or join the canonical profile scan. job_ids identifies the durable work;
+ * jobs_enqueued counts newly created jobs and can be zero when joining a scan.
  */
 export async function discoverAllForProfile({ profileId }) {
   const pid = typeof profileId === 'string' ? profileId.trim() : null
   if (!pid) {
     throw new Error('profile_id is required to discover funding. Select a profile first.')
   }
-  // Crawler OS cutover: the legacy /discover-all endpoint enqueues background
-  // crawler jobs whose types are now SUPERSEDED by the Crawler OS — the
-  // dispatcher marks them "completed" with zero results, so discover-all can
-  // never surface new funding (and frequently 504s while enqueuing, which the UI
-  // mis-rendered as "never searched"). Route discovery to the LIVE, in-process
-  // path (/run-smart → runProfileDiscoveryLive): it runs the full profile-aware
-  // discovery (federal APIs + open-web lane) under a gateway-safe time budget
-  // and PERSISTS matches before responding. Shape the result so the existing
-  // DiscoverGrants handler treats it as a completed synchronous run and pulls
-  // the freshly-persisted matches via its final fetchCatalogMatches pass.
-  const res = await apiFetch('/api/real-crawlers/run-smart', {
+  const result = await apiFetch('/api/real-crawlers/discover-all', {
     method: 'POST',
     body: JSON.stringify({ profile_id: pid }),
   })
-  const stored = Number(res?.count ?? res?.stored ?? res?.inserted ?? res?.total_found) || 0
-  const sources = Array.isArray(res?.sources_used)
-    ? res.sources_used
-    : Array.isArray(res?.sources)
-      ? res.sources
-      : []
-  return {
-    success: res?.success !== false,
-    profile_id: pid,
-    synchronous: true,
-    jobs_enqueued: 0,
-    stored,
-    matches: Number(res?.matches ?? res?.count) || stored,
-    crawler_types: sources,
-    partial: Boolean(res?.partial || res?.timed_out),
-  }
+  if (result?.success === false) throw new Error(result.message || result.error || 'Could not start the funding search')
+  return result
 }

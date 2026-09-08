@@ -1,0 +1,31 @@
+-- Durable canonical discovery; historical job rows remain valid.
+ALTER TABLE crawler_jobs DROP CONSTRAINT IF EXISTS crawler_jobs_type_check;
+ALTER TABLE crawler_jobs ADD CONSTRAINT crawler_jobs_type_check CHECK(type IN (
+'anya_match_scout',
+  'avatar_lookup',
+  'clinical_trials',
+  'comprehensive',
+  'crawler_os_discovery',
+  'curated_benefits',
+  'document_ingest',
+  'ecf_benefits',
+  'ecf_hcbs',
+  'foundation_990',
+  'government_funding',
+  'health_resources',
+  'item_gift_search',
+  'item_matching',
+  'item_search',
+  'live_search',
+  'local',
+  'local_funding',
+  'national',
+  'national_zip_scan',
+  'pipeline_automation',
+  'portal_check',
+  'profile_enrichment',
+  'scholarship',
+  'special_needs',
+  'student_bridge_funding',
+  'student_grants'
+));

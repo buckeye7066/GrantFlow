@@ -89,6 +89,21 @@ function NavGroupCollapsible({ group, location, isOpen, onToggle, user, activePr
     return true
   })
 
+  const primaryItems = visibleItems.filter((item) => !item.isSecondary)
+  const secondaryItems = visibleItems.filter((item) => item.isSecondary)
+  const secondaryActive = secondaryItems.some((item) => location.pathname === item.url)
+  const [moreOpen, setMoreOpen] = useState(false)
+  const renderItems = (items) => items.map((item) => (
+    <SidebarMenuItem key={item.routeName}>
+      <SidebarMenuButton asChild className={`mb-1 rounded-lg ${location.pathname === item.url ? 'bg-primary text-primary-foreground shadow-sm' : 'hover:bg-sidebar-accent hover:text-sidebar-accent-foreground'}`}>
+        <Link to={navItemUrl(item, activeProfileId)} aria-current={location.pathname === item.url ? 'page' : undefined} className="flex items-center gap-3 px-3 py-2.5">
+          <item.icon className="h-4 w-4 shrink-0" />
+          <span className="font-medium">{item.i18nKey ? t(item.i18nKey) : item.title}</span>
+        </Link>
+      </SidebarMenuButton>
+    </SidebarMenuItem>
+  ))
+
   if (visibleItems.length === 0) return null
   const GroupIcon = group.icon
 
@@ -110,24 +125,17 @@ function NavGroupCollapsible({ group, location, isOpen, onToggle, user, activePr
         </CollapsibleTrigger>
         <CollapsibleContent>
           <SidebarMenu className="mt-1">
-            {visibleItems.map((item) => (
-              <SidebarMenuItem key={item.routeName}>
-                <SidebarMenuButton
-                  asChild
-                  className={`mb-1 rounded-lg transition-all duration-200 ${
-                    location.pathname === item.url
-                      ? 'bg-primary text-primary-foreground shadow-sm'
-                      : 'hover:bg-sidebar-accent hover:text-sidebar-accent-foreground'
-                  } ${item.isAdvanced ? 'pl-6 text-xs' : ''}`}
-                >
-                  <Link to={navItemUrl(item, activeProfileId)} className="flex items-center gap-3 px-3 py-2.5">
-                    <item.icon className="h-4 w-4 shrink-0" />
-                    <span className="font-medium">{item.i18nKey ? t(item.i18nKey) : item.title}</span>
-                  </Link>
-                </SidebarMenuButton>
-              </SidebarMenuItem>
-            ))}
+            {renderItems(primaryItems)}
           </SidebarMenu>
+          {secondaryItems.length > 0 ? <Collapsible open={moreOpen || secondaryActive} onOpenChange={setMoreOpen}>
+            <CollapsibleTrigger asChild>
+              <SidebarMenuButton className="mt-1 text-sm text-muted-foreground">
+                <ChevronDown className="h-4 w-4" />
+                {group.groupId === 'find' ? 'More funding tools' : 'More application tools'}
+              </SidebarMenuButton>
+            </CollapsibleTrigger>
+            <CollapsibleContent><SidebarMenu className="mt-1">{renderItems(secondaryItems)}</SidebarMenu></CollapsibleContent>
+          </Collapsible> : null}
         </CollapsibleContent>
       </SidebarGroup>
     </Collapsible>

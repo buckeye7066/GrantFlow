@@ -56,6 +56,36 @@ function createFundingOpportunitiesWithoutLinkStatus(db) {
 }
 
 describe('saved grants schema repair', () => {
+  it('preserves source and link metadata when only canonical URL columns exist', async () => {
+    const db = new Database(':memory:')
+    try {
+      createFundingOpportunitiesWithoutLinkStatus(db)
+      db.exec(`
+        ALTER TABLE funding_opportunities DROP COLUMN url;
+        ALTER TABLE funding_opportunities ADD COLUMN link_status TEXT;
+        CREATE TABLE saved_grants (
+          id TEXT PRIMARY KEY, user_id TEXT NOT NULL, opportunity_id TEXT NOT NULL,
+          saved_at DATETIME DEFAULT CURRENT_TIMESTAMP, notes TEXT,
+          UNIQUE(user_id, opportunity_id)
+        );
+        INSERT INTO funding_opportunities (id, title, apply_url, source_url, record_origin, link_status)
+        VALUES ('opp-canonical', 'Community funding', 'https://example.org/apply',
+                'https://example.org/funding', 'crawler_os', 'verified');
+        INSERT INTO saved_grants (id, user_id, opportunity_id)
+        VALUES ('saved-canonical', 'user-1', 'opp-canonical');
+      `)
+      const response = await request(createSavedGrantsApp(db)).get('/api/saved-grants')
+      expect(response.status).toBe(200)
+      expect(response.body.saved[0]).toMatchObject({
+        opportunity_id: 'opp-canonical',
+        url: 'https://example.org/apply',
+        source_url: 'https://example.org/funding',
+        record_origin: 'crawler_os',
+        link_status: 'verified',
+      })
+    } finally { db.close() }
+  })
+
   it('GET /api/saved-grants creates missing saved_grants table instead of returning 500', async () => {
     const db = new Database(':memory:')
     try {

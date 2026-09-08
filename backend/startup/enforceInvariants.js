@@ -6213,8 +6213,7 @@ export async function enforceGrantScoreBackfill(db) {
     try {
       candidates = await db
         .prepare(
-          `SELECT g.id, g.profile_id, g.funding_opportunity_id, g.title, g.description,
-                  g.funder, g.deadline, g.amount_min, g.amount_max
+          `SELECT g.*
            FROM grants g
            WHERE g.match_score IS NULL AND g.profile_id IS NOT NULL
            LIMIT ${Math.max(1, Number.parseInt(process.env.SCORE_BACKFILL_BATCH || '300', 10) || 300)}`,

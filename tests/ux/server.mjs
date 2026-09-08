@@ -3,15 +3,21 @@ import os from 'node:os'
 import path from 'node:path'
 import crypto from 'node:crypto'
 import { spawnSync } from 'node:child_process'
+import { buildIsolatedTestEnv } from '../../scripts/test-environment.mjs'
 
 // This fixture always uses a newly-created local directory and a loopback listener.
 // It cannot connect to a deployed database or make paid model calls.
 const runtime = fs.mkdtempSync(path.join(os.tmpdir(), 'grantflow-ux-'))
-for (const key of ['DATABASE_URL', 'DATABASE_PRIVATE_URL', 'POSTGRES_URL', 'PGHOST', 'OPENAI_API_KEY', 'ANTHROPIC_API_KEY']) delete process.env[key]
+const isolatedEnv = buildIsolatedTestEnv(process.env)
+for (const key of Object.keys(process.env)) if (!(key in isolatedEnv)) delete process.env[key]
+Object.assign(process.env, isolatedEnv)
 Object.assign(process.env, {
   NODE_ENV: 'test', SMOKE_MODE: 'true', GRANTFLOW_TEST_RUNNER: '1', DB_AUTO_MIGRATE: 'true',
   // Multiple authorized fixture accounts share one loopback IP. Production defaults are unchanged.
   AUTH_PASSWORD_RATE_LIMIT: '100', API_AUTH_RATE_LIMIT_MAX: '300',
+  // The expanded journeys exceed 600 combined requests/minute. Their shared
+  // IP must not consume the emergency bucket before later accounts can log in.
+  GLOBAL_API_RATE_LIMIT_MAX: '6000',
   SQLITE_DB_PATH: path.join(runtime, 'test.sqlite'), DB_PROVIDER: 'sqlite', DB_DIALECT: 'sqlite',
   DATA_DIR: runtime, UPLOADS_DIR: path.join(runtime, 'uploads'),
   ANYA_AUTONOMOUS_ENABLED: 'false', NATIONAL_PROGRAMS_CRAWLER_ENABLED: 'false',

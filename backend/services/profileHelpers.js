@@ -559,27 +559,14 @@ export async function loadProfileContext(
          WHERE profile_id = ?
            AND extracted_text IS NOT NULL
            AND TRIM(extracted_text) <> ''
-         ORDER BY uploaded_at DESC NULLS LAST, created_at DESC NULLS LAST
+         ORDER BY created_at DESC, id DESC
          LIMIT 25`,
       )
       .all(profileId)
   } catch {
-    // SQLite doesn't support `NULLS LAST` — retry with a portable form.
-    try {
-      documents = await db
-        .prepare(
-          `SELECT id, name, mime_type, extracted_text
-           FROM documents
-           WHERE profile_id = ?
-             AND extracted_text IS NOT NULL
-             AND TRIM(extracted_text) <> ''
-           ORDER BY COALESCE(uploaded_at, created_at) DESC
-           LIMIT 25`,
-        )
-        .all(profileId)
-    } catch {
-      documents = []
-    }
+    // Some legacy/test schemas omit documents; matching can still use profile
+    // sections. The canonical documents table records uploads in created_at.
+    documents = []
   }
 
   const safeDocuments = Array.isArray(documents) ? documents : []

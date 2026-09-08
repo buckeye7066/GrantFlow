@@ -23,7 +23,7 @@ router.get('/announcements/pending', async (req, res) => {
   try {
     let profileIds = []
     try { profileIds = (await getAccessibleProfileIds(req.db, user)) || [] } catch { profileIds = [] }
-    const audienceVals = ['all', ...profileIds.map(String)]
+    const audienceVals = ['all', ...Array.from(profileIds, String)]
     const audiencePh = audienceVals.map(() => '?').join(', ')
     // `active` has drifted to an INTEGER column on some prod Postgres instances,
     // so `active IS TRUE` throws "argument of IS TRUE must be type boolean, not

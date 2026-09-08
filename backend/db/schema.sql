@@ -1828,6 +1828,7 @@ CREATE TABLE IF NOT EXISTS crawler_jobs (
     'curated_benefits',
     'health_resources',
     'comprehensive',
+    'crawler_os_discovery',
     'national',
     'item_search',
     'item_gift_search',

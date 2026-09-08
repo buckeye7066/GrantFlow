@@ -206,13 +206,16 @@ export function createFetcher(opts = {}) {
   const maxResponseBytes = positiveInt(opts.maxResponseBytes, DEFAULT_MAX_RESPONSE_BYTES);
   const clock = typeof opts.clock === 'function' ? opts.clock : () => Date.now();
   const sleep = typeof opts.sleep === 'function' ? opts.sleep : (ms) => new Promise((r) => setTimeout(r, ms));
-  const lastHitByHost = new Map();
+  const nextHitByHost = new Map();
 
   async function rateLimit(host) {
-    const last = lastHitByHost.get(host) ?? 0;
-    const wait = rateMs - (clock() - last);
+    // Reserve synchronously before sleeping so concurrent callers get distinct
+    // slots, instead of waking together and overwhelming the same source.
+    const time = clock();
+    const slot = Math.max(time, nextHitByHost.get(host) ?? time);
+    nextHitByHost.set(host, slot + rateMs);
+    const wait = slot - time;
     if (wait > 0) await sleep(wait);
-    lastHitByHost.set(host, clock());
   }
 
   async function guardHostIps(host) {
@@ -232,6 +235,7 @@ export function createFetcher(opts = {}) {
    *   declaredResponseBytes?:number|null, maxResponseBytes:number }>}
    */
   async function fetchUrl(url, init = {}) {
+    let requestInit = { ...init };
     let attempts = 0;
     let retries = 0;
     let responseBytes = 0;
@@ -262,20 +266,22 @@ export function createFetcher(opts = {}) {
     let redirects = 0;
     const hops = [current];
     while (true) {
+      if (init.signal?.aborted) return failure({ finalUrl: current, error: 'request_aborted', reason: 'request_aborted', hops });
       const parsed = new URL(current);
       const ipGuard = await guardHostIps(parsed.hostname);
       if (!ipGuard.ok) {
         return failure({ finalUrl: current, error: 'ssrf_guard', reason: ipGuard.reason, hops });
       }
       await rateLimit(parsed.hostname);
+      if (init.signal?.aborted) return failure({ finalUrl: current, error: 'request_aborted', reason: 'request_aborted', hops });
 
       let res;
       attempts += 1;
       try {
-        res = await doFetch(current, { ...init, redirect: 'manual' });
+        res = await doFetch(current, { ...requestInit, redirect: 'manual' });
       } catch (error) {
         const callerAborted = Boolean(init.signal?.aborted);
-        const mayRetry = isRetryableMethod(init)
+        const mayRetry = isRetryableMethod(requestInit)
           && !callerAborted
           && isTransientNetworkError(error)
           && retries < maxRetries;
@@ -288,7 +294,7 @@ export function createFetcher(opts = {}) {
         }
         const retrySuppressed = callerAborted || init.signal?.aborted
           ? 'request_aborted'
-          : (!isRetryableMethod(init) && isTransientNetworkError(error)
+          : (!isRetryableMethod(requestInit) && isTransientNetworkError(error)
               ? 'non_idempotent_method'
               : (isTransientNetworkError(error) && retries >= maxRetries ? 'retry_limit_reached' : undefined));
         return failure({
@@ -304,7 +310,7 @@ export function createFetcher(opts = {}) {
       const retryAfterMs = parseRetryAfter(getHeader(res, 'retry-after'), clock);
       if (status != null && RETRYABLE_STATUSES.has(status)) {
         let retrySuppressed;
-        if (!isRetryableMethod(init)) retrySuppressed = 'non_idempotent_method';
+        if (!isRetryableMethod(requestInit)) retrySuppressed = 'non_idempotent_method';
         else if (retries >= maxRetries) retrySuppressed = 'retry_limit_reached';
         else if (retryAfterMs != null && retryAfterMs > retryMaxMs) retrySuppressed = 'retry_after_exceeds_limit';
 
@@ -358,7 +364,7 @@ export function createFetcher(opts = {}) {
       }
 
       // Manual redirect handling so each hop is re-validated and re-resolved.
-      if (status != null && status >= 300 && status < 400) {
+      if ([301, 302, 303, 307, 308].includes(status)) {
         const loc = getHeader(res, 'location') ?? res.location ?? null;
         await cancelResponseBody(res);
         if (!loc) {
@@ -379,7 +385,9 @@ export function createFetcher(opts = {}) {
             hops,
           });
         }
-        const next = new URL(loc, current).toString();
+        let next;
+        try { next = new URL(loc, current).toString(); }
+        catch { return failure({ status, finalUrl: current, error: 'invalid_redirect_location', reason: 'bad_redirect', hops }); }
         const safe = isSafeUrl(next, { kind: 'fetch' });
         if (!safe.ok) {
           return failure({
@@ -390,6 +398,20 @@ export function createFetcher(opts = {}) {
             hops,
           });
         }
+        // Follow Fetch redirect semantics, retaining each-hop SSRF checks.
+        // Credentials for one origin must never be sent to another origin.
+        const headers = new Headers(requestInit.headers);
+        if (new URL(next).origin !== parsed.origin) {
+          for (const name of ['authorization', 'proxy-authorization', 'cookie', 'cookie2', 'host', 'x-api-key', 'api-key']) headers.delete(name);
+        }
+        const method = String(requestInit.method ?? 'GET').toUpperCase();
+        const switchToGet = ((status === 301 || status === 302) && method === 'POST')
+          || (status === 303 && method !== 'GET' && method !== 'HEAD');
+        if (switchToGet) {
+          requestInit = { ...requestInit, method: 'GET', body: undefined };
+          for (const name of ['content-encoding', 'content-language', 'content-location', 'content-type', 'content-length', 'transfer-encoding']) headers.delete(name);
+        }
+        requestInit = { ...requestInit, headers };
         redirects += 1;
         current = safe.url;
         hops.push(current);

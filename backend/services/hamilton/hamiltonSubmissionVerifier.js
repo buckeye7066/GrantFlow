@@ -1,3 +1,4 @@
+import { parseDbTimestamp } from '../../utils/dbTimestamp.js'
 /**
  * hamiltonSubmissionVerifier.js — the post-submit verification pass.
  *
@@ -88,7 +89,7 @@ async function priorRecheckAttempts(db, taskId) {
          FROM application_task_events
         WHERE task_id = ? AND step = ?`,
     ).get(String(taskId), RECHECK_STEP)
-    return { count: Number(row?.n) || 0, latestMs: Date.parse(row?.latest || '') || 0 }
+    return { count: Number(row?.n) || 0, latestMs: parseDbTimestamp(row?.latest) || 0 }
   } catch {
     return { count: 0, latestMs: 0 }
   }

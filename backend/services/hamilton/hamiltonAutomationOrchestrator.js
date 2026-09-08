@@ -1,4 +1,5 @@
-﻿/**
+import { parseDbTimestamp } from '../../utils/dbTimestamp.js'
+/**
  * hamiltonAutomationOrchestrator.js
  *
  * Top-level "Automate with Hamilton" entry point. Given a list of selected
@@ -1112,7 +1113,7 @@ export async function detectAutopilotRunLoop(db, { taskId, now = Date.now(), max
   try { runs = await listAutopilotRuns(db, { taskId, limit: 25 }) } catch { return null }
   const dayAgo = now - 24 * 60 * 60_000
   const recent = (runs || []).filter((r) => {
-    const t = Date.parse(r?.created_at || '')
+    const t = parseDbTimestamp(r?.created_at || '')
     return Number.isFinite(t) && t >= dayAgo
   })
   // A SCHEDULED deferral (listing reader unavailable, outside the access
@@ -1123,7 +1124,7 @@ export async function detectAutopilotRunLoop(db, { taskId, now = Date.now(), max
   // tasks (prod 2026-08-31) while saying nothing about the credits.
   const counted = recent.filter((r) => !isBoundedRetryRun(r))
   if (counted.length < maxRunsPerDay) return null
-  const oldestRecentMs = Math.min(...counted.map((r) => Date.parse(r.created_at)))
+  const oldestRecentMs = Math.min(...counted.map((r) => parseDbTimestamp(r.created_at)))
   let humanSince = null
   try {
     humanSince = await db
@@ -1133,7 +1134,7 @@ export async function detectAutopilotRunLoop(db, { taskId, now = Date.now(), max
       )
       .get(String(taskId))
   } catch { humanSince = null }
-  const humanMs = Date.parse(humanSince?.at || '')
+  const humanMs = parseDbTimestamp(humanSince?.at || '')
   if (Number.isFinite(humanMs) && humanMs >= oldestRecentMs) return null
   const diagnosis = diagnoseRunOutcomes(counted)
   // The NEWEST run that actually recorded a blocker — surfaced on the verdict
@@ -1141,7 +1142,7 @@ export async function detectAutopilotRunLoop(db, { taskId, now = Date.now(), max
   // dead-end without re-reading the ledger. Null when nothing recorded one,
   // which is itself the crash/redeploy signature the summary spells out.
   const lastBlockerRun = [...counted]
-    .sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at))
+    .sort((a, b) => parseDbTimestamp(b.created_at) - parseDbTimestamp(a.created_at))
     .find((r) => r?.blocker_kind || r?.blocker_detail) || null
   return {
     kind: 'run_loop',

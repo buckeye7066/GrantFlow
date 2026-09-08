@@ -64,6 +64,8 @@ export default function EndUserPageGuide() {
       <details className="mt-2">
         <summary className="min-h-11 cursor-pointer py-3 text-sm font-medium focus-visible:ring-2 focus-visible:ring-primary">{t('journey.how')}</summary>
         <p className="mb-3 text-sm">{t('journey.notWizard')}</p>
+      </details>
+      <nav aria-label={t('journey.how')} className="mt-2">
         <ol className="grid gap-2 sm:grid-cols-2 lg:grid-cols-5">
           {STEPS.map(([key, name, routes], index) => <li key={key}>
             <Link to={href(name)} aria-current={routes.includes(route) ? 'step' : undefined} className="flex min-h-11 items-center gap-2 rounded-lg border px-3 py-2 text-sm aria-[current=step]:border-primary aria-[current=step]:font-bold focus-visible:ring-2 focus-visible:ring-primary">
@@ -71,7 +73,7 @@ export default function EndUserPageGuide() {
             </Link>
           </li>)}
         </ol>
-      </details>
+      </nav>
     </aside>
   )
 }

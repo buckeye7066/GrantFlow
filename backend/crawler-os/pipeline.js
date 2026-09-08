@@ -264,7 +264,12 @@ export async function runDiscovery(deps, opts = {}) {
     // act on (2026-08-06: a dead ACF URL + a gate rejection both surfaced as it).
     let fetchFailureDetail = null;
     let firstRejectReason = null;
+    let budgetExhausted = false;
     for (const req of requests) {
+      if (Number.isFinite(opts.deadlineMs) && clock() >= opts.deadlineMs) {
+        budgetExhausted = true;
+        break;
+      }
       if (req.query) sr.queries.push(req.query);
       let resp;
       try { resp = await fetcher.fetch(req.url, req.init); }
@@ -389,7 +394,7 @@ export async function runDiscovery(deps, opts = {}) {
     sr.match_score_n = tally?.score_n ?? 0;
 
     const foundForProfile = sr.stored + sr.existing;
-    const outcome = foundForProfile > 0 ? CRAWLER_OUTCOME.OK
+    const outcome = budgetExhausted ? CRAWLER_OUTCOME.SKIPPED : foundForProfile > 0 ? CRAWLER_OUTCOME.OK
       : (sawParseError
         ? CRAWLER_OUTCOME.PARSE_ERROR
         : sawFetchError
@@ -398,7 +403,7 @@ export async function runDiscovery(deps, opts = {}) {
     // Zero-found reason, most actionable first. `no_candidates_stored` now means
     // exactly what it says — the source answered cleanly and had nothing —
     // instead of doubling as "the fetch died" and "the gate rejected it".
-    const reason = foundForProfile > 0 ? null
+    const reason = budgetExhausted ? 'time_budget_exhausted' : foundForProfile > 0 ? null
       : (sawParseError ? 'parse_error'
         : sawFetchError ? `fetch_failed:${fetchFailureDetail ?? 'unknown'}`
           : (sr.deduped > 0 ? 'all_candidates_deduped'

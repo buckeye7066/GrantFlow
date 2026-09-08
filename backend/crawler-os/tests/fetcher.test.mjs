@@ -7,6 +7,53 @@
 // hermetic offline helper so neither can regress unnoticed.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+
+test('malformed redirect locations return a failure receipt instead of throwing', async () => {
+  const f = createFetcher({ rateMs: 0, resolve: async () => ['8.8.8.8'], doFetch: async () => new Response(null, { status: 302, headers: { location: 'https://[' } }) });
+  const result = await f.fetch('https://example.org/start');
+  assert.equal(result.error, 'invalid_redirect_location');
+  assert.equal(result.attempts, 1);
+});
+
+test('cross-origin 303 drops credentials and POST body without changing caller headers', async () => {
+  const calls = [];
+  const headers = { Authorization: 'Bearer synthetic', Cookie: 'session=synthetic', 'Content-Type': 'application/json', 'X-Api-Key': 'synthetic' };
+  const f = createFetcher({ rateMs: 0, resolve: async () => ['8.8.8.8'], doFetch: async (url, init) => {
+    calls.push({ url, init });
+    return calls.length === 1 ? new Response(null, { status: 303, headers: { location: 'https://other.example.org/results' } }) : new Response('ok');
+  } });
+  assert.equal((await f.fetch('https://example.org/search', { method: 'POST', headers, body: '{}' })).ok, true);
+  assert.equal(calls[1].init.method, 'GET');
+  assert.equal(calls[1].init.body, undefined);
+  for (const name of ['authorization', 'cookie', 'content-type', 'x-api-key']) assert.equal(new Headers(calls[1].init.headers).has(name), false);
+  assert.equal(headers.Authorization, 'Bearer synthetic');
+});
+
+test('same-origin 307 preserves method, body and authorization', async () => {
+  const calls = [];
+  const f = createFetcher({ rateMs: 0, resolve: async () => ['8.8.8.8'], doFetch: async (url, init) => {
+    calls.push(init);
+    return calls.length === 1 ? new Response(null, { status: 307, headers: { location: '/next' } }) : new Response('ok');
+  } });
+  await f.fetch('https://example.org/start', { method: 'POST', body: '{}', headers: { authorization: 'Bearer synthetic' } });
+  assert.equal(calls[1].method, 'POST');
+  assert.equal(calls[1].body, '{}');
+  assert.equal(new Headers(calls[1].headers).get('authorization'), 'Bearer synthetic');
+});
+
+test('concurrent calls reserve separate host slots and an aborted waiter never fetches', async () => {
+  const waits = [];
+  const calls = [];
+  const controller = new AbortController();
+  const f = createFetcher({ rateMs: 100, clock: () => 1000, resolve: async () => ['8.8.8.8'],
+    sleep: async (ms) => { waits.push(ms); if (ms === 200) controller.abort(); },
+    doFetch: async (url) => { calls.push(url); return new Response('ok'); },
+  });
+  const results = await Promise.all([f.fetch('https://example.org/1'), f.fetch('https://example.org/2'), f.fetch('https://example.org/3', { signal: controller.signal })]);
+  assert.deepEqual(waits, [100, 200]);
+  assert.equal(calls.length, 2);
+  assert.equal(results[2].reason, 'request_aborted');
+});
 import { createFetcher } from '../fetcher.js';
 import { makeOfflineFetcher } from './fixtures/fakeFetch.mjs';
 

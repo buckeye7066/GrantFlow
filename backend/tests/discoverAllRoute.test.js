@@ -1,43 +1,10 @@
-/**
- * POST /api/real-crawlers/discover-all — synchronous Crawler OS alias.
- *
- * Pins the route contract:
- *   - An authorized profile owner gets persisted counts and source receipts
- *     from the synchronous Crawler OS compatibility entrypoint.
- *   - A returned Crawler OS error is an HTTP failure, never success:true/zero.
- *   - A user with no access to the profile is rejected (403), profile-scoped, no
- *     cross-tenant dispatch.
- *   - Missing profile_id → 400.
- *
- * triggerAutoDiscoveryCrawlers is mocked so the test asserts on the route's
- * auth + receipt/error contract, not on external crawl execution.
- */
-
 import express from 'express'
 import request from 'supertest'
 import { describe, expect, it, vi, beforeEach } from 'vitest'
 import Database from 'better-sqlite3'
 
-const triggerMock = vi.fn(async () => ({
-  engine: 'crawler-os',
-  synchronous: true,
-  jobs_enqueued: 1,
-  crawler_types: ['grants-gov', 'ohio-benefits'],
-  stored: 2,
-  matches: 3,
-  planned: 4,
-  rejected: 1,
-  recommendations: 2,
-  sources: [
-    { source_id: 'grants-gov', stored: 1, rejected: 1 },
-    { source_id: 'ohio-benefits', stored: 1, rejected: 0 },
-  ],
-}))
-
-vi.mock('../services/crawlerOsCompatibility.js', async (importOriginal) => {
-  const actual = await importOriginal()
-  return { ...actual, triggerAutoDiscoveryCrawlers: triggerMock }
-})
+const triggerMock = vi.fn()
+vi.mock('../services/crawlerOsDiscoveryJob.js', () => ({ enqueueCrawlerOsDiscovery: triggerMock }))
 
 const realCrawlersRouter = (await import('../routes/realCrawlers.js')).default
 
@@ -67,82 +34,35 @@ describe('POST /api/real-crawlers/discover-all', () => {
   beforeEach(() => {
     triggerMock.mockReset()
     triggerMock.mockResolvedValue({
-      engine: 'crawler-os',
-      synchronous: true,
-      jobs_enqueued: 1,
-      crawler_types: ['grants-gov', 'ohio-benefits'],
-      stored: 2,
-      matches: 3,
-      planned: 4,
-      rejected: 1,
-      recommendations: 2,
-      sources: [
-        { source_id: 'grants-gov', stored: 1, rejected: 1 },
-        { source_id: 'ohio-benefits', stored: 1, rejected: 0 },
-      ],
+      success: true, engine: 'crawler-os', synchronous: false,
+      jobs_enqueued: 1, job_ids: ['job-discovery'], profile_id: 'profile-owned',
     })
   })
 
-  it('returns synchronous persisted counts and source receipts to the authorized owner', async () => {
+  it('accepts a durable discovery job immediately and returns its exact progress receipt', async () => {
     const db = new Database(':memory:')
     try {
       seedSchema(db)
-      const app = createApp(db, { userId: 'owner', role: 'user' })
-
-      const res = await request(app)
-        .post('/api/real-crawlers/discover-all')
-        .send({ profile_id: 'profile-owned' })
-
-      expect(res.status).toBe(200)
-      expect(res.body.success).toBe(true)
-      expect(res.body.profile_id).toBe('profile-owned')
-      expect(res.body.engine).toBe('crawler-os')
-      expect(res.body.synchronous).toBe(true)
-      expect(res.body.jobs_enqueued).toBe(0)
-      expect(res.body.stored).toBe(2)
-      expect(res.body.matches).toBe(3)
-      expect(res.body.crawler_types).toEqual(['grants-gov', 'ohio-benefits'])
-      expect(res.body.sources).toEqual([
-        { source_id: 'grants-gov', stored: 1, rejected: 1 },
-        { source_id: 'ohio-benefits', stored: 1, rejected: 0 },
-      ])
-      expect(res.body.source_receipts).toEqual(res.body.sources)
-      expect(triggerMock).toHaveBeenCalledTimes(1)
-      expect(triggerMock.mock.calls[0][1]).toBe('profile-owned')
-    } finally {
-      db.close()
-    }
+      const res = await request(createApp(db, { userId: 'owner', role: 'user' }))
+        .post('/api/real-crawlers/discover-all').send({ profile_id: 'profile-owned' })
+      expect(res.status).toBe(202)
+      expect(res.body).toMatchObject({ success: true, synchronous: false, job_ids: ['job-discovery'], jobs_enqueued: 1 })
+      expect(res.body).not.toHaveProperty('stored')
+      expect(triggerMock).toHaveBeenCalledExactlyOnceWith(db, 'profile-owned')
+    } finally { db.close() }
   })
 
-  it('returns non-2xx success:false when Crawler OS reports a persistence failure', async () => {
-    triggerMock.mockResolvedValue({
-      engine: 'crawler-os',
-      synchronous: true,
-      error: 'profile match persistence failed',
-    })
+  it('returns failure when durable enqueue fails, never a successful zero-result scan', async () => {
+    triggerMock.mockRejectedValue(new Error('database unavailable'))
     const db = new Database(':memory:')
     try {
       seedSchema(db)
-      const app = createApp(db, { userId: 'owner', role: 'user' })
-
-      const res = await request(app)
-        .post('/api/real-crawlers/discover-all')
-        .send({ profile_id: 'profile-owned' })
-
-      expect(res.status).toBeGreaterThanOrEqual(400)
-      expect(res.body).toMatchObject({
-        success: false,
-        engine: 'crawler-os',
-        synchronous: true,
-        stored: 0,
-        matches: 0,
-        sources: [],
-      })
+      const res = await request(createApp(db, { userId: 'owner', role: 'user' }))
+        .post('/api/real-crawlers/discover-all').send({ profile_id: 'profile-owned' })
+      expect(res.status).toBe(500)
+      expect(res.body).toMatchObject({ success: false, synchronous: false, jobs_enqueued: 0, job_ids: [] })
       expect(res.body).not.toHaveProperty('results')
-      expect(triggerMock).toHaveBeenCalledTimes(1)
-    } finally {
-      db.close()
-    }
+    } finally { db.close() }
   })
 
   it('rejects a user with no access to the profile (403) and never dispatches', async () => {
