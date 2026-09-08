@@ -1,5 +1,6 @@
 import crypto from 'crypto'
 import { isValidRealUrl, isLoanLike, isMatchingFunds, enforceOpportunityPolicy, isSearchEngineUrl } from './shared/opportunityPolicy.js'
+import { isLoanExcluded, classifyLoanRisk, LOAN_CLASS } from '../config/loanClassification.js'
 import { canonicalProgramTargetRepair } from '../config/canonicalProgramRegistry.js'
 import { applyFundableOpportunityNormalization, evaluateFundableOpportunity } from './matching/qualityGate.js'
 import { ALLOWED_RECORD_ORIGINS } from '../utils/recordOrigins.js'
@@ -196,7 +197,20 @@ function shouldProbeUrls(opts) {
 
 // Backward-compat alias
 const isValidHttpUrl = isValidRealUrl
-const isLoanOrMatchingFund = (opp) => isLoanLike(opp) || isMatchingFunds(opp)
+/**
+ * The canonical admission gate's loan predicate.
+ *
+ * `classifyLoanRisk` (config/loanClassification.js) is the ONE registry; the six
+ * previous classifiers disagreed (measured 2026-09-08: `isLoanLike` 141 rows vs
+ * `classifyAidType==='loan'` 215 across the same 29,138). It is consulted
+ * ALONGSIDE the legacy predicate rather than replacing it here, so this gate can
+ * only ever refuse MORE debt, never less, while the other call sites migrate.
+ *
+ * DEBT RELIEF is deliberately not refused: loan repayment/forgiveness pays the
+ * applicant's debt — money TO them. A blanket loan-word rule would have deleted
+ * the only two such rows surfaced in prod.
+ */
+const isLoanOrMatchingFund = (opp) => isLoanExcluded(opp) || isLoanLike(opp) || isMatchingFunds(opp)
 
 function ensureArray(value) {
   if (!value) return []
