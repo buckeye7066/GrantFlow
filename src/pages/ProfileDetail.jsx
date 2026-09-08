@@ -170,6 +170,11 @@ function WorkspaceTabTrigger({
   complete = false,
   isNext = false,
   pulse = false,
+  // Optional click hook on top of tab selection. The "Profile facts" card
+  // uses it to OPEN the section editor: the profile tab is usually already
+  // the active tab, so selecting it again changed nothing on screen and the
+  // card read as dead (owner report 2026-09-07).
+  onSelect,
 }) {
   // Card fill: complete (green) wins over active (blue) wins over resting.
   // emerald-700 (not -600) so white/emerald-50 small label + detail text clear
@@ -211,6 +216,7 @@ function WorkspaceTabTrigger({
           value={value}
           data-step-complete={complete ? "true" : undefined}
           data-step-next={isNext ? "true" : undefined}
+          onClick={onSelect}
           aria-label={
             complete
               ? `${title} — done`
@@ -279,6 +285,7 @@ function ProfileWorkspaceNav({
   nextEmptySectionTitle,
   onRunDeeperSearch,
   onCompleteProfile,
+  onOpenProfileFacts,
   onOpenCoverageEvidence,
   stepStatus,
   pulseEnabled = true,
@@ -446,6 +453,7 @@ function ProfileWorkspaceNav({
                 complete={Boolean(step?.complete)}
                 isNext={Boolean(step?.isNext)}
                 pulse={pulseEnabled}
+                onSelect={tab.value === "profile" ? onOpenProfileFacts : undefined}
               />
             )
           })}
@@ -1261,6 +1269,16 @@ export default function ProfileDetail() {
   const nextEmptySection = profileCompletion.nextIncompleteSectionKey
   const nextEmptySectionTitle = nextEmptySection ? (SECTION_METADATA[nextEmptySection]?.title ?? nextEmptySection) : null
 
+  // "Profile facts" card + the Complete-profile chip: OPEN the sections so the
+  // person can finish filling them in — the next empty section, or the first
+  // applicable one once every section has something in it. Selecting the
+  // (already active) profile tab alone changed nothing visible.
+  const openProfileFacts = React.useCallback(() => {
+    goToWorkspaceTab("profile")
+    const target = nextEmptySection ?? profileCompletion.applicableSectionKeys?.[0] ?? "basic_information"
+    handleOpenSection(target)
+  }, [goToWorkspaceTab, nextEmptySection, profileCompletion.applicableSectionKeys, handleOpenSection])
+
   // Ordered Workspace step status (green cards + which one pulses). Same shared
   // selector Anya reads, so the pulsing "next step" and Anya's guidance agree.
   const stepStatus = React.useMemo(() => getWorkspaceStepStatus(profile), [profile])
@@ -1516,13 +1534,8 @@ export default function ProfileDetail() {
             pulseEnabled={pulseEnabled}
             onRunDeeperSearch={() => navigate(createPageUrl("DiscoverGrants", { profile_id: profileId, autorun: 1 }))}
             onOpenCoverageEvidence={() => navigate(createPageUrl("CoverageEvidence", { profile_id: profileId }))}
-            onCompleteProfile={() => {
-              if (nextEmptySection) {
-                handleOpenSection(nextEmptySection)
-                return
-              }
-              goToWorkspaceTab("profile")
-            }}
+            onCompleteProfile={openProfileFacts}
+            onOpenProfileFacts={openProfileFacts}
           />
 
           <TabsContent value="profile" className="mt-6 space-y-6">
