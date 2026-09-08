@@ -450,7 +450,7 @@ function resolvePageName(pathname) {
   return null
 }
 
-export default function AnyaChat({ profileId, currentPage: currentPageProp, initialSessionOptions, prefillMessage, prefillHidden = false, onPrefillConsumed }) {
+export default function AnyaChat({ profileId, currentPage: currentPageProp, initialSessionOptions, prefillMessage, prefillHidden = false, onPrefillConsumed, guidanceContext = null, suggestedQuestions = [] }) {
   const user = useAuthStore((state) => state.user)
   const profiles = useAuthStore((state) => state.profiles)
   // Accept every admin shape the auth store normalizes (is_admin snake_case,
@@ -1094,6 +1094,7 @@ export default function AnyaChat({ profileId, currentPage: currentPageProp, init
       currentPage: currentPage ?? null,
       currentPath: location?.pathname ?? null,
       profileId: effectiveProfileId ?? null,
+      ...(guidanceContext ? { guidance: guidanceContext } : {}),
     }
     if (adapter) {
       if (adapter.pageType) ctx.pageType = adapter.pageType
@@ -1115,7 +1116,7 @@ export default function AnyaChat({ profileId, currentPage: currentPageProp, init
       }
     }
     return ctx
-  }, [anyaContext?.adapter, currentPage, location?.pathname, effectiveProfileId])
+  }, [anyaContext?.adapter, currentPage, location?.pathname, effectiveProfileId, guidanceContext])
 
   // Keep a ref of the latest page context / consume callback so the prefill
   // effect can read fresh values without re-subscribing on every navigation
@@ -1297,7 +1298,7 @@ export default function AnyaChat({ profileId, currentPage: currentPageProp, init
           <div className="font-semibold text-slate-800 dark:text-slate-100">Anya is temporarily unavailable</div>
         </div>
         <div className="mt-2 text-xs text-slate-600 dark:text-slate-400">
-          The core app is still working; we’re restoring Anya’s services in the background. Refresh in a minute.
+          Anya could not be reached. You can still use the navigation and written Help Center instructions. Refresh this page to retry the connection.
         </div>
       </div>
     )
@@ -2240,6 +2241,12 @@ export default function AnyaChat({ profileId, currentPage: currentPageProp, init
           handleSend()
         }}
       >
+        {suggestedQuestions.length > 0 ? <div className="mb-2 flex flex-wrap gap-2" aria-label="Questions you can ask Anya">
+          {suggestedQuestions.map((question) => <Button key={question} type="button" variant="outline" className="h-auto min-h-11 whitespace-normal text-left" onClick={() => {
+            setInput(question)
+            document.getElementById('anya-message-' + accessibilityId)?.focus()
+          }}>{question}</Button>)}
+        </div> : null}
         <Label htmlFor={`anya-message-${accessibilityId}`} className="sr-only">Message Anya</Label>
         <Textarea
           id={`anya-message-${accessibilityId}`}

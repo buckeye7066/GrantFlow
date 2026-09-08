@@ -1565,6 +1565,7 @@ export default function ProfileSectionEditor({
   onClose,
   onSave,
   isSaving,
+  saveError = null,
   onAskAI,
 }) {
   const config = SECTION_CONFIG[sectionKey]
@@ -1618,6 +1619,17 @@ export default function ProfileSectionEditor({
     return () => clearTimeout(timer)
   }, [open, config, focusField, form])
 
+  useEffect(() => {
+    if (!open || !form.formState.isDirty) return undefined
+    const warn = (event) => { event.preventDefault(); event.returnValue = '' }
+    window.addEventListener('beforeunload', warn)
+    return () => window.removeEventListener('beforeunload', warn)
+  }, [open, form.formState.isDirty])
+  const requestClose = () => {
+    if (isSaving) return
+    if (form.formState.isDirty && !window.confirm('These changes have not been saved. Discard them and close?')) return
+    onClose()
+  }
   const handleSubmit = form.handleSubmit((values) => {
     const legacyValues = dropLegacyOnSave ? {} : Object.fromEntries(legacyEntries)
 
@@ -1677,7 +1689,7 @@ export default function ProfileSectionEditor({
   }
 
   return (
-    <Dialog open={open} onOpenChange={(next) => !isSaving && !next && onClose()}>
+    <Dialog open={open} onOpenChange={(next) => !next && requestClose()}>
       {/* Keep actions visible even for long forms */}
       <DialogContent data-flash-id="profile-section-editor" className="!flex max-h-[85vh] min-h-0 w-[calc(100vw-2rem)] max-w-xl flex-col overflow-hidden">
         <DialogHeader className="shrink-0">
@@ -1966,6 +1978,7 @@ export default function ProfileSectionEditor({
             </form>
           )}
 
+          {saveError ? <Alert role="alert" variant="destructive" className="mt-4"><AlertDescription>{saveError}</AlertDescription></Alert> : null}
           {aiError && (
             <Alert variant="destructive" className="mt-4">
               <AlertDescription className="text-sm">{aiError}</AlertDescription>
@@ -1982,7 +1995,7 @@ export default function ProfileSectionEditor({
         </div>
 
         <DialogFooter className="flex shrink-0 items-center justify-between border-t border-slate-200 pt-4">
-          <Button variant="ghost" onClick={onClose} disabled={isSaving}>
+          <Button variant="ghost" onClick={requestClose} disabled={isSaving}>
             Cancel
           </Button>
           {config && (

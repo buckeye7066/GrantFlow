@@ -8,7 +8,7 @@ import { ArrowRight } from "lucide-react";
 /**
  * "Continue where you left off" — links to last visited page (from localStorage).
  */
-export default function ContinueCard({ lastVisitedPath }) {
+export default function ContinueCard({ lastVisitedPath, secondary = false }) {
   if (!lastVisitedPath || lastVisitedPath === "/" || lastVisitedPath === "/Dashboard") return null;
 
   const pathname = lastVisitedPath.split("?")[0];
@@ -26,7 +26,7 @@ export default function ContinueCard({ lastVisitedPath }) {
       </CardHeader>
       <CardContent className="pt-0">
         <p className="text-sm text-muted-foreground mb-3">Return to {label}.</p>
-        <Button asChild className="w-full sm:w-auto" size="sm">
+        <Button asChild variant={secondary ? "outline" : "default"} className="w-full sm:w-auto" size="sm">
           <Link to={lastVisitedPath} className="gap-2">
             Open {label}
           </Link>

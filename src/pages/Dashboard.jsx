@@ -18,7 +18,7 @@ import client, { apiFetch } from '@/api/client'
 import { getPipelineStats, getReminders } from "@/api/dashboard"
 import { listProfiles, getProfile } from "@/api/profiles"
 import { daysUntilLocal } from "@/components/shared/dateUtils"
-import { isActiveStage } from "../../shared/pipelineStages.js"
+import { canonicalStage, isActiveStage } from "../../shared/pipelineStages.js"
 import { Button } from "@/components/ui/button"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { createPageUrl } from "@/utils"
@@ -50,37 +50,43 @@ import { useSavedGrantsStore } from "@/stores/savedGrantsStore"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Star, User, CheckCircle2, ArrowRight } from "lucide-react"
 import { Progress } from "@/components/ui/progress"
+import { safeResumePath, resumeStorageKey } from '@/lib/resumePath'
+import { partitionHamiltonTasks } from '../../shared/hamiltonTaskLifecycle.js'
+import { SECTION_METADATA } from '@/config/sectionMetadata'
+import { isRealProfileId } from '@/api/profileIdGuards'
 import { calculateProfileCompletion } from "@/utils/profileCompletion"
 
 const END_USER_DASHBOARD_PATHS = new Set(END_USER_ROUTE_NAMES.map((name) => `/${name}`))
 
 /** Resolves last-visited page from preferences (source of truth) or localStorage (fallback). */
-function DashboardContinueOrStart({ profilesLength, urgentDeadlines, activeGrants, hasGrants, isSimplified = false }) {
+function DashboardContinueOrStart({ profilesLength, urgentDeadlines, activeGrants, hasGrants, isSimplified = false, profileId = null, userId = null }) {
   const [lastVisitedPath, setLastVisitedPath] = useState(null);
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      const fromServer = await getLastVisitedPath();
+      const fromServer = await getLastVisitedPath(isSimplified ? profileId : null);
       if (cancelled) return;
       if (fromServer) {
         setLastVisitedPath(fromServer);
         return;
       }
       try {
-        setLastVisitedPath(window.localStorage.getItem("grantflow:last-visited-page"));
+        setLastVisitedPath(window.localStorage.getItem(isSimplified ? resumeStorageKey(userId, profileId) : "grantflow:last-visited-page"));
       } catch {
         setLastVisitedPath(null);
       }
     })();
     return () => { cancelled = true; };
-  }, []);
+  }, [isSimplified, profileId, userId]);
+  const safeLastPath = isSimplified ? safeResumePath(lastVisitedPath, { profileId, allowedRoutes: [...END_USER_DASHBOARD_PATHS].map((p) => p.slice(1)), grantIds: activeGrants.map((g) => g.id) }) : lastVisitedPath;
   const lastVisitedBasePath = lastVisitedPath?.split('?')[0]
   const hasLastPage =
     lastVisitedPath &&
     lastVisitedPath !== "/" &&
     lastVisitedPath !== "/Dashboard" &&
     (!isSimplified || END_USER_DASHBOARD_PATHS.has(lastVisitedBasePath));
-  if (hasLastPage) return <ContinueCard lastVisitedPath={lastVisitedPath} />;
+  if (hasLastPage && safeLastPath) return <ContinueCard lastVisitedPath={safeLastPath} secondary={isSimplified} />;
+  if (isSimplified) return null;
   if (profilesLength === 0 && !isSimplified) return <StartHereCard />;
   return (
     <ResumeWhereYouLeftOff
@@ -92,7 +98,7 @@ function DashboardContinueOrStart({ profilesLength, urgentDeadlines, activeGrant
   );
 }
 
-function EngagementRow({ profileDetail, activeGrants, urgentDeadlines, isSimplified = false }) {
+function EngagementRow({ profileDetail, activeGrants, urgentDeadlines, isSimplified = false, resolvedNextAction = null }) {
   const { savedIds, sync, synced } = useSavedGrantsStore()
 
   React.useEffect(() => {
@@ -117,7 +123,7 @@ function EngagementRow({ profileDetail, activeGrants, urgentDeadlines, isSimplif
     open_pipeline: ArrowRight,
     move_saved: Star,
   }
-  const resolvedAction = pickDashboardNextAction({
+  const resolvedAction = isSimplified ? resolvedNextAction : pickDashboardNextAction({
     completionPct,
     savedCount: savedIds.length,
     activeCount: activeGrants.length,
@@ -127,9 +133,9 @@ function EngagementRow({ profileDetail, activeGrants, urgentDeadlines, isSimplif
   const nextAction = resolvedAction
     ? {
         label: resolvedAction.label,
-        url: resolvedAction.usesActiveProfile && profileDetail?.id
+        url: resolvedAction.href || (resolvedAction.usesActiveProfile && profileDetail?.id
           ? createPageUrl(resolvedAction.route, { id: profileDetail.id })
-          : createPageUrl(resolvedAction.route),
+          : createPageUrl(resolvedAction.route, resolvedAction.params)),
         icon: NEXT_ACTION_ICONS[resolvedAction.key] || Target,
       }
     : null
@@ -154,22 +160,22 @@ function EngagementRow({ profileDetail, activeGrants, urgentDeadlines, isSimplif
             aria-label={`Profile completeness: ${completionPct}%`}
           />
           <p className="text-xs text-slate-600">
-            {completionPct < 100 ? `${filledCount} of ${totalCount} sections filled` : 'Profile complete'}
+            {completionPct < 100 ? `${filledCount} of ${totalCount} sections have answers` : 'All sections have answers'}
           </p>
         </CardContent>
       </Card>
 
       {/* Saved Grants */}
-      {!isSimplified ? <Card>
+      {<Card>
         <CardHeader className="pb-2">
           <CardTitle className="text-sm font-medium text-slate-600 flex items-center gap-2">
             <Star className="w-4 h-4" /> Saved Grants
           </CardTitle>
         </CardHeader>
         <CardContent>
-          <p className="text-lg font-semibold">{savedIds.length}</p>
+          <p className="text-lg font-semibold">{synced ? savedIds.length : 'Checking...'}</p>
           <p className="text-xs text-slate-600 mt-1">
-            {savedIds.length === 0 ? 'Star grants in Discovery to save them' : 'Bookmarked for later'}
+            {synced && savedIds.length === 0 ? 'Save useful opportunities in Discover Grants' : 'Bookmarks are not applications'}
           </p>
           {savedIds.length > 0 && (
             <Link to={createPageUrl('SavedGrants')} className="text-xs text-blue-600 hover:underline mt-2 inline-flex items-center gap-1">
@@ -177,10 +183,10 @@ function EngagementRow({ profileDetail, activeGrants, urgentDeadlines, isSimplif
             </Link>
           )}
         </CardContent>
-      </Card> : null}
+      </Card>}
 
       {/* Next Action */}
-      <Card className={nextAction ? 'border-blue-200 bg-blue-50/50 dark:border-blue-800 dark:bg-blue-950/30' : ''}>
+      {!isSimplified ? <Card className={nextAction ? 'border-blue-200 bg-blue-50/50 dark:border-blue-800 dark:bg-blue-950/30' : ''}>
         <CardHeader className="pb-2">
           <CardTitle className="flex items-center gap-2 text-sm font-medium text-slate-600 dark:text-blue-100">
             <Sparkles className="h-4 w-4" /> Next Step
@@ -200,7 +206,7 @@ function EngagementRow({ profileDetail, activeGrants, urgentDeadlines, isSimplif
             <p className="text-sm text-emerald-700">You're on track! Keep monitoring your pipeline.</p>
           )}
         </CardContent>
-      </Card>
+      </Card> : null}
     </div>
   )
 }
@@ -220,8 +226,13 @@ function LJWMonogram({ className = "" }) {
 }
 
 export default function Dashboard() {
+  const storedActiveProfileId = useAuthStore((state) => state.activeProfileId)
+  const storedUser = useAuthStore((state) => state.user)
+  const savedStore = useSavedGrantsStore()
   const sessionExpired = useAuthStore((state) => state.sessionExpired)
   const logout = useAuthStore((state) => state.logout)
+  const forcedWelcomeVideo = useAuthStore((state) => state.forcedWelcomeVideo)
+  const requiredProfileGate = useAuthStore((state) => state.profileCompletion?.blocked)
   const guidedCycleTourStatus = useAuthStore((state) => state.guidedCycleTourStatus)
   // "Dashboard Columns" personalization (1/2/3) now actually drives the stat grid.
   // Default (2) keeps the original responsive layout so existing users see no change.
@@ -243,7 +254,8 @@ export default function Dashboard() {
   // Presentation policy only — server-side authorization stays authoritative.
   // The simplified (end-user) Dashboard must never funnel to hidden surfaces
   // (Discovery, Automations, the profile editor).
-  const isSimplified = Boolean(currentUser) && !hasFullAdminWorkspace(currentUser)
+  const isSimplified = !hasFullAdminWorkspace(storedUser || currentUser)
+  const identityKey = storedUser?.id || currentUser?.user?.id || currentUser?.id || null
 
   // Fetch user preferences to check if onboarding video has been seen
   const { data: userPreferences } = useQuery({
@@ -309,13 +321,14 @@ export default function Dashboard() {
   // home page said "Profile 0% - 0 of 5 sections filled" over a complete
   // profile (2026-09-07).
   const endUserProfileId =
+    (isRealProfileId(storedActiveProfileId) ? storedActiveProfileId : null) ??
     currentUser?.active_profile_id ??
     currentUser?.user?.active_profile_id ??
     currentUser?.user?.profile_id ??
     currentUser?.profile_id ??
     null
-  const { data: profileDetail, isLoading: isLoadingProfileDetail } = useQuery({
-    queryKey: ["dashboard-profile", endUserProfileId],
+  const { data: profileDetail, isLoading: isLoadingProfileDetail, error: profileDetailError } = useQuery({
+    queryKey: ["profile", endUserProfileId],
     queryFn: () => getProfile(endUserProfileId),
     enabled: Boolean(currentUser) && !hasFullAdminWorkspace(currentUser) && Boolean(endUserProfileId),
     staleTime: 30_000,
@@ -332,9 +345,9 @@ export default function Dashboard() {
   })
 
   const { data: grants = [], isLoading: isLoadingGrants, error: grantsError } = useQuery({
-    queryKey: ["grants"],
+    queryKey: ["grants", identityKey, isSimplified ? endUserProfileId : "__admin__"],
     queryFn: async () => {
-      const res = await client.entities.Grant.list("-created_date")
+      const res = await client.entities.Grant.list("-created_date", 2000, isSimplified ? { profile_id: endUserProfileId } : {})
       return Array.isArray(res) ? res : Array.isArray(res?.data) ? res.data : []
     },
     enabled: Boolean(currentUser),
@@ -342,9 +355,9 @@ export default function Dashboard() {
   })
 
   const { data: milestones = [], isLoading: isLoadingMilestones, error: milestonesError } = useQuery({
-    queryKey: ["milestones"],
+    queryKey: ["milestones", identityKey, isSimplified ? endUserProfileId : "__admin__"],
     queryFn: async () => {
-      const res = await client.entities.Milestone.list("due_date")
+      const res = await client.entities.Milestone.list("due_date", 2000, isSimplified ? { profile_id: endUserProfileId } : {})
       return Array.isArray(res) ? res : Array.isArray(res?.data) ? res.data : []
     },
     enabled: Boolean(currentUser),
@@ -388,7 +401,7 @@ export default function Dashboard() {
   const profileOrganizationId = profileDetail?.organization_id ?? null
 
   const relevantGrants = useMemo(() => {
-    const base =
+    const base = isSimplified ? grants.filter((grant) => String(grant.profile_id) === String(endUserProfileId)) :
       currentUser?.role === "admin" || !profileOrganizationId
         ? grants
         : grants.filter((grant) => grant.organization_id === profileOrganizationId)
@@ -407,7 +420,7 @@ export default function Dashboard() {
       deduped.push(g)
     }
     return deduped
-  }, [grants, currentUser?.role, profileOrganizationId])
+  }, [grants, currentUser?.role, profileOrganizationId, isSimplified, endUserProfileId])
 
   const relevantExpenses = useMemo(() => {
     if (currentUser?.role === "admin" || !profileOrganizationId) return expenses
@@ -415,9 +428,10 @@ export default function Dashboard() {
   }, [expenses, currentUser?.role, profileOrganizationId])
 
   const relevantMilestones = useMemo(() => {
+    if (isSimplified) return milestones.filter((milestone) => String(milestone.profile_id) === String(endUserProfileId))
     if (currentUser?.role === "admin" || !profileOrganizationId) return milestones
     return milestones.filter((milestone) => milestone.organization_id === profileOrganizationId)
-  }, [milestones, currentUser?.role, profileOrganizationId])
+  }, [milestones, currentUser?.role, profileOrganizationId, isSimplified, endUserProfileId])
 
   const activeGrants = useMemo(
     // ONE definition of "active" (shared/pipelineStages.js isActiveStage) so the
@@ -444,7 +458,7 @@ export default function Dashboard() {
   )
 
   const { data: dashboardStats } = useQuery({
-    queryKey: ["dashboard-stats"],
+    queryKey: ["dashboard-stats", identityKey, isSimplified ? endUserProfileId : "__admin__"],
     queryFn: () => apiFetch('/api/stats/dashboard'),
     enabled: Boolean(currentUser),
     staleTime: 60_000,
@@ -457,20 +471,20 @@ export default function Dashboard() {
       // Real funds secured. Prefer the backend's authoritative, per-user-scoped
       // figure when available so the card maps 1:1 to /api/stats; otherwise
       // compute from the grants loaded in the UI. Never show marketing numbers.
-      if (dashboardStats && Number.isFinite(Number(dashboardStats.fundsSecured))) {
+      if (!isSimplified && dashboardStats && Number.isFinite(Number(dashboardStats.fundsSecured))) {
         return Number(dashboardStats.fundsSecured)
       }
       return relevantGrants
-        .filter((g) => g.status === 'awarded' && g.amount)
-        .reduce((sum, g) => sum + (Number(g.amount) || 0), 0)
+        .filter((g) => g.status === 'awarded' && (isSimplified ? g.amount_awarded : g.amount))
+        .reduce((sum, g) => sum + (Number(isSimplified ? g.amount_awarded : g.amount) || 0), 0)
     },
-    [relevantGrants, dashboardStats],
+    [relevantGrants, dashboardStats, isSimplified],
   )
 
   const urgentDeadlines = useMemo(
     () =>
       relevantGrants.filter((g) => {
-        if (!["discovered", "interested", "drafting"].includes(g.status)) {
+        if (!["discovered", "saved", "interested", "gathering_documents", "drafting", "ready_to_submit"].includes(canonicalStage(g.status))) {
           return false
         }
 
@@ -505,7 +519,7 @@ export default function Dashboard() {
   const stats = useMemo(
     () => [
       {
-        title: "Funds Secured",
+        title: isSimplified ? "Awards recorded" : "Funds Secured",
         value: isLoadingGrants ? "Loading..." : `$${totalFundsSecured.toLocaleString()}`,
         icon: LJWMonogram,
         color: "from-amber-500 to-amber-600",
@@ -562,9 +576,44 @@ export default function Dashboard() {
     return null
   }, [profileDetail, currentUser, profiles])
 
+  React.useEffect(() => {
+    if (isSimplified && identityKey && isRealProfileId(endUserProfileId)) savedStore.resyncForProfile()
+  }, [isSimplified, identityKey, endUserProfileId, savedStore.resyncForProfile])
+
+  const nextTasksQuery = useQuery({
+    queryKey: ['hamilton', 'tasks', identityKey, endUserProfileId],
+    enabled: isSimplified && Boolean(identityKey) && isRealProfileId(endUserProfileId),
+    queryFn: async () => {
+      const result = await client.get('/api/hamilton/automation/tasks?profile_id=' + encodeURIComponent(endUserProfileId))
+      if (!Array.isArray(result?.tasks) && !Array.isArray(result?.current)) throw new Error('Application task status could not be checked.')
+      return partitionHamiltonTasks(result).current
+    },
+    staleTime: 10_000, refetchInterval: 20_000, retry: 1,
+  })
+  const profileProgress = useMemo(() => calculateProfileCompletion(profileDetail), [profileDetail])
+  const dashboardNextAction = useMemo(() => {
+    const basic = profileDetail?.sections?.find?.((section) => section.section_key === 'basic_information')?.data || {}
+    return pickDashboardNextAction({
+      isSimplified: true, profileId: endUserProfileId,
+      completionPct: profileProgress.completionPct,
+      nextSectionKey: profileProgress.nextIncompleteSectionKey,
+      nextSectionTitle: SECTION_METADATA[profileProgress.nextIncompleteSectionKey]?.title,
+      missingLocation: Boolean(profileDetail) && !basic.zip && !basic.postal_code && !basic.state && !basic.city,
+      savedCount: savedStore.synced ? savedStore.savedIds.length : 0,
+      savedState: savedStore.syncError ? 'error' : savedStore.synced ? 'ready' : 'loading',
+      activeCount: activeGrants.length, grants: relevantGrants,
+      urgentCount: urgentDeadlines.length,
+      urgentGrants: [...urgentDeadlines].sort((a, b) => (daysUntilLocal(a.deadline) ?? Infinity) - (daysUntilLocal(b.deadline) ?? Infinity)),
+      tasks: nextTasksQuery.isError ? [] : nextTasksQuery.data,
+      taskState: nextTasksQuery.isError ? 'error' : nextTasksQuery.isLoading ? 'loading' : 'ready',
+      dataState: grantsError || profileDetailError ? 'error' : isLoadingGrants || isLoadingProfileDetail ? 'loading' : 'ready',
+    })
+  }, [endUserProfileId, profileDetail, profileProgress, savedStore.synced, savedStore.savedIds.length, savedStore.syncError, activeGrants, relevantGrants, urgentDeadlines, nextTasksQuery.data, nextTasksQuery.isError, nextTasksQuery.isLoading, grantsError, profileDetailError, isLoadingGrants, isLoadingProfileDetail])
+
   const today = format(new Date(), "EEEE, MMM d")
 
   const isLoading =
+    !currentUser ||
     isLoadingProfiles ||
     isLoadingOrgs ||
     isLoadingGrants ||
@@ -598,7 +647,7 @@ export default function Dashboard() {
   }
 
   const errors = [orgsError, grantsError, milestonesError, expensesError].filter(Boolean)
-  if (errors.length > 0) {
+  if (errors.length > 0 && !isSimplified) {
     return (
       <div className="p-6 md:p-8">
         <Alert variant="destructive">
@@ -625,7 +674,7 @@ export default function Dashboard() {
         <div className="grid gap-6 lg:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]">
           <div className="space-y-6">
             {isSimplified ? (
-              <NextStepHero grants={activeGrants} today={today} isLoading={isLoadingGrants} />
+              <NextStepHero grants={relevantGrants} today={today} isLoading={isLoadingGrants} nextAction={dashboardNextAction} onRetry={() => queryClient.invalidateQueries()} />
             ) : (
             <div className="relative overflow-hidden rounded-3xl border border-border/70 bg-card/90 p-6 shadow-lg md:p-8">
               <div className="absolute -right-12 -top-12 h-52 w-52 rounded-full bg-gradient-to-br from-primary/20 via-primary/15 to-transparent blur-3xl" />
@@ -691,6 +740,9 @@ export default function Dashboard() {
               stats={pipelineError ? undefined : pipelineStats}
               isLoading={isLoadingPipeline}
               hasError={Boolean(pipelineError)}
+              grants={isSimplified ? relevantGrants : undefined}
+              grantsLoading={isLoadingGrants}
+              grantsError={Boolean(grantsError)}
             />
             {!isSimplified ? <PipelineActionsCard activeProfileId={activeProfileId} isSimplified={isSimplified} /> : null}
           </div>
@@ -698,13 +750,15 @@ export default function Dashboard() {
           <div className="space-y-6">
             <DashboardContinueOrStart
               profilesLength={profiles.length}
+              profileId={endUserProfileId}
+              userId={identityKey}
               urgentDeadlines={urgentDeadlines}
               activeGrants={activeGrants}
               hasGrants={relevantGrants?.length > 0}
               isSimplified={isSimplified}
             />
             {!isSimplified ? <PersonalizationPanel /> : null}
-            {activeProfileId && !globalThis?.__GF_SMOKE__ ? <AnyaChat profileId={activeProfileId} /> : null}
+            {activeProfileId && !globalThis?.__GF_SMOKE__ ? <AnyaChat profileId={activeProfileId} guidanceContext={isSimplified ? { nextAction: dashboardNextAction } : undefined} /> : null}
           </div>
         </div>
 
@@ -717,6 +771,7 @@ export default function Dashboard() {
         {/* Engagement Row */}
         <EngagementRow
           profileDetail={profileDetail}
+          resolvedNextAction={dashboardNextAction}
           activeGrants={activeGrants}
           urgentDeadlines={urgentDeadlines}
           isSimplified={isSimplified}
@@ -749,7 +804,7 @@ export default function Dashboard() {
       </div>
 
       <OnboardingVideo
-        open={showOnboarding}
+        open={showOnboarding && !forcedWelcomeVideo?.url && !requiredProfileGate && !guidedCycleTourStatus}
         onComplete={handleOnboardingComplete}
         onSkip={handleOnboardingSkip}
       />

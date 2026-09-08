@@ -1,162 +1,128 @@
 import { create } from 'zustand'
-import { apiFetch } from '@/api/client'
-import client from '@/api/client'
+import client, { apiFetch } from '@/api/client'
+import { useAuthStore } from '@/stores/authStore'
 
-// localStorage cache key. Note: per-user/per-profile partitioning is enforced
-// SERVER-side now (RC-14). We keep a single client cache but namespace it by
-// the active profile id so reload-while-switched doesn't show another
-// profile's saved IDs for a frame.
-const STORAGE_KEY_BASE = 'grantflow:saved-grants'
-
-function activeProfileId() {
+function activeScope() {
+  const user = useAuthStore.getState().user
+  const profileId = client.getActiveProfileId?.() || null
+  return { userId: user?.id || null, profileId, key: user?.id && profileId ? String(user.id) + ':' + String(profileId) : null }
+}
+const storageKey = (scope) => 'grantflow:saved-work:v2:' + encodeURIComponent(scope.key || '')
+function readPending(scope) {
   try {
-    return client?.getActiveProfileId?.() || null
-  } catch {
-    return null
-  }
+    const parsed = scope.key ? JSON.parse(localStorage.getItem(storageKey(scope)) || '{}') : {}
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {}
+  } catch { return {} }
 }
-
-function storageKey() {
-  const pid = activeProfileId()
-  return pid ? `${STORAGE_KEY_BASE}:profile:${pid}` : STORAGE_KEY_BASE
+function persistPending(scope, pending) {
+  try { if (scope.key) localStorage.setItem(storageKey(scope), JSON.stringify(pending)) } catch { /* Keep failed intent in memory when storage is unavailable. */ }
 }
+const empty = () => ({ savedIds: [], notesMap: {}, opportunitiesMap: {}, synced: false, syncing: false, syncError: null, writing: {}, pending: {} })
+let generation = 0
+let readRevision = 0
+let syncingPromise = null
 
-function loadFromStorage() {
-  try {
-    const raw = localStorage.getItem(storageKey())
-    if (!raw) return []
-    const parsed = JSON.parse(raw)
-    return Array.isArray(parsed) ? parsed : []
-  } catch {
-    return []
-  }
-}
-
-function saveToStorage(ids) {
-  try {
-    localStorage.setItem(storageKey(), JSON.stringify(ids))
-  } catch { /* ignore */ }
-}
-
+/** Confirm writes before claiming success; never resurrect server-deleted bookmarks from a cache. */
 export const useSavedGrantsStore = create((set, get) => ({
-  savedIds: loadFromStorage(),
-  /** Map of opportunity_id → notes string (populated after sync) */
-  notesMap: {},
-  /**
-   * Map of opportunity_id → full opportunity row (populated after sync).
-   * The GET /api/saved-grants response LEFT JOINs funding_opportunities, so
-   * each saved row already carries title/sponsor/amount/deadline/urls. We keep
-   * it here so SavedGrants can render directly — the saved id is a
-   * funding_opportunities id, NOT a grants (pipeline) id, so fetching
-   * /api/grants/{id} with it always 404'd.
-   */
-  opportunitiesMap: {},
-  synced: false,
-
-  /** Fetch saved IDs from backend (scoped server-side by active profile) and merge with localStorage cache */
+  ...empty(), scopeKey: null,
+  resetForScope() {
+    const scope = activeScope()
+    generation += 1
+    syncingPromise = null
+    set({ ...empty(), scopeKey: scope.key, pending: readPending(scope) })
+  },
   async sync() {
-    try {
-      // apiFetch automatically attaches the X-Profile-Id header from the
-      // shared client. The backend uses that to filter saved_grants by
-      // (user, profile-or-NULL), so no extra param is needed here.
-      const res = await apiFetch('/api/saved-grants')
-      const backendIds = res?.ids ?? []
-      const localIds = get().savedIds
-
-      // Merge: anything in local but not backend gets pushed up.
-      // POSTs only succeed when an active profile is set; if not, the
-      // backend returns 400 and we just keep the local cache. We never
-      // silently overwrite another profile's data.
-      const pid = activeProfileId()
-      const toUpload = pid ? localIds.filter((id) => !backendIds.includes(id)) : []
-      await Promise.all(
-        toUpload.map((id) =>
-          apiFetch('/api/saved-grants', {
-            method: 'POST',
-            body: JSON.stringify({ opportunity_id: id }),
-          }).catch(() => {})
-        )
-      )
-
-      // Final set = union of both (only if we successfully sent uploads or
-      // we already had backend rows — avoids accidentally promoting a stale
-      // local cache built under a different profile).
-      const merged = pid
-        ? [...new Set([...backendIds, ...localIds])]
-        : backendIds
-      saveToStorage(merged)
-      // Build notes + opportunity maps from backend response. The saved rows
-      // are LEFT JOINed with funding_opportunities, so they hold the full
-      // opportunity payload SavedGrants needs to render each card.
-      const notes = {}
-      const opportunities = {}
-      for (const row of (res?.saved ?? [])) {
-        if (row.notes) notes[row.opportunity_id] = row.notes
-        if (row.opportunity_id) opportunities[row.opportunity_id] = row
-      }
-      set({ savedIds: merged, notesMap: notes, opportunitiesMap: opportunities, synced: true })
-    } catch {
-      // Offline or not logged in — keep localStorage only
-      set({ synced: false })
-    }
+    const scope = activeScope()
+    if (get().scopeKey !== scope.key) get().resetForScope()
+    if (!scope.key) { set({ syncError: 'Select an available funding profile to see saved opportunities.' }); return false }
+    if (syncingPromise) return syncingPromise
+    const ticket = generation
+    const revision = readRevision
+    const valid = () => ticket === generation && revision === readRevision && activeScope().key === scope.key
+    set({ syncing: true, syncError: null })
+    syncingPromise = (async () => {
+      try {
+        const response = await apiFetch('/api/saved-grants?profile_id=' + encodeURIComponent(scope.profileId))
+        if (!Array.isArray(response?.ids) || !Array.isArray(response?.saved)) throw new Error('Invalid saved-work response')
+        if (!valid()) return false
+        const opportunitiesMap = {}, notesMap = {}
+        for (const row of response.saved) {
+          if (!row?.opportunity_id) continue
+          opportunitiesMap[row.opportunity_id] = row
+          notesMap[row.opportunity_id] = row.notes || ''
+        }
+        set({ savedIds: response.ids, opportunitiesMap, notesMap, synced: true, syncing: false, syncError: null })
+        return true
+      } catch {
+        if (valid()) set({ synced: false, syncing: false, syncError: 'Your saved opportunities could not be checked. Your previous work has not been erased. Try again.' })
+        return false
+      } finally { if (valid()) syncingPromise = null }
+    })()
+    return syncingPromise
   },
-
-  /**
-   * Reload from backend after the active profile changes. Clears the in-memory
-   * cache so we never display the previous profile's saved set for a frame.
-   */
   async resyncForProfile() {
-    set({ savedIds: loadFromStorage(), notesMap: {}, opportunitiesMap: {}, synced: false })
-    await get().sync()
+    if (get().scopeKey !== activeScope().key) get().resetForScope()
+    return get().sync()
   },
-
-  saveGrant(id) {
-    const current = get().savedIds
-    if (current.includes(id)) return
-    const next = [...current, id]
-    saveToStorage(next)
-    set({ savedIds: next })
-    // Fire-and-forget backend save (X-Profile-Id auto-attached by client).
-    // The backend rejects with 400 if no active profile is set, in which case
-    // the local cache still tracks the intent and the next sync will retry.
-    apiFetch('/api/saved-grants', {
-      method: 'POST',
-      body: JSON.stringify({ opportunity_id: id }),
-    }).catch(() => {})
-  },
-
-  removeGrant(id) {
-    const next = get().savedIds.filter((s) => s !== id)
-    saveToStorage(next)
-    set({ savedIds: next })
-    // Fire-and-forget backend delete (server scopes to the active profile +
-    // any legacy NULL row, leaving other profiles' explicit saves intact).
-    apiFetch(`/api/saved-grants/${encodeURIComponent(id)}`, {
-      method: 'DELETE',
-    }).catch(() => {})
-  },
-
-  toggleGrant(id) {
-    if (get().savedIds.includes(id)) {
-      get().removeGrant(id)
-    } else {
-      get().saveGrant(id)
+  async writeOperation(id, operation) {
+    const scope = activeScope()
+    if (get().scopeKey !== scope.key) get().resetForScope()
+    if (!scope.key || !id) { set({ syncError: 'Select an available funding profile before saving.' }); return false }
+    if (get().writing[id]) return false
+    const ticket = generation
+    const valid = () => ticket === generation && activeScope().key === scope.key
+    readRevision += 1
+    syncingPromise = null
+    set({ syncing: false })
+    const pending = { ...get().pending, [id]: operation }
+    persistPending(scope, pending)
+    set({ pending, writing: { ...get().writing, [id]: true } })
+    try {
+      const suffix = '?profile_id=' + encodeURIComponent(scope.profileId)
+      if (operation.kind === 'save') {
+        await apiFetch('/api/saved-grants' + suffix, { method: 'POST', body: JSON.stringify({ opportunity_id: id }) })
+      } else if (operation.kind === 'remove') {
+        await apiFetch('/api/saved-grants/' + encodeURIComponent(id) + suffix, { method: 'DELETE' })
+      } else if (operation.kind === 'note' && typeof operation.notes === 'string') {
+        await apiFetch('/api/saved-grants/' + encodeURIComponent(id) + '/notes' + suffix, { method: 'PATCH', body: JSON.stringify({ notes: operation.notes }) })
+      } else throw new Error('Unsupported saved-work operation')
+      if (!valid()) return false
+      const remaining = { ...get().pending }; delete remaining[id]
+      persistPending(scope, remaining)
+      set((state) => ({
+        pending: remaining,
+        savedIds: operation.kind === 'save' ? [...new Set([...state.savedIds, id])] : operation.kind === 'remove' ? state.savedIds.filter((value) => value !== id) : state.savedIds,
+        notesMap: operation.kind === 'note' ? { ...state.notesMap, [id]: operation.notes } : state.notesMap,
+      }))
+      // A refresh that began before this write must not replace the confirmed result.
+      readRevision += 1
+      syncingPromise = null
+      set({ syncing: false })
+      return true
+    } catch {
+      return false
+    } finally {
+      // Scope, rather than generation, owns per-item feedback when two different writes finish.
+      if (activeScope().key === scope.key && get().scopeKey === scope.key) {
+        set((state) => { const writing = { ...state.writing }; delete writing[id]; return { writing } })
+      }
     }
   },
-
-  isSaved(id) {
-    return get().savedIds.includes(id)
-  },
-
-  getNote(id) {
-    return get().notesMap[id] ?? ''
-  },
-
-  async updateNote(id, notes) {
-    set((state) => ({ notesMap: { ...state.notesMap, [id]: notes } }))
-    apiFetch(`/api/saved-grants/${encodeURIComponent(id)}/notes`, {
-      method: 'PATCH',
-      body: JSON.stringify({ notes }),
-    }).catch(() => {})
+  saveGrant(id) { return get().writeOperation(id, { kind: 'save' }) },
+  removeGrant(id) { return get().writeOperation(id, { kind: 'remove' }) },
+  toggleGrant(id) { return get().savedIds.includes(id) ? get().removeGrant(id) : get().saveGrant(id) },
+  isSaved(id) { return get().savedIds.includes(id) },
+  getNote(id) { return get().notesMap[id] ?? '' },
+  updateNote(id, notes) { return get().writeOperation(id, { kind: 'note', notes }) },
+  async retryPending() {
+    for (const [id, operation] of Object.entries(get().pending)) {
+      if (activeScope().key !== get().scopeKey) return false
+      if (!(await get().writeOperation(id, operation))) return false
+    }
+    return get().sync()
   },
 }))
+// Clear in-memory private records synchronously at an account/profile transition.
+useAuthStore.subscribe((state, previous) => {
+  if (state.user?.id !== previous.user?.id || state.activeProfileId !== previous.activeProfileId) useSavedGrantsStore.getState().resetForScope()
+})

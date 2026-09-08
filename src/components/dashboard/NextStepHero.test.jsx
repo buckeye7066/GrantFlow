@@ -19,7 +19,7 @@ describe('NextStepHero', () => {
     expect(screen.getByText('Your next step')).toBeTruthy()
     expect(screen.getByText('Emergency Rental Assistance')).toBeTruthy()
     expect(screen.getByText('United Ministries')).toBeTruthy()
-    const start = screen.getByRole('link', { name: /Start with this source/ })
+    const start = screen.getByRole('link', { name: /Review this funding source/ })
     expect(start.getAttribute('href')).toContain('grant_id=g1')
     expect(screen.getByRole('link', { name: /See all 2 sources/ })).toBeTruthy()
   })
@@ -31,10 +31,10 @@ describe('NextStepHero', () => {
     expect(screen.getAllByRole('link')).toHaveLength(2)
   })
 
-  it('points to Anya when nothing is ready yet', () => {
+  it('offers discovery without requiring an AI conversation when nothing is ready yet', () => {
     renderHero({ grants: [] })
-    expect(screen.getByText(/No funding sources are ready yet/)).toBeTruthy()
-    expect(screen.getByRole('link', { name: /Ask Anya what to do next/ })).toBeTruthy()
+    expect(screen.getByText(/Search for funding using your saved profile/)).toBeTruthy()
+    expect(screen.getByRole('link', { name: /Discover grants matched to your profile/ })).toBeTruthy()
   })
 
   it('pickNextSource skips rows without an id', () => {

@@ -5,20 +5,24 @@ import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
 import { Textarea } from '@/components/ui/textarea'
 import { Loader2, Star, Trash2, StickyNote, Check } from 'lucide-react'
+import { useAuthStore } from '@/stores/authStore'
 import FundingResultCard from '@/components/funding/FundingResultCard'
 import { toCanonicalResult } from '@/components/funding/toCanonicalResult'
 
 function NoteEditor({ grantId }) {
-  const { getNote, updateNote } = useSavedGrantsStore()
+  const { getNote, updateNote, writing } = useSavedGrantsStore()
   const existing = getNote(grantId)
   const [value, setValue] = useState(existing)
   const [open, setOpen] = useState(false)
   const [saved, setSaved] = useState(false)
 
-  const handleSave = useCallback(() => {
-    updateNote(grantId, value)
-    setSaved(true)
-    setTimeout(() => setSaved(false), 1500)
+  const [saveFailed, setSaveFailed] = useState(false)
+  const handleSave = useCallback(async () => {
+    setSaved(false)
+    setSaveFailed(false)
+    const success = await updateNote(grantId, value)
+    setSaved(success)
+    setSaveFailed(!success)
   }, [grantId, value, updateNote])
 
   if (!open) {
@@ -38,15 +42,17 @@ function NoteEditor({ grantId }) {
     <div className="mt-2 space-y-1.5">
       <Textarea
         value={value}
-        onChange={(e) => setValue(e.target.value)}
+        onChange={(e) => { setValue(e.target.value); setSaved(false) }}
+        aria-label="Note for this saved opportunity"
         placeholder="Why did you save this? Any reminders..."
         className="text-xs min-h-[60px] resize-none"
         autoFocus
       />
+      {saveFailed ? <p role="alert" className="text-sm text-red-700 dark:text-red-300">Your note was not saved. Your text is still here. Try again.</p> : null}
       <div className="flex items-center gap-2">
-        <Button type="button" size="sm" variant="outline" className="text-xs h-7" onClick={handleSave}>
+        <Button type="button" size="sm" variant="outline" className="min-h-11" disabled={Boolean(writing[grantId])} onClick={handleSave}>
           {saved ? <Check className="w-3 h-3 mr-1 text-green-600" /> : null}
-          {saved ? 'Saved' : 'Save note'}
+          {writing[grantId] ? 'Saving...' : saved ? 'Saved' : 'Save note'}
         </Button>
         <Button type="button" size="sm" variant="ghost" className="text-xs h-7" onClick={() => setOpen(false)}>
           Cancel
@@ -58,17 +64,18 @@ function NoteEditor({ grantId }) {
 
 export default function SavedGrants() {
   const navigate = useNavigate()
-  const { savedIds, removeGrant, sync, synced, opportunitiesMap } = useSavedGrantsStore()
+  const { savedIds, removeGrant, sync, synced, syncing, syncError, opportunitiesMap } = useSavedGrantsStore()
 
+  const activeProfileId = useAuthStore((state) => state.activeProfileId)
   // Always sync on mount: freshly-starred items (saved earlier this session,
   // before the last sync) still need their full opportunity payload pulled in.
   // sync() is idempotent and merges local + backend saves; `sync` is a stable
   // zustand action reference, so this effect runs once.
   React.useEffect(() => {
     sync()
-  }, [sync])
+  }, [sync, activeProfileId])
 
-  const isLoading = savedIds.length > 0 && !synced
+  const isLoading = syncing || (!synced && !syncError)
 
   // A saved id is a funding_opportunities id. The synced opportunitiesMap holds
   // the full JOINed row (title/sponsor/amount/deadline/url) for each, so we
@@ -102,7 +109,8 @@ export default function SavedGrants() {
           </p>
         </header>
 
-        {savedIds.length === 0 && (
+        {syncError ? <div role="alert" className="mb-4 rounded-lg border p-4 text-foreground"><p>{syncError}</p><Button className="mt-3" variant="outline" onClick={sync}>Try again</Button></div> : null}
+        {synced && !isLoading && savedIds.length === 0 && (
           <Card>
             <CardContent className="p-12 text-center space-y-4">
               <Star className="w-14 h-14 mx-auto text-slate-300" />
@@ -115,8 +123,8 @@ export default function SavedGrants() {
           </Card>
         )}
 
-        {savedIds.length > 0 && isLoading && (
-          <div className="flex min-h-[200px] items-center justify-center">
+        {isLoading && (
+          <div role="status" className="flex min-h-[200px] items-center justify-center gap-2">Checking saved opportunities
             <Loader2 className="w-6 h-6 animate-spin text-primary" />
           </div>
         )}
@@ -124,7 +132,7 @@ export default function SavedGrants() {
         {savedIds.length > 0 && !isLoading && missingIds.length > 0 && (
           <div className="mb-4 flex items-center justify-between gap-3 rounded-md border border-dashed border-slate-300 bg-slate-50 px-4 py-3">
             <p className="text-sm text-slate-600">
-              {missingIds.length} saved grant{missingIds.length === 1 ? ' is' : 's are'} no longer available.
+              {missingIds.length} saved grant{missingIds.length === 1 ? ' is' : 's are'} could not be resolved from the catalog.
             </p>
             <Button type="button" size="sm" variant="outline" onClick={removeAllUnavailable}>
               <Trash2 className="w-3.5 h-3.5 mr-1" />
@@ -166,12 +174,12 @@ export default function SavedGrants() {
                         <div className="min-w-0">
                           <p className="text-sm font-medium text-slate-700">
                             {missingIds.includes(id)
-                              ? 'This grant is no longer available'
+                              ? 'Source details are unavailable'
                               : "Couldn't load this grant"}
                           </p>
                           <p className="text-xs text-slate-400 mt-1">
                             {missingIds.includes(id)
-                              ? 'It was removed from the source since you saved it. You can safely remove it.'
+                              ? 'The saved source details could not be found. This does not prove the funder removed the program. Keep your bookmark or remove it deliberately.'
                               : 'A temporary error occurred. It may reappear on refresh.'}
                           </p>
                           <p className="text-[10px] text-slate-300 mt-1 truncate">Ref: {id}</p>

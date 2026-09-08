@@ -54,7 +54,7 @@ function grantValue(grant) {
   return 0
 }
 
-export default function PipelineStatusCard({ stats = {}, isLoading, hasError = false }) {
+export default function PipelineStatusCard({ stats = {}, isLoading, hasError = false, grants, grantsLoading = false, grantsError = false }) {
   const user = useAuthStore((state) => state.user)
   const isAdmin = user ? hasFullAdminWorkspace(user) : false
   const grantsQuery = useQuery({
@@ -63,21 +63,21 @@ export default function PipelineStatusCard({ stats = {}, isLoading, hasError = f
       const response = await client.entities.Grant.list('-created_date')
       return Array.isArray(response) ? response : Array.isArray(response?.data) ? response.data : []
     },
-    enabled: !isAdmin,
+    enabled: !isAdmin && !Array.isArray(grants),
     staleTime: 60_000,
   })
 
   const endUserSummary = useMemo(() => {
     if (isAdmin) return null
-    const rows = Array.isArray(grantsQuery.data) ? grantsQuery.data : []
+    const rows = Array.isArray(grants) ? grants : Array.isArray(grantsQuery.data) ? grantsQuery.data : []
     const active = rows.filter(
       (grant) => grant?.id && !hiddenPipelineStatuses.has(String(grant.status || '').toLowerCase()),
     )
     return {
       count: active.length,
-      amount: active.reduce((sum, grant) => sum + grantValue(grant), 0),
+      amount: active.filter((grant) => grant.status !== 'awarded').reduce((sum, grant) => sum + grantValue(grant), 0),
     }
-  }, [grantsQuery.data, isAdmin])
+  }, [grants, grantsQuery.data, isAdmin])
 
   const total = statusOrder.reduce((sum, status) => sum + resolveCount(stats, status.key), 0)
 
@@ -101,7 +101,7 @@ export default function PipelineStatusCard({ stats = {}, isLoading, hasError = f
           </div>
         </CardHeader>
         <CardContent className="space-y-4">
-          {grantsQuery.isError ? (
+          {(grantsError || grantsQuery.isError) ? (
             <div role="alert" className="rounded-xl border border-amber-300 bg-amber-50 p-4 text-sm text-amber-950 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-100">
               <p className="font-semibold">Pipeline totals are unavailable.</p>
               <p className="mt-1">No source is being counted as missing or complete.</p>
@@ -110,18 +110,18 @@ export default function PipelineStatusCard({ stats = {}, isLoading, hasError = f
           ) : (
             <div
               className="grid grid-cols-1 gap-3 rounded-xl border border-primary/20 bg-primary/5 p-3 min-[360px]:grid-cols-2"
-              aria-busy={grantsQuery.isLoading}
+              aria-busy={(grantsLoading || grantsQuery.isLoading)}
             >
               <div className="rounded-lg bg-background/85 p-3">
                 <p className="text-xs font-medium uppercase tracking-wide text-foreground">Funding sources</p>
                 <p className="mt-1 text-2xl font-bold text-foreground">
-                  {grantsQuery.isLoading ? 'Loading…' : endUserSummary?.count ?? 0}
+                  {(grantsLoading || grantsQuery.isLoading) ? 'Loading…' : endUserSummary?.count ?? 0}
                 </p>
               </div>
               <div className="rounded-lg bg-background/85 p-3">
                 <p className="text-xs font-medium uppercase tracking-wide text-foreground">Potential amount listed</p>
                 <p className="mt-1 text-2xl font-bold text-foreground">
-                  {grantsQuery.isLoading ? 'Loading…' : currency.format(endUserSummary?.amount ?? 0)}
+                  {(grantsLoading || grantsQuery.isLoading) ? 'Loading…' : currency.format(endUserSummary?.amount ?? 0)}
                 </p>
               </div>
             </div>
@@ -165,13 +165,13 @@ export default function PipelineStatusCard({ stats = {}, isLoading, hasError = f
             <div className="rounded-lg bg-background/85 p-3">
               <p className="text-xs font-medium uppercase tracking-wide text-foreground">Funding sources in pipeline</p>
               <p className="mt-1 text-2xl font-bold text-foreground">
-                {grantsQuery.isLoading ? '…' : endUserSummary?.count ?? 0}
+                {(grantsLoading || grantsQuery.isLoading) ? '…' : endUserSummary?.count ?? 0}
               </p>
             </div>
             <div className="rounded-lg bg-background/85 p-3">
               <p className="text-xs font-medium uppercase tracking-wide text-foreground">Potential dollar amount</p>
               <p className="mt-1 text-2xl font-bold text-foreground">
-                {grantsQuery.isLoading ? '…' : currency.format(endUserSummary?.amount ?? 0)}
+                {(grantsLoading || grantsQuery.isLoading) ? '…' : currency.format(endUserSummary?.amount ?? 0)}
               </p>
             </div>
           </div>

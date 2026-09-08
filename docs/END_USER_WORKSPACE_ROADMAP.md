@@ -1,3 +1,28 @@
+# Current non-admin workspace policy (2026-09-08)
+
+The historical roadmap below is retained for context, not implementation authority.
+Its five-destination restriction, chatbot-only operating layer, hidden profile
+editor, and illustrative future billing proposals are superseded.
+
+The current implementation preserves every authorized route in
+`src/nav/endUserNavConfig.js` and the existing universal non-admin entitlement
+policy. Payment, suspension, authorization, and server-side capability checks
+remain authoritative. Do not infer permission from a menu or change pricing as
+part of usability work.
+
+Non-admin navigation starts expanded, with preferences isolated by account and
+workspace. My Profile remains directly editable. The shared page guide and
+written Help Center explain the funding journey without requiring an AI service.
+The dashboard uses one scoped next-action policy; saved-work success requires
+an acknowledged server write. Submission still requires the existing evidence
+and authorization rules. Required welcome and profile-completion steps remain.
+
+Implementation and verification: `docs/ux/NON_ADMIN_GUIDANCE_2026-09-08.md`.
+
+---
+
+## Historical roadmap (superseded where it conflicts with the policy above)
+
 # GrantFlow End-User Workspace and Automation Roadmap
 
 ## Product decision
