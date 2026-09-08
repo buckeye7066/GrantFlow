@@ -233,6 +233,52 @@ async function runInvariant(name, fn) {
   }
 }
 
+/**
+ * Project one step onto the shape persisted to `system_kv
+ * enforce_invariants_last_run` — the ONLY artifact Sam, Anya and an operator
+ * can read after a boot.
+ *
+ * `scanned === bound` is the documented blindness signature (#944 / #1080), but
+ * it names the symptom, never the link that dropped the work. Measured in prod
+ * 2026-09-08: `catalog_rescore_convergence` persisted `{ok:true, repaired:0,
+ * scanned:3000}` — scanned exactly its budget — every boot while its lane held
+ * ZERO rows fleet-wide, and the counters that would have named the drop point
+ * were computed by the sweep and thrown away HERE. A zero-write run and a
+ * refused-everything run were byte-identical in the artifact.
+ *
+ * So the diagnostic counters ride along when a step emits them. Each is
+ * OPTIONAL — a step that does not emit one is unchanged, because `?? 0` would
+ * make "did not report" indistinguishable from "reported zero", which is the
+ * same conflation this function exists to remove.
+ */
+const PERSISTED_STEP_DIAGNOSTICS = Object.freeze([
+  'upserted', 'adjudicated', 'notFundable', 'rejectedByEngine', 'review',
+  'convergenceErrors', 'foreignLaneSkipped', 'truncated', 'enforced',
+])
+
+export function projectPersistedStep(s) {
+  const out = {
+    name: s.name,
+    ok: s.ok,
+    repaired: s.repaired ?? 0,
+    // NOTE: `?? 0` means a step that never emits `scanned` is indistinguishable
+    // here from one that scanned nothing — which is exactly why every BOUNDED
+    // sweep must emit it (see stale_missing_field_resolution /
+    // hamilton_stop_recheck): `scanned === bound` is the only blindness signal
+    // this artifact can carry.
+    scanned: s.scanned ?? 0,
+  }
+  for (const key of PERSISTED_STEP_DIAGNOSTICS) {
+    if (s[key] !== undefined) out[key] = s[key]
+  }
+  // Work the sweep deliberately did NOT do, and why — so "repaired 0" can be
+  // read as "the decision contract forbade N candidates" instead of as an
+  // unexplained empty run.
+  if (s.contractRejected) out.contractRejected = s.contractRejected
+  if (s.error) out.error = s.error
+  return out
+}
+
 function changesOf(result) {
   const n = Number(result?.changes ?? result?.rowCount ?? 0)
   return Number.isFinite(n) ? n : 0
@@ -10956,10 +11002,47 @@ export async function enforceCatalogRescoreConvergence(db) {
       log.warn('catalog_rescore_convergence: sweep unavailable (non-fatal)', { error: String(err?.message || err) })
       return { scanned: 0, repaired: 0, enforced: true, skipped: 'deps' }
     }
-    const res = await runCatalogRescoreSweep(db)
-    return {
-      scanned: res.scanned ?? 0,
+    return summarizeCatalogRescore(() => runCatalogRescoreSweep(db))
+  })
+}
+
+/**
+ * Turn one catalog-rescore sweep run into the step summary.
+ *
+ * Extracted so the zero-write contract is testable without booting the whole
+ * ladder. THE POINT: `linked` (reported as `repaired`) counts only pairs that
+ * had no prior match row, so a sweep that updates existing rows — or one whose
+ * every write throws and is swallowed as "non-fatal" — reports `repaired: 0`
+ * and looks identical to one the engine simply refused. `upserted`,
+ * `convergenceErrors` and `foreignLaneSkipped` are what separate those cases,
+ * and they were computed and discarded before reaching the artifact.
+ */
+export async function summarizeCatalogRescore(runSweep) {
+  const res = await runSweep()
+  const scanned = res.scanned ?? 0
+  const upserted = res.upserted ?? 0
+  const convergenceErrors = res.convergence_errors ?? 0
+  // A sweep that looked at candidates and wrote nothing is either correct or
+  // broken, and the artifact alone cannot tell you which — so say so out loud
+  // rather than letting `ok: true` stand as an all-clear.
+  if (scanned > 0 && upserted === 0) {
+    log.warn('catalog_rescore_convergence adjudicated candidates but wrote NOTHING', {
+      scanned,
+      adjudicated: res.adjudicated ?? 0,
+      notFundable: res.not_fundable ?? 0,
+      rejectedByEngine: res.rejected_by_engine ?? 0,
+      review: res.review ?? 0,
+      convergenceErrors,
+      foreignLaneSkipped: res.foreign_lane_skipped ?? 0,
+      writeEnabled: Boolean(res.write_enabled),
+    })
+  }
+  return {
+      scanned,
       repaired: res.linked ?? 0,
+      upserted,
+      convergenceErrors,
+      foreignLaneSkipped: res.foreign_lane_skipped ?? 0,
       wouldRepair: res.would_link ?? 0,
       adjudicated: res.adjudicated ?? 0,
       rejectedByEngine: res.rejected_by_engine ?? 0,
@@ -10974,8 +11057,7 @@ export async function enforceCatalogRescoreConvergence(db) {
       truncated: Boolean(res.truncated),
       enforced: Boolean(res.write_enabled),
       examples: res.examples ?? [],
-    }
-  })
+  }
 }
 
 /**
@@ -11977,22 +12059,7 @@ export async function runEnforceInvariants(db, { logger = log } = {}) {
       ran: steps.length,
       failed,
       totalRepaired,
-      steps: steps.map((s) => ({
-        name: s.name,
-        ok: s.ok,
-        repaired: s.repaired ?? 0,
-        // NOTE: `?? 0` means a step that never emits `scanned` is indistinguishable
-        // here from one that scanned nothing — which is exactly why every BOUNDED
-        // sweep must emit it (see stale_missing_field_resolution /
-        // hamilton_stop_recheck): `scanned === bound` is the only blindness signal
-        // this artifact can carry.
-        scanned: s.scanned ?? 0,
-        // Work the sweep deliberately did NOT do, and why — so "repaired 0" can be
-        // read as "the decision contract forbade N candidates" instead of as an
-        // unexplained empty run.
-        ...(s.contractRejected ? { contractRejected: s.contractRejected } : {}),
-        ...(s.error ? { error: s.error } : {}),
-      })),
+      steps: steps.map(projectPersistedStep),
     })
     const iso = new Date().toISOString()
     await db.prepare('CREATE TABLE IF NOT EXISTS system_kv (key TEXT PRIMARY KEY, value TEXT, updated_at TEXT)').run()
@@ -12014,6 +12081,8 @@ function _parseBoolEnv(value) {
 }
 
 export const __testables = {
+  projectPersistedStep,
+  summarizeCatalogRescore,
   PROTECTED_PIPELINE_STATUSES,
   PROTECTED_NAME_PATTERN,
   PURGEABLE_DISCOVERY_STATUSES,
