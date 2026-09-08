@@ -1,4 +1,5 @@
 import zipcodes from 'zipcodes'
+import { normalizeConditionTerm } from '../config/conditionTerms.js'
 import { sanitizeLogValue } from '../utils/logger.js'
 import { resolveCountyForZip } from './geo/zipCountyResolver.js'
 import crypto from 'crypto'
@@ -1992,7 +1993,7 @@ export function buildProfileSignals({ profile, sections, asOf = null, documents 
         : entry && typeof entry === 'object'
           ? entry.name
           : null
-    const normalized = normalizeString(name)
+    const normalized = normalizeConditionTerm(name)
     if (!normalized) continue
     healthSet.add(normalized)
     // The conditions[] field is where a DIAGNOSIS lives — the one health signal
@@ -2867,7 +2868,7 @@ export function buildProfileSignals({ profile, sections, asOf = null, documents 
   // Primary/secondary conditions feed health signals and condition-specific grant matching
   const medicalHistory = sections?.medical_history ?? {}
   if (medicalHistory.primary_condition) {
-    const condition = normalizeString(medicalHistory.primary_condition)
+    const condition = normalizeConditionTerm(medicalHistory.primary_condition)
     if (condition) {
       healthSet.add(condition)
       healthConditionSet.add(condition) // a diagnosis field — see the provenance note
@@ -2876,7 +2877,7 @@ export function buildProfileSignals({ profile, sections, asOf = null, documents 
   }
   if (Array.isArray(medicalHistory.secondary_conditions)) {
     for (const cond of medicalHistory.secondary_conditions) {
-      const normalized = normalizeString(cond)
+      const normalized = normalizeConditionTerm(cond)
       if (normalized) {
         healthSet.add(normalized)
         healthConditionSet.add(normalized) // a diagnosis field

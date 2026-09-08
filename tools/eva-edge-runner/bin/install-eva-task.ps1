@@ -38,15 +38,24 @@ Copy-Item -LiteralPath $sourceBootstrap -Destination $installCandidate -Force
 
 # Prepare the dedicated checkout and dependency set before replacing the task;
 # a failed install therefore leaves the previous task untouched.
-& $powerShellExe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $installCandidate -PrepareOnly
-if ($LASTEXITCODE -ne 0) { throw "EVA bootstrap preparation failed with exit code $LASTEXITCODE" }
+$prepareLog = Join-Path $stableRoot 'prepare.stdout.log'
+$prepareErrorLog = Join-Path $stableRoot 'prepare.stderr.log'
+# Windows PowerShell treats native stderr as ErrorRecord objects when its caller
+# captures output. Git's normal progress output must not abort installation.
+$prepare = Start-Process -FilePath $powerShellExe -ArgumentList @(
+  '-NoLogo', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass',
+  '-File', ('"' + $installCandidate + '"'), '-PrepareOnly'
+) -WindowStyle Hidden -Wait -PassThru -RedirectStandardOutput $prepareLog -RedirectStandardError $prepareErrorLog
+if ($prepare.ExitCode -ne 0) {
+  throw "EVA bootstrap preparation failed with exit code $($prepare.ExitCode); inspect $prepareLog and $prepareErrorLog"
+}
 if (-not (Test-Path -LiteralPath $installedBootstrap -PathType Leaf)) {
   throw 'EVA bootstrap validation succeeded but did not install the versioned bootstrap.'
 }
 Remove-Item -LiteralPath $installCandidate -Force
 
 $quotedBootstrap = '"' + $installedBootstrap + '"'
-$action = New-ScheduledTaskAction -Execute $powerShellExe -Argument "-NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $quotedBootstrap" -WorkingDirectory $stableRoot
+$action = New-ScheduledTaskAction -Execute $powerShellExe -Argument "-NoLogo -NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File $quotedBootstrap" -WorkingDirectory $stableRoot
 $trigger = New-ScheduledTaskTrigger -Daily -At $At
 $settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -DontStopOnIdleEnd -MultipleInstances IgnoreNew -ExecutionTimeLimit (New-TimeSpan -Hours 4)
 Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $trigger -Settings $settings -Force | Out-Null

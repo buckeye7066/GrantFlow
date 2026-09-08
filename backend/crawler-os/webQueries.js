@@ -812,7 +812,13 @@ export function buildWebQueries(thesis = {}, opts = {}) {
   const priority = unique([...forced, ...core]);
   const broadening = unique(extra);
   if (priority.length + broadening.length <= max) return [...priority, ...rotate(broadening, seed)];
-  const fixedCount = Math.min(priority.length, max - 1);
+  // A continuing shortfall must meaningfully explore. Keeping max-1 queries
+  // fixed left a live 28-query retry spending 27 searches on the same ground.
+  // Retain the highest-priority half and rotate the remaining budget, including
+  // overflow core queries. Admission and eligibility do not change.
+  const needsBreadth = (thesis.learned_gaps?.classes || [])
+    .some((gap) => gap === 'low_results' || gap === 'result_floor_shortfall');
+  const fixedCount = Math.min(priority.length, max - 1, needsBreadth ? Math.ceil(max / 2) : max - 1);
   const head = priority.slice(0, fixedCount);
   const pool = [...priority.slice(fixedCount), ...broadening];
   return [...head, ...rotate(pool, seed).slice(0, max - head.length)];

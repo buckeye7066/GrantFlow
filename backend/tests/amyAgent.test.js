@@ -1395,7 +1395,7 @@ describe('Amy orphans from dead runs (owner 2026-09-05: "not crawled, gleaned fr
         db,
         categories: CATEGORY_IDS.slice(0, 2),
         perCategory: 1,
-        dryRunDiscovery: true,
+        dryRunDiscovery: false,
         runDiscovery: async (args) => { crawledIds.push(args.profileId); return fake(args) },
         writeArtifact: async (name) => `audit-reports/${name}`,
         clock: () => new Date(),
@@ -1407,6 +1407,16 @@ describe('Amy orphans from dead runs (owner 2026-09-05: "not crawled, gleaned fr
       // Crawled by THIS run and evaluated with the cohort.
       expect(crawledIds).toContain(orphan)
       expect(out.summary.scenarios).toBe(3)
+      // Recovery keeps its teaching evidence without duplicating a planned
+      // scenario in the exact-run cohort receipt.
+      const receipt = out.combined.flywheel_cohort.receipt
+      expect(receipt.requested_target).toBe(2)
+      expect(receipt.evaluation_rows).toBe(2)
+      expect(receipt.reconciliation.rows_equal_target).toBe(true)
+      expect(receipt.exception_classes.duplicate_evaluation).toBeUndefined()
+      expect(receipt.exception_classes.unexpected_member).toBeUndefined()
+      expect(receipt.members).toHaveLength(2)
+      expect(receipt.members.some(member => member.profile_id === orphan)).toBe(false)
       // Deleted by this run's own cleanup (crawled + taught invariants held).
       expect(out.combined.adopted_orphans.cleanup.deleted).toBe(1)
       expect(out.combined.adopted_orphans.cleanup.ids).toEqual([orphan])

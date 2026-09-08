@@ -69,6 +69,19 @@ describe('summarizeEvaPortfolioQa freshness', () => {
 })
 
 describe('EVA section rendering', () => {
+  it('shows the latest startup evidence once, preserves older variants, and closes only on a pass', async () => {
+    const app = (journey) => ({app_id:'grantflow', display_name:'GrantFlow', app_status:'tested', duration_ms:1, journeys:[journey]})
+    await persistRun(db, runPayload('old-failure', [app(fail({journey_id:'app-startup', sig:'old import', observed:'old import error'}))]), {idempotencyKey:'old-failure', now:'2026-09-07T08:00:00Z'})
+    await persistRun(db, runPayload('new-failure', [app(fail({journey_id:'app-startup', sig:'missing shared build', observed:'missing shared build'}))]), {idempotencyKey:'new-failure', now:'2026-09-08T08:00:00Z'})
+    const summary = summarizeEvaPortfolioQa(await defaultLoadEvaPortfolioQa(db))
+    expect(summary.actionable).toHaveLength(1)
+    expect(summary.actionable[0].historical_variants).toBe(1)
+    expect(db.prepare("SELECT COUNT(*) AS n FROM eva_findings WHERE lifecycle_state != 'resolved'").get().n).toBe(2)
+    await persistRun(db, runPayload('pass', [app({journey_id:'app-startup',name:'Startup',status:'passed'})]), {idempotencyKey:'pass'})
+    const closed = summarizeEvaPortfolioQa(await defaultLoadEvaPortfolioQa(db))
+    expect(closed.actionable).toHaveLength(0)
+    expect(closed.resolved).toHaveLength(1)
+  })
   it('orders findings critical/high first', async () => {
     await persistRun(db, runPayload('r1', [
       { app_id: 'grantflow', display_name: 'GrantFlow', app_status: 'tested', duration_ms: 1, journeys: [

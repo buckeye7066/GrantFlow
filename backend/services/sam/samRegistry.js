@@ -27,6 +27,7 @@
  */
 
 import { SAM_CATEGORIES, SEVERITY } from './samTypes.js'
+import { cohortCounts, cohortSummary } from '../amy/cohortSummary.js'
 import { PIPELINE_ACTIVE_STATUSES, pipelineValueSql, pipelineValueWithCatalogSql } from '../../config/pipelineValue.js'
 import { ORIGIN_CREATED_BY as AMY_ORIGIN_CREATED_BY } from '../amy/amyConstants.js'
 // Shared with the enrichment sweeps (config/amountEnrichEnv.js) so the WRITER
@@ -597,11 +598,12 @@ export const DIAGNOSTIC_CHECKS = Object.freeze([
         .slice(0, 4)
         .map(([k, v]) => `${k} ×${v}`)
         .join(', ')
-      const label = `${latest.clean}/${latest.evaluated} clean (target ${latest.target}) on ${latest.day}`
-      if (latest.evaluated > 0 && latest.issues === 0 && latest.complete) {
+      const counts = cohortCounts(latest)
+      const label = cohortSummary(latest)
+      if (latest.evaluated > 0 && latest.issues === 0 && latest.complete && !counts.inconsistent && counts.unevaluated === 0) {
         return { ok: true, summary: `GOAL: full cohort clean — ${label}.${store.goal_notified_at ? '' : ' Owner notification pending.'}` }
       }
-      if (latest.issues > 0) {
+      if (latest.issues > 0 || counts.unevaluated > 0 || counts.inconsistent) {
         // Recall-miss classes are exactly what a degraded search backend
         // produces (bing-only junk SERPs can't surface institution pages), so
         // attach the live provider diagnosis: the owner reads WHY, not just
@@ -615,7 +617,7 @@ export const DIAGNOSTIC_CHECKS = Object.freeze([
         const envNote = envDegraded ? ` Environment diagnosis: search backend ${providerHealth.verdict} — ${providerHealth.detail}.` : ''
         return {
           ok: false,
-          summary: `${latest.issues} of ${latest.evaluated} synthetic profiles had issues — ${label}. Top classes: ${topTypes || 'n/a'}.${envNote}`,
+          summary: `${label}. Top classes: ${topTypes || 'n/a'}.${envNote}`,
           evidence: {
             day: latest.day,
             target: latest.target,

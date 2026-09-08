@@ -27,7 +27,9 @@
 //   and the state stays honestly stale.
 import { spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { existsSync, mkdirSync, readdirSync, lstatSync, realpathSync, readFileSync, writeFileSync, rmSync } from 'node:fs'
+import { createRequire } from 'node:module'
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, lstatSync, realpathSync, readFileSync, writeFileSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import { dirname, join, resolve, sep } from 'node:path'
 import { baseLaunchEnv } from './prereq.mjs'
 
@@ -328,6 +330,35 @@ export function discoverFrozenDependencyPlans(root, { maxDepth = 3 } = {}) {
 }
 
 /** Install dependencies in the EVA clone, keyed by its exact lockfile. */
+export function missingDependencyEntrypoints(dependencyDir) {
+  if (!existsSync(dependencyDir)) return []
+  const root = realpathSync(dependencyDir)
+  const require = createRequire(join(root, '__eva_probe.cjs'))
+  const missing = []
+  const inspect = (dir) => {
+    try {
+      // Workspace links legitimately point at unbuilt source packages. Only
+      // inspect installed packages within this node_modules cache.
+      const actual = realpathSync(dir)
+      if (!actual.startsWith(root + sep)) return
+      const pkg = JSON.parse(readFileSync(join(dir, 'package.json'), 'utf8'))
+      if (typeof pkg.main !== 'string' || pkg.exports) return
+      try {
+        const entry = require.resolve(resolve(dir, pkg.main))
+        if (!existsSync(entry)) missing.push(pkg.name || dir)
+      } catch { missing.push(pkg.name || dir) }
+    } catch { /* not a package directory */ }
+  }
+  for (const name of readdirSync(dependencyDir)) {
+    if (name.startsWith('.')) continue
+    const dir = join(dependencyDir, name)
+    if (name.startsWith('@')) {
+      try { for (const child of readdirSync(dir)) inspect(join(dir, child)) } catch { /* not a scope */ }
+    } else inspect(dir)
+  }
+  return missing
+}
+
 export function ensureWorkspaceDependencies(workspaceRoot, {
   dataDir,
   appId,
@@ -341,11 +372,18 @@ export function ensureWorkspaceDependencies(workspaceRoot, {
     const lockHash = createHash('sha256').update(readFileSync(plan.lockfile)).digest('hex')
     const markerKey = createHash('sha256').update(`${plan.relative}\n${lockHash}`).digest('hex')
     const marker = join(dataDir, 'dependency-state', String(appId || 'app'), `${markerKey}.ready`)
-    if (existsSync(plan.dependencyDir) && existsSync(marker)) {
+    const missing = missingDependencyEntrypoints(plan.dependencyDir)
+    if (existsSync(plan.dependencyDir) && existsSync(marker) && missing.length === 0) {
       result.reused.push(plan.relative)
       continue
     }
-    const run = exec(plan.command, plan.args, {
+    const installArgs = missing.length && plan.args[0] === 'pnpm' ? [...plan.args, '--force'] : plan.args
+    // A shared pnpm store can reproduce the same missing files even with
+    // --force. Repair from a fresh task-owned store; preserve other apps' stores.
+    const repairStore = missing.length && plan.args[0] === 'pnpm'
+      ? mkdtempSync(join(tmpdir(), 'eva-pnpm-repair-')) : null
+    let run
+    try { run = exec(plan.command, installArgs, {
       cwd: plan.cwd,
       encoding: 'utf8',
       timeout: timeoutMs,
@@ -356,14 +394,22 @@ export function ensureWorkspaceDependencies(workspaceRoot, {
       // shell only on Windows preserves both portability and the injection
       // boundary.
       shell: platform === 'win32',
-      env: baseLaunchEnv(process.env),
-    })
+      env: { ...baseLaunchEnv(process.env), ...(repairStore ? { npm_config_store_dir: repairStore } : {}) },
+    }) } finally {
+      if (repairStore) rmSync(repairStore, { recursive: true, force: true })
+    }
     if (!run || run.status !== 0) {
       result.failed.push({
         path: plan.relative,
         command: `${plan.command} ${plan.args.join(' ')}`,
         error: String(run?.stderr || run?.stdout || `exit ${run?.status ?? 'unknown'}`).slice(0, 500),
       })
+      continue
+    }
+    const stillMissing = missingDependencyEntrypoints(plan.dependencyDir)
+    if (stillMissing.length) {
+      result.failed.push({path: plan.relative, command: `${plan.command} ${installArgs.join(' ')}`,
+        error: `Installed dependency entrypoints are missing: ${stillMissing.slice(0, 8).join(', ')}`})
       continue
     }
     mkdirSync(dirname(marker), { recursive: true })

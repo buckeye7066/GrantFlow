@@ -25,6 +25,7 @@
 // The registry is pure data with no imports of its own, so reading it here
 // cannot re-create the cycle this module exists to break.
 import { STATE_BENEFITS_SOURCE_IDS, STATE_HOUSING_AGENCY_SOURCE_ID } from '../crawler-os/sourceRegistry.js';
+import { normalizeConditionTerm } from './conditionTerms.js';
 
 export const LANES = Object.freeze([
   { lane: 'federal_grants', label: 'Federal grants' },
@@ -311,7 +312,7 @@ export function conditionCoveredBySource(condition, source, overlay = null) {
   // — `hearing_impairment` became a false "no source lane exists" the moment this
   // rule shipped, even though hlaa_financial_assistance is right there. Normalise
   // both sides to the same word-separated shape before comparing.
-  const raw = String(condition || '').trim().toLowerCase().replace(/_/g, ' ');
+  const raw = normalizeConditionTerm(condition);
   if (!raw) return false;
   // An adopted, fully-gated source retires the gap — see conditionCoverageKey.
   if (overlay && overlay.has(conditionCoverageKey(raw))) return true;
@@ -328,7 +329,7 @@ export function conditionCoveredBySource(condition, source, overlay = null) {
 
 /** Stable key for a condition across the gap scoreboard and the adoption overlay. */
 export function conditionCoverageKey(condition) {
-  return String(condition || '').trim().toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
+  return normalizeConditionTerm(condition).replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
 }
 
 /**
@@ -383,7 +384,7 @@ export function sourceServesDeclaredCondition(source, declaredTerms = []) {
     .filter((t) => t.length >= 4 && !GENERIC_CONDITION_WORDS.has(t));
   if (terms.length === 0) return false;
   for (const declared of declaredTerms || []) {
-    const raw = String(declared || '').trim().toLowerCase().replace(/_/g, ' ');
+    const raw = normalizeConditionTerm(declared);
     if (!raw || raw.length < 4) continue;
     if (GENERIC_CONDITION_WORDS.has(raw) || GENERIC_HEALTH_DESCRIPTORS.has(raw)) continue;
     if (terms.some((term) => containsTerm(raw, term) || containsTerm(term, raw))) return true;

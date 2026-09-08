@@ -104,6 +104,7 @@ export function renderEvaSection(summary) {
       if (f.candidate_files?.length) t.push(`    Candidate files: ${f.candidate_files.map((x) => safeText(x)).join(', ')}`)
       t.push(`    Confidence: ${confidenceLabel(f.confidence)}`)
       if (f.missing_evidence) t.push(`    Missing evidence: ${safeText(f.missing_evidence)}`)
+      if (f.historical_variants) t.push(`    History: ${f.historical_variants} earlier failure variant(s) retained; latest evidence shown above. A passing run is still required.`)
       t.push(`    First seen ${safeText(f.first_seen)} | last seen ${safeText(f.last_seen)} | seen ${f.recurrence_count}x | last pass ${f.last_passing_run ? safeText(f.last_passing_run) : 'never'}`)
       if (f.evidence?.length) t.push(`    Evidence: ${f.evidence.map((e) => safeText(e.kind + ':' + e.ref)).join(', ')}`)
     }
@@ -155,6 +156,7 @@ export function renderEvaSection(summary) {
       if (f.candidate_files?.length) h.push(`<div><span style="color:#64748b">Candidate files:</span> ${f.candidate_files.map((x) => `<code>${safe(x)}</code>`).join(', ')}</div>`)
       h.push(`<div><span style="color:#64748b">Confidence:</span> ${esc(confidenceLabel(f.confidence))}</div>`)
       if (f.missing_evidence) h.push(`<div><span style="color:#64748b">Missing evidence:</span> ${safe(f.missing_evidence)}</div>`)
+      if (f.historical_variants) h.push(`<div>History: ${f.historical_variants} earlier failure variant(s) retained; latest evidence shown above. A passing run is still required.</div>`)
       h.push(`<div style="color:#94a3b8;font-size:12px;margin-top:2px">First seen ${safe(f.first_seen)} · last seen ${safe(f.last_seen)} · seen ${f.recurrence_count}× · last pass ${f.last_passing_run ? safe(f.last_passing_run) : 'never'}</div>`)
       if (f.evidence?.length) h.push(`<div style="color:#94a3b8;font-size:12px">Evidence: ${f.evidence.map((e) => safe(e.kind + ':' + e.ref)).join(', ')}</div>`)
       h.push('</div></div>')

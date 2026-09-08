@@ -7,9 +7,10 @@
 // A journey is a list of steps: { action, selector?, url?, value?, expect? }.
 // The adapter asserts SEMANTIC correctness (visible text / value), not merely
 // element presence, and records console errors + failed requests as findings.
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import os from 'node:os'
+import { redactDiagnosticText } from '../redact.mjs'
 
 async function loadPlaywright() {
   try {
@@ -283,6 +284,20 @@ async function checkAssertion(page, assertion) {
   }
 }
 
+export function writeFailureLogs(captureDir, journeyId, ctx) {
+  const evidence = []
+  if (!captureDir || !/^[a-zA-Z0-9_-]+$/.test(journeyId)) return evidence
+  for (const [kind, lines] of [['console', ctx.consoleErrors], ['network', ctx.failedRequests]]) {
+    if (!lines?.length) continue
+    const ref = `${journeyId}-${kind}.txt`
+    try {
+      writeFileSync(join(captureDir, ref), lines.map(line => redactDiagnosticText(line)).join('\n') + '\n', 'utf8')
+      evidence.push({ kind, ref })
+    } catch { /* Only reference evidence that was actually written. */ }
+  }
+  return evidence
+}
+
 async function fail(journey, started, page, captureDir, ctx) {
   const evidence = []
   if (page && captureDir) {
@@ -295,8 +310,7 @@ async function fail(journey, started, page, captureDir, ctx) {
       /* screenshot best-effort */
     }
   }
-  if (ctx.consoleErrors?.length) evidence.push({ kind: 'console', ref: `${journey.id}-console.txt` })
-  if (ctx.failedRequests?.length) evidence.push({ kind: 'network', ref: `${journey.id}-network.txt` })
+  evidence.push(...writeFailureLogs(captureDir, journey.id, ctx))
   return {
     journey_id: journey.id,
     name: journey.name,

@@ -409,11 +409,11 @@ export async function launchWebApp({ app, manifest, log = () => {}, launchEnv = 
         `[launcher] ${manifest.app_id || app?.app_id}: the app announced port(s) ${portDrift.join(', ')} but the manifest declares ${declaredPorts.join(', ')} — manifest port drift`,
       )
     }
-    return { launched: true, ready, baseUrl, failedProbeUrl, exitInfos, outputTail: output.tail, pid: children[0]?.pid, portDrift, blockedPorts, declaredPorts, stop }
+    return { launched: true, ready, baseUrl, failedProbeUrl, exitInfos, outputTail: output.diagnostic, pid: children[0]?.pid, portDrift, blockedPorts, declaredPorts, stop }
   }
 
   await sleep(Math.min(timeoutMs, 3000))
-  return { launched: true, ready: starterMayExit || !requiredProcessExited(), baseUrl, failedProbeUrl: null, exitInfos, outputTail: output.tail, pid: children[0]?.pid, portDrift: [], blockedPorts, declaredPorts, stop }
+  return { launched: true, ready: starterMayExit || !requiredProcessExited(), baseUrl, failedProbeUrl: null, exitInfos, outputTail: output.diagnostic, pid: children[0]?.pid, portDrift: [], blockedPorts, declaredPorts, stop }
 }
 
 // Bounded capture of a launched server's console output. Keeps only the LAST
@@ -436,6 +436,14 @@ export function createOutputRing(limit = 8000) {
     },
     snapshot(maxChars = limit) {
       return buf.length > maxChars ? buf.slice(buf.length - maxChars) : buf
+    },
+    diagnostic(maxChars = 400) {
+      const lines = buf.split(/\r?\n/).map((line) => line.replace(/\u001b\[[0-9;]*[A-Za-z]/g, '').trim()).filter(Boolean)
+      // Stack-frame tails discarded the actual Prisma/import/pip exception on
+      // every failed night. Preserve the exception heading before frames.
+      const cause = lines.findIndex((line) => /(?:\b[A-Za-z]*Error(?:\s*\[[^\]]+\])?:|\bERROR:|\berror:)/.test(line) && !/^\s*at\s/.test(line))
+      const selected = cause >= 0 ? lines.slice(cause, cause + 4) : lines.slice(-6)
+      return selected.join(' | ').slice(0, maxChars)
     },
   }
 }

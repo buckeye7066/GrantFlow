@@ -10,6 +10,10 @@ $ownedMarker = Join-Path $stableRoot '.eva-runner-owned'
 $ownedMarkerValue = 'Owned exclusively by GrantFlow EVA. Safe target for the EVA bootstrap checkout.'
 $runnerRepo = Join-Path $stableRoot 'runner-repo'
 $dataDir = Join-Path $stableRoot 'data'
+$browserDir = Join-Path $stableRoot 'browsers'
+# Keep installs inside the runner mutex instead of competing for the shared
+# ms-playwright cache with desktop development/test sessions.
+$env:PLAYWRIGHT_BROWSERS_PATH = $browserDir
 $dependencyHashFile = Join-Path $stableRoot 'edge-runner-package-lock.sha256'
 $validatedShaFile = Join-Path $stableRoot 'validated-runner.sha'
 $powerShellExe = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
@@ -31,7 +35,7 @@ if (-not (Test-Path -LiteralPath $ownedMarker -PathType Leaf) -or
     (Get-Content -LiteralPath $ownedMarker -Raw).Trim() -ne $ownedMarkerValue) {
   throw "EVA stable directory is not initialized. Run install-eva-task.ps1 once: $stableRoot"
 }
-$ownedPaths = @($stableRoot, $runnerRepo, $dataDir)
+$ownedPaths = @($stableRoot, $runnerRepo, $dataDir, $browserDir)
 foreach ($ownedPath in $ownedPaths) {
   if (Test-Path -LiteralPath $ownedPath) {
     $ownedItem = Get-Item -LiteralPath $ownedPath -Force
