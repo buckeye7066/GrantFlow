@@ -120,6 +120,8 @@ truth: `shared/freeWeek.js` (enforced in `backend/utils/tierGating.js` and
 
 - **Free/local AI failover (OpenAI-compatible)**
   - Used after OpenAI and Anthropic are missing, out of credit/quota, rate-limited, timed out, or return an unusable response. GrantFlow tries configured routes in order and reports the actual provider as `free:<route-id>`; it never turns a provider failure into fabricated output.
+  - The shared JSON/text helpers try OpenAI first, then Anthropic, then configured free routes, within one deadline. Omitting `openai` automatically creates a client from the server's `OPENAI_API_KEY`; an injected client is preserved and explicit `openai: null` opts out. The chain does not retry OpenAI after Anthropic. A provider can exhaust the remaining deadline, leaving no time for the next provider.
+  - `[utils:aiProviders]` failure logs include provider, output format, HTTP status and a fixed failure reason. Anthropic failures also report `openai_available` and `openai_attempted`, distinguishing a skipped OpenAI client from a failed request without logging keys, prompts or raw provider messages. These logs diagnose provider failures; they do not prove grant eligibility or successful applications.
   - **Ollama/local shorthand:** set `OLLAMA_BASE_URL` to the server's OpenAI-compatible `/v1` URL and `OLLAMA_MODEL` to an installed model. `OLLAMA_API_KEY` is optional for gateways that require one.
   - **Generic shorthand:** set `FREE_AI_BASE_URL`, `FREE_AI_MODEL`, and optionally `FREE_AI_API_KEY`.
   - **Multiple routes:** set `FREE_AI_ROUTES` to a JSON array such as:
