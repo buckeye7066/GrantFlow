@@ -153,6 +153,17 @@ function profileStatesForGeo(profileContext) {
   ].map((value) => String(value ?? '').trim()).filter(Boolean))]
 }
 
+function profileCountyForGeo(profileContext) {
+  if (!profileContext) return null
+  const signals = profileContext.signals ?? {}
+  const profile = profileContext.profile ?? profileContext
+  const normalized = profileContext.profileNorm ?? profileContext.normalized ?? {}
+  for (const value of [signals.location?.county, profile.county, profile.geo_county, normalized.county]) {
+    const s = String(value ?? '').trim()
+    if (s) return s
+  }
+  return null
+}
 function adjustPersistedRow(persisted, canonical, profileContext, directory) {
   const storedDecision = directory
     ? 'REVIEW'
@@ -202,6 +213,7 @@ function adjustPersistedRow(persisted, canonical, profileContext, directory) {
 export function restorePersistedMatchTruth(canonicalRows = [], persistedRows = [], opts = {}) {
   const profileContext = opts?.profileContext ?? null
   const profileStates = profileStatesForGeo(profileContext)
+  const profileCounty = profileCountyForGeo(profileContext)
   const persistedById = new Map()
   for (const row of Array.isArray(persistedRows) ? persistedRows : []) {
     const key = rowKey(row)
@@ -221,7 +233,7 @@ export function restorePersistedMatchTruth(canonicalRows = [], persistedRows = [
     // ACCEPT cannot resurrect CPCC for a TN student, Ohio RDA as TN, or an
     // out-of-state machine-minted locator. Missing geography remains neutral.
     if (profileContext) {
-      const geo = isRelevantGeo(persisted, { states: profileStates })
+      const geo = isRelevantGeo(persisted, { states: profileStates, county: profileCounty })
       if (!geo.relevant) continue
     }
 

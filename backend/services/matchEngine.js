@@ -36,6 +36,7 @@ import { listPresentProfileSignals } from './profileCoverage.js'
 import { containsTermWholeWord } from './shared/textMatch.js'
 import { isGenericOnly } from '../config/genericTitleVocabulary.js'
 import { detectForeignOpportunity, declaredStateFromTitle } from '../config/opportunityJurisdiction.js'
+import { countyAwardMismatch } from '../config/countyDeclaration.js'
 import { resolvedUsOpportunityJurisdiction } from '../config/canonicalUsJurisdiction.js'
 import {
   isLeadGenScholarship,
@@ -3925,6 +3926,30 @@ export function makeDecision(score, profile, opportunity, normalizedProfile = nu
     return {
       decision: 'REJECT',
       explanation: `${reasonText}. A US applicant cannot apply to it.`,
+      reasons,
+    }
+  }
+
+  // SINGLE-COUNTY AWARD (owner rule 2026-09-07: "franklin county should not
+  // qualify, he does not live in franklin county"). A row that names itself
+  // after a county is for that county's residents. This used to be only a
+  // score cap when the row resolved to another STATE; in-state, or with no
+  // state at all, "Franklin County Foundation Grant" reached a LaGrange
+  // County senior's pipeline. The profile side is its corroborated county
+  // (signals.location.county, or the declared basic_information county);
+  // no county = neutral, a county SERVICE agency = neutral.
+  const profileCounty = signals?.location?.county
+    ?? sections?.basic_information?.county
+    ?? prof.county
+    ?? null
+  const countyVerdict = countyAwardMismatch(opp, profileCounty)
+  if (countyVerdict.mismatch) {
+    const reasonText = `Single-county award: this program is for ${countyVerdict.declared[0]} County; ` +
+      `this profile is in ${countyVerdict.profile} County`
+    reasons.push(reasonText)
+    return {
+      decision: 'REJECT',
+      explanation: `${reasonText}. It is not available outside ${countyVerdict.declared[0]} County.`,
       reasons,
     }
   }
