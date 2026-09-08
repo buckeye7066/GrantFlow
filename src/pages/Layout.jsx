@@ -37,6 +37,7 @@ import RobertRecommendationListener from '@/components/robert/RobertRecommendati
 import { AnyaContextProvider } from '@/contexts/AnyaContext'
 import ProBonoBanner from '@/components/banners/ProBonoBanner.jsx'
 import FreePeriodNotice from '@/components/banners/FreePeriodNotice.jsx'
+import { resolveAccountDisplayName } from '@/lib/accountDisplayName'
 import MaintenanceGate from '@/components/maintenance/MaintenanceGate.jsx'
 import NotificationBell from '@/components/notifications/NotificationBell'
 import LoginAnnouncementModal from '@/components/announcements/LoginAnnouncementModal'
@@ -158,7 +159,8 @@ export default function Layout({ children }) {
     updatePreference('theme', isDarkActive ? 'light' : 'dark')
   }, [isDarkActive, updatePreference])
 
-  const displayName = user?.display_name || user?.full_name || 'User'
+  const profiles = useAuthStore((state) => state.profiles)
+  const displayName = resolveAccountDisplayName({ user, profiles, activeProfileId, isAdmin })
   const displayEmail = user?.primary_email || user?.email || undefined
   const initials =
     displayName
