@@ -1409,6 +1409,21 @@ export function buildThesis(profile = {}) {
     origin_terms: Array.isArray(profile?.origin_search_terms)
       ? profile.origin_search_terms.map((t) => String(t ?? '').trim()).filter(Boolean)
       : [],
+    // ── THE WHOLE PROFILE (owner order 2026-09-08) ──────────────────────────
+    // These reached the bridge and were dropped before any crawl, so a senior
+    // homeowner's occupation, income band, rural status, licensure and
+    // first-generation status could not influence one query or lane.
+    // STRUCTURED ONLY — a consumer reads the flags, never the prose, because
+    // mining a section's text matches a fact inside its own denial.
+    occupation: Array.isArray(profile?.occupation) ? profile.occupation.filter(Boolean) : [],
+    credentials: Array.isArray(profile?.credentials) ? profile.credentials.filter(Boolean) : [],
+    is_licensed_professional: profile?.is_licensed_professional === true,
+    academics: profile?.academics ?? null,
+    financial: profile?.financial ?? null,
+    immigration: Array.isArray(profile?.immigration) ? profile.immigration.filter(Boolean) : [],
+    geographic: Array.isArray(profile?.geographic) ? profile.geographic.filter(Boolean) : [],
+    education_profile: profile?.education_profile ?? null,
+    secondary_location: profile?.secondary_location ?? null,
     // The derived-fact set with provenance, carried through so LANE SELECTION
     // (planner.plan) reads the same derivation the query builder does.
     derived_facts: profile?.derived_facts ?? null,
