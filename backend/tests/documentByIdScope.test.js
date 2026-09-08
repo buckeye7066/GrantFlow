@@ -5,7 +5,7 @@
  * /:id/download answered 500 — the tenant guard refused the bare
  * `WHERE id = ?` ("Profile-scoped SELECT on [documents] without required
  * scope predicate") — for the person's OWN documents as much as anyone
- * else's. Only the admin (buckeye7066@gmail.com) may read across profiles.
+ * else's. Only the admin account may read across profiles.
  * Another profile's document comes back as identity only (id + owner), so
  * the handler's access check answers 403 exactly as before, never a crash,
  * and never the content.
