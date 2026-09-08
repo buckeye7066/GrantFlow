@@ -65,15 +65,28 @@ function renderLauncher(props = {}) {
 
 /** apiFetch mock covering profile list, gap plans, and section persistence. */
 function mockApi({ profiles = [], plans = {}, puts = [] } = {}) {
+  const sectionStore = new Map()
   apiFetch.mockImplementation((url, opts) => {
     if (url === '/api/profiles' || url.startsWith('/api/profiles?')) {
       return Promise.resolve(profiles)
     }
     const gap = url.match(/^\/api\/profiles\/([^/]+)\/gap-plan$/)
     if (gap) return Promise.resolve(plans[gap[1]] ?? COMPLETE_PLAN)
-    if (/\/sections$/.test(url) && !opts) return Promise.resolve([])
-    if (/\/sections\//.test(url) && opts?.method === 'PUT') {
-      puts.push({ url, body: JSON.parse(opts.body) })
+    // The sections store is REAL here: a PUT stores and the next GET reads it
+    // back. A mock that always answered [] hid the erasure class entirely —
+    // persistGapAnswers verifies what the row ended up holding.
+    const list = url.match(/^\/api\/profiles\/([^/]+)\/sections$/)
+    if (list && !opts) {
+      const store = sectionStore.get(list[1]) || new Map()
+      return Promise.resolve([...store.entries()].map(([section_key, data]) => ({ section_key, data })))
+    }
+    const put = url.match(/^\/api\/profiles\/([^/]+)\/sections\/([^/]+)$/)
+    if (put && opts?.method === 'PUT') {
+      const body = JSON.parse(opts.body)
+      puts.push({ url, body })
+      const store = sectionStore.get(put[1]) || new Map()
+      store.set(decodeURIComponent(put[2]), body.data)
+      sectionStore.set(put[1], store)
       return Promise.resolve({ ok: true })
     }
     return Promise.resolve({})

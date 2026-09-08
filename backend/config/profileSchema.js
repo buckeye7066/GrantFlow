@@ -391,6 +391,12 @@ export const PROFILE_SCHEMA = {
       },
       chronic_illness: { type: 'boolean', default: false, description: 'True if chronic illness is explicitly stated.' },
       chronic_illness_type: { type: 'string', default: '', description: 'Type/name of chronic illness if provided.' },
+      has_disability: {
+        type: 'boolean',
+        default: null,
+        description:
+          'Canonical yes/no for "do you have a disability or long-term health condition?" (the gap interview writes here). Null = never asked.',
+      },
       disability_type: {
         type: 'array<string>',
         default: [],
@@ -549,6 +555,12 @@ export const PROFILE_SCHEMA = {
     title: 'Demographics',
     description: 'Demographic identifiers that unlock targeted funds and scholarships.',
     fields: {
+      age_60_plus: {
+        type: 'boolean',
+        default: null,
+        description:
+          'Canonical yes/no for "are you 60 or older?" — only asked when no date of birth is on file. Null = never asked.',
+      },
       african_american: { type: 'boolean', default: false, description: 'True if Black/African American identity stated.' },
       hispanic_latino: { type: 'boolean', default: false, description: 'True if Hispanic/Latino identity stated.' },
       asian_american: { type: 'boolean', default: false, description: 'True if Asian/AAPI identity stated.' },

@@ -221,7 +221,11 @@ export const PROFILE_FIELD_MIRROR_RULES = Object.freeze([
   },
   {
     target: ['demographics', 'disability_status'],
-    sources: [['health_medical', 'disability_type'], ...Object.keys(DISABILITY_FLAG_LABELS).map((k) => ['health_medical', k])],
+    sources: [
+      ['health_medical', 'has_disability'],
+      ['health_medical', 'disability_type'],
+      ...Object.keys(DISABILITY_FLAG_LABELS).map((k) => ['health_medical', k]),
+    ],
     forward: (get) => {
       const types = get('health_medical', 'disability_type')
       const list = Array.isArray(types) ? types.map(text).filter(Boolean) : text(types) ? [text(types)] : []
@@ -230,6 +234,12 @@ export const PROFILE_FIELD_MIRROR_RULES = Object.freeze([
         .map(([, label]) => label)
       const all = [...new Set([...list, ...flags])]
       if (all.length > 0) return all.join(', ')
+      // The user's own yes/no outranks the per-type flags: a plain "yes" with no
+      // type named must still read back as a disability, and their explicit "no"
+      // must not be re-derived away.
+      const declared = readTri(get('health_medical', 'has_disability'))
+      if (declared === true) return 'has disability'
+      if (declared === false) return ''
       const answered = Object.keys(DISABILITY_FLAG_LABELS).some((k) => readTri(get('health_medical', k)) === false)
       return answered ? '' : undefined
     },
@@ -242,10 +252,16 @@ export const PROFILE_FIELD_MIRROR_RULES = Object.freeze([
   },
   {
     target: ['demographics', 'age_group'],
-    sources: [['basic_information', 'date_of_birth']],
+    sources: [['basic_information', 'date_of_birth'], ['demographics', 'age_60_plus']],
     forward: (get) => {
       const age = ageFromDateOfBirth(get('basic_information', 'date_of_birth'))
-      return age === null ? undefined : ageGroupForAge(age)
+      if (age !== null) return ageGroupForAge(age)
+      // No date of birth on file — fall back to the yes/no the user answered,
+      // so their answer is not blanked and is not asked again.
+      const senior = readTri(get('demographics', 'age_60_plus'))
+      if (senior === true) return 'Senior 60+'
+      if (senior === false) return 'Under 60'
+      return undefined
     },
   },
   {

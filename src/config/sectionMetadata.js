@@ -945,6 +945,12 @@ export const SECTION_METADATA = {
         "help": "Type or name of chronic illness if provided."
       },
       {
+        "name": "has_disability",
+        "label": "Has a disability or long-term health condition",
+        "format": "boolean_tri",
+        "help": "Canonical yes/no home for the disability question Anya asks. Feeds the (deprecated) Demographics > Disability status descriptor via the field mirrors; leave blank when unknown."
+      },
+      {
         "name": "disability_type",
         "label": "Disability types",
         "format": "string_array",
@@ -1387,6 +1393,12 @@ export const SECTION_METADATA = {
         "format": "text",
         "deprecated": true,
         "help": "High-level veteran status descriptor. Deprecated: duplicate question, hidden from intake/edit; the canonical field is Military service > Veteran / Active duty / National guard / Disabled veteran and this value is mirrored from it on save (any stored value is preserved)."
+      },
+      {
+        "name": "age_60_plus",
+        "label": "Age 60 or older",
+        "format": "boolean_tri",
+        "help": "Canonical yes/no home for the age question Anya asks when no date of birth is on file. A date of birth always wins; this only fills the gap. Feeds the (deprecated) Age group descriptor via the field mirrors."
       },
       {
         "name": "age_group",
