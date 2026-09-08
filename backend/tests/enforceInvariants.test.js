@@ -3343,6 +3343,15 @@ describe('enforceNonGrantNoticePipeline', () => {
 // decision is REJECT).
 // ─────────────────────────────────────────────────────────────────────────────
 describe('enforceGrantScoreBackfill', () => {
+  it('does not abandon PostgreSQL-shaped rows when optional legacy grant columns are absent', async () => {
+    const db = new Database(':memory:')
+    try {
+      db.exec('CREATE TABLE grants (id TEXT PRIMARY KEY, profile_id TEXT, match_score REAL)')
+      const result = await enforceGrantScoreBackfill(db)
+      expect(result).toMatchObject({ scanned: 0, repaired: 0, enforced: true })
+      expect(result.skipped).toBeUndefined()
+    } finally { db.close() }
+  })
   // The invariant's candidate SELECT + write touch columns the shared minimal
   // schema omits; the real grants schema has all of them.
   function makeScoreDb() {

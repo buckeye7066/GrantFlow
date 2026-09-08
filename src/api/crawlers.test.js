@@ -3,7 +3,17 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 const { apiFetchMock } = vi.hoisted(() => ({ apiFetchMock: vi.fn() }))
 vi.mock('@/api/client', () => ({ apiFetch: (...args) => apiFetchMock(...args) }))
 
-import { runRealCrawler } from './crawlers'
+import { runRealCrawler, discoverAllForProfile } from './crawlers'
+
+it('Find Funding uses the durable endpoint and preserves the exact job receipt', async () => {
+  apiFetchMock.mockReset()
+  const receipt = { success: true, synchronous: false, jobs_enqueued: 0, existing: true, job_ids: ['active-job'] }
+  apiFetchMock.mockResolvedValue(receipt)
+  expect(await discoverAllForProfile({ profileId: ' profile-123 ' })).toEqual(receipt)
+  expect(apiFetchMock).toHaveBeenCalledExactlyOnceWith('/api/real-crawlers/discover-all', {
+    method: 'POST', body: JSON.stringify({ profile_id: 'profile-123' }),
+  })
+})
 
 describe('runRealCrawler', () => {
   beforeEach(() => {

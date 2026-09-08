@@ -6,7 +6,8 @@ import { describe, expect, it, vi } from 'vitest'
 // so the route reaches its announcements SELECT deterministically.
 vi.mock('../utils/accessControl.js', () => ({
   requireAuthenticatedUser: (req) => req.user,
-  getAccessibleProfileIds: async () => [],
+  // Production access control returns a Set, not an array.
+  getAccessibleProfileIds: async () => new Set(['owned-profile']),
 }))
 
 const announcementsRouter = (await import('../routes/announcements.js')).default

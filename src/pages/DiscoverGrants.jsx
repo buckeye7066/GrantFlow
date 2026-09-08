@@ -984,10 +984,8 @@ export default function DiscoverGrants() {
       const jobIds = Array.isArray(dispatch?.job_ids) ? dispatch.job_ids : []
       const enqueued = jobIds.length || Number(dispatch?.jobs_enqueued) || 0
       const crawlerTypes = Array.isArray(dispatch?.crawler_types) ? dispatch.crawler_types : []
-      // synchronous=true means the OS shim ran the entire profile discovery
-      // INSIDE the request \u2014 by the time we see this response the catalog
-      // has already been updated and there is nothing to poll for. Polling
-      // anyway just adds 12s+ of wasted spinner time before fetchCatalogMatches.
+      // Older servers may still return a synchronous result during a rolling
+      // deployment. Only durable receipts have a job to poll.
       const synchronous = Boolean(dispatch?.synchronous)
       if (!synchronous && !jobIds.length) throw new Error('The search did not return a progress receipt. Please try again.')
       const partial = Boolean(dispatch?.partial)
@@ -1037,11 +1035,9 @@ export default function DiscoverGrants() {
         }
       } else if (synchronous && partial) {
         searchComplete = false
-        // The crawl hit the gateway time budget and is finishing in the
-        // background. Show what was found so far instead of a 504/empty state.
         toast({
-          title: 'Search is taking longer than usual',
-          description: 'We’re still searching in the background and have shown the matches found so far. Check back in a minute or run the search again for more.',
+          title: 'Search partially completed',
+          description: 'Some sources could not be checked. Showing the matches found so far; you can search again to retry.',
         })
       } else if (synchronous) {
         toast({

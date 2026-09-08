@@ -580,7 +580,7 @@ export async function runProfileDiscoveryLive({ db = getDb(), profileId, fetcher
   // and the promotion lane canonically rescores before anything reaches a
   // pipeline.
   Object.defineProperty(thesis, '_profileContext', {
-    value: { profile: ctx?.profile ?? null, sections: ctx?.sections ?? null, signals: ctx?.signals ?? null },
+    value: ctx,
     enumerable: false,
   });
   // Close the learning loop ON THE CRAWL PATH. The learned-gap attach used to

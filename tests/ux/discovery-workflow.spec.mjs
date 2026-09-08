@@ -22,13 +22,13 @@ test('the five workflow steps stay visible and specialist tools remain reachable
   const journey = guide.getByRole('navigation')
   await expect(journey.getByRole('link')).toHaveCount(5)
   for (const link of await journey.getByRole('link').all()) await expect(link).toBeVisible()
-  await expect(page.getByRole('link', { name: 'Smart Matcher', exact: true })).not.toBeVisible()
+  await expect(page.locator('a[data-sidebar="menu-button"][href="/SmartMatcher"]')).not.toBeVisible()
   await page.getByRole('button', { name: 'More funding tools', exact: true }).click()
-  await page.getByRole('link', { name: 'Smart Matcher', exact: true }).click()
+  await page.locator('a[data-sidebar="menu-button"][href="/SmartMatcher"]').click()
   await expect(page).toHaveURL(/SmartMatcher/)
   await page.reload()
-  await expect(page.getByRole('link', { name: 'Smart Matcher', exact: true })).toBeVisible()
-  await expect(page.getByRole('link', { name: 'Smart Matcher', exact: true })).toHaveAttribute('aria-current', 'page')
+  await expect(page.locator('a[data-sidebar="menu-button"][href="/SmartMatcher"]')).toBeVisible()
+  await expect(page.locator('a[data-sidebar="menu-button"][href="/SmartMatcher"]')).toHaveAttribute('aria-current', 'page')
 })
 
 test('unavailable job progress is shown as a search failure, never a completed empty scan', async ({ page }) => {

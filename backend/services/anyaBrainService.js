@@ -80,7 +80,7 @@ export async function getMemory(db, { scope = SCOPES.GLOBAL, scopeId = null, mem
     row = await db.prepare(`
       SELECT *
       FROM anya_brain_memory
-      WHERE scope = ? AND (scope_id = ? OR (scope_id IS NULL AND ? IS NULL)) AND memory_key = ?
+      WHERE scope = ? AND (scope_id = ? OR (scope_id IS NULL AND CAST(? AS TEXT) IS NULL)) AND memory_key = ?
         AND (expires_at IS NULL OR expires_at > CURRENT_TIMESTAMP)
       ORDER BY updated_at DESC, created_at DESC
       LIMIT 1
@@ -90,7 +90,7 @@ export async function getMemory(db, { scope = SCOPES.GLOBAL, scopeId = null, mem
     row = await db.prepare(`
       SELECT *
       FROM anya_brain_memory
-      WHERE scope = ? AND (scope_id = ? OR (scope_id IS NULL AND ? IS NULL)) AND memory_key = ?
+      WHERE scope = ? AND (scope_id = ? OR (scope_id IS NULL AND CAST(? AS TEXT) IS NULL)) AND memory_key = ?
         AND (expires_at IS NULL OR expires_at > CURRENT_TIMESTAMP)
       LIMIT 1
     `).get(scope, scopeId, scopeId, memoryKey)
@@ -118,7 +118,7 @@ export async function getMemories(db, { scope = SCOPES.GLOBAL, scopeId = null, m
   let query = `
     SELECT *
     FROM anya_brain_memory
-    WHERE scope = ? AND (scope_id = ? OR (scope_id IS NULL AND ? IS NULL))
+    WHERE scope = ? AND (scope_id = ? OR (scope_id IS NULL AND CAST(? AS TEXT) IS NULL))
       AND (expires_at IS NULL OR expires_at > CURRENT_TIMESTAMP)
   `
   const params = [scope, scopeId, scopeId]
@@ -145,7 +145,7 @@ export async function getMemories(db, { scope = SCOPES.GLOBAL, scopeId = null, m
 export async function deleteMemory(db, { scope = SCOPES.GLOBAL, scopeId = null, memoryKey }) {
   const result = await db.prepare(`
     DELETE FROM anya_brain_memory
-    WHERE scope = ? AND (scope_id = ? OR (scope_id IS NULL AND ? IS NULL)) AND memory_key = ?
+    WHERE scope = ? AND (scope_id = ? OR (scope_id IS NULL AND CAST(? AS TEXT) IS NULL)) AND memory_key = ?
   `).run(scope, scopeId, scopeId, memoryKey)
   
   return { deleted: result.changes > 0 }
