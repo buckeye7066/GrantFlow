@@ -93,6 +93,7 @@ export default function LoginGapInterviewLauncher({ onFinished } = {}) {
   const [gapped, setGapped] = useState(null) // null = not probed yet
   const [index, setIndex] = useState(0)
   const [submitting, setSubmitting] = useState(false)
+  const [submitError, setSubmitError] = useState(null)
   const [closedForSession, setClosedForSession] = useState(false)
   const probedRef = useRef(false)
   const finishedRef = useRef(false)
@@ -155,7 +156,10 @@ export default function LoginGapInterviewLauncher({ onFinished } = {}) {
   const current = Array.isArray(gapped) ? gapped[index] : null
   if (!current) return null
 
-  const advance = () => setIndex((i) => i + 1)
+  const advance = () => {
+    setSubmitError(null)
+    setIndex((i) => i + 1)
+  }
 
   // Explicit "Skip for now" button: snooze just this profile, show the next.
   const handleSkip = () => {
@@ -175,15 +179,19 @@ export default function LoginGapInterviewLauncher({ onFinished } = {}) {
 
   const handleSubmit = async (sectionUpdates) => {
     setSubmitting(true)
+    setSubmitError(null)
     try {
       await persistGapAnswers(current.profile.id, sectionUpdates)
       // Refresh anything (e.g. ProfileOverview's ProfileGapGate) reading this plan.
       queryClient.invalidateQueries({ queryKey: ['gap-plan', current.profile.id] })
-    } catch {
-      // Persist failed — don't trap the user in the dialog; next login re-asks.
-    } finally {
       setSubmitting(false)
       advance()
+    } catch (err) {
+      // A failed/rejected save must be VISIBLE: silently advancing looked like
+      // success while the answer never landed (re-asked at every login). The
+      // user keeps their answers on screen and can retry or skip.
+      setSubmitting(false)
+      setSubmitError(err instanceof Error ? err : new Error('Your answers could not be saved. Please try again.'))
     }
   }
 
@@ -205,6 +213,7 @@ export default function LoginGapInterviewLauncher({ onFinished } = {}) {
         <ProfileGapInterview
           plan={current.plan}
           submitting={submitting}
+          error={submitError}
           onSubmit={handleSubmit}
           onSkip={handleSkip}
         />

@@ -16,7 +16,7 @@ import { Label } from '@/components/ui/label'
  * jsdom. On submit it maps answers → section updates ({ sectionKey: { field: value } })
  * via each question's `writes` descriptor and hands them to onSubmit for persistence.
  */
-export default function ProfileGapInterview({ plan, onSubmit, onSkip, submitting = false }) {
+export default function ProfileGapInterview({ plan, onSubmit, onSkip, submitting = false, error = null }) {
   const questions = useMemo(() => (Array.isArray(plan?.questions) ? plan.questions : []), [plan])
   const [answers, setAnswers] = useState({})
 
@@ -97,6 +97,12 @@ export default function ProfileGapInterview({ plan, onSubmit, onSkip, submitting
           </li>
         ))}
       </ol>
+
+      {error && (
+        <p role="alert" className="text-sm text-red-600" data-testid="profile-gap-interview-error">
+          {typeof error === 'string' ? error : error?.message || 'Your answers could not be saved. Please try again.'}
+        </p>
+      )}
 
       <div className="flex items-center gap-3">
         <Button type="button" disabled={!canSubmit} onClick={() => onSubmit?.(buildSectionUpdates(), answers)}>

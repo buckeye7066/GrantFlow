@@ -3,7 +3,8 @@
  * gate + gap-explanation email.
  */
 import { describe, it, expect } from 'vitest'
-import { buildProfileGapPlan, FACET_QUESTIONS } from '../services/profileGapInterview.js'
+import { buildProfileGapPlan, FACET_QUESTIONS, GAP_QUESTIONS } from '../services/profileGapInterview.js'
+import { guardProfileSectionPayload } from '../utils/profileSuggestionGuards.js'
 import { normalizeProfile } from '../services/profileNormalizer.js'
 
 describe('buildProfileGapPlan', () => {
@@ -64,5 +65,30 @@ describe('buildProfileGapPlan', () => {
     const plan = buildProfileGapPlan(n, secWithVet, { minCoverage: 0.3 })
     expect(plan.complete).toBe(true)
     expect(plan.email).toBeNull()
+  })
+})
+
+// Every interview answer must SURVIVE the section-write guard. The section PUT
+// (backend/routes/profiles.js) runs guardProfileSectionPayload before writing;
+// a `writes` target the guard does not know is dropped as unknown_field with a
+// 200 OK — the answer silently vanishes and the question is re-asked at every
+// login (GeneMac, 2026-09-07: education.is_student written as {} in prod).
+describe('interview writes survive guardProfileSectionPayload', () => {
+  const profile = { id: 'p', primary_type: 'individual' }
+  const cases = []
+  for (const q of FACET_QUESTIONS) {
+    cases.push({ label: `${q.id}=yes`, ...q.writes, value: q.writes.yes })
+    cases.push({ label: `${q.id}=no`, ...q.writes, value: q.writes.no })
+  }
+  for (const q of Object.values(GAP_QUESTIONS)) {
+    cases.push({ label: q.id, ...q.writes, value: q.type === 'number' ? 5000 : 'sample answer' })
+  }
+
+  it.each(cases)('$label survives the section guard', ({ section, field, value }) => {
+    const guarded = guardProfileSectionPayload({ [field]: value }, { profile, sections: {}, sectionKey: section })
+    const dropped = guarded.rejected.filter((r) => !r.routedTo)
+    expect(dropped).toEqual([])
+    const persistedKey = guarded.rejected.find((r) => r.routedTo)?.routedTo ?? field
+    expect(Object.prototype.hasOwnProperty.call(guarded.data, persistedKey)).toBe(true)
   })
 })

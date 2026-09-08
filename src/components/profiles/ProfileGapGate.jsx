@@ -44,10 +44,14 @@ export default function ProfileGapGate({ profileId, enabled = false, onComplete,
     <ProfileGapInterview
       plan={plan}
       submitting={submitting || persist.isPending}
+      error={persist.error}
       onSubmit={async (sectionUpdates) => {
         setSubmitting(true)
         try {
           await persist.mutateAsync(sectionUpdates)
+        } catch {
+          // Surfaced through `persist.error` -> the interview's alert line;
+          // a rejected/failed save must never look like a silent success.
         } finally {
           setSubmitting(false)
         }

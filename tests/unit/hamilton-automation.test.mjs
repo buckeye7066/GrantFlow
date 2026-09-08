@@ -372,8 +372,13 @@ describe('hamiltonAutomationOrchestrator — multi-source dispatch', () => {
   it('automates a mail source: creates a task, generates DOCX, sets ready_to_print_mail, with mailing instructions', async () => {
     resetCaches()
     const db = makeMemoryDb()
+    // The award is county-named on purpose: since #1613 a "<Name> County" award
+    // qualifies only for a profile anchored in that county. Profile A lives in
+    // Murfreesboro TN 37130 (Rutherford County), so the fixture names Rutherford;
+    // the old 'MTSU County' title was read as a county the profile is not in and
+    // the source was skipped as ineligible_profile before any mail automation.
     db.raw.prepare(`INSERT INTO funding_opportunities (id, title, description, mailing_address, application_mode, funder_name, application_url, eligibility_text)
-                    VALUES ('opp-mail', 'MTSU County Education Scholarship', 'A direct education scholarship for eligible Tennessee college students enrolled at Middle Tennessee State University; submit the application by mail.', '1 Main St', 'mail', 'County Foundation', 'https://www.mtsu.edu/financial-aid/county-aid', 'Eligible Tennessee college students at Middle Tennessee State University may apply.')`).run()
+                    VALUES ('opp-mail', 'Rutherford County Education Scholarship', 'A direct education scholarship for eligible Tennessee college students enrolled at Middle Tennessee State University; submit the application by mail.', '1 Main St', 'mail', 'County Foundation', 'https://www.mtsu.edu/financial-aid/county-aid', 'Eligible Tennessee college students at Middle Tennessee State University may apply.')`).run()
     const result = await automateSelected(db, {
       profileId: 'p-A',
       userId: 'u-A',

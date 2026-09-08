@@ -21,11 +21,28 @@ export async function persistGapAnswers(profileId, sectionUpdates) {
   const rows = Array.isArray(current) ? current : (current?.sections || [])
   const byKey = {}
   for (const s of rows) byKey[s.section_key] = s.data || {}
+  const dropped = []
   for (const [sectionKey, fields] of Object.entries(sectionUpdates || {})) {
     const merged = { ...(byKey[sectionKey] || {}), ...fields }
-    await apiFetch(`/api/profiles/${profileId}/sections/${encodeURIComponent(sectionKey)}`, {
+    const response = await apiFetch(`/api/profiles/${profileId}/sections/${encodeURIComponent(sectionKey)}`, {
       method: 'PUT',
       body: JSON.stringify({ data: merged }),
     })
+    // The PUT answers 200 even when the section guard DROPPED a field (it is
+    // listed under `rejected`). An answer that never reached the row is a
+    // failed save, not a success: the question would be re-asked at every
+    // login (GeneMac, 2026-09-07 — education.is_student persisted as {}).
+    // Items carrying `routedTo` were saved under a canonical alias, not lost.
+    for (const item of Array.isArray(response?.rejected) ? response.rejected : []) {
+      if (item?.routedTo) continue
+      if (!Object.prototype.hasOwnProperty.call(fields, item?.key)) continue
+      dropped.push(`${sectionKey}.${item.key} (${item.reason || 'rejected'})`)
+    }
+  }
+  if (dropped.length > 0) {
+    const error = new Error(`Your answer could not be saved: ${dropped.join(', ')}`)
+    error.code = 'gap_answer_rejected'
+    error.dropped = dropped
+    throw error
   }
 }

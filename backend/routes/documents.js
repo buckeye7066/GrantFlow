@@ -510,6 +510,7 @@ export async function loadDocumentForContext(req, context, select = '*') {
   const id = String(req.params?.id ?? '')
   if (!id) return null
   if (context?.isAdmin) {
+    // audit:allow unscoped-profile-query -- admin-only branch: the runtime tenant guard exempts admins, and every non-admin read below carries `AND profile_id IN (...)`.
     return req.db.prepare(`SELECT ${select} FROM documents WHERE id = ?`).get(id)
   }
   const ids = [...(context?.accessibleProfiles ?? [])].map(String)
