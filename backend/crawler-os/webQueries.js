@@ -441,6 +441,62 @@ export function buildWebQueries(thesis = {}, opts = {}) {
       add(core, `211 community resources ${state || geo}`);
       add(extra, `community action agency ${county || geo}`);
     }
+    // ── THE PROFILE'S OWN FACTS BECOME SEARCHES (owner order 2026-09-08) ────
+    // These channels reached the thesis and no query ever read them, so a
+    // profile's occupation, income band, rural status, licensure, immigration
+    // status and first-generation status could not find a single source. The
+    // richest profile-to-query mapping in the repo (services/crawlers/
+    // queryPlanner.profileSignalTerms) has NO runtime importer at all — this
+    // ports its highest-value terms onto the live path.
+    //
+    // CORE, not EXTRA: `.slice(0, max)` truncates from the END and the live
+    // route passes a small max, so an EXTRA query is one that never runs.
+    // Each is guarded by a POSITIVE structured flag — silence adds nothing.
+    for (const job of (thesis.occupation ?? []).slice(0, 2)) {
+      add(core, `${String(job).replace(/_/g, ' ')} assistance programs ${state || geo}`);
+      add(extra, `grants for ${String(job).replace(/_/g, ' ')} ${state || geo}`);
+    }
+    for (const tag of (thesis.geographic ?? []).slice(0, 2)) {
+      // rural / appalachian / tribal / frontier / urban_underserved
+      add(core, `${String(tag).replace(/_/g, ' ')} assistance grants ${state || geo}`);
+    }
+    for (const status of (thesis.immigration ?? []).slice(0, 1)) {
+      add(core, `${String(status).replace(/_/g, ' ')} assistance programs ${state || geo}`);
+    }
+    if (thesis.is_licensed_professional === true) {
+      for (const cred of (thesis.credentials ?? []).slice(0, 1)) {
+        add(extra, `${String(cred).replace(/_/g, ' ')} professional assistance fund`);
+      }
+    }
+    {
+      const fin = thesis.financial ?? {};
+      const income = Number(fin.householdIncome);
+      const size = Number(fin.householdSize);
+      // A stated LOW income is what unlocks means-tested programs; a high one
+      // states nothing useful, so only the low end becomes a query.
+      if (Number.isFinite(income) && income > 0 && income < 60000) {
+        add(core, `low income assistance programs ${state || geo}`);
+        if (Number.isFinite(size) && size > 0) {
+          add(extra, `household of ${size} income eligibility assistance ${state || geo}`);
+        }
+      }
+      if (String(fin.needLevel ?? '').toLowerCase() === 'urgent') {
+        add(core, `emergency financial assistance ${county || state || geo}`);
+      }
+    }
+    {
+      const edu = thesis.education_profile ?? {};
+      if (edu.firstGeneration === true) add(core, `first generation student scholarships ${state || geo}`);
+      if (edu.returningAdult === true) add(extra, `adult learner returning student grants ${state || geo}`);
+      if (edu.gedGraduate === true) add(extra, `GED graduate scholarships ${state || geo}`);
+      if (edu.jobRetraining === true) add(core, `job retraining workforce grants ${state || geo}`);
+    }
+    {
+      const ac = thesis.academics ?? {};
+      const gpa = Number(ac.gpa);
+      if (Number.isFinite(gpa) && gpa >= 3.5) add(extra, `merit scholarships GPA ${gpa} ${state || geo}`);
+    }
+
     // Per-need ASSISTANCE PROGRAMS (distinct from the "need grants" phrase above).
     for (const need of needs.slice(0, 3)) {
       add(core, `${need} assistance programs ${state || geo}`);

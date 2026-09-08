@@ -466,12 +466,19 @@ export async function runWebDiscoveryLane(deps, opts = {}) {
     const n = Number(raw);
     return Number.isFinite(n) && n > 0 ? Math.floor(n) : fallback;
   };
+  // RAISED 20 -> 28 (2026-09-08, "use the entire profile"). The bridge now
+  // carries occupation, income band, geographic qualifiers, immigration status,
+  // licensure and first-generation status through to the query builder, which
+  // emits them as CORE queries. `.slice(0, max)` truncates from the END, so
+  // leaving the cap at 20 would have paid for those new queries by silently
+  // cutting eight that already ran — the same starvation this file's own
+  // comment warns about. maxPages rises with it below.
   const maxQueries = Number.isFinite(opts.maxQueries) ? opts.maxQueries
-    : envInt(process.env.WEB_LANE_MAX_QUERIES, 20);
+    : envInt(process.env.WEB_LANE_MAX_QUERIES, 28);
   const resultsPerQuery = Number.isFinite(opts.resultsPerQuery) ? opts.resultsPerQuery
     : envInt(process.env.WEB_LANE_RESULTS_PER_QUERY, 8);
   const maxPages = Number.isFinite(opts.maxPages) ? opts.maxPages
-    : envInt(process.env.WEB_LANE_MAX_PAGES, 32);
+    : envInt(process.env.WEB_LANE_MAX_PAGES, 44);
   // Per-run rotation seed: successive discoveries sample DIFFERENT broadening
   // queries (the CORE queries always run) so a profile stops getting the same
   // set every time. Injectable for deterministic tests; defaults to wall-clock.

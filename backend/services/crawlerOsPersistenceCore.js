@@ -556,6 +556,29 @@ export function profileContextToThesisInput(ctx = {}) {
       zip: location.zip ?? profile.postal_code ?? profile.zip_code ?? null,
       city: location.city ?? profile.city ?? null,
     },
+    // ── THE WHOLE PROFILE REACHES THE CRAWLERS (owner order 2026-09-08) ──────
+    // `buildProfileSignals` emits ~35 channels and this bridge read 11. Every
+    // fact below was computed, carried to this line, and DROPPED — so a senior
+    // homeowner's occupation, income band, rural status and licensure could not
+    // influence a single search query or lane. Measured on one real profile:
+    // his declared needs (housing/utilities/medical bills/food) reached the
+    // query builder while none of these did.
+    //
+    // Carried as NAMED STRUCTURED channels, never rendered prose: the
+    // `military_service` precedent is that mining a section's TEXT matches a
+    // fact inside its own DENIAL ("no military affiliation ... veteran status").
+    // Consumers must read the flags, not the words.
+    occupation: asList(signals.occupation),
+    credentials: asList(signals.credentials),
+    is_licensed_professional: signals.isLicensedProfessional === true,
+    academics: signals.academics && typeof signals.academics === 'object' ? signals.academics : null,
+    financial: signals.financial && typeof signals.financial === 'object' ? signals.financial : null,
+    immigration: asList(signals.immigration),
+    geographic: asList(signals.geographic),
+    education_profile: signals.education && typeof signals.education === 'object' ? signals.education : null,
+    secondary_location: signals.secondaryLocation && typeof signals.secondaryLocation === 'object'
+      ? signals.secondaryLocation
+      : null,
     // honesty doctrine: loans/cost-share off unless the profile opted in.
     allow_loans: profile.allow_loans === true,
     allow_cost_share: profile.allow_cost_share === true,
