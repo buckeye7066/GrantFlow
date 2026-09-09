@@ -16,7 +16,7 @@ jobs:
           ref: recovery/propublica-pagination-20260909
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
         with:
-          node-version: '24'
+          node-version-file: .nvmrc
           cache: npm
       - name: Apply guarded source-only manifest
         shell: python
@@ -45,6 +45,14 @@ jobs:
           pathlib.Path('/tmp/recovery-paths.json').write_text(json.dumps([str(p) for p, _ in prepared]))
           print('Applied five source/test/doc files with before/after SHA-256 verification.')
       - run: npm ci
+      - name: Report current dependency advisories
+        shell: python
+        run: |
+          import subprocess
+          report = subprocess.run(['npm', 'audit', '--json'], text=True, capture_output=True)
+          print(report.stdout)
+          if report.returncode not in (0, 1):
+              raise SystemExit(report.returncode)
       - name: Reproducing and related regression checks
         run: |
           node node_modules/vitest/vitest.mjs run backend/tests/propublicaPaginationRecovery.test.js backend/tests/yanaLeadDiscovery.test.js backend/tests/foundation990ProfileDriven.test.js
