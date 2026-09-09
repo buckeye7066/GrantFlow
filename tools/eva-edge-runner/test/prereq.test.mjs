@@ -6,10 +6,37 @@ import { tmpdir } from 'node:os'
 import {
   checkPrerequisites,
   inferExecutableRequirements,
+  probeExecutable,
   recoverDockerDesktop,
   resolveLaunchEnv,
   satisfiesNodeEngine,
 } from '../src/prereq.mjs'
+
+test('native Windows prerequisite arguments bypass cmd interpretation', () => {
+  const args = ['-NoProfile', '-Command', "& (Join-Path $env:ProgramFiles 'PostgreSQL\\16\\bin\\initdb.exe') --version"]
+  for (const command of ['powershell', 'powershell.exe', 'node', 'python', 'docker']) {
+    const result = probeExecutable({ command, args, platform: 'win32', run: (actual, received, options) => {
+      assert.equal(actual, command)
+      assert.deepEqual(received, args)
+      assert.equal(options.shell, false)
+      assert.equal(options.windowsHide, true)
+      return { status: 0, stdout: 'available' }
+    } })
+    assert.equal(result.ok, true, result.detail)
+  }
+})
+
+test('Windows batch prerequisite launchers retain cmd support without changing POSIX execution', () => {
+  for (const command of ['npm', 'pnpm', 'npx', 'corepack', 'npm.cmd', 'C:\\tools\\custom.bat']) {
+    for (const platform of ['win32', 'linux']) {
+      const result = probeExecutable({ command, platform, run: (_actual, _args, options) => {
+        assert.equal(options.shell, platform === 'win32')
+        return { status: 0, stdout: 'available' }
+      } })
+      assert.equal(result.ok, true, `${command}: ${result.detail}`)
+    }
+  }
+})
 
 test('runtime executables are inferred globally from start and journey commands', () => {
   const requirements = inferExecutableRequirements({
@@ -118,4 +145,3 @@ test('resolved launch secrets are identified for payload-wide exact redaction', 
   assert.ok(result.sensitiveValues.includes('generated-opaque-secret'))
   assert.equal(result.sensitiveValues.includes('4000'), false)
 })
-

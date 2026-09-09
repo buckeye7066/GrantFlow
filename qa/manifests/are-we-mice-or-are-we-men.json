@@ -72,11 +72,11 @@
       "severity": "critical",
       "steps": [
         { "action": "goto", "url": "/" },
-        { "action": "waitForSelector", "selector": "body" }
+        { "action": "waitForSelector", "selector": "h1:has-text('Are We Mice Or Are We Men')", "timeout": 30000 }
       ],
-      "assert": [{ "type": "text_visible", "selector": "body", "value": "Mice" }],
+      "assert": [{ "type": "text_visible", "selector": "h1", "value": "Are We Mice Or Are We Men" }],
       "user_impact": "If the app shell does not load, no student can reach quizzes, flashcards, or the exam simulator.",
-      "candidate_files": ["src/App.jsx", "src/pages/Login.jsx"]
+      "candidate_files": ["src/App.jsx", "src/components/AuthScreen.jsx"]
     },
     {
       "id": "reach-register",
@@ -84,13 +84,13 @@
       "severity": "high",
       "steps": [
         { "action": "goto", "url": "/" },
-        { "action": "waitForSelector", "selector": "body" },
+        { "action": "waitForSelector", "selector": "h1:has-text('Are We Mice Or Are We Men')", "timeout": 30000 },
         { "action": "click", "selector": "a:has-text('Register'), button:has-text('Register'), a:has-text('Sign up'), button:has-text('Sign up')" },
-        { "action": "wait", "ms": 800 }
+        { "action": "waitForSelector", "selector": "form button[type='submit']:has-text('Create account')" }
       ],
       "assert": [{ "type": "text_visible", "selector": "body", "value": "Create account" }],
       "user_impact": "A prospective student who cannot reach registration cannot self-onboard (with INVITE_ONLY=false in the test env).",
-      "candidate_files": ["src/pages/Login.jsx", "src/pages/Register.jsx"]
+      "candidate_files": ["src/components/AuthScreen.jsx"]
     }
   ]
 }
