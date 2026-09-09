@@ -77,6 +77,49 @@ const WINDOW_CHARS = 900
  */
 export const LISTING_PAGES = Object.freeze([
   Object.freeze({
+    // The catalog stores both UWF umbrella rows at this shared index URL. Each
+    // title has a dedicated official page, so title ownership is required to
+    // route the row without borrowing a sibling scholarship's dollar figure.
+    id: 'uwf_freshman_scholarships',
+    matchHosts: Object.freeze(['uwf.edu', 'www.uwf.edu']),
+    matchPaths: Object.freeze(['/admissions/undergraduate/cost-and-financial-aid/awards-and-scholarships']),
+    matchTitles: Object.freeze(['Freshman Scholarships']),
+    fetchUrl: 'https://uwf.edu/admissions/undergraduate/cost-and-financial-aid/awards-and-scholarships/freshman-scholarships/',
+    pageLevelStatus: Object.freeze({
+      status: 'varies',
+      phrases: Object.freeze(['Awards and requirements are subject to change annually']),
+    }),
+  }),
+  Object.freeze({
+    id: 'uwf_transfer_scholarships',
+    matchHosts: Object.freeze(['uwf.edu', 'www.uwf.edu']),
+    matchPaths: Object.freeze(['/admissions/undergraduate/cost-and-financial-aid/awards-and-scholarships']),
+    matchTitles: Object.freeze(['Transfer Scholarships']),
+    fetchUrl: 'https://uwf.edu/admissions/undergraduate/cost-and-financial-aid/awards-and-scholarships/transfer-scholarships/',
+    pageLevelStatus: Object.freeze({
+      status: 'varies',
+      phrases: Object.freeze(['Value: Amounts Vary']),
+    }),
+  }),
+  Object.freeze({
+    id: 'ohio_transfer_scholarships',
+    matchHosts: Object.freeze(['ohio.edu', 'www.ohio.edu']),
+    matchPaths: Object.freeze(['/admissions/tuition/transfer-scholarships']),
+    matchTitles: Object.freeze(['Transfer Scholarships']),
+    fetchUrl: 'https://www.ohio.edu/admissions/tuition/transfer-scholarships',
+  }),
+  Object.freeze({
+    id: 'howard_transfer_scholarships',
+    matchHosts: Object.freeze(['financialservices.howard.edu']),
+    matchPaths: Object.freeze(['/grants-scholarships-and-other-opportunities']),
+    matchTitles: Object.freeze(['Transfer Scholarships']),
+    fetchUrl: 'https://financialservices.howard.edu/grants-scholarships-and-other-opportunities',
+    pageLevelStatus: Object.freeze({
+      status: 'varies',
+      phrases: Object.freeze(['Allocations for Transfer scholarships may change every year']),
+    }),
+  }),
+  Object.freeze({
     id: 'cscc_scholarship_portal',
     matchHosts: Object.freeze([
       'clevelandstatecc.scholarships.ngwebsolutions.com',
@@ -155,11 +198,26 @@ function pathMatchesExact(pathname, exact) {
   return pathname === normalized || pathname === `${normalized}/`
 }
 
+function normalizedTitle(value) {
+  return String(value || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim()
+}
+
+function titleMatchesEntry(title, entry) {
+  const titles = Array.isArray(entry?.matchTitles) ? entry.matchTitles : null
+  if (!titles?.length) return true
+  const candidate = normalizedTitle(title)
+  return candidate.length > 0 && titles.some((expected) => normalizedTitle(expected) === candidate)
+}
+
 /** The registry entry that owns this row, or null. Pure; exported for tests. */
 export function findListingPageEntry(row) {
   const urls = [row?.source_url, row?.application_url, row?.evidence_url, row?.url].filter(Boolean)
   if (urls.length === 0) return null
   for (const entry of LISTING_PAGES) {
+    if (!titleMatchesEntry(row?.title, entry)) continue
     const exactPaths = Array.isArray(entry.matchPaths) ? entry.matchPaths : null
     const prefixes = Array.isArray(entry.matchPathPrefixes) ? entry.matchPathPrefixes : null
     for (const url of urls) {
@@ -183,6 +241,16 @@ function pageLevelFallback(entry, collapsedText) {
   if (!phrases.length) return false
   const text = String(collapsedText || '').toLowerCase()
   return phrases.some((phrase) => text.includes(String(phrase).toLowerCase()))
+}
+
+function pageLevelStatus(entry, collapsedText) {
+  const status = entry?.pageLevelStatus
+  const phrases = Array.isArray(status?.phrases) ? status.phrases : []
+  if (!status?.status || !phrases.length) return null
+  const text = String(collapsedText || '').toLowerCase()
+  const phrase = phrases.find((candidate) => text.includes(String(candidate).toLowerCase()))
+  if (!phrase) return null
+  return { amount_status: status.status, amount_text: String(phrase) }
 }
 
 /** Is this row served by a registered listing page? Pure; exported for tests. */
@@ -287,6 +355,31 @@ export async function enrichAmountViaListingPage(row, deps = {}) {
     if (text.length < 200) {
       // A WAF interstitial / JS shell — we read nothing about the row.
       return { attempted: true, page_read: false, transient: false, found: false, reason: 'thin_page' }
+    }
+
+    const sourceStatus = pageLevelStatus(entry, text)
+    if (sourceStatus) {
+      return {
+        attempted: true,
+        page_read: true,
+        transient: false,
+        found: false,
+        reason: 'listing_page_source_status',
+        ...sourceStatus,
+      }
+    }
+    if (entry.pageLevelStatus) {
+      // These entries own umbrella rows whose dedicated page contains several
+      // sibling programs. If the source changes and the registered status
+      // statement disappears, fail closed so a nearby sibling figure can
+      // never become the umbrella row's amount.
+      return {
+        attempted: true,
+        page_read: false,
+        transient: false,
+        found: false,
+        reason: 'listing_status_marker_not_found',
+      }
     }
 
     const result = extractAnchoredAmounts(text, row?.title)

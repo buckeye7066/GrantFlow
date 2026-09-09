@@ -47,6 +47,11 @@ describe('versioned amount-adapter reconciliation', () => {
         'East Tennessee Foundation',
         'https://www.easttennesseefoundation.org/nonprofits/apply-for-grants/',
       )
+      insertFo.run(
+        'uwf-transfer',
+        'Transfer Scholarships',
+        'https://uwf.edu/admissions/undergraduate/cost-and-financial-aid/awards-and-scholarships/',
+      )
       insertFo.run('unowned', 'Unowned Program', 'https://unowned.example/program')
 
       const insertGrant = db.prepare(`
@@ -59,7 +64,7 @@ describe('versioned amount-adapter reconciliation', () => {
       insertGrant.run('grant-unowned', 'Unowned Grant', 'https://unowned.example/grant')
 
       const first = await reconcileBurnedAmountAdapters(db)
-      expect(first).toMatchObject({ reopened: 3, version: AMOUNT_ADAPTER_REGISTRY_VERSION })
+      expect(first).toMatchObject({ reopened: 4, version: AMOUNT_ADAPTER_REGISTRY_VERSION })
       expect(db.prepare('SELECT amount_enrich_attempted_at, amount_enrich_attempts, amount_enrich_env_attempts, amount_enrich_last_reason FROM funding_opportunities WHERE id = ?').get('etf')).toMatchObject({
         amount_enrich_attempted_at: null,
         amount_enrich_attempts: 0,
@@ -72,7 +77,7 @@ describe('versioned amount-adapter reconciliation', () => {
       expect(db.prepare('SELECT amount_enrich_attempted_at FROM grants WHERE id = ?').get('grant-unowned').amount_enrich_attempted_at).not.toBeNull()
 
       const marker = JSON.parse(db.prepare('SELECT value FROM system_kv WHERE key = ?').get(AMOUNT_ADAPTER_RECONCILIATION_KV_KEY).value)
-      expect(marker).toMatchObject({ version: AMOUNT_ADAPTER_REGISTRY_VERSION, reopened: 3 })
+      expect(marker).toMatchObject({ version: AMOUNT_ADAPTER_REGISTRY_VERSION, reopened: 4 })
 
       // A source that honestly produces no per-award number may burn again.
       // The same registry version must not reopen it forever on every boot.

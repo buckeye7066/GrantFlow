@@ -79,6 +79,34 @@ const ETF_TEXT = [
   'This page lists process guidance only and does not publish one umbrella award amount.',
 ].join(' ')
 
+const UWF_ROOT = 'https://uwf.edu/admissions/undergraduate/cost-and-financial-aid/awards-and-scholarships/'
+const UWF_FRESHMAN_TEXT = [
+  'Freshman Scholarships.',
+  'Students have opportunities to compete for full tuition, on-campus housing, and meal plans.',
+  'Academic merit awards include annual awards from $2,000 through $8,000 depending on the program.',
+  'Awards and requirements are subject to change annually.',
+  'Review each scholarship program and its eligibility requirements before applying.',
+].join(' ')
+const UWF_TRANSFER_TEXT = [
+  'Transfer Scholarships.',
+  'Amounts indicate potential award over two years and range from $2,000 to $4,000 by program.',
+  'Phi Theta Kappa members may receive up to $4,000.',
+  'Foundation Scholarships. Value: Amounts Vary.',
+  'Students should review the separate qualifications for each transfer scholarship opportunity.',
+].join(' ')
+const OHIO_TRANSFER_TEXT = [
+  'Transfer Scholarships.',
+  'Ohio University transfer merit scholarships provide from $1,000 to $3,000 toward tuition expenses.',
+  'A separate Phi Theta Kappa scholarship provides $3,000 to eligible transfer students.',
+  'Awards are applied to tuition after admission and enrollment requirements are confirmed.',
+].join(' ')
+const HOWARD_TRANSFER_TEXT = [
+  'Transfer Scholarships.',
+  'Transfer scholarships are allocated for tuition and fees only.',
+  'Allocations for Transfer scholarships may change every year.',
+  'Transfer scholarships may not be available every year and students should review current financial aid guidance.',
+].join(' ')
+
 const okFetcher = (body) => ({ fetch: vi.fn(async () => ({ ok: true, status: 200, body })) })
 const asHtml = (text) => `<html><body><main>${text}</main></body></html>`
 
@@ -128,6 +156,16 @@ describe('registry routing', () => {
       expect(entry.fetchUrl, `${entry.id}.fetchUrl`).toMatch(/^https:\/\//)
       expect(entry.matchHosts.length, `${entry.id}.matchHosts`).toBeGreaterThan(0)
     }
+  })
+
+  it('routes same-URL UWF umbrella rows by exact title and never claims an unrelated title', () => {
+    expect(findListingPageEntry({ title: 'Freshman Scholarships', source_url: UWF_ROOT })?.id).toBe(
+      'uwf_freshman_scholarships',
+    )
+    expect(findListingPageEntry({ title: 'Transfer Scholarships', source_url: UWF_ROOT })?.id).toBe(
+      'uwf_transfer_scholarships',
+    )
+    expect(findListingPageEntry({ title: 'Other Scholarships', source_url: UWF_ROOT })).toBeNull()
   })
 })
 
@@ -327,5 +365,77 @@ describe('MTSU CS listing — amount_recall_miss titles never inherit S-STEM dol
     const res = await enrichAmountViaListingPage(MTSU_CS_ROW, { fetcher: okFetcher(asHtml(MTSU_CS_TEXT)) })
     expect(res).toMatchObject({ attempted: true, page_read: true, found: false })
     expect(res.amounts).toBeUndefined()
+  })
+})
+
+describe('official title-specific pages close the recurring amount-recall gap', () => {
+  it.each([
+    {
+      title: 'Freshman Scholarships',
+      sourceUrl: UWF_ROOT,
+      expectedFetchUrl: 'https://uwf.edu/admissions/undergraduate/cost-and-financial-aid/awards-and-scholarships/freshman-scholarships/',
+      body: UWF_FRESHMAN_TEXT,
+    },
+    {
+      title: 'Transfer Scholarships',
+      sourceUrl: UWF_ROOT,
+      expectedFetchUrl: 'https://uwf.edu/admissions/undergraduate/cost-and-financial-aid/awards-and-scholarships/transfer-scholarships/',
+      body: UWF_TRANSFER_TEXT,
+    },
+    {
+      title: 'Transfer Scholarships',
+      sourceUrl: 'https://financialservices.howard.edu/grants-scholarships-and-other-opportunities',
+      expectedFetchUrl: 'https://financialservices.howard.edu/grants-scholarships-and-other-opportunities',
+      body: HOWARD_TRANSFER_TEXT,
+    },
+  ])('$title at $sourceUrl records a source-stated varying amount instead of a sibling number', async ({
+    title,
+    sourceUrl,
+    expectedFetchUrl,
+    body,
+  }) => {
+    const fetcher = okFetcher(asHtml(body))
+    const result = await enrichAmountViaListingPage({ title, source_url: sourceUrl }, { fetcher })
+
+    expect(fetcher.fetch).toHaveBeenCalledWith(expectedFetchUrl)
+    expect(result).toMatchObject({
+      attempted: true,
+      page_read: true,
+      transient: false,
+      found: false,
+      amount_status: 'varies',
+    })
+    expect(result.amounts).toBeUndefined()
+  })
+
+  it('extracts Ohio University\'s own published $1,000-$3,000 transfer range', async () => {
+    const sourceUrl = 'https://www.ohio.edu/admissions/tuition/transfer-scholarships'
+    const result = await enrichAmountViaListingPage(
+      { title: 'Transfer Scholarships', source_url: sourceUrl },
+      { fetcher: okFetcher(asHtml(OHIO_TRANSFER_TEXT)) },
+    )
+
+    expect(result).toMatchObject({ attempted: true, page_read: true, found: true })
+    expect(result.amounts).toMatchObject({ amount_min: 1000, amount_max: 3000 })
+  })
+
+  it('never falls through to sibling numbers when a registered umbrella status marker disappears', async () => {
+    const changedPage = UWF_FRESHMAN_TEXT.replace(
+      'Awards and requirements are subject to change annually.',
+      'Please review the current scholarship catalog for program-specific terms and updates.',
+    )
+    const result = await enrichAmountViaListingPage(
+      { title: 'Freshman Scholarships', source_url: UWF_ROOT },
+      { fetcher: okFetcher(asHtml(changedPage)) },
+    )
+
+    expect(result).toMatchObject({
+      attempted: true,
+      page_read: false,
+      transient: false,
+      found: false,
+      reason: 'listing_status_marker_not_found',
+    })
+    expect(result.amounts).toBeUndefined()
   })
 })

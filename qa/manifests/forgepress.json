@@ -40,8 +40,8 @@
   },
   "coverage": [
     { "feature": "App launches + main window with a disposable profile", "journeys": ["app-launches"] },
-    { "feature": "Manuscript import (fixture)", "unautomated_reason": "electron adapter harness pending; launch smoke via Playwright electron support" },
-    { "feature": "Stream parser / manuscript export", "unautomated_reason": "electron adapter harness pending; export needs the electron interaction harness" },
+    { "feature": "Manuscript import (fixture)", "unautomated_reason": "launch verification is automated; interactive Electron fixture coverage is still pending" },
+    { "feature": "Stream parser / manuscript export", "unautomated_reason": "launch verification is automated; export still needs an interactive Electron harness" },
     { "feature": "Bowker/ISBN submit & publishing", "unautomated_reason": "PROHIBITED — no Bowker registration, ISBN assignment, cover upload, or publishing is ever exercised" }
   ],
   "journeys": [
@@ -49,10 +49,15 @@
       "id": "app-launches",
       "name": "App launches with a disposable profile",
       "severity": "critical",
+      "command": "node",
+      "args": ["tools/verify-launch.cjs"],
+      "expect_exit_code": 0,
+      "expect_stdout_matches": "verify-launch OK",
+      "timeout_ms": 90000,
       "steps": [],
       "assert": [],
       "user_impact": "If it won't launch nothing works.",
-      "candidate_files": ["resources/app/dist/assets/forge-enhance.js"]
+      "candidate_files": ["tools/verify-launch.cjs", "resources/app/electron/main.cjs", "resources/app/electron/preload.cjs"]
     }
   ]
 }
