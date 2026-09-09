@@ -187,13 +187,24 @@ export function probeExecutable({ command, args = ['--version'], env = process.e
     // must stay separate: routing PowerShell -Command through cmd interprets
     // its &, parentheses, and redirects before PowerShell receives the script.
     const batchLauncher = /\.(?:cmd|bat)$/i.test(command) || /^(?:npm|pnpm|npx|corepack)$/i.test(command)
-    const res = run(command, Array.isArray(args) ? args : [], {
+    const runProbe = () => run(command, Array.isArray(args) ? args : [], {
       encoding: 'utf8',
       timeout: timeoutMs,
       windowsHide: true,
       shell: platform === 'win32' && batchLauncher,
       env,
     })
+    let res
+    try {
+      res = runProbe()
+    } catch (err) {
+      if (err?.code !== 'ETIMEDOUT') throw err
+      res = runProbe()
+    }
+    // A busy Windows host can time out cmd.exe once even though the same npm
+    // executable ran seconds earlier. One bounded retry separates that
+    // transient scheduler/process-start delay from a genuinely absent runtime.
+    if (res?.error?.code === 'ETIMEDOUT') res = runProbe()
     if (res && res.status === 0) {
       const version = firstLine(res.stdout || res.stderr || '')
       return { ok: true, detail: version || `${command} is callable` }

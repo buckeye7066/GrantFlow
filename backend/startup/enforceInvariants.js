@@ -4076,6 +4076,16 @@ export async function enforceAmountEnrichment(db, deps = {}) {
       // bounded batch: before this split, low-id blocked rows re-entered the
       // batch every run (attempts=0 sorts first) and starved valid
       // never-attempted rows out of the budget entirely.
+      // The unattended sweep remains limited to rows in an ACTIVE pipeline.
+      // An explicit, ID-bounded maintenance request is already its own scope
+      // and must also be able to reconcile a catalog row before/after its
+      // temporary synthetic grant link has been removed.
+      const activeGrantJoin = scopedOpportunityIds
+        ? ''
+        : 'JOIN grants g ON g.funding_opportunity_id = fo.id'
+      const activeGrantPredicate = scopedOpportunityIds
+        ? ''
+        : `AND g.status IN (${statuses})`
       const candidateSql = (envPredicate, orderSql) =>
         // fo.source / fo.source_id / fo.record_origin are what the amount
         // ADAPTER registry routes on (services/sources/amountAdapters.js): the
@@ -4088,8 +4098,9 @@ export async function enforceAmountEnrichment(db, deps = {}) {
                 COALESCE(fo.amount_enrich_attempts, 0) AS attempts,
                 COALESCE(fo.amount_enrich_env_attempts, 0) AS env_attempts
            FROM funding_opportunities fo
-           JOIN grants g ON g.funding_opportunity_id = fo.id
-          WHERE g.status IN (${statuses})
+           ${activeGrantJoin}
+          WHERE 1 = 1
+            ${activeGrantPredicate}
             AND COALESCE(fo.amount_min, 0) <= 0
             AND COALESCE(fo.amount_max, 0) <= 0
             AND (fo.amount_status IS NULL OR fo.amount_status = 'not_listed')
