@@ -12,7 +12,8 @@ import { Button } from '@/components/ui/button'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Progress } from '@/components/ui/progress'
 import { Download, Loader2 } from 'lucide-react'
-import { version as APP_VERSION } from '../../../package.json'
+import { version as PACKAGE_VERSION } from '../../../package.json'
+const APP_VERSION = import.meta.env.VITE_APP_UPDATE_VERSION || PACKAGE_VERSION
 import {
   downloadAndApplyUpdate,
   fetchUpdateManifest,
@@ -28,7 +29,7 @@ import { notifyUpdateAvailable } from '@/lib/mobileUpdateNotifier'
  * the feed. The Settings card's MANUAL "Check for Updates" button is never
  * throttled — this only bounds the automatic launch/resume checks.
  */
-export const AUTO_CHECK_COOLDOWN_MS = 15 * 60 * 1000
+export const AUTO_CHECK_COOLDOWN_MS = 60 * 1000
 
 /**
  * Launch + resume OTA update watcher.
@@ -58,6 +59,7 @@ export default function MobileUpdateWatcher() {
   const nativeVersionRef = useRef('')
   const lastCheckRef = useRef(0)
   const checkingRef = useRef(false)
+  const installingRef = useRef(false)
   const dismissedVersionRef = useRef('')
 
   /**
@@ -68,6 +70,10 @@ export default function MobileUpdateWatcher() {
     const currentVersion = bundleVersionRef.current
     if (!isNewerVersion(found.version, currentVersion)) return
     if (dismissedVersionRef.current === found.version) return
+
+    setManifest(found)
+    setPhase(requiresNativeUpdate(found, nativeVersionRef.current) ? 'native-required' : 'idle')
+    setOpen(true)
 
     // Notification is best-effort and gated (once per version, silent when the
     // permission is denied). It must never gate the in-app prompt below.
@@ -82,17 +88,11 @@ export default function MobileUpdateWatcher() {
       // Plugin absent in an older native build — in-app prompt still shows.
     }
 
-    setManifest(found)
-    // OTA can only replace the WEB bundle. If this bundle declares a native
-    // floor above the installed app, say so instead of offering a web update
-    // that cannot carry the change.
-    setPhase(requiresNativeUpdate(found, nativeVersionRef.current) ? 'native-required' : 'idle')
-    setOpen(true)
   }, [])
 
   const runCheck = useCallback(
     async ({ force = false } = {}) => {
-      if (checkingRef.current) return
+      if (checkingRef.current || installingRef.current) return
       const now = Date.now()
       if (!force && now - lastCheckRef.current < AUTO_CHECK_COOLDOWN_MS) return
       checkingRef.current = true
@@ -155,6 +155,11 @@ export default function MobileUpdateWatcher() {
       removers.push(() => document.removeEventListener('visibilitychange', onVisible))
     }
 
+    const poll = setInterval(onVisible, AUTO_CHECK_COOLDOWN_MS)
+    window.addEventListener('online', onVisible)
+    removers.push(() => clearInterval(poll))
+    removers.push(() => window.removeEventListener('online', onVisible))
+
     return () => {
       cancelled = true
       removers.forEach((remove) => remove())
@@ -162,7 +167,8 @@ export default function MobileUpdateWatcher() {
   }, [isNative, runCheck])
 
   const install = useCallback(async () => {
-    if (!manifest) return
+    if (!manifest || installingRef.current) return
+    installingRef.current = true
     setPhase('installing')
     setError('')
     setProgress(0)
@@ -178,6 +184,7 @@ export default function MobileUpdateWatcher() {
     } catch (err) {
       setError(err?.message || 'Update failed.')
       setPhase('error')
+      installingRef.current = false
     }
   }, [manifest])
 
@@ -236,3 +243,4 @@ export default function MobileUpdateWatcher() {
     </Dialog>
   )
 }
+

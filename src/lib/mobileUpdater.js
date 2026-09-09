@@ -209,7 +209,8 @@ export function resolveFeedUrl({ localStorage: ls, isDev } = {}) {
  */
 export function requiresNativeUpdate(manifest, nativeVersion) {
   const floor = manifest?.minNativeVersion
-  if (!parseVersion(floor) || !parseVersion(nativeVersion)) return false
+  if (!parseVersion(floor)) return false
+  if (!parseVersion(nativeVersion)) return true
   return compareVersions(floor, nativeVersion) > 0
 }
 
@@ -242,13 +243,19 @@ export function requireVerifiableBundle(manifest) {
  * we pass, on both Android and iOS. We refuse to call it at all without one.
  *
  * @param {object} opts
- * @param {{ version: string, url: string, sha256?: string }} opts.manifest
- * @param {{ download: Function, set: Function, addListener?: Function }} opts.updater CapacitorUpdater
+ * @param {{ version: string, url: string, sha256?: string, minNativeVersion?: string }} opts.manifest
+ * @param {{ download: Function, set: Function, current?: Function, addListener?: Function }} opts.updater CapacitorUpdater
  * @param {(percent: number) => void} [opts.onProgress]
  * @returns {Promise<void>} resolves once set() has been called (the webview then reloads)
  */
 export async function downloadAndApplyUpdate({ manifest, updater, onProgress }) {
   const checksum = requireVerifiableBundle(manifest)
+  if (manifest.minNativeVersion) {
+    const current = await updater.current?.()
+    if (requiresNativeUpdate(manifest, current?.native)) {
+      throw new Error('Install the latest signed app release before applying this update.')
+    }
+  }
   let listener = null
   try {
     if (onProgress && typeof updater.addListener === 'function') {
@@ -313,3 +320,4 @@ export async function fetchUpdateManifest({ fetchImpl, feedUrl, timeoutMs = UPDA
   }
   return parseUpdateManifest(parsed, url)
 }
+

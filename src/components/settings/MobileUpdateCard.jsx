@@ -5,7 +5,8 @@ import { Button } from '@/components/ui/button'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Progress } from '@/components/ui/progress'
 import { Loader2, RefreshCw, Download, CheckCircle2 } from 'lucide-react'
-import { version as APP_VERSION } from '../../../package.json'
+import { version as PACKAGE_VERSION } from '../../../package.json'
+const APP_VERSION = import.meta.env.VITE_APP_UPDATE_VERSION || PACKAGE_VERSION
 import {
   downloadAndApplyUpdate,
   fetchUpdateManifest,
@@ -186,3 +187,4 @@ export default function MobileUpdateCard() {
     </Card>
   )
 }
+
