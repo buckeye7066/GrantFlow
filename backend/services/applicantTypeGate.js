@@ -43,6 +43,8 @@
 import { safeParseArrayField } from './profileHelpers.js'
 import { FARM_APPLICANT_TOKENS, hasFarmIdentity, isFarmApplicantToken, normalizeApplicantToken } from './eligibility/farmIdentity.js'
 import { getParentChain, resolveProfileType } from './profileTypeRegistry.js'
+import { normalizeProfile, readNonprofit501c3Status } from './profileNormalizer.js'
+import { grantsGovApplicantCodesFrom } from '../../shared/grantsGovProtocol.js'
 
 // Registry roots that mean a person applies (individual-root family) vs an
 // organization applies. Derived from the canonical profileTypeRegistry so a new
@@ -554,6 +556,62 @@ export function evaluateApplicantTypeEligibility(opportunity, profileApplicantTy
     // on something we can't verify. Mark as review so the matcher can still
     // surface them with a softer decision.
     return { decision: 'review', reason: 'profile_applicant_type_missing' }
+  }
+
+  // A federal detail response can name a narrower legal applicant than its
+  // coarse search bucket: an independent school district is not every school,
+  // and a state government is not every public agency. Preserve those source
+  // restrictions across crawl, persisted matching and pipeline admission.
+  const codes = grantsGovApplicantCodesFrom(opportunity)
+  const sourceApplicantIdentities = {
+    '00': ['state_government', 'state_agency'],
+    '01': ['county_government'],
+    '02': ['municipality', 'municipal_government', 'city_government', 'township_government'],
+    '04': ['special_district'],
+    '05': ['school_district'],
+    '06': ['higher_education', 'university', 'college', 'institution'],
+    '07': ['tribal_government'],
+    '08': ['local_housing_authority', 'housing_authority', 'public_housing_authority'],
+    '11': ['tribal_organization'],
+    '12': ['nonprofit'],
+    '13': ['nonprofit'],
+    '20': ['higher_education', 'university', 'college', 'institution'],
+    '21': ['individual'],
+    '22': ['business'],
+    '23': ['business'],
+  }
+  if (Array.isArray(codes) && codes.length) {
+    const declared = profileApplicantType instanceof Set ? [...profileApplicantType]
+      : Array.isArray(profileApplicantType) ? [...profileApplicantType] : [profileApplicantType]
+    declared.push(context.profile?.primary_type, context.sections?.basic_information?.profile_category,
+      context.sections?.organization_details?.organization_type)
+    for (const collection of [context.profile?.applicantTypes, context.profile?.applicant_types]) {
+      declared.push(...(collection instanceof Set ? [...collection] : safeParseArrayField(collection, [])))
+    }
+    const identities = new Set(declared.flatMap(type => {
+      const token = normalizeApplicantToken(type)
+      return [token, resolveProfileType(token), ...getParentChain(token)].filter(Boolean)
+    }))
+    // Reuse canonical, structured business/nonprofit facts. A generic
+    // organization profile may document its business in another section.
+    const normalized = context.normalizedProfile ?? normalizeProfile(
+      context.profile ?? { primary_type: declared[0] }, context.sections ?? {},
+    )
+    if (normalized?.isBusiness || buckets.has('farm')) {
+      identities.add('business')
+      buckets.add('business')
+    }
+    if (normalized?.isNonprofit) identities.add('nonprofit')
+    const taxStatus = readNonprofit501c3Status(context.profile, context.sections)
+    const bothNonprofitClassesAllowed = codes.includes('12') && codes.includes('13')
+    if (!codes.some(code => {
+      if (code === '99') return true // the source explicitly permits every applicant type
+      if (!bothNonprofitClassesAllowed && code === '12' && taxStatus !== true) return false
+      if (!bothNonprofitClassesAllowed && code === '13' && taxStatus !== false) return false
+      return sourceApplicantIdentities[code]?.some(type => identities.has(type))
+    })) {
+      return { decision: 'review', reason: 'federal_applicant_identity_unconfirmed', required_applicant_codes: codes }
+    }
   }
 
   const oppText = gatherOppText(opportunity)

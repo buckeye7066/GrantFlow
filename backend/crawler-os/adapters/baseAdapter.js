@@ -23,6 +23,9 @@
  * @param {string[]} [cfg.requiredEnv]
  * @param {(thesis:object, source:object, env:object)=>Array<{url:string, init?:object, parseCfg?:object}>} cfg.buildRequests
  * @param {(raw:object, ctx:{thesis:object, source:object})=>object|null} cfg.mapCandidate
+ * @param {Function} [cfg.enrichCandidate] optional award-detail reader using the
+ *   pipeline's injected, recorded fetcher and run-scoped cache; returns
+ *   { candidate, evidence?, reason? }. Missing detail retains an unqualified row.
  * @param {(resp:object, req:object)=>boolean|string} [cfg.benignFetchFailure] declare a
  *   specific non-ok response as an honest END OF DATA (e.g. ProPublica 404s on
  *   page overrun) so the pipeline treats it as a clean empty page, never a
@@ -40,6 +43,9 @@ export function createBaseAdapter(cfg) {
     family: cfg.family ?? 'api',
     ...(typeof cfg.benignFetchFailure === 'function'
       ? { benignFetchFailure: cfg.benignFetchFailure }
+      : {}),
+    ...(typeof cfg.enrichCandidate === 'function'
+      ? { enrichCandidate: cfg.enrichCandidate }
       : {}),
     /** Return the subset of required env keys that are missing/empty. */
     missingEnv(env = {}) {

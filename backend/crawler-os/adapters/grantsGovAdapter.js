@@ -8,10 +8,11 @@
 // - runs a small deterministic query set instead of one brittle keyword string;
 // - marks the Search2 JSON contract as required so schema drift becomes a
 //   PARSE_ERROR rather than a misleading empty result;
-// - infers concrete need/applicant categories and funding flags from the source
-//   row instead of relying on broad source-level wildcards.
+// - reads each discovered award's official detail for applicant eligibility,
+//   purpose, dates and amounts; search metadata cannot establish qualification.
 
 import { createBaseAdapter } from './baseAdapter.js';
+import { enrichGrantsGovCandidate } from './grantsGovDetail.js';
 import { OPPORTUNITY_KIND } from '../contract.js';
 import { buildCrawlerQueries, inferCandidateProfile, inferFundingFlags } from '../crawlerVocabulary.js';
 import {
@@ -99,6 +100,7 @@ export function createGrantsGovAdapter() {
     source_id: 'grants_gov',
     family: 'api',
     requiredEnv: [], // public API
+    enrichCandidate: enrichGrantsGovCandidate,
     buildRequests(thesis, source) {
       const eligibilities = eligibilitiesFor(thesis);
       return buildCrawlerQueries(thesis, source, { limit: 4 }).map((keyword) => ({
@@ -129,7 +131,7 @@ export function createGrantsGovAdapter() {
       // created two source identities for the same federal opportunity. Keep
       // the internal id only for the authoritative detail URL.
       const identity = resolveGrantsGovIdentity(raw);
-      const profile = inferCandidateProfile(raw, source);
+      const profile = inferCandidateProfile(raw, {});
       const fundingFlags = inferFundingFlags(raw);
       return {
         external_id: identity.sourceId,
@@ -147,8 +149,8 @@ export function createGrantsGovAdapter() {
         application_method: 'grants.gov',
         apply_url: identity.detailUrl,
         info_url: identity.detailUrl,
-        applicant_types: profile.applicant_types,
-        need_categories: profile.need_categories,
+        applicant_types: [],
+        need_categories: profile.need_categories.filter(type => type !== '*'),
         geography: source?.geography ?? { national: true, states: [] },
         is_loan: fundingFlags.is_loan,
         requires_cost_share: fundingFlags.requires_cost_share,

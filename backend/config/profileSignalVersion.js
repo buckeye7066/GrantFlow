@@ -31,9 +31,9 @@
  */
 
 /** Bump on ANY change to the files below (date + counter). */
-// Re-score profiles whose registered applicant ancestry was missing from
-// entity normalization or positive applicant-type evidence.
-export const PROFILE_SIGNAL_VERSION = '2026.09.09-1'
+// Re-score federal matches with award-specific applicant evidence; search
+// results and broad routing categories cannot certify qualification.
+export const PROFILE_SIGNAL_VERSION = '2026.09.09-2'
 
 /** Repo-relative files whose content decides what the engine believes about a profile. */
 export const PROFILE_SIGNAL_DERIVATION_FILES = Object.freeze([
@@ -49,12 +49,16 @@ export const PROFILE_SIGNAL_DERIVATION_FILES = Object.freeze([
   'backend/config/stageOfLifeEligibility.js',
   'backend/services/matching/needFirstScoringAdapter.js',
   'backend/services/matchEngine.js',
+  'backend/services/applicantTypeGate.js',
+  'backend/crawler-os/fundingTruthPolicy.js',
+  'backend/services/opportunityNormalizer.js',
+  'shared/grantsGovProtocol.js',
 ])
 
 /**
  * sha256 over the LF-normalized concatenation of the files above, pinned by
  * `scripts/pin-signal-version.mjs`. The test recomputes it.
  */
-export const PROFILE_SIGNAL_DERIVATION_HASH = '8a7643d33d22ea044d5d1aa37f43a2493e59097d0a4e8b2567982959414de01a'
+export const PROFILE_SIGNAL_DERIVATION_HASH = '67d9400f236459f9c8acbf18cb555c4691193f94e7b7efe413c113ba41350acd'
 
 export default { PROFILE_SIGNAL_VERSION, PROFILE_SIGNAL_DERIVATION_FILES, PROFILE_SIGNAL_DERIVATION_HASH }

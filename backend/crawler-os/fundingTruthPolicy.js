@@ -15,6 +15,14 @@
 const POSITIVE_ELIGIBILITY = new Set(['yes', 'eligible', 'qualified', 'true'])
 const POSITIVE_REALITY = new Set(['VERIFIED', 'ROLLING'])
 
+/** Search2 captures an identity, not the award's applicant eligibility. */
+export function isGrantsGovSearchEvidence(value) {
+  try {
+    const url = new URL(String(value ?? ''))
+    return url.hostname.toLowerCase() === 'api.grants.gov' && /^\/v1\/api\/search2\/?$/i.test(url.pathname)
+  } catch { return false }
+}
+
 function parseObject(value) {
   if (!value) return null
   if (typeof value === 'object' && !Array.isArray(value)) return value
@@ -50,6 +58,7 @@ export function hasPositiveFourTruthProof(value) {
   const eligibility = String(proof?.profile_qualifies?.eligibility ?? '').trim().toLowerCase()
 
   return proof?.direct_funding === true &&
+    !isGrantsGovSearchEvidence(proof?.real?.evidence_url) &&
     proof?.all_passed === true &&
     proof?.real?.passed === true &&
     POSITIVE_REALITY.has(realityStatus) &&
@@ -165,6 +174,7 @@ export function refreshFourTruthProof(previous, { canonical, opportunity = null,
     },
     profile_qualifies: {
       passed: POSITIVE_ELIGIBILITY.has(eligibilityKey) &&
+        !isGrantsGovSearchEvidence(prev.real?.evidence_url) &&
         (applicantEvidenceFinal.length > 0 || proseFinal.length > 0) &&
         applicantMatched,
       eligibility,
