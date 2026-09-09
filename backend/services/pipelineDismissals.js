@@ -17,6 +17,7 @@
  */
 
 import crypto from 'node:crypto'
+import { isAutomaticGateDismissal, withDismissalProfileTransaction, archiveDismissal, readLockedDismissals } from './pipelineDismissalPolicy.js'
 import {
   grantFingerprintFromOpportunity,
   chooseGrantUrl,
@@ -194,39 +195,31 @@ export async function recordDismissal(
     return { recorded: false, reason: 'no_identity_key' }
   }
 
-  // Non-fingerprint pre-check (idempotency for legacy rows that lack URLs)
-  const existing = await findDismissal(db, profile, key)
-  if (existing) {
-    return { recorded: true, alreadyExisted: true, key }
-  }
-
-  const id = crypto.randomUUID()
-  try {
-    await db
-      .prepare(
-        `INSERT INTO pipeline_dismissals
-           (id, profile_id, fingerprint, opportunity_id, source_url, title, reason, dismissed_by)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-      )
-      .run(
-        id,
-        profile,
-        key.fingerprint,
-        key.opportunity_id,
-        key.source_url,
-        key.title,
-        normString(reason),
-        normString(userId),
-      )
-  } catch (err) {
-    // Race with the unique partial index — treat as already-recorded.
-    const msg = String(err?.message || '')
-    if (/unique/i.test(msg) || /duplicate key/i.test(msg)) {
+  // Profile-wide serialization also covers title/fingerprint aliases. A user
+  // dismissal racing revalidation must either protect the old row or insert a
+  // new protected row after removal; their intent cannot disappear in a precheck.
+  const recorded = await withDismissalProfileTransaction(db, profile, async tx => {
+    const found = await findDismissal(tx, profile, key, { schemaReady: true })
+    const existing = found ? (await readLockedDismissals(tx, profile)).find(row => row.id === found.id) : null
+    if (existing) {
+      const incoming = { dismissed_by: normString(userId), reason: normString(reason) }
+      if (isAutomaticGateDismissal(existing) && !isAutomaticGateDismissal(incoming)) {
+        await archiveDismissal(tx, existing, { profile_id: profile, opportunity_id: existing.opportunity_id,
+          replacement: incoming }, 'automatic_dismissal_superseded_by_protected_intent')
+        await tx.prepare(`UPDATE pipeline_dismissals SET dismissed_by = ?, reason = ?, dismissed_at = CURRENT_TIMESTAMP
+          WHERE id = ? AND profile_id = ?`).run(incoming.dismissed_by, incoming.reason, existing.id, profile)
+      }
       return { recorded: true, alreadyExisted: true, key }
     }
-    log.error('failed to record pipeline dismissal', { profileId: profile, error: msg })
-    throw err
-  }
+    const id = crypto.randomUUID()
+    await tx.prepare(`INSERT INTO pipeline_dismissals
+      (id, profile_id, fingerprint, opportunity_id, source_url, title, reason, dismissed_by)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
+      .run(id, profile, key.fingerprint, key.opportunity_id, key.source_url, key.title, normString(reason), normString(userId))
+    return { recorded: true, alreadyExisted: false, key, id }
+  })
+
+  if (recorded.alreadyExisted) return recorded
 
   // SOFT user-behavior learning (architecture #12): a dismiss/reject nudges
   // future matching AWAY from this opportunity's categories/needs/source (e.g.
@@ -238,7 +231,7 @@ export async function recordDismissal(
     opportunity: opportunity ?? grantRow ?? null,
   }).catch(() => {})
 
-  return { recorded: true, alreadyExisted: false, key, id }
+  return recorded
 }
 
 /**
@@ -249,9 +242,9 @@ export async function recordDismissal(
  *   4. lower(title) only match (last resort, blocks re-add of synthetic rows
  *      whose URL drifts between crawls)
  */
-export async function findDismissal(db, profileId, opportunityOrKey) {
+export async function findDismissal(db, profileId, opportunityOrKey, { schemaReady = false } = {}) {
   if (!db || !profileId) return null
-  await ensurePipelineDismissalsSchema(db)
+  if (!schemaReady) await ensurePipelineDismissalsSchema(db)
 
   const key = opportunityOrKey?.fingerprint !== undefined
     ? opportunityOrKey
