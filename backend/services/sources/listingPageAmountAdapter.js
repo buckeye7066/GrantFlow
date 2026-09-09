@@ -93,7 +93,10 @@ export const LISTING_PAGES = Object.freeze([
   Object.freeze({
     id: 'uwf_transfer_scholarships',
     matchHosts: Object.freeze(['uwf.edu', 'www.uwf.edu']),
-    matchPaths: Object.freeze(['/admissions/undergraduate/cost-and-financial-aid/awards-and-scholarships']),
+    matchPaths: Object.freeze([
+      '/admissions/undergraduate/cost-and-financial-aid/awards-and-scholarships',
+      '/admissions/transfer/transfer-scholarships',
+    ]),
     matchTitles: Object.freeze(['Transfer Scholarships']),
     fetchUrl: 'https://uwf.edu/admissions/transfer/transfer-scholarships/',
     pageLevelStatus: Object.freeze({

@@ -7,6 +7,8 @@
  */
 import { describe, it, expect } from 'vitest'
 import Database from 'better-sqlite3'
+import { readFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
 import { getCheckById } from '../services/sam/samRegistry.js'
 
 const KV_KEY = 'golden_amount_expectations'
@@ -35,8 +37,28 @@ const seedGrant = (db, { id = 'g1', url = 'https://coca-colascholarsfoundation.o
     .run(id, profileId, url, amount)
 
 const COKE = [{ label: 'Coca-Cola Scholars', url_contains: 'coca-colascholarsfoundation', expect_max: 20000 }]
+const OHIO_MIGRATION = fileURLToPath(new URL('../db/migrations/1005_ohio_transfer_golden_amount.sql', import.meta.url))
+const OHIO_PG_MIGRATION = fileURLToPath(new URL('../db/postgres/migrations/1005_ohio_transfer_golden_amount.sql', import.meta.url))
 
 describe('sam check coverage.goldenAmounts', () => {
+  it('persists the live Ohio transfer amount in both migration dialects', async () => {
+    const db = makeDb()
+    const sqliteSql = readFileSync(OHIO_MIGRATION, 'utf8')
+    db.exec(sqliteSql)
+    db.exec(sqliteSql)
+
+    const expectations = JSON.parse(db.prepare('SELECT value FROM system_kv WHERE key = ?').get(KV_KEY).value)
+    expect(expectations.filter((entry) => entry.url_contains === 'ohio.edu/admissions/tuition/transfer-scholarships')).toEqual([
+      expect.objectContaining({ label: 'Ohio University Transfer Scholarships', expect_max: 3000 }),
+    ])
+
+    const postgresSql = readFileSync(OHIO_PG_MIGRATION, 'utf8')
+    expect(postgresSql).toContain('ohio.edu/admissions/tuition/transfer-scholarships')
+    expect(postgresSql).toContain('"expect_max":3000')
+    expect(postgresSql).toMatch(/value NOT LIKE/i)
+    db.close()
+  })
+
   it('is a non-heavy internal check with high severity', () => {
     expect(check).toBeTruthy()
     expect(check.kind).toBe('internal')

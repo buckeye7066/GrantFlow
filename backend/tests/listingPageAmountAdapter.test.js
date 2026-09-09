@@ -170,6 +170,15 @@ describe('registry routing', () => {
     )
     expect(findListingPageEntry({ title: 'Other Scholarships', source_url: UWF_ROOT })).toBeNull()
   })
+
+  it('keeps the replacement UWF transfer URL inside the exact-title adapter', () => {
+    expect(
+      findListingPageEntry({
+        title: 'Transfer Scholarships',
+        source_url: 'https://uwf.edu/admissions/transfer/transfer-scholarships/',
+      })?.id,
+    ).toBe('uwf_transfer_scholarships')
+  })
 })
 
 describe('findTitleAnchor', () => {
