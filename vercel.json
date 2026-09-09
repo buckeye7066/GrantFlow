@@ -90,15 +90,19 @@
       "destination": "/assets/release-identity.json"
     },
     {
-      "source": "/grantflow/((?!assets/).*)",
+      "source": "/grantflow/((?!assets/|app-update(?:[.]json$|-[A-Za-z0-9-]+[.](?:js|css)$)).*)",
       "destination": "/index.html"
     },
     {
-      "source": "/((?!assets/).*)",
+      "source": "/((?!assets/|app-update(?:[.]json$|-[A-Za-z0-9-]+[.](?:js|css)$)).*)",
       "destination": "/index.html"
     }
   ],
   "headers": [
+    {
+      "source": "/app-update.json",
+      "headers": [{ "key": "Cache-Control", "value": "no-cache, no-store, must-revalidate" }]
+    },
     {
       "source": "/(.*)",
       "headers": [
