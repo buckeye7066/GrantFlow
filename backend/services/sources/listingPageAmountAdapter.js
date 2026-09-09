@@ -390,7 +390,10 @@ export async function enrichAmountViaListingPage(row, deps = {}) {
       }
     }
 
-    const anchorTitles = [row?.title, ...(entry.anchorTitles || [])].filter(Boolean)
+    // Page-owned section headings are narrower evidence than a generic catalog
+    // title, so they must win when both occur on one listing page. Otherwise a
+    // sibling amount near an earlier generic H1 can be assigned to this row.
+    const anchorTitles = [...(entry.anchorTitles || []), row?.title].filter(Boolean)
     const anchorCandidates = anchorTitles.map((title) => extractAnchoredAmounts(text, title))
     const result = anchorCandidates.find((candidate) =>
       candidate.anchored && (candidate.amounts || candidate.amount_status || candidate.amount_text)

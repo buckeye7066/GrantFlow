@@ -431,11 +431,10 @@ describe('official title-specific pages close the recurring amount-recall gap', 
     expect(result.amounts).toMatchObject({ amount_min: 1000, amount_max: 3000 })
   })
 
-  it('prefers an evidenced page-owned anchor when the generic row title also appears without an amount', async () => {
+  it('prefers the page-owned anchor when the generic row title has a nearby sibling amount', async () => {
     const sourceUrl = 'https://www.ohio.edu/admissions/tuition/transfer-scholarships'
     const bothHeadings = [
-      'Transfer Scholarships. General transfer information and navigation.',
-      'Overview details '.repeat(80),
+      'Transfer Scholarships. A separate sibling program awards range from $8,000 to $9,999.',
       OHIO_TRANSFER_TEXT,
     ].join(' ')
     const result = await enrichAmountViaListingPage(
