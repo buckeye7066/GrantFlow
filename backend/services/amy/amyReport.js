@@ -21,6 +21,7 @@ import { AMOUNT_STATUS_NONE_PUBLISHED } from '../awardAmountExtractor.js'
 import { isNoPerAwardFigureKind, isPointerKind } from '../../config/opportunityKindClasses.js'
 import { CRAWLER_OUTCOME } from '../../crawler-os/contract.js'
 import { titleStatesTerm } from '../../config/profileDerivedFacts.js'
+import { classifyKnownNonLeaf } from '../../config/fundingResultFilters.js'
 import { blindSpotForGate } from './pipelineGuardEscapeAudit.js'
 
 /** Needs that mean a profile legitimately WANTS student aid (engine's carve-out). */
@@ -626,7 +627,10 @@ export function evaluateDiscovery(scenario, profileId, result, opts = {}) {
   // adapter gap that no adapter could close. Rows with no/unknown kind (older
   // run shapes) deliberately stay measurable so real extraction gaps fire.
   const grantShaped = recommendations.filter(
-    (r) => !isNoPerAwardFigureKind(r.kind),
+    // A legacy DIRECT_GRANT stamp cannot turn an exam or accommodation service
+    // into a per-award funding opportunity. Use the same positive classification
+    // as admission and presentation; unknown ordinary programs remain measurable.
+    (r) => !isNoPerAwardFigureKind(r.kind) && !classifyKnownNonLeaf(r),
   )
   const withAmount = grantShaped.filter(
     (r) => num(r.amount_max) > 0 || num(r.amount_min) > 0,

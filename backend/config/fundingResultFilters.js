@@ -406,7 +406,20 @@ export const NON_LEAF_HOSTS = Object.freeze([
 export const NON_FUNDING_SERVICE_TITLE_RX =
   /\b(?:national\s+)?(?:helpline|hotline)\b|\b(?:2-1-1|211)\b|\bstate health insurance assistance\b|\b(?:discount|savings)\s+(?:program|card)\b/i
 
+// Educational testing and accommodation pages provide services, not an award.
+// The September 8 cohort counted these as missing scholarship dollars because
+// ingest had labeled them DIRECT_GRANT. Read the page's title independently of
+// that stored kind; a real scholarship or exam-fee assistance title stays fundable.
+const EDUCATIONAL_SERVICE_TITLE_RX =
+  /\b(?:entrance|placement|correspondence)\s+(?:exams?|tests?)\b|\b(?:exam|test)\s+proctoring\b|^\s*(?:student\s+)?disability\s+(?:support\s+)?services\s*(?:[|—–:-].*)?$/i
+const EDUCATIONAL_AWARD_TITLE_RX =
+  /\b(?:scholarships?|grants?|awards?|bursar(?:y|ies)|fellowships?|vouchers?|financial[-\s]+assistance|(?:fee|cost)[-\s]+(?:assistance|waivers?|reimbursement|support))\b/i
+
 export function classifyKnownNonLeaf(row) {
+  const title = String(row?.title ?? '')
+  if (EDUCATIONAL_SERVICE_TITLE_RX.test(title) && !EDUCATIONAL_AWARD_TITLE_RX.test(title)) {
+    return { bucket: RESULT_BUCKETS.RESOURCE, reason: 'educational_service_title' }
+  }
   const hosts = URL_FIELDS.map((field) => hostnameOf(row?.[field])).filter(Boolean)
   const matchedHost = hosts.find((host) =>
     NON_LEAF_HOSTS.some((blocked) => host === blocked || host.endsWith(`.${blocked}`)) ||

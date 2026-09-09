@@ -239,9 +239,12 @@ export function partitionFundingSources(sources = []) {
     // the engine's own accepts is incoherence) — absence of a stated signal is
     // SILENCE, and silence is not a denial, so the no-fundable-signal routing
     // applies only to rows the engine did NOT certify. Positive junk evidence
-    // (the not_a_grant classes above) still overrides a stored ACCEPT.
+    // and positive resource evidence (such as an exam-service title) still
+    // override a stored ACCEPT; only missing funding fields remain neutral.
     const isStoredAccept = String(source?.match_decision || '').toLowerCase() === 'accept'
-    if (isFundingResource(source) || (verdict.bucket === RESULT_BUCKETS.RESOURCE && !isStoredAccept)) {
+    const positiveResourceEvidence = verdict.bucket === RESULT_BUCKETS.RESOURCE &&
+      verdict.reasons.some((reason) => reason !== 'no_fundable_signal')
+    if (isFundingResource(source) || (verdict.bucket === RESULT_BUCKETS.RESOURCE && (!isStoredAccept || positiveResourceEvidence))) {
       directories.push(
         verdict.bucket === RESULT_BUCKETS.RESOURCE && !isFundingResource(source)
           ? { ...source, resource_reasons: verdict.reasons }
