@@ -1,3 +1,5 @@
+import { BROWSER_FETCH_HEADERS, browserHeadersEnabled } from '../config/browserDocumentHeaders.js';
+export { BROWSER_FETCH_HEADERS } from '../config/browserDocumentHeaders.js';
 // backend/services/crawlerOsService.js
 //
 // THE single seam between the live GrantFlow backend (Express routes, agent
@@ -160,16 +162,6 @@ function crawlFetchTimeoutMs() {
  * Caller-provided headers always win (API adapters keep their keys/accepts).
  * Kill switch: CRAWLER_BROWSER_HEADERS=0.
  */
-export const BROWSER_FETCH_HEADERS = Object.freeze({
-  'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36',
-  'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
-  'Accept-Language': 'en-US,en;q=0.9',
-});
-
-function browserHeadersEnabled() {
-  return String(process.env.CRAWLER_BROWSER_HEADERS ?? '1').toLowerCase() !== '0';
-}
-
 /** Exported for tests. */
 export function fetchWithTimeout(url, init = {}) {
   const timeoutSignal = AbortSignal.timeout(crawlFetchTimeoutMs());

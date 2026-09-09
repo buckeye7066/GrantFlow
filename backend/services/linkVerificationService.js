@@ -1,3 +1,4 @@
+import { BROWSER_FETCH_HEADERS, browserHeadersEnabled } from '../config/browserDocumentHeaders.js'
 /**
  * Link Verification Service
  *
@@ -264,14 +265,15 @@ export async function checkUrl(url, opts = {}) {
       // the guard above. It also enforces the per-request timeout.
       const res = await safeFetch(url, {
         method,
-        headers: {
-            // browser-compatible liveness probe: transparent product token plus
-            // normal document headers avoids false 403/404 results from servers
-            // that reject bare programmatic HEAD requests.
-            'User-Agent': 'Mozilla/5.0 (compatible; GrantFlowLinkVerifier/2.0; +https://app.axiombiolabs.org)',
-            Accept: 'text/html,application/xhtml+xml,application/json;q=0.9,*/*;q=0.8',
-            'Accept-Language': 'en-US,en;q=0.9',
-          },
+        // Match the browser document identity used by native crawl fetches.
+        // node-fetch does not add native fetch's Sec-Fetch-Mode header itself.
+        headers: browserHeadersEnabled()
+          ? BROWSER_FETCH_HEADERS
+          : {
+              'User-Agent': 'Mozilla/5.0 (compatible; GrantFlowLinkVerifier/2.0; +https://app.axiombiolabs.org)',
+              Accept: 'text/html,application/xhtml+xml,application/json;q=0.9,*/*;q=0.8',
+              'Accept-Language': 'en-US,en;q=0.9',
+            },
       }, { timeoutMs, fetchImpl: opts.fetchImpl })
       // safeFetch stamps the post-redirect URL it actually settled on.
       const finalUrl = res.grantflowFinalUrl
