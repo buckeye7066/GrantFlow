@@ -401,7 +401,7 @@ function makeAmyDb() {
 }
 
 /** Discovery stub: every profile comes back ZERO — the low_results signature. */
-function makeZeroDiscovery(db) {
+function makeZeroDiscovery(db, searchStatus = 'ok') {
   let i = 0
   return async ({ profileId }) => {
     const row = db.prepare('SELECT primary_type FROM profiles WHERE id = ?').get(profileId)
@@ -409,6 +409,7 @@ function makeZeroDiscovery(db) {
     return {
       run: {
         run_id: `zero-${i}`,
+        web_lane: { search_provenance: [{ query_index: 0, provider: 'searxng', provenance: 'live', status: searchStatus }] },
         stored: 0,
         sources: [{ source_id: 'web', outcome: 'EMPTY', fetched: 0 }],
         recommendations: [],
@@ -427,7 +428,7 @@ function makeZeroDiscovery(db) {
 
 const silentLogger = { info: () => {}, warn: () => {}, error: () => {} }
 
-function amyRunOptions(db) {
+function amyRunOptions(db, searchStatus = 'ok') {
   return {
     db,
     categories: [CATEGORY_IDS[0]],
@@ -438,7 +439,7 @@ function amyRunOptions(db) {
     improve: true,
     applyLearning: true,
     gapLearning: false,
-    runDiscovery: makeZeroDiscovery(db),
+    runDiscovery: makeZeroDiscovery(db, searchStatus),
     runPipeline: async () => ({}),
     recordActivity: () => {},
     logger: silentLogger,
@@ -476,7 +477,17 @@ describe('Amy ⇄ mesh wiring (teach → learn loop)', () => {
     expect(samInbox[0].kind).toBe('lesson')
   })
 
-  it('WITH a fresh Sam crawler_reliability lesson: low_results is SUPPRESSED, nothing is cleared, and the lesson is stamped consumed', async () => {
+  it('a coarse peer warning does not suppress measured healthy search lessons', async () => {
+    const db = makeAmyDb()
+    await recordMeshLesson(db, { author: 'sam', topic: 'crawler_reliability', claim: 'Earlier search responses were degraded.' })
+    const result = await runAmyTraining(amyRunOptions(db, 'ok'))
+    expect(result.combined.agent_mesh.search_degraded).toBe(true)
+    expect(result.combined.agent_mesh.suppressed_low_results).toEqual([])
+    const store = await getArchetypeLearning(db)
+    expect(Object.values(store.archetypes).some(entry => entry.classes.includes('low_results'))).toBe(true)
+  })
+
+  it('WITH measured degraded search and a Sam warning: low_results is suppressed, nothing is cleared, and the lesson is consumed', async () => {
     const db = makeAmyDb()
     // A prior legitimate lesson that a degraded night must NOT erase.
     db.prepare('INSERT INTO system_kv (key, value, updated_at) VALUES (?, ?, ?)').run(
@@ -490,7 +501,7 @@ describe('Amy ⇄ mesh wiring (teach → learn loop)', () => {
       claim: 'Web-search backend degraded: SearXNG first-word collapse',
     })
 
-    const result = await runAmyTraining(amyRunOptions(db))
+    const result = await runAmyTraining(amyRunOptions(db, 'degraded_results'))
 
     expect(result.combined.agent_mesh.search_degraded).toBe(true)
     expect(result.combined.agent_mesh.lessons_heard.map((l) => l.id)).toContain(samLesson.id)

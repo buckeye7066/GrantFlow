@@ -23,6 +23,7 @@ import { sendEmail as defaultSendEmail } from '../email.js'
 import { ADMIN_EMAIL } from '../../config/constants.js'
 import { maskSecrets, latestRun as defaultLatestRun, getRun as defaultGetRun } from '../sam/samAuditStore.js'
 import { summarizeCrawlerResearch } from '../amy/crawlerCompetitiveResearch.js'
+import { normalizeApprovalItem } from '../amy/approvalLedger.js'
 import { cohortCounts, cohortSummary } from '../amy/cohortSummary.js'
 import { defaultLoadEvaPortfolioQa, summarizeEvaPortfolioQa } from '../eva/evaSummary.js'
 import { renderEvaSection } from '../eva/evaReportSection.js'
@@ -386,7 +387,7 @@ export function summarizeAmyFlywheel(amy, { now = new Date() } = {}) {
   }
 
   const couldNot = []
-  const queue = Array.isArray(report.approval_queue) ? report.approval_queue.filter((q) => !q?.auto_applied) : []
+  const queue = Array.isArray(report.approval_queue) ? report.approval_queue.filter((q) => !q?.auto_applied).map(normalizeApprovalItem) : []
   // A ledger CLOSE is the only proof this loop can converge — report it first,
   // above the open items, so an owner can see the queue moving at all.
   const closed = Array.isArray(report.approval_ledger?.closed) ? report.approval_ledger.closed : []
@@ -401,6 +402,7 @@ export function summarizeAmyFlywheel(amy, { now = new Date() } = {}) {
   // carries its AGE and the exact surface that closes it.
   const ownerAsks = queue.filter((q) => q?.requires_approval === true || q?.actionability === 'owner_api')
   const codeChanges = queue.filter((q) => q?.actionability === 'code_change')
+  const uncertainRecall = queue.filter((q) => q?.actionability === 'blocked')
   const age = (item) => {
     const n = Number(item?.nights_open)
     if (!Number.isFinite(n) || n <= 0) return ''
@@ -418,23 +420,39 @@ export function summarizeAmyFlywheel(amy, { now = new Date() } = {}) {
     // is followed by exactly what to open and where — not just a refusal.
     const brief = item?.code_brief || null
     couldNot.push(
-      `Needs a CODE change (no approval can close this): ${item?.lever || 'change'}${item?.category ? ` for ${item.category}` : ''}${age(item)}`
+      `${item?.lever === 'query_breadth' ? 'Needs code investigation' : 'Needs a CODE change (no approval can close this)'}: ${item?.lever || 'change'}${item?.category ? ` for ${item.category}` : ''}${age(item)}`
       + `${brief?.file ? ` → ${brief.file}${brief.line ? `:${brief.line}` : ''}` : ''}`
       + `${brief?.subjects?.length ? ` [${brief.subjects.slice(0, 3).join(', ')}]` : ''}`
       + `${item?.human_gate_reason ? ` — ${item.human_gate_reason}` : ''}`,
     )
   }
   if (codeChanges.length > 4) couldNot.push(`…and ${codeChanges.length - 4} more code-change items.`)
+  for (const item of uncertainRecall.slice(0, 6)) {
+    couldNot.push(`Coverage gap — cause unverified: ${item.lever}${item.category ? ` for ${item.category}` : ''}${age(item)}. ${item.attribution?.reason || item.human_gate_reason || 'Healthy search evidence is required.'}`)
+  }
+  if (uncertainRecall.length > 6) couldNot.push(`…and ${uncertainRecall.length - 6} more coverage gaps awaiting healthy search evidence.`)
   if (day && day.issues > 0) {
     const types = Object.entries(day.finding_types || {})
       .sort((a, b) => b[1] - a[1])
       .slice(0, 4)
       .map(([k, v]) => `${k} ×${v}`)
       .join(', ')
-    couldNot.push(`Open gap classes the loop has not closed yet: ${types || 'n/a'} — persistent classes need a code change.`)
+    couldNot.push(`Open gap classes the loop has not closed yet: ${types || 'n/a'} — resolve using the evidence and attribution above.`)
   }
   // The honest "this cannot finish itself" list, named rather than counted.
   for (const u of (Array.isArray(conv?.unclosable_by_any_lever) ? conv.unclosable_by_any_lever : []).slice(0, 3)) {
+    // Historical convergence snapshots predate per-item attribution. A cached
+    // categorical claim cannot override the current queue's unknown evidence.
+    if (u.lever === 'query_breadth') {
+      const current = queue.find(item => item.lever === u.lever && item.category === u.category && item.finding_type === u.finding_type)
+      const normalized = normalizeApprovalItem(current || { ...u, id: `${u.finding_type}:${u.category}` })
+      if (normalized.actionability === 'blocked') {
+        if (!current || !uncertainRecall.slice(0, 6).includes(current)) {
+          couldNot.push(`Coverage gap — cause unverified: ${u.finding_type}${u.category ? ` (${u.category})` : ''} open ${u.nights_open} nights. ${normalized.attribution.reason}`)
+        }
+        continue
+      }
+    }
     couldNot.push(
       `NO LEVER CAN CLOSE THIS: ${u.finding_type}${u.category ? ` (${u.category})` : ''} open ${u.nights_open} nights`
       + `${u.file ? ` → ${u.file}` : ''} — ${u.human_action}`,

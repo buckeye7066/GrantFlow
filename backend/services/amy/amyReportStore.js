@@ -10,6 +10,7 @@
  */
 
 import { createLogger } from '../../utils/logger.js'
+import { normalizeApprovalItem } from './approvalLedger.js'
 
 const log = createLogger('services:amy:reportStore')
 
@@ -82,7 +83,7 @@ export async function saveAmyReport(db, report) {
 
 export async function readLatestAmyReport(db) {
   const r = await kvGet(db, KEY_LATEST)
-  return r ? { ...r.value, persisted_at: r.updated_at } : null
+  return r ? { ...r.value, approval_queue: (Array.isArray(r.value.approval_queue) ? r.value.approval_queue : []).map(normalizeApprovalItem), persisted_at: r.updated_at } : null
 }
 
 export async function readAmyHistory(db) {
@@ -92,7 +93,7 @@ export async function readAmyHistory(db) {
 
 export async function readAmyApprovalQueue(db) {
   const r = await kvGet(db, KEY_APPROVALS)
-  return r ? { ...r.value, persisted_at: r.updated_at } : { items: [] }
+  return r ? { ...r.value, items: (Array.isArray(r.value.items) ? r.value.items : []).map(normalizeApprovalItem), persisted_at: r.updated_at } : { items: [] }
 }
 
 export default { saveAmyReport, readLatestAmyReport, readAmyHistory, readAmyApprovalQueue }

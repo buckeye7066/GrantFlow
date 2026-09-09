@@ -68,7 +68,7 @@ import { decideFloorChange, decideWeightChange, proposeCoverageOverrides, buildA
 import { FINDING_TYPES } from './amyConstants.js'
 import { getEffectiveMinScore, getEffectiveWeights, setScoringTuning, persistScoringTuning } from '../../config/scoringTuning.js'
 import { readLiveOverrides, applyCoverageOverrides, revertCoverageOverrides } from './crawlerCoverageEditor.js'
-import { buildArchetypeMetrics, buildArchetypeLearningUpdate, saveArchetypeLearning, appendArchetypeMetrics, evaluationArchetype } from './archetypeLearning.js'
+import { buildArchetypeMetrics, buildArchetypeLearningUpdate, saveArchetypeLearning, appendArchetypeMetrics, evaluationArchetype, learningSearchCoverage } from './archetypeLearning.js'
 import { runAmyAnyaSamPipeline } from './amyPipeline.js'
 import { saveAmyReport } from './amyReportStore.js'
 import { recordApprovalQueue, decorateApprovalQueue } from './approvalLedger.js'
@@ -287,10 +287,9 @@ export async function runAmyTraining(options = {}) {
   // ── AGENT MESH: read the inbox + fresh peer lessons BEFORE training ──────
   // Sam's overnight sweep teaches Amy about degraded discovery dependencies
   // (topic crawler_reliability, e.g. "web-search backend down"). On such a
-  // night a zero/weak cohort is an ENVIRONMENT fact, not a crawler-quality
-  // fact, so Amy must not burn it into the archetype learning store as a
-  // `low_results` lesson (the same silence-is-not-a-denial posture as the
-  // amount sweep). Everything here is best-effort.
+  // night search may be unreliable. Retain that peer warning, but actual
+  // per-profile search receipts below govern which observations can teach or
+  // clear query-steering lessons. Everything here is best-effort.
   let meshInbox = []
   let meshLessonsHeard = []
   let searchDegraded = false
@@ -316,7 +315,7 @@ export async function runAmyTraining(options = {}) {
   meshLessonsHeard = Array.isArray(meshContext?.lessons) ? meshContext.lessons : []
   searchDegraded = meshLessonsHeard.length > 0
   if (searchDegraded) {
-    logger.info('Amy heard fresh crawler_reliability lesson(s) from the mesh — low_results learning suspended this run', {
+    logger.info('Amy heard fresh crawler_reliability lesson(s) — per-profile search evidence governs learning', {
       run_id: runId,
       lessons: meshLessonsHeard.map((l) => `${l.author}: ${l.claim}`),
     })
@@ -687,23 +686,13 @@ export async function runAmyTraining(options = {}) {
     at: clock().toISOString(),
     minEvidence: tuningOpts.archetype?.minEvidence,
   })
-  // ── MESH CONSUMPTION WITH TEETH: on a degraded-search night (a fresh
-  // crawler_reliability lesson from another agent, normally Sam), the cohort's
-  // zero/weak outcomes are environment, not crawler quality — strip the
-  // `low_results` class from this run's archetype update so the outage is
-  // never burned into the steering store as an archetype weakness. Recorded
-  // (suppressed_low_results) and stamped consumed on the teaching lesson so
-  // the owner's report can show the teach→learn loop actually closing.
-  const suppressedLowResults = []
-  let effectiveArchetypeUpdate = archetypeUpdate
+  // Per-profile search receipts govern learning. A peer's coarse outage lesson
+  // cannot invalidate healthy sibling observations, and unknown/degraded search
+  // cannot teach institution, hyperlocal, or low-result query weaknesses.
+  const searchLearningCoverage = learningSearchCoverage(evaluations)
+  const suppressedLowResults = [...new Set(evaluations.filter(e => e.search_evidence?.status !== 'healthy' && ['zero', 'weak'].includes(e.status)).map(evaluationArchetype).filter(Boolean))]
+  const effectiveArchetypeUpdate = archetypeUpdate
   if (searchDegraded) {
-    effectiveArchetypeUpdate = {}
-    for (const [key, entry] of Object.entries(archetypeUpdate)) {
-      throwIfAmyRunAborted(signal)
-      const classes = (entry.classes || []).filter((c) => c !== 'low_results')
-      if (classes.length !== (entry.classes || []).length) suppressedLowResults.push(key)
-      if (classes.length > 0) effectiveArchetypeUpdate[key] = { ...entry, classes }
-    }
     for (const lesson of meshLessonsHeard) {
       throwIfAmyRunAborted(signal)
       try {
@@ -718,19 +707,14 @@ export async function runAmyTraining(options = {}) {
     try {
       // Per-archetype cohort sizes: an archetype may only CLEAR a prior lesson
       // when this run exercised it with real evidence (same bar as learning).
-      // On a degraded-search night NOTHING may clear: a cohort whose zero/weak
-      // outcomes are environmental proves neither weakness NOR health, and
-      // letting it clear would erase legitimate prior lessons (the same
-      // "an outage never burns" rule the amount sweep enforces).
-      const cohortArchetypes = searchDegraded
-        ? {}
-        : Object.fromEntries(
-            Object.entries(archetypeMetrics).map(([key, m]) => [key, m.profiles]),
-          )
+      // Mixed archetypes can learn from healthy members but retain older
+      // lessons because their uncertain members cannot prove recovery.
+      const cohortArchetypes = searchLearningCoverage.clearable_counts
       archetypeLearningApplied = await saveArchetypeLearning(db, effectiveArchetypeUpdate, {
         runId,
         at: clock().toISOString(),
         cohortArchetypes,
+        preserveArchetypes: searchLearningCoverage.uncertain_archetypes,
         minEvidence: tuningOpts.archetype?.minEvidence,
       })
       if (Object.keys(effectiveArchetypeUpdate).length > 0) {
@@ -1458,6 +1442,7 @@ export async function runAmyTraining(options = {}) {
     try {
       const led = await recordApprovalQueue(db, {
         items: approvalQueue,
+        evaluations,
         runId,
         at: completedAtDate.toISOString(),
       })

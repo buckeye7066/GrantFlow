@@ -170,7 +170,7 @@ describe('buildApprovalQueue now emits an item for EVERY emitted class', () => {
 
   it('carries the CONCRETE subject, not just a count', () => {
     const items = buildApprovalQueue([
-      evalWithFinding(FINDING_TYPES.INSTITUTION_RECALL_MISS, 'student', { schools: ['West Virginia University'] }),
+      { ...evalWithFinding(FINDING_TYPES.INSTITUTION_RECALL_MISS, 'student', { schools: ['West Virginia University'] }), search_evidence: { status: 'healthy', provenance: [] } },
     ])
     const item = items.find((i) => itemFindingType(i) === FINDING_TYPES.INSTITUTION_RECALL_MISS)
     expect(item.evidence.subjects).toContain('West Virginia University')
@@ -216,7 +216,7 @@ describe('buildApprovalQueue now emits an item for EVERY emitted class', () => {
     expect(item.code_brief).toBeUndefined()
   })
 
-  it('a reclassified recall miss DOES carry a brief, and the brief names the schools', () => {
+  it('a recall miss with healthy search evidence carries a brief naming the schools', () => {
     // The reconciliation regression: #1097 declared these AUTO in the registry
     // while #1095's runtime branch emitted them as `query_breadth`. Whichever
     // way that fork is resolved, the registry and the runtime must AGREE — the
@@ -224,7 +224,7 @@ describe('buildApprovalQueue now emits an item for EVERY emitted class', () => {
     // itself, plus the evidence-key bug it exposed (`missed_subjects` was
     // written but `buildCodeBrief` reads `subjects`, so the brief was empty).
     const items = buildApprovalQueue([
-      evalWithFinding(FINDING_TYPES.INSTITUTION_RECALL_MISS, 'student', { schools: ['West Virginia University'] }),
+      { ...evalWithFinding(FINDING_TYPES.INSTITUTION_RECALL_MISS, 'student', { schools: ['West Virginia University'] }), search_evidence: { status: 'healthy', provenance: [] } },
     ])
     const item = items.find((i) => itemFindingType(i) === FINDING_TYPES.INSTITUTION_RECALL_MISS)
     expect(item.lever).toBe('query_breadth')

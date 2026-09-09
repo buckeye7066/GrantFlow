@@ -17,7 +17,8 @@
 
 import { DISCOVERY_MIN_SCORE_FLOOR } from '../../config/matchThresholds.js'
 import { FINDING_TYPES, CODE_TARGETS, SEVERITY } from './amyConstants.js'
-import { leverActionability, ACTIONABILITY } from './approvalLedger.js'
+import { itemActionability, normalizeApprovalItem, leverActionability, ACTIONABILITY } from './approvalLedger.js'
+import { recallAttribution } from './searchAttribution.js'
 import { FINDING_ACTORS, actorFor } from './findingActorRegistry.js'
 
 /**
@@ -595,7 +596,7 @@ export function buildApprovalQueue(evaluations = [], { robertGapNotes = [] } = {
     }
     for (const [category, bucket] of Object.entries(byCat)) {
       const target = CODE_TARGETS[type]
-      const subjects = [...bucket.subjects].slice(0, 6)
+      const subjects = [...bucket.subjects].slice(0, 200)
       items.push({
         id: `${type}:${category}`,
         lever: 'query_breadth',
@@ -609,7 +610,7 @@ export function buildApprovalQueue(evaluations = [], { robertGapNotes = [] } = {
         // NOTHING read — so once these classes became CODE_CHANGE the owner
         // would have received a brief with an empty subject list: "some student
         // profiles missed something", with no school ever named.
-        evidence: { profiles: bucket.profiles, finding_type: type, subjects },
+        evidence: { profiles: bucket.profiles, finding_type: type, subjects, ...(bucket.subjects.size > 200 ? { subject_history_incomplete: true } : {}) },
         requires_approval: true,
       })
     }
@@ -740,7 +741,13 @@ export function buildApprovalQueue(evaluations = [], { robertGapNotes = [] } = {
   // six lines in the owner's morning email, none of them clickable, none of
   // them ever actioned in production.
   for (const item of items) {
-    const meta = leverActionability(item.lever)
+    if (item.lever === 'query_breadth') {
+      item.attribution = recallAttribution(evals.filter(e => e.category === item.category
+        && (e.findings || []).some(f => f.type === itemFindingType(item))))
+      item.rationale = `${item.evidence?.profiles || 0} "${item.category}" profile(s) had a measured recall gap (${item.id}). ${item.attribution.reason} Missing subject(s): ${(item.evidence?.subjects || []).join(', ')}.`
+      Object.assign(item, normalizeApprovalItem(item))
+    }
+    const meta = itemActionability(item)
     item.actionability = meta.actionability
     item.apply_surface = meta.surface
     item.human_gate_reason = meta.why

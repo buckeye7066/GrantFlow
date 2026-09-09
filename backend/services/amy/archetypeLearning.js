@@ -127,6 +127,7 @@ export function buildArchetypeMetrics(evaluations = []) {
 export function buildArchetypeLearningUpdate(evaluations = [], { runId = null, at = null, minEvidence = 2 } = {}) {
   const byArchetype = {}
   for (const ev of Array.isArray(evaluations) ? evaluations : []) {
+    if (ev.search_evidence?.status !== 'healthy') continue
     const key = evaluationArchetype(ev)
     if (!key) continue
     const agg = byArchetype[key] || { profiles: 0, zero: 0, weak: 0, institution: 0, hyperlocal: 0 }
@@ -177,6 +178,20 @@ export function buildArchetypeLearningUpdate(evaluations = [], { runId = null, a
   return update
 }
 
+// A bad provider observation does not erase healthy siblings' lessons, but it
+// cannot prove that an older lesson for their shared archetype has disappeared.
+export function learningSearchCoverage(evaluations = []) {
+  const counts = {}
+  const uncertain = new Set()
+  for (const ev of evaluations) {
+    const key = evaluationArchetype(ev)
+    if (!key) continue
+    if (ev.search_evidence?.status === 'healthy') counts[key] = (counts[key] || 0) + 1
+    else uncertain.add(key)
+  }
+  return { clearable_counts: Object.fromEntries(Object.entries(counts).filter(([key]) => !uncertain.has(key))), uncertain_archetypes: [...uncertain] }
+}
+
 // ── Persistence (system_kv; dialect-agnostic, mirrors liveCrawlGapLearning) ──
 
 async function ensureKv(db) {
@@ -223,7 +238,7 @@ export async function getArchetypeLearning(db) {
  * @param {object} opts { runId, at, cohortArchetypes: string[]|Record<string,number>, minEvidence=2 }
  * @returns {Promise<object>} the new store value
  */
-export async function saveArchetypeLearning(db, update, { runId = null, at = null, cohortArchetypes = [], minEvidence = 2 } = {}) {
+export async function saveArchetypeLearning(db, update, { runId = null, at = null, cohortArchetypes = [], minEvidence = 2, preserveArchetypes = [] } = {}) {
   if (!db?.prepare) return null
   const prev = (await kvGet(db, KV_LEARNING_KEY)) || {}
   const prevArchetypes = prev.archetypes && typeof prev.archetypes === 'object' ? prev.archetypes : {}
@@ -238,9 +253,15 @@ export async function saveArchetypeLearning(db, update, { runId = null, at = nul
     if (!update?.[key]) delete nextArchetypes[key]
   }
   for (const [key, entry] of Object.entries(update || {})) {
+    const prior = preserveArchetypes.includes(key) ? prevArchetypes[key] : null
+    const classes = [...new Set([...(prior?.classes || []), ...(entry.classes || [])])].filter(c => SAFE_LEARNED_CLASSES.includes(c))
     nextArchetypes[key] = {
       ...entry,
-      classes: (entry.classes || []).filter((c) => SAFE_LEARNED_CLASSES.includes(c)),
+      classes,
+      ...(prior ? {
+        caused_by: [...new Set([...(prior.caused_by || []), ...(entry.caused_by || [])])],
+        class_provenance: Object.fromEntries(classes.map(c => [c, (entry.classes || []).includes(c) ? (entry.run_id || runId) : (prior.class_provenance?.[c] || prior.run_id || null)])),
+      } : {}),
     }
   }
   const next = {
