@@ -1,6 +1,5 @@
 // Closed provenance contract: these are automated gate decisions, never owner intent.
 import crypto from 'node:crypto'
-import { withIdentityTxn } from './opportunityIdentityStore.js'
 
 export function isAutomaticGateDismissal(row = {}) {
   if (/duplicate/i.test(String(row.reason ?? ''))) return false
@@ -16,15 +15,27 @@ export function isAutomaticGateDismissal(row = {}) {
 }
 
 export async function withDismissalProfileTransaction(db, profileId, callback) {
-  // An explicit PostgresTx already owns the transaction; never escape onto a
-  // second connection. Raw SQLite callers may likewise supply an open tx.
-  if (db?.dialect === 'postgres' && typeof db.withTransaction !== 'function') {
-    await db.prepare('SELECT pg_advisory_xact_lock(hashtext(?), hashtext(?)) AS locked')
-      .get('pipeline-dismissal-profile', String(profileId))
-    return callback(db)
+  if (db?.dialect === 'postgres') {
+    const locked = async tx => {
+      await tx.prepare('SELECT pg_advisory_xact_lock(hashtext(?), hashtext(?)) AS locked')
+        .get('pipeline-dismissal-profile', String(profileId))
+      return callback(tx)
+    }
+    // An explicit PostgresTx already owns its connection and transaction.
+    return typeof db.withTransaction === 'function' ? db.withTransaction(locked) : locked(db)
   }
   if (db?.inTransaction === true) return callback(db)
-  return withIdentityTxn(db, 'pipeline-dismissal-profile', String(profileId), callback)
+  if (typeof db?.withTransaction === 'function') return db.withTransaction(tx => callback(tx || db))
+  // Raw SQLite callers do not have the app adapter's transaction helper.
+  db.exec('BEGIN IMMEDIATE')
+  try {
+    const result = await callback(db)
+    db.exec('COMMIT')
+    return result
+  } catch (error) {
+    try { db.exec('ROLLBACK') } catch { /* preserve the original failure */ }
+    throw error
+  }
 }
 
 // INSERT-only archive, in the same transaction as supersession/removal. Failure
