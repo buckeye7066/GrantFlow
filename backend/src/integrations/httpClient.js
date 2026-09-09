@@ -78,6 +78,16 @@ function summarizeAxiosError(err) {
   return { status, code, message }
 }
 
+/** Keep protocol evidence separate from the loggable error message. */
+function responseError(message, response) {
+  const error = new Error(message)
+  // Do not retain Axios config/request headers or serialize upstream payloads.
+  Object.defineProperty(error, 'response', {
+    value: { status: Number(response.status), data: response.data },
+  })
+  return error
+}
+
 /**
  * Request JSON with retries/backoff.
  * Returns parsed JSON (axios `response.data`).
@@ -112,7 +122,7 @@ export async function requestJson(options) {
       'User-Agent': GRANTFLOW_USER_AGENT,
       ...headers,
     },
-    // axios throws on non-2xx; keep it that way so retry policy can run.
+    // Inspect every HTTP response here; transport failures still throw.
     validateStatus: () => true,
   }
 
@@ -131,7 +141,7 @@ export async function requestJson(options) {
       // Rate limit handling
       if (status === 429) {
         if (isLast) {
-          throw new Error(`[${provider}] HTTP 429 Too Many Requests (max retries exceeded)`)
+          throw responseError(`[${provider}] HTTP 429 Too Many Requests (max retries exceeded)`, res)
         }
 
         const retryAfterMs = parseRetryAfterMs(res.headers?.['retry-after'])
@@ -143,23 +153,16 @@ export async function requestJson(options) {
       // Retry on transient server errors
       if ([500, 502, 503, 504].includes(status)) {
         if (isLast) {
-          throw new Error(`[${provider}] HTTP ${status} (max retries exceeded)`)
+          throw responseError(`[${provider}] HTTP ${status} (max retries exceeded)`, res)
         }
         const waitMs = jitter(DEFAULT_BASE_BACKOFF_MS * Math.pow(2, attempt))
         await sleep(waitMs)
         continue
       }
 
-      // Non-retryable status
-      const bodyHint =
-        res?.data && typeof res.data === 'object'
-          ? JSON.stringify(res.data).slice(0, 400)
-          : typeof res?.data === 'string'
-            ? res.data.slice(0, 400)
-            : ''
-      throw new Error(
-        `[${provider}] HTTP ${status} ${method} ${url}${bodyHint ? ` :: ${bodyHint}` : ''}`,
-      )
+      // A real HTTP rejection is not a missing-response network failure.
+      // Keep its structured body for provider-specific protocol handling, not logs.
+      throw responseError(`[${provider}] HTTP ${status} ${method} ${url}`, res)
     } catch (err) {
       lastErr = err
       const { status, code } = summarizeAxiosError(err)
@@ -183,6 +186,10 @@ export async function requestJson(options) {
 
   const { status, code, message } = summarizeAxiosError(lastErr)
   const suffix = (status !== null && status !== undefined) ? ` status=${status}` : code ? ` code=${code}` : ''
-  throw new Error(`[${provider}] request failed${suffix}: ${message}`)
+  const failure = lastErr?.response
+    ? responseError(`[${provider}] request failed${suffix}: ${message}`, lastErr.response)
+    : new Error(`[${provider}] request failed${suffix}: ${message}`)
+  if (code) failure.code = code
+  throw failure
 }
 

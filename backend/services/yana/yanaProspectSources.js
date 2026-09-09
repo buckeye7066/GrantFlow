@@ -134,11 +134,20 @@ const DEFAULT_PROSPECT_QUERIES = Object.freeze([
  * @param {object} [deps]
  * @param {Function} [deps.searchOrganizations] injectable for tests — defaults
  *        to the live ProPublica integration.
+ * @param {Function} [deps.clock] clock for expiring per-query pagination bounds.
  */
 export function makePropublica990Source(deps = {}) {
   const search = typeof deps.searchOrganizations === 'function'
     ? deps.searchOrganizations
     : realSearchOrganizations
+  const clock = typeof deps.clock === 'function' ? deps.clock : Date.now
+  const bounds = new Map()
+  const remember = (key, result, requestedPage) => {
+    if (!Number.isSafeInteger(result?.num_pages) || result.num_pages < 0 ||
+        result.cur_page !== requestedPage || typeof result.page_exhausted !== 'boolean') return
+    if (!bounds.has(key) && bounds.size >= 512) bounds.delete(bounds.keys().next().value)
+    bounds.set(key, { count: result.num_pages, until: clock() + 15 * 60_000 })
+  }
   return {
     name: 'propublica_990',
     // `page`/`pages` let the caller PAGINATE ProPublica results. The scheduler
@@ -158,9 +167,25 @@ export function makePropublica990Source(deps = {}) {
         for (let p = startPage; p < startPage + pageCount; p += 1) {
           for (const plan of plans) {
             if (out.length >= limit) break outer
+            const key = JSON.stringify([plan.q, plan.ntee || null, state || null])
+            const saved = bounds.get(key)
+            const known = saved && saved.until > clock() ? saved : null
+            if (known?.count === 0) continue
+            let requestedPage = known ? p % known.count : p
             let result
             try {
-              result = await search({ q: plan.q, ntee: plan.ntee, state: state || undefined, page: p })
+              const query = { q: plan.q, ntee: plan.ntee, state: state || undefined }
+              result = await search({ ...query, page: requestedPage })
+              remember(key, result, requestedPage)
+              if (result?.page_exhausted === true && result.cur_page === requestedPage &&
+                  Number.isSafeInteger(result.num_pages) && result.num_pages > 0) {
+                // The persisted fleet cursor cannot be valid for every query.
+                // Recover once within THIS query's measured bounds, not always
+                // page zero, and never turn an arbitrary provider error into EOF.
+                requestedPage = p % result.num_pages
+                result = await search({ ...query, page: requestedPage })
+                remember(key, result, requestedPage)
+              }
             } catch (err) {
               log.warn(`990 search failed for q="${plan.q}" state=${state || 'all'} page=${p}: ${err?.message || err}`)
               continue
