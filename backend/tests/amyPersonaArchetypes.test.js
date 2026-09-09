@@ -91,14 +91,19 @@ describe('a recall miss now has a lever, so it can be closed instead of re-repor
   })
 
   it('institution_recall_miss produces an approval item naming the query-breadth lever', () => {
-    const items = buildApprovalQueue([
+    const evaluations = [
       evalWith(FINDING_TYPES.INSTITUTION_RECALL_MISS, 'college_student', { schools: ['Middle Tennessee State University'] }),
       evalWith(FINDING_TYPES.INSTITUTION_RECALL_MISS, 'college_student', { schools: ['The Ohio State University'] }),
-    ])
+    ]
+    const items = buildApprovalQueue(evaluations)
     const item = items.find((i) => i.id === `${FINDING_TYPES.INSTITUTION_RECALL_MISS}:college_student`)
     expect(item, 'the 21-of-21-day finding still produces no approval item').toBeTruthy()
     expect(item.lever).toBe('query_breadth')
-    expect(item.target_file).toBe('backend/crawler-os/webQueries.js')
+    expect(item.target_file).toBeNull()
+    expect(item.actionability).toBe('blocked')
+    expect(item.attribution.status).toBe('inconclusive')
+    const healthy = buildApprovalQueue(evaluations.map(e => ({ ...e, search_evidence: { status: 'healthy' } })))
+    expect(healthy.find(i => i.id === item.id).target_file).toBe('backend/crawler-os/webQueries.js')
     expect(item.evidence.profiles).toBe(2)
     // The concrete missed subjects travel with the item — that is what makes it
     // work someone can do, rather than a number.
