@@ -225,8 +225,8 @@ function normalizeFinding(f, candidateByUrl) {
 
 /**
  * Summarize the persisted research store for the owner email: a headline, the
- * "more optimal" findings (each a technique + concrete suggestion), and a note
- * when nothing beat GrantFlow's current approach. Pure; exported for tests.
+ * model-shortlisted candidates (each a technique + concrete suggestion).
+ * A shortlist is not a comparative benchmark. Pure; exported for tests.
  *
  * @param {{latest?:object|null}} store the system_kv `amy_crawler_research` store
  * @returns {{headline:string, findings:string[], allClear:boolean, generatedAt:string|null}|null}
@@ -239,8 +239,8 @@ export function summarizeCrawlerResearch(store) {
   const allClear = optimal.length === 0
 
   const headline = allClear
-    ? `Scanned ${scanned} competitor crawler technique(s) — none beat GrantFlow's current approach this run.`
-    : `${optimal.length} competitor technique(s) look MORE optimal than ours (scanned ${scanned}). Candidates only — nothing changed.`
+    ? `Scanned ${scanned} competitor crawler technique(s) — no candidates for evaluation identified this run. Comparative performance was not measured.`
+    : `${optimal.length} competitor technique(s) are candidates for evaluation (scanned ${scanned}). Comparative performance was not measured; nothing changed.`
 
   const findings = optimal.slice(0, MAX_FINDINGS).map((f) => {
     const who = f.source_title || f.domain || 'source'
@@ -540,8 +540,8 @@ export async function runCrawlerCompetitiveResearch(db, {
     status: 'succeeded',
     severity: 'info',
     title: optimalCount > 0
-      ? `Amy competitive crawler research: ${optimalCount} technique(s) may beat ours (${candidates.length} scanned)`
-      : `Amy competitive crawler research: none beat our approach (${candidates.length} scanned)`,
+      ? `Amy competitive crawler research: ${optimalCount} candidate technique(s) for evaluation (${candidates.length} scanned; comparative performance not measured)`
+      : `Amy competitive crawler research: no candidates for evaluation (${candidates.length} scanned; comparative performance not measured)`,
     metric_key: 'optimal_findings',
     metric_value: optimalCount,
     entity_type: 'crawler_research',

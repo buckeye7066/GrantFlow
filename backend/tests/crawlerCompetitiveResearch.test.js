@@ -118,6 +118,8 @@ describe('runCrawlerCompetitiveResearch', () => {
     // telemetry emitted under agent amy
     expect(emit).toHaveBeenCalledTimes(1)
     expect(emit.mock.calls[0][1].agent_name).toBe('amy')
+    expect(emit.mock.calls[0][1].title).toMatch(/candidate technique.*for evaluation/)
+    expect(emit.mock.calls[0][1].title).not.toMatch(/beat|optimal/i)
     // persisted to system_kv, and NOTHING else touched (kv only holds our key)
     const store = await readCrawlerResearch(db)
     expect(store.latest.findings[0].technique).toBe('async 990 ingestion')
@@ -270,7 +272,7 @@ describe('summarizeCrawlerResearch', () => {
     const store = { latest: { candidates_scanned: 8, findings: [{ technique: 'x', more_optimal: false }] } }
     const s = summarizeCrawlerResearch(store)
     expect(s.allClear).toBe(true)
-    expect(s.headline).toMatch(/none beat GrantFlow/)
+    expect(s.headline).toMatch(/no candidates for evaluation/)
     expect(s.findings).toHaveLength(0)
   })
 })

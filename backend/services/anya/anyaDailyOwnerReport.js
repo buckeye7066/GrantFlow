@@ -687,10 +687,10 @@ export function buildOwnerReport(run = {}, { now = null, amy = null, gaps = null
 
   const clean = needsHuman.length === 0
   const headline = clean
-    ? 'No code issues need your attention today'
+    ? 'No findings need your attention today'
     : counts.critical > 0
-      ? `${counts.critical} critical code issue${counts.critical === 1 ? '' : 's'} need your attention`
-      : `${needsHuman.length} code issue${needsHuman.length === 1 ? '' : 's'} for your review`
+      ? `${counts.critical} critical issue${counts.critical === 1 ? '' : 's'} need your attention`
+      : `${needsHuman.length} issue${needsHuman.length === 1 ? '' : 's'} for your review`
 
   // EVA portfolio user-journey section — rendered once, folded into the subject
   // and both bodies. The section renders whenever EVA loading was ATTEMPTED
@@ -718,12 +718,12 @@ export function buildOwnerReport(run = {}, { now = null, amy = null, gaps = null
           ? (evaSummary.testing_complete ? 'user-journeys clear' : 'user-tests incomplete')
           : 'user-tests stale'
   const subject = evaPart
-    ? `[GrantFlow] Anya daily — ${clean ? 'code clear' : `${needsHuman.length} code (${counts.critical}C/${counts.high}H)`} · ${evaPart}`
-    : `[GrantFlow] Anya's daily code report — ${codePart}`
+    ? `[GrantFlow] Anya daily — ${clean ? 'findings clear' : `${needsHuman.length} findings (${counts.critical}C/${counts.high}H)`} · ${evaPart}`
+    : `[GrantFlow] Anya's daily report — ${codePart}`
 
   // ----- plain text ---------------------------------------------------------
   const t = []
-  t.push(`Good morning — here's Anya's daily code/function report.`)
+  t.push(`Good morning — here's Anya's daily findings report.`)
   if (dateStr) t.push(dateStr)
   t.push('')
   if (samUnavailable) {
@@ -825,10 +825,10 @@ export function buildOwnerReport(run = {}, { now = null, amy = null, gaps = null
     t.push('========================================================')
     t.push(researchSummary.headline)
     if (researchSummary.findings.length) {
-      t.push('Techniques worth stealing (candidates — nothing changed automatically):')
+      t.push('Candidates for evaluation (nothing changed automatically):')
       researchSummary.findings.forEach((f) => t.push(`  • ${f}`))
     } else if (researchSummary.allClear) {
-      t.push('Nothing beat our current crawler approach this run.')
+      t.push('No candidates for evaluation were identified this run; comparative performance was not measured.')
     }
   }
   const meshSummary = summarizeAgentMesh(agentMesh)
@@ -987,9 +987,9 @@ export function buildOwnerReport(run = {}, { now = null, amy = null, gaps = null
         if (!rs) return ''
         const list = (items, color = '#334155') => `<ul style="margin:6px 0 0;padding-left:18px;color:${color};">${items.map((i) => `<li>${esc(i)}</li>`).join('')}</ul>`
         const findingsHtml = rs.findings.length
-          ? `<div style="margin-top:8px;"><strong style="color:#1d4ed8;">Techniques worth stealing (candidates — nothing changed automatically):</strong>${list(rs.findings, '#1e3a8a')}</div>`
+          ? `<div style="margin-top:8px;"><strong style="color:#1d4ed8;">Candidates for evaluation (nothing changed automatically):</strong>${list(rs.findings, '#1e3a8a')}</div>`
           : rs.allClear
-            ? '<div style="margin-top:8px;color:#166534;">Nothing beat our current crawler approach this run.</div>'
+            ? '<div style="margin-top:8px;color:#166534;">No candidates for evaluation were identified this run; comparative performance was not measured.</div>'
             : ''
         return `
       <h3 style="margin:22px 0 8px;border-bottom:2px solid #0f172a;padding-bottom:4px;">Competitive crawler research</h3>
