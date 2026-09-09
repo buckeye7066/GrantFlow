@@ -117,6 +117,14 @@ describe('federal crawler qualifications come from the award detail', () => {
     expect(result.run.recommendations).toHaveLength(1)
   })
 
+  it('accepts a nonprofit when the source explicitly permits both tax-status classes', async () => {
+    const result = await discover({ type: 'nonprofit', detailTypes: [
+      { id: '12', description: 'Nonprofits having 501(c)(3) status' },
+      { id: '13', description: 'Nonprofits without 501(c)(3) status' },
+    ] })
+    expect(result.run.recommendations).toHaveLength(1)
+  })
+
   it('holds conflicting tax-status facts from different profile sections for review', async () => {
     const result = await discover({ type: 'nonprofit', detailTypes: [{ id: '13', description: 'Nonprofits without 501(c)(3) status' }], sectionOverrides: { nonprofit_compliance: { is_501c3: false }, organization_details: { is_501c3_public_charity: true } } })
     expect(result.run.recommendations).toEqual([])

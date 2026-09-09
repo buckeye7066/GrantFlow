@@ -33,6 +33,7 @@ function makeDb() {
       is_national INTEGER, state TEXT, categories TEXT, opportunity_kind TEXT,
       source_trust_tier TEXT, reality_status TEXT, record_origin TEXT, fingerprint TEXT,
       evidence_url TEXT, is_active INTEGER DEFAULT 1, is_hidden INTEGER DEFAULT 0,
+      eligibility_bullets TEXT, field_provenance TEXT,
       last_crawled DATETIME, last_verified_at DATETIME, discovered_at DATETIME, updated_at DATETIME
     );
     CREATE TABLE grants (id TEXT PRIMARY KEY, profile_id TEXT, funding_opportunity_id TEXT, status TEXT);
@@ -53,10 +54,28 @@ const GRANTS_GOV_BODY = JSON.stringify({
   },
 })
 
+const GRANTS_GOV_DETAIL_BODY = JSON.stringify({
+  errorcode: 0,
+  data: {
+    id: 900001, opportunityNumber: 'TEST-900001',
+    opportunityTitle: 'Rural Community Facilities Grant',
+    synopsis: {
+      opportunityId: 900001,
+      synopsisDesc: 'Funding for rural community facilities and equipment for nonprofits across the United States.',
+      applicantTypes: [
+        { id: '12', description: 'Nonprofits having 501(c)(3) status' },
+        { id: '13', description: 'Nonprofits without 501(c)(3) status' },
+      ],
+      costSharing: 'No', responseDateStr: '2099-12-31',
+    },
+  },
+})
+
 function makeStubFetcher() {
   return {
     async fetch(url) {
-      const body = String(url).includes('api.grants.gov') ? GRANTS_GOV_BODY : '{}'
+      const body = String(url).endsWith('/fetchOpportunity') ? GRANTS_GOV_DETAIL_BODY
+        : String(url).includes('api.grants.gov') ? GRANTS_GOV_BODY : '{}'
       return { ok: true, status: 200, finalUrl: url, contentHash: 'hash', body, fetchedAt: '2026-09-08T00:00:00.000Z' }
     },
   }

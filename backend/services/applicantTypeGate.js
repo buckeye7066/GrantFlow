@@ -603,10 +603,11 @@ export function evaluateApplicantTypeEligibility(opportunity, profileApplicantTy
     }
     if (normalized?.isNonprofit) identities.add('nonprofit')
     const taxStatus = readNonprofit501c3Status(context.profile, context.sections)
+    const bothNonprofitClassesAllowed = codes.includes('12') && codes.includes('13')
     if (!codes.some(code => {
       if (code === '99') return true // the source explicitly permits every applicant type
-      if (code === '12' && taxStatus !== true) return false
-      if (code === '13' && taxStatus !== false) return false
+      if (!bothNonprofitClassesAllowed && code === '12' && taxStatus !== true) return false
+      if (!bothNonprofitClassesAllowed && code === '13' && taxStatus !== false) return false
       return sourceApplicantIdentities[code]?.some(type => identities.has(type))
     })) {
       return { decision: 'review', reason: 'federal_applicant_identity_unconfirmed', required_applicant_codes: codes }

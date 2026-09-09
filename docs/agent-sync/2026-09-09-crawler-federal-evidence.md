@@ -25,6 +25,8 @@ the whole profile, including business information on a generic organization.
 Review corrections cover text-valued cost-share flags, secondary applicant-type
 collections, explicit unrestricted code 99, and the separate 501(c)(3) fact for
 codes 12 and 13. Unknown or conflicting tax status cannot certify either restricted class.
+When the source explicitly permits both classes, nonprofit identity suffices
+for that combined applicant requirement.
 The older reported detail-API WAF block did not reproduce: today's probes from
 the deployed service returned valid HTTP 200 detail records for Impact Aid,
 JAG State Formula, JAG Local Formula and Law & Science using the same fetcher.
@@ -56,8 +58,11 @@ extractions timed out, and the paid search fallback was at its daily pace limit.
 Regression coverage runs the real pipeline, canonical matcher and proof
 validator. It checks detail identity, repeated-hit deduplication, failed reads,
 actual amounts, narrow applicant restrictions, cost share and stale proofs.
-The final focused run passed 231 tests across nine files. The crawler OS suite
+The focused run passed 231 tests across nine files. The crawler OS suite
 passed 492 tests; pre-push validation and changed-file lint also passed.
+CI then found an older cross-profile fixture that supplied only Search2 data.
+It now supplies official detail and the live provenance columns. The combined
+tax-class case and cross-profile persistence pass together (27 tests).
 The original nightly Amy receipt remains 1 clean / 50 evaluated. It must not be
 rewritten as a successful post-fix cohort.
 
