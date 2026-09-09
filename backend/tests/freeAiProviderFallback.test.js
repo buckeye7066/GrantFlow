@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import {
+  invokeFreeJsonRoutes,
   getConfiguredFreeAiRoutes,
   isProviderCreditExhaustion,
 } from '../utils/freeAiRoutes.js'
@@ -14,6 +15,7 @@ import {
 const priorAnthropicKey = process.env.ANTHROPIC_API_KEY
 
 afterEach(() => {
+  vi.useRealTimers()
   if (priorAnthropicKey === undefined) delete process.env.ANTHROPIC_API_KEY
   else process.env.ANTHROPIC_API_KEY = priorAnthropicKey
 })
@@ -124,6 +126,7 @@ describe('free AI provider routing', () => {
     expect(freeClientFactory).toHaveBeenCalledTimes(1)
     expect(freeClient.chat.completions.create).toHaveBeenCalledWith(
       expect.objectContaining({ model: 'local-model' }),
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
     )
   })
 
@@ -217,4 +220,38 @@ describe('free AI provider routing', () => {
     }
   })
 
+})
+
+
+describe('free route cancellation and deadline', () => {
+  const routes = [{ id: 'one', model: 'one' }, { id: 'two', model: 'two' }]
+  it('aborts the active free request and never starts the next route', async () => {
+    vi.useFakeTimers()
+    const controller = new AbortController()
+    const create = vi.fn(() => new Promise(() => {}))
+    const factory = vi.fn(async () => ({ chat: { completions: { create } } }))
+    const pending = invokeFreeJsonRoutes({ routes, clientFactory: factory, prompt: 'fixture', timeoutMs: 4000, signal: controller.signal })
+    await vi.advanceTimersByTimeAsync(10)
+    controller.abort()
+    await vi.advanceTimersByTimeAsync(0)
+    expect(await pending).toMatchObject({ ok: false })
+    expect(create.mock.calls[0][1].signal.aborted).toBe(true)
+    expect(factory).toHaveBeenCalledTimes(1)
+  })
+  it('does not restart a default budget when the supplied deadline is exhausted', async () => {
+    const factory = vi.fn()
+    const result = await invokeFreeJsonRoutes({ routes, clientFactory: factory, prompt: 'fixture', timeoutMs: 0 })
+    expect(result.ok).toBe(false)
+    expect(factory).not.toHaveBeenCalled()
+  })
+  it('counts client initialization against the deadline and starts no late request', async () => {
+    vi.useFakeTimers()
+    const create = vi.fn()
+    const factory = vi.fn(async () => { await new Promise(resolve => setTimeout(resolve, 2000)); return { chat: { completions: { create } } } })
+    const pending = invokeFreeJsonRoutes({ routes: routes.slice(0, 1), clientFactory: factory, prompt: 'fixture', timeoutMs: 1000 })
+    await vi.advanceTimersByTimeAsync(1000)
+    expect(await pending).toMatchObject({ ok: false })
+    await vi.advanceTimersByTimeAsync(1000)
+    expect(create).not.toHaveBeenCalled()
+  })
 })

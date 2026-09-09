@@ -60,27 +60,37 @@ function boundedHtml(html) {
     : html;
 }
 
-function makeProfileBlindLlm(deps = {}) {
+function makeProfileBlindLlm(deps = {}, deadlineAt) {
   const invoke = deps.invoke || invokeJsonWithFallback;
   const openai = deps.openai !== undefined ? deps.openai : getOpenAIOptional();
   return async ({ system, prompt, signal }) => {
+    const timeoutMs = deadlineAt - Date.now();
+    if (signal?.aborted || timeoutMs <= 0) return null;
     const call = Promise.resolve(invoke({
       openai,
       system,
       prompt,
       temperature: 0.1,
       maxTokens: 1800,
+      timeoutMs,
+      signal,
       anthropicModel: process.env.WEB_DISCOVERY_MODEL_ANTHROPIC || 'claude-haiku-4-5',
       openaiModel: process.env.WEB_DISCOVERY_MODEL_OPENAI || 'gpt-4o-mini',
     }));
     if (!signal) return call;
-    if (signal.aborted) return null;
-    return Promise.race([
-      call,
-      new Promise((resolve) => {
-        signal.addEventListener('abort', () => resolve(null), { once: true });
-      }),
-    ]);
+    let onAbort;
+    try {
+      return await Promise.race([
+        call,
+        new Promise(resolve => {
+          onAbort = () => resolve(null);
+          signal.addEventListener('abort', onAbort, { once: true });
+          if (signal.aborted) onAbort();
+        }),
+      ]);
+    } finally {
+      signal.removeEventListener('abort', onAbort);
+    }
   };
 }
 
@@ -193,7 +203,7 @@ export async function extractOpportunitiesFromPage(
     facts = await extractPageFactsBlind(
       { pageUrl, pageText, linkInventory },
       {
-        llm: makeProfileBlindLlm(deps),
+        llm: makeProfileBlindLlm(deps, Date.now() + timeoutMs),
         timeoutMs,
         signal: deps.signal,
       },

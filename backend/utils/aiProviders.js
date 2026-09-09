@@ -141,6 +141,30 @@ function combineCompletionUsage(first, second) {
   return total
 }
 
+// Split the existing paid window only when the second provider is configured.
+// The initial OpenAI request and its one recovery share a fixed first deadline;
+// a retry cannot consume the time reserved for Anthropic or free routes.
+function providerBudget(timeoutMs, freeReserveMs) {
+  const suppliedBudgetMs = Number(timeoutMs ?? LLM_TIMEOUT_MS)
+  const requestBudgetMs = Number.isFinite(suppliedBudgetMs) ? Math.max(0, suppliedBudgetMs) : LLM_TIMEOUT_MS
+  const startedAt = Date.now()
+  const deadlineAt = startedAt + requestBudgetMs
+  const paidDeadlineAt = deadlineAt - freeReserveMs
+  const paidWindowMs = Math.max(0, paidDeadlineAt - startedAt)
+  const anthropicReserveMs = String(process.env.ANTHROPIC_API_KEY || '').trim() ? paidWindowMs / 2 : 0
+  const openaiDeadlineAt = paidDeadlineAt - anthropicReserveMs
+  return {
+    remainingMs: () => Math.max(0, deadlineAt - Date.now()),
+    paidAttemptMs: () => Math.max(0, paidDeadlineAt - Date.now()),
+    openaiAttemptMs: () => Math.max(0, openaiDeadlineAt - Date.now()),
+  }
+}
+
+function abortedResult(signal) {
+  return { ok: false, provider: 'fallback', aborted: true, text: null, json: null, raw: null,
+    error: signal.reason || new DOMException('Operation aborted', 'AbortError'), freeRouteErrors: [] }
+}
+
 // Omission uses the server's configured client. Explicit null remains an
 // opt-out for callers that have already tried OpenAI or select Anthropic.
 export async function invokeTextWithFallback({
@@ -154,7 +178,9 @@ export async function invokeTextWithFallback({
   freeRoutes = null,
   freeClientFactory = null,
   timeoutMs = null,
+  signal = null,
 } = {}) {
+  if (signal?.aborted) return abortedResult(signal)
   const safePrompt = typeof prompt === 'string' ? prompt : JSON.stringify(prompt ?? '')
   const messages = system
     ? [
@@ -174,50 +200,54 @@ export async function invokeTextWithFallback({
 
   // Shared gateway-safe deadline across BOTH providers — a sequential
   // OpenAI->Anthropic fallback must never sum past the proxy's ~30s cut.
-  const requestBudgetMs = Math.max(1, Number(timeoutMs ?? LLM_TIMEOUT_MS) || LLM_TIMEOUT_MS)
-  const deadlineAt = Date.now() + requestBudgetMs
-  const remainingMs = () => deadlineAt - Date.now()
-  const paidAttemptMs = () => Math.max(0, remainingMs() - freeReserveMs)
+  const { remainingMs, paidAttemptMs, openaiAttemptMs } = providerBudget(timeoutMs, freeReserveMs)
 
   // 1) OpenAI (optional)
-  if (openai && paidAttemptMs() > 25) {
+  if (openai && openaiAttemptMs() > 25) {
     openaiAttempted = true
     try {
       const completion = await withLLMTimeout(
-        openai.chat.completions.create({
+        attemptSignal => openai.chat.completions.create({
           model: openaiModel || process.env.OPENAI_MODEL || process.env.ANYA_OPENAI_MODEL || 'gpt-4o-mini',
           messages,
           temperature,
           max_tokens: maxTokens,
-        }),
-        { timeoutMs: paidAttemptMs(), label: 'OpenAI text generation' },
+        }, { signal: attemptSignal }),
+        { timeoutMs: openaiAttemptMs(), label: 'OpenAI text generation', signal },
       )
       const text = String(completion?.choices?.[0]?.message?.content ?? '').trim()
       return { ok: true, provider: 'openai', text, raw: text, usage: completion?.usage ?? null, openaiError: null, anthropicError: null }
     } catch (error) {
+      if (signal?.aborted) return abortedResult(signal)
       if (isLLMTimeout(error)) timedOut = true
       openaiError = summarizeOpenAIError(error)
       qualityLog.warn('[aiProviders] OpenAI text call failed', providerFailureDiagnostics(error))
     }
   }
 
+  if (signal?.aborted) return abortedResult(signal)
   // 2) Anthropic (only if budget remains)
-  const anthropic = paidAttemptMs() > 25 ? await getAnthropicClient() : null
-  if (anthropic) {
+  if (paidAttemptMs() > 25 && String(process.env.ANTHROPIC_API_KEY || '').trim()) {
     try {
       const response = await withLLMTimeout(
-        anthropic.messages.create({
-          model: anthropicModel || process.env.ANTHROPIC_MODEL || 'claude-haiku-4-5',
-          max_tokens: maxTokens,
-          temperature,
-          system: system ? String(system) : undefined,
-          messages: [{ role: 'user', content: safePrompt }],
-        }),
-        { timeoutMs: paidAttemptMs(), label: 'Anthropic text generation' },
+        async attemptSignal => {
+          const anthropic = await getAnthropicClient()
+          attemptSignal.throwIfAborted()
+          if (!anthropic) throw new Error('Anthropic is no longer configured')
+          return anthropic.messages.create({
+            model: anthropicModel || process.env.ANTHROPIC_MODEL || 'claude-haiku-4-5',
+            max_tokens: maxTokens,
+            temperature,
+            system: system ? String(system) : undefined,
+            messages: [{ role: 'user', content: safePrompt }],
+          }, { signal: attemptSignal })
+        },
+        { timeoutMs: paidAttemptMs(), label: 'Anthropic text generation', signal },
       )
       const text = extractAnthropicText(response)
       return { ok: true, provider: 'anthropic', text, raw: text, usage: null, openaiError, anthropicError: null }
     } catch (error) {
+      if (signal?.aborted) return abortedResult(signal)
       if (isLLMTimeout(error)) timedOut = true
       anthropicError = error?.message ?? String(error)
       qualityLog.error('[aiProviders] Anthropic text call failed', {
@@ -228,6 +258,7 @@ export async function invokeTextWithFallback({
     }
   }
 
+  if (signal?.aborted) return abortedResult(signal)
   // 3) No-credit/local and free-tier OpenAI-compatible routes.
   const freeResult = await invokeFreeTextRoutes({
     routes: configuredFreeRoutes,
@@ -237,7 +268,9 @@ export async function invokeTextWithFallback({
     temperature,
     maxTokens,
     timeoutMs: remainingMs(),
+    signal,
   })
+  if (signal?.aborted) return abortedResult(signal)
   if (freeResult.ok) {
     return {
       ...freeResult,
@@ -277,7 +310,9 @@ export async function invokeJsonWithFallback({
   freeRoutes = null,
   freeClientFactory = null,
   timeoutMs = null,
+  signal = null,
 } = {}) {
+  if (signal?.aborted) return abortedResult(signal)
   const safePrompt = typeof prompt === 'string' ? prompt : JSON.stringify(prompt ?? '')
   let openaiError = null
   let openaiAttempted = false
@@ -289,13 +324,10 @@ export async function invokeJsonWithFallback({
     : 0
 
   // Shared gateway-safe deadline across BOTH providers (see invokeTextWithFallback).
-  const requestBudgetMs = Math.max(1, Number(timeoutMs ?? LLM_TIMEOUT_MS) || LLM_TIMEOUT_MS)
-  const deadlineAt = Date.now() + requestBudgetMs
-  const remainingMs = () => deadlineAt - Date.now()
-  const paidAttemptMs = () => Math.max(0, remainingMs() - freeReserveMs)
+  const { remainingMs, paidAttemptMs, openaiAttemptMs } = providerBudget(timeoutMs, freeReserveMs)
 
   // 1) OpenAI (optional)
-  if (openai && paidAttemptMs() > 25) {
+  if (openai && openaiAttemptMs() > 25) {
     openaiAttempted = true
     try {
       const messages = [
@@ -306,20 +338,20 @@ export async function invokeJsonWithFallback({
       let usage = null
       for (let attempt = 0; attempt < 2; attempt += 1) {
         const completion = await withLLMTimeout(
-          openai.chat.completions.create({
+          attemptSignal => openai.chat.completions.create({
             model: openaiModel || process.env.OPENAI_MODEL || process.env.ANYA_OPENAI_MODEL || 'gpt-4o-mini',
             temperature,
             max_tokens: outputLimit,
             response_format: { type: 'json_object' },
             messages,
-          }),
-          { timeoutMs: paidAttemptMs(), label: 'OpenAI JSON generation' },
+          }, { signal: attemptSignal }),
+          { timeoutMs: openaiAttemptMs(), label: 'OpenAI JSON generation', signal },
         )
         usage = combineCompletionUsage(usage, completion?.usage)
         const choice = completion?.choices?.[0]
         if (choice?.finish_reason === 'length') {
           const retryLimit = Math.min(8192, Math.floor(Number(maxTokens) * 2))
-          if (attempt === 0 && retryLimit > Number(outputLimit) && paidAttemptMs() > 1000) {
+          if (attempt === 0 && retryLimit > Number(outputLimit) && openaiAttemptMs() > 1000) {
             qualityLog.warn('[aiProviders] OpenAI JSON response truncated; retrying once', { max_tokens: outputLimit, retry_max_tokens: retryLimit })
             outputLimit = retryLimit
             continue
@@ -334,15 +366,16 @@ export async function invokeJsonWithFallback({
         return { ok: true, provider: 'openai', json: parsed, raw: rawText, usage, openaiError: null, anthropicError: null }
       }
     } catch (error) {
+      if (signal?.aborted) return abortedResult(signal)
       if (isLLMTimeout(error)) timedOut = true
       openaiError = summarizeOpenAIError(error)
       qualityLog.warn('[aiProviders] OpenAI JSON call failed', providerFailureDiagnostics(error))
     }
   }
 
+  if (signal?.aborted) return abortedResult(signal)
   // 2) Anthropic (only if budget remains)
-  const anthropic = paidAttemptMs() > 25 ? await getAnthropicClient() : null
-  if (anthropic) {
+  if (paidAttemptMs() > 25 && String(process.env.ANTHROPIC_API_KEY || '').trim()) {
     try {
       const systemText = [
         system ? String(system) : null,
@@ -352,14 +385,19 @@ export async function invokeJsonWithFallback({
         .join('\n\n')
 
       const response = await withLLMTimeout(
-        anthropic.messages.create({
-          model: anthropicModel || process.env.ANTHROPIC_MODEL || 'claude-haiku-4-5',
-          max_tokens: maxTokens,
-          temperature,
-          system: systemText || undefined,
-          messages: [{ role: 'user', content: safePrompt }],
-        }),
-        { timeoutMs: paidAttemptMs(), label: 'Anthropic JSON generation' },
+        async attemptSignal => {
+          const anthropic = await getAnthropicClient()
+          attemptSignal.throwIfAborted()
+          if (!anthropic) throw new Error('Anthropic is no longer configured')
+          return anthropic.messages.create({
+            model: anthropicModel || process.env.ANTHROPIC_MODEL || 'claude-haiku-4-5',
+            max_tokens: maxTokens,
+            temperature,
+            system: systemText || undefined,
+            messages: [{ role: 'user', content: safePrompt }],
+          }, { signal: attemptSignal })
+        },
+        { timeoutMs: paidAttemptMs(), label: 'Anthropic JSON generation', signal },
       )
       const rawText = extractAnthropicText(response)
       const parsed = isLikelyJson(rawText) ? safeParseJSON(rawText, null) : tryParseJsonLoose(rawText)
@@ -368,6 +406,7 @@ export async function invokeJsonWithFallback({
       }
       return { ok: true, provider: 'anthropic', json: parsed, raw: rawText, usage: null, openaiError, anthropicError: null }
     } catch (error) {
+      if (signal?.aborted) return abortedResult(signal)
       if (isLLMTimeout(error)) timedOut = true
       anthropicError = error?.message ?? String(error)
       qualityLog.error('[aiProviders] Anthropic JSON call failed', {
@@ -378,6 +417,7 @@ export async function invokeJsonWithFallback({
     }
   }
 
+  if (signal?.aborted) return abortedResult(signal)
   // 3) No-credit/local and free-tier OpenAI-compatible routes.
   const freeResult = await invokeFreeJsonRoutes({
     routes: configuredFreeRoutes,
@@ -387,7 +427,9 @@ export async function invokeJsonWithFallback({
     temperature,
     maxTokens,
     timeoutMs: remainingMs(),
+    signal,
   })
+  if (signal?.aborted) return abortedResult(signal)
   if (freeResult.ok) {
     return {
       ...freeResult,

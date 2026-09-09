@@ -9,8 +9,8 @@
 // to be marked "presumed dead" (a chunk of the orphaned-job failures).
 //
 // withLLMTimeout races an in-flight LLM promise against a deadline and REJECTS
-// with a tagged timeout error if the deadline wins (the in-flight call is
-// abandoned — its eventual settlement is ignored). Callers catch err.isTimeout
+// with a tagged timeout error if the deadline wins. Signal-aware thunks also
+// receive cancellation; legacy promise callers still abandon late settlement. Callers catch err.isTimeout
 // and return a clean 503 "try again" instead of a 504. Default 26s leaves ~4s
 // headroom under the gateway cap for serialization, matching CRAWL_TOTAL_BUDGET_MS.
 
@@ -28,26 +28,45 @@ export class LLMTimeoutError extends Error {
 /**
  * Race an LLM promise (or a thunk returning one) against a deadline.
  *
- * @param {Promise|Function} work - the LLM call promise, or a () => Promise.
+ * @param {Promise|Function} work - the LLM call promise, or a (signal) => Promise.
  * @param {object} [opts]
  * @param {number} [opts.timeoutMs=LLM_TIMEOUT_MS]
  * @param {string} [opts.label='LLM call']
+ * @param {AbortSignal} [opts.signal] - optional caller cancellation
  * @returns {Promise<*>} the work's result, or rejects with LLMTimeoutError.
  */
 export async function withLLMTimeout(work, opts = {}) {
   const timeoutMs = Number.isFinite(opts.timeoutMs) ? opts.timeoutMs : LLM_TIMEOUT_MS
   const label = opts.label || 'LLM call'
+  const signal = opts.signal
+  signal?.throwIfAborted()
+  const controller = new AbortController()
   let timer = null
-  const deadline = new Promise((_, reject) => {
-    timer = setTimeout(() => reject(new LLMTimeoutError(label, timeoutMs)), Math.max(1, timeoutMs))
-    // Don't keep the event loop alive just for this timer.
+  let onAbort = null
+  const interrupted = new Promise((_, reject) => {
+    onAbort = () => {
+      reject(signal.reason || new DOMException('Operation aborted', 'AbortError'))
+      controller.abort(signal.reason)
+    }
+    signal?.addEventListener('abort', onAbort, { once: true })
+    timer = setTimeout(() => {
+      const error = new LLMTimeoutError(label, timeoutMs)
+      reject(error)
+      controller.abort(error)
+    }, Math.max(1, timeoutMs))
     if (typeof timer?.unref === 'function') timer.unref()
   })
   try {
-    const p = typeof work === 'function' ? Promise.resolve().then(work) : Promise.resolve(work)
-    return await Promise.race([p, deadline])
+    const p = typeof work === 'function' ? Promise.resolve().then(() => {
+      controller.signal.throwIfAborted()
+      return work(controller.signal)
+    }) : Promise.resolve(work)
+    const result = await Promise.race([p, interrupted])
+    signal?.throwIfAborted()
+    return result
   } finally {
     if (timer) clearTimeout(timer)
+    signal?.removeEventListener('abort', onAbort)
   }
 }
 
