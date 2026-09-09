@@ -17,6 +17,7 @@ import { describe, it, expect } from 'vitest'
 import fs from 'fs'
 import path from 'path'
 import Database from 'better-sqlite3'
+import { normalize } from '../crawler-os/normalizer.js'
 import { persistRun } from '../services/crawlerOsPersistence.js'
 import { ensurePageFactProvenanceColumns } from '../startup/ensureSchemaInvariants.js'
 import { checkFundingOpportunitiesSchema } from '../services/diagnosticsService.js'
@@ -381,5 +382,23 @@ describe('migration 144 — page-fact provenance columns', () => {
     expect(() => applyWithDirective(db)).not.toThrow()
     expect(() => applyWithDirective(db)).not.toThrow()
     for (const c of ALL) expect(cols(db)).toContain(c)
+  })
+})
+
+
+describe('affirmative tuition amounts survive OS normalization and persistence', () => {
+  it('retains the exact ACES description as a varies benefit through both boundaries', async () => {
+    const summary = 'Full-time students enrolled in a B.S. or M.S. in Cybersecurity, Computer Science, or Information Technology who are interested in a cybersecurity career in the federal government. Scholarships will award full tuition for up to two years, provide an annual living stipend, and a professional development allowance.'
+    const candidate = osRow({ title: 'Argo Cyber Emerging Scholars (ACES) Scholarship', summary, amount_min: null, amount_max: null })
+    const normalized = normalize(candidate, { kind: 'PROGRAM' })
+    expect(normalized.funding).toMatchObject({ amount_min: null, amount_max: null, amount_status: 'varies', amount_text: 'award full tuition' })
+    const db = makeLegacyDb()
+    try {
+      await persistRun(db, makeMemStore([candidate]), {})
+      expect(db.prepare('SELECT amount_min, amount_max, amount_text, amount_status FROM funding_opportunities WHERE id = ?').get(candidate.id))
+        .toEqual({ amount_min: null, amount_max: null, amount_text: 'award full tuition', amount_status: 'varies' })
+    } finally {
+      db.close()
+    }
   })
 })

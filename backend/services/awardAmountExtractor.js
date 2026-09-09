@@ -149,14 +149,22 @@ const RE_CONTACT =
 // award phrasing only, so "covers everything except tuition" (arbitrary words
 // between) and bare mentions ("eligible for in-state tuition", "help pay for
 // college") can never match.
+// Award/provide require explicit "full tuition" plus a benefit subject below.
+// Applicant obligations and evidence documents are not benefits (UWF ACES).
 const RE_TUITION_COVERAGE = new RegExp(
-  String.raw`\b(?:covers?|covering|pays?|paying|waives?|waiving)\s+`
+  String.raw`\b(?:(?:covers?|covering|pays?|paying|waives?|waiving)\s+|(?:awards?|awarding|provides?|providing)\s+(?=full\s+tuition\b))`
     + String.raw`(?:(?:any\s+gap\s+in|up\s+to|all(?:\s+of)?|full|remaining|the\s+(?:full\s+)?cost\s+of|a\s+portion\s+of|\d{1,3}\s*(?:%|percent)(?:\s+of)?)\s+)*`
     + String.raw`(?:in-?state\s+|resident\s+)?tuition\b`,
   'i',
 )
 // A negated coverage claim ("does not cover tuition") is NOT a tuition award.
 const RE_TUITION_NEGATION = /\b(?:not|never|no|isn'?t|doesn'?t|don'?t|won'?t|cannot|can'?t|except(?:ing)?|excluding)\s+(?:\w+\s+){0,2}$/i
+// New award/provide verbs are admitted only with an explicit scholarship or
+// program subject. Unknown subjects stay unknown; "students must provide full
+// tuition" must not become a scholarship benefit just because it names tuition.
+const RE_TUITION_BENEFIT_SUBJECT = /\b(?:scholarships?|fellowships?|grants?|programs?|awards?)\s+(?:(?:will|which|that)\s+)?$/i
+const RE_TUITION_DOCUMENT = /^\s+(?:receipts?|payments?|documentation|statements?|records?|invoices?|bills?)\b/i
+
 
 // "TUITION-FREE" — the Tennessee Promise class (Amy
 // `amount_recall_miss:high_school_student`, 2026-08-15). Real prod ingest text:
@@ -364,7 +372,13 @@ export function extractAwardAmountsFromText(text) {
   // Tuition-coverage: an explicit per-award semantic whose dollar value varies
   // by institution — a real answer, not silence. Status only; never a number.
   const tuition = RE_TUITION_COVERAGE.exec(t)
-  if (tuition && !RE_TUITION_NEGATION.test(t.slice(Math.max(0, tuition.index - 40), tuition.index))) {
+  const tuitionPrefix = tuition ? t.slice(Math.max(0, tuition.index - 80), tuition.index) : ''
+  const newBenefitVerb = tuition && /^(?:award|provid)/i.test(tuition[0])
+  const benefitSubject = !newBenefitVerb || (
+    RE_TUITION_BENEFIT_SUBJECT.test(tuitionPrefix) &&
+    !RE_TUITION_DOCUMENT.test(t.slice(tuition.index + tuition[0].length))
+  )
+  if (tuition && benefitSubject && !RE_TUITION_NEGATION.test(tuitionPrefix)) {
     return { ...none, amount_text: excerpt(tuition[0]), amount_status: 'varies' }
   }
   // "tuition-free" is the same per-award semantic stated as an adjective
