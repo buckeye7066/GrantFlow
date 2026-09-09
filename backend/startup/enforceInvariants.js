@@ -4047,9 +4047,12 @@ export async function enforceAmountEnrichment(db, deps = {}) {
       return { scanned: 0, repaired: 0, enforced: !disabled }
     }
 
-    // Catalog rows worth enriching: linked to an ACTIVE pipeline grant, no
-    // numeric amount, no text yet (or explicitly not_listed), has a page, and
-    // NOT already attempted.
+    // Catalog rows worth enriching: the unattended sweep requires a link to
+    // an ACTIVE pipeline grant; an explicit nonempty opportunityIds scope may
+    // also name an unlinked catalog row for bounded maintenance after a
+    // temporary/synthetic grant link is removed. Both modes still require no
+    // numeric amount, no text yet (or explicitly not_listed), a page, and no
+    // completed attempt.
     //
     // The attempted-exclusion MUST be part of this query, not a JS filter after
     // it. The previous implementation SELECTed `LIMIT 200` and then dropped
@@ -4076,6 +4079,16 @@ export async function enforceAmountEnrichment(db, deps = {}) {
       // bounded batch: before this split, low-id blocked rows re-entered the
       // batch every run (attempts=0 sorts first) and starved valid
       // never-attempted rows out of the budget entirely.
+      // The unattended sweep remains limited to rows in an ACTIVE pipeline.
+      // An explicit, ID-bounded maintenance request is already its own scope
+      // and must also be able to reconcile a catalog row before/after its
+      // temporary synthetic grant link has been removed.
+      const activeGrantJoin = scopedOpportunityIds
+        ? ''
+        : 'JOIN grants g ON g.funding_opportunity_id = fo.id'
+      const activeGrantPredicate = scopedOpportunityIds
+        ? ''
+        : `AND g.status IN (${statuses})`
       const candidateSql = (envPredicate, orderSql) =>
         // fo.source / fo.source_id / fo.record_origin are what the amount
         // ADAPTER registry routes on (services/sources/amountAdapters.js): the
@@ -4088,8 +4101,9 @@ export async function enforceAmountEnrichment(db, deps = {}) {
                 COALESCE(fo.amount_enrich_attempts, 0) AS attempts,
                 COALESCE(fo.amount_enrich_env_attempts, 0) AS env_attempts
            FROM funding_opportunities fo
-           JOIN grants g ON g.funding_opportunity_id = fo.id
-          WHERE g.status IN (${statuses})
+           ${activeGrantJoin}
+          WHERE 1 = 1
+            ${activeGrantPredicate}
             AND COALESCE(fo.amount_min, 0) <= 0
             AND COALESCE(fo.amount_max, 0) <= 0
             AND (fo.amount_status IS NULL OR fo.amount_status = 'not_listed')

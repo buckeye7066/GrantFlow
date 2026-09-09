@@ -502,6 +502,8 @@ extend the test's ordered list and bump its number; do NOT try to keep the
 prose totals below in sync — read them as "this row's step was #N when it
 landed", never as the current size of the ladder.
 
+**Amount-enrichment scope exception:** `enforceAmountEnrichment()` keeps its unattended sweep restricted to catalog rows linked to active-pipeline grants. A caller-supplied, nonempty `opportunityIds` maintenance scope is already an explicit hard boundary and may reconcile exactly those named catalog rows after a temporary/synthetic grant link has been removed; it must not broaden the unattended sweep.
+
 | Invariant | Single enforcer | Guard test |
 | --- | --- | --- |
 | Sticky deletes (deleted pipeline grants AND deleted funding-source matches stay gone) | `reconcileDismissedGrants()` + `reconcileDismissedMatches()` in `backend/services/pipelineDismissals.js`, both re-run by `enforceStickyDeletes()`. Owner-facing delete: `DELETE /api/profiles/:id/funding-sources/:opportunityId` (`backend/routes/fundingSources.js`) records the tombstone + purges via the same sweeps; the GET excludes tombstoned rows per-read | `backend/tests/enforceInvariants.test.js` + `backend/tests/fundingSourcesDismissRoute.test.js` |

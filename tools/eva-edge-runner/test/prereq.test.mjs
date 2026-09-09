@@ -38,6 +38,27 @@ test('Windows batch prerequisite launchers retain cmd support without changing P
   }
 })
 
+test('a transient executable-probe timeout is retried before the runtime is declared missing', () => {
+  let calls = 0
+  const result = probeExecutable({
+    command: 'npm',
+    platform: 'win32',
+    run: () => {
+      calls += 1
+      if (calls === 1) {
+        return {
+          status: null,
+          error: Object.assign(new Error('spawnSync cmd.exe ETIMEDOUT'), { code: 'ETIMEDOUT' }),
+        }
+      }
+      return { status: 0, stdout: '11.17.0' }
+    },
+  })
+
+  assert.equal(calls, 2, 'one transient timeout gets one bounded retry')
+  assert.equal(result.ok, true, result.detail)
+})
+
 test('runtime executables are inferred globally from start and journey commands', () => {
   const requirements = inferExecutableRequirements({
     start_command: 'cd backend && uvicorn app.main:app --port 8000 & cd frontend && pnpm dev',

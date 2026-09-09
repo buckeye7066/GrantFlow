@@ -4184,6 +4184,44 @@ describe('enforceAmountEnrichment', () => {
     expect(res.scanned).toBe(0)
   })
 
+  it('an explicit opportunity scope can reconcile an unlinked catalog row without broadening the nightly sweep', async () => {
+    const db = makeRealDb()
+    const scopedId = crypto.randomUUID()
+    const unscopedId = crypto.randomUUID()
+    db.prepare(
+      `INSERT INTO funding_opportunities (id, title, source_url) VALUES (?, 'Scoped orphan', 'https://funder.org/scoped')`,
+    ).run(scopedId)
+    db.prepare(
+      `INSERT INTO funding_opportunities (id, title, source_url) VALUES (?, 'Other orphan', 'https://funder.org/other')`,
+    ).run(unscopedId)
+    const seen = []
+
+    const res = await enforceAmountEnrichment(db, {
+      opportunityIds: [scopedId],
+      enrichImpl: async (row) => {
+        seen.push(row.id)
+        return {
+          attempted: true,
+          page_read: true,
+          transient: false,
+          found: true,
+          amounts: {
+            amount_min: 1000,
+            amount_max: 3000,
+            amount_text: '$1,000-$3,000',
+            amount_status: 'range',
+            amount_confidence: 0.95,
+          },
+        }
+      },
+    })
+
+    expect(seen).toEqual([scopedId])
+    expect(res.repaired).toBe(1)
+    expect(foRow(db, scopedId).amount_max).toBe(3000)
+    expect(foRow(db, unscopedId).amount_max).toBeNull()
+  })
+
   it('count-only mode via ENFORCE_AMOUNT_ENRICHMENT=0', async () => {
     const db = makeRealDb()
     seedLinkedPair(db)
