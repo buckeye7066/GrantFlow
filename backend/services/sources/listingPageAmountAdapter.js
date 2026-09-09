@@ -48,6 +48,7 @@
 import { createLogger } from '../../utils/logger.js'
 import { extractAwardAmountsFromText } from '../awardAmountExtractor.js'
 import { htmlToText } from '../webGrantExtractor.js'
+import { load } from 'cheerio'
 
 const log = createLogger('service:listingPageAmountAdapter')
 
@@ -76,6 +77,22 @@ const WINDOW_CHARS = 900
  * 159/0163 missed: the host is dead, but its content lives on the portal.
  */
 export const LISTING_PAGES = Object.freeze([
+  Object.freeze({
+    id: 'uwf_aces_academicworks',
+    matchHosts: Object.freeze(['uwf.academicworks.com']),
+    matchPaths: Object.freeze(['/', '/opportunities', '/opportunities/9039']),
+    matchTitles: Object.freeze(['Argo Cyber Emerging Scholars (ACES)']),
+    fetchUrl: 'https://uwf.academicworks.com/opportunities/9039',
+    structuredAward: true,
+  }),
+  Object.freeze({
+    id: 'uwf_aces_stipend_academicworks',
+    matchHosts: Object.freeze(['uwf.academicworks.com']),
+    matchPaths: Object.freeze(['/', '/opportunities', '/opportunities/9430']),
+    matchTitles: Object.freeze(['Argo Cyber Emerging Scholars Stipend (ACES)']),
+    fetchUrl: 'https://uwf.academicworks.com/opportunities/9430',
+    structuredAward: true,
+  }),
   Object.freeze({
     // The catalog stores both UWF umbrella rows at this shared index URL. Each
     // title has a dedicated official page, so title ownership is required to
@@ -211,6 +228,36 @@ function normalizedTitle(value) {
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, ' ')
     .trim()
+}
+
+// AcademicWorks renders the award in a definition list, well after its long
+// description. A title window can miss it; whole-page extraction can take a
+// dollar figure from a supplemental question. Read only the uniquely labeled
+// field on a page that identifies this exact award.
+function readStructuredAward(row, body, text) {
+  const unresolved = (reason) => ({ attempted: true, page_read: false, transient: false, found: false, reason })
+  const $ = load(body)
+  const headings = $('h1,h2,h3').filter((_i, el) => normalizedTitle($(el).text()) === normalizedTitle(row.title))
+  if (headings.length !== 1) return unresolved('structured_award_title_not_found')
+  const fields = $('dt').filter((_i, el) => $(el).text().trim().toLowerCase() === 'award')
+  if (fields.length !== 1) return unresolved('structured_award_field_ambiguous')
+  const value = fields.first().next('dd').text().replace(/\s+/g, ' ').trim()
+  if (!value) return unresolved('structured_award_field_missing')
+  const answer = { attempted: true, page_read: true, transient: false, found: false, reason: 'structured_award_source_status' }
+  if (/^varies\.?$/i.test(value)) return { ...answer, amount_status: 'varies', amount_text: `Award: ${value}` }
+  if (/^\$\s*0+(?:\.0+)?$/.test(value)) {
+    // The source displays zero for this stipend and directs readers to its
+    // contact. Preserve both statements; do not assert a real zero-dollar
+    // stipend or borrow the separate scholarship's full-tuition benefit.
+    const contact = text.match(/\bfor more information contact\s+[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/i)
+    if (!contact) return unresolved('structured_award_zero_unresolved')
+    return { ...answer, amount_status: 'contact_required', amount_text: `Award: ${value}. ${contact[0]}.` }
+  }
+  const amounts = extractAwardAmountsFromText(`Award amount: ${value}`)
+  if (amounts.amount_min > 0 || amounts.amount_max > 0) {
+    return { ...answer, found: true, reason: 'structured_award_amount', amounts }
+  }
+  return unresolved('structured_award_value_unresolved')
 }
 
 function titleMatchesEntry(title, entry) {
@@ -364,6 +411,8 @@ export async function enrichAmountViaListingPage(row, deps = {}) {
       // A WAF interstitial / JS shell — we read nothing about the row.
       return { attempted: true, page_read: false, transient: false, found: false, reason: 'thin_page' }
     }
+
+    if (entry.structuredAward) return readStructuredAward(row, res.body, text)
 
     const sourceStatus = pageLevelStatus(entry, text)
     if (sourceStatus) {
