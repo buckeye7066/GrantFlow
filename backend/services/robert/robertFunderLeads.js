@@ -425,7 +425,7 @@ export async function demoteResearchOnlyPromotions(db, cols = null) {
  *      URL that looks like an application PATH is found, set it and PROMOTE.
  *   3. A live homepage (no apply path) is recorded as a research lead; the row
  *      stays a lead, attempts++ (bounded -> not_applicable, labeled).
- *   4. A search-provider outage (0 hits) never burns an attempt.
+ *   4. A failed, unavailable, or empty search never burns an attempt.
  *
  * Bounded per pass (FUNDER_LEAD_INVESTIGATE_LIMIT, time budget). Fewest-attempts
  * first so a permanently-unreachable funder never starves fresh leads.
@@ -460,12 +460,15 @@ export async function investigateFunderLeads(db, {
   let rows
   try {
     const stateFilter = hasState ? `AND (funder_lead_state IS NULL OR funder_lead_state IN ('candidate','investigated'))` : ''
-    // SAFE BY CONSTRUCTION: a ternary over two compile-time literals, selected by
-    // a column-existence flag — no caller data reaches the SQL text.
-    const safeOrderBy = hasAttempts ? 'COALESCE(funder_lead_attempts,0) ASC, updated_at ASC' : 'updated_at ASC'
+    // SAFE BY CONSTRUCTION: identifiers come only from this fixed allowlist,
+    // filtered against the deployed grants schema. Catalog-only source_url
+    // and optional URL columns must not make every investigation fail.
+    const safeSelectColumns = ['id', 'title', 'funder', 'application_url', 'portal_url', 'url', 'apply_url', 'source_url', 'funder_lead_attempts']
+      .filter((column) => cols.has(column)).join(', ')
+    const safeDateOrder = cols.has('updated_at') ? 'updated_at ASC' : 'id ASC'
+    const safeOrderBy = hasAttempts ? `COALESCE(funder_lead_attempts,0) ASC, ${safeDateOrder}` : safeDateOrder
     rows = await db.prepare(
-      `SELECT id, title, funder, application_url, portal_url, url, source_url
-         ${hasAttempts ? ', funder_lead_attempts' : ''}
+      `SELECT ${safeSelectColumns}
          FROM grants
         WHERE LOWER(COALESCE(pipeline_category,'')) = '${PIPELINE_CATEGORY.FUNDER_LEAD}'
           ${stateFilter}
@@ -497,8 +500,11 @@ export async function investigateFunderLeads(db, {
     } catch (err) {
       found = { url: null, searched: false, error: String(err?.message || err) }
     }
-    if (found && found.searched === true && (found.hits === 0)) {
-      out.deferredOutage += 1 // provider returned nothing — do not burn an attempt
+    if (!found || found.error || (!found.url && found.searched !== true) ||
+        (found.searched === true && found.hits === 0)) {
+      // A provider failure is not a completed negative investigation. Preserve
+      // state, attempts, timestamps, and owner notes so recovery can retry it.
+      out.deferredOutage += 1
       continue
     }
     if (found?.url && looksLikeApplicationPath(found.url)) {
@@ -516,10 +522,12 @@ export async function investigateFunderLeads(db, {
     if (hasAttempts) { sets.push('funder_lead_attempts = ?'); vals.push(attempts) }
     if (hasInvestigatedAt) { sets.push(`funder_lead_last_investigated_at = ${isPg(db) ? 'now()' : 'CURRENT_TIMESTAMP'}`) }
     if (found?.url && cols.has('notes')) {
-      // Record the funder's site as a research lead (a homepage is a contact,
-      // not an application form — a human/relationship step still applies).
-      sets.push('notes = ?')
-      vals.push(`Robert investigated: funder site ${found.url} found (no self-serve application path detected). Relationship/research step needed.`)
+      // Append to the current database value, not a stale pre-search snapshot.
+      // A repeated receipt is a no-op; user notes and concurrent edits survive.
+      const receipt = `Robert investigated: funder site ${found.url} found (no self-serve application path detected). Relationship/research step needed.`
+      const safeReceiptPosition = isPg(db) ? "strpos(COALESCE(notes,''), ?)" : "instr(COALESCE(notes,''), ?)"
+      sets.push(`notes = CASE WHEN ${safeReceiptPosition} > 0 THEN notes WHEN TRIM(COALESCE(notes,'')) = '' THEN ? ELSE notes || ? END`)
+      vals.push(receipt, receipt, `\n\n${receipt}`)
     }
     if (!sets.length) { out.investigated += 1; continue }
     vals.push(row.id)
