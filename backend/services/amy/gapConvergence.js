@@ -38,7 +38,7 @@
  */
 
 import { actorFor } from './findingActorRegistry.js'
-import { ACTIONABILITY, leverActionability, staleNights } from './approvalLedger.js'
+import { ACTIONABILITY, itemActionability, staleNights } from './approvalLedger.js'
 
 export const TREND = Object.freeze({
   CONVERGING: 'converging',
@@ -158,7 +158,7 @@ export function assessConvergence({ flywheel = null, coverage = null, approvalQu
 export function namedUnclosableClasses(approvalQueue = []) {
   const out = []
   for (const item of Array.isArray(approvalQueue) ? approvalQueue : []) {
-    const meta = leverActionability(item?.lever)
+    const meta = itemActionability(item)
     if (meta.actionability !== ACTIONABILITY.CODE_CHANGE) continue
     const nights = Number(item?.nights_open) || 0
     if (nights < staleNights()) continue

@@ -441,6 +441,18 @@ export function summarizeAmyFlywheel(amy, { now = new Date() } = {}) {
   }
   // The honest "this cannot finish itself" list, named rather than counted.
   for (const u of (Array.isArray(conv?.unclosable_by_any_lever) ? conv.unclosable_by_any_lever : []).slice(0, 3)) {
+    // Historical convergence snapshots predate per-item attribution. A cached
+    // categorical claim cannot override the current queue's unknown evidence.
+    if (u.lever === 'query_breadth') {
+      const current = queue.find(item => item.lever === u.lever && item.category === u.category && item.finding_type === u.finding_type)
+      const normalized = normalizeApprovalItem(current || { ...u, id: `${u.finding_type}:${u.category}` })
+      if (normalized.actionability === 'blocked') {
+        if (!current || !uncertainRecall.slice(0, 6).includes(current)) {
+          couldNot.push(`Coverage gap — cause unverified: ${u.finding_type}${u.category ? ` (${u.category})` : ''} open ${u.nights_open} nights. ${normalized.attribution.reason}`)
+        }
+        continue
+      }
+    }
     couldNot.push(
       `NO LEVER CAN CLOSE THIS: ${u.finding_type}${u.category ? ` (${u.category})` : ''} open ${u.nights_open} nights`
       + `${u.file ? ` → ${u.file}` : ''} — ${u.human_action}`,

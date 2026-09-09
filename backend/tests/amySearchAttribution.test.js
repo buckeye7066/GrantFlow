@@ -5,6 +5,7 @@ import { evaluateDiscovery, buildAnyaHandoff } from '../services/amy/amyReport.j
 import { runAmyAnyaSamPipeline } from '../services/amy/amyPipeline.js'
 import { buildApprovalQueue } from '../services/amy/crawlerTuner.js'
 import { foldApprovalLedger, decorateApprovalQueue, hydrateApprovalLedger, normalizeApprovalItem } from '../services/amy/approvalLedger.js'
+import { namedUnclosableClasses } from '../services/amy/gapConvergence.js'
 import { searchEvidence } from '../services/amy/searchAttribution.js'
 import { buildOwnerReport } from '../services/anya/anyaDailyOwnerReport.js'
 import { buildArchetypeLearningUpdate, learningSearchCoverage } from '../services/amy/archetypeLearning.js'
@@ -36,6 +37,21 @@ describe('search degradation does not prove a query-builder defect', () => {
       const stored = JSON.parse(db.prepare('SELECT value FROM system_kv WHERE key = ?').get('amy_approval_queue').value)
       expect(stored.items[0]).toEqual(legacy)
     } finally { db.close() }
+  })
+  it('does not turn uncertain gaps into code claims through generated or cached convergence', () => {
+    const unknown = buildApprovalQueue([evaluate('degraded_results')]).map(item => ({ ...item, nights_open: 30 }))
+    const unrelated = { lever: 'eligibility_gate', finding_type: 'pipeline_guard_escape', category: 'guard_escape:qualifies', nights_open: 30, target_file: 'backend/guard.js' }
+    const unclosable = namedUnclosableClasses([...unknown, unrelated])
+    expect(unclosable.some(item => item.lever === 'query_breadth')).toBe(false)
+    expect(unclosable.some(item => item.lever === 'eligibility_gate')).toBe(true)
+    const cached = { lever: 'query_breadth', finding_type: 'institution_recall_miss', category: 'college_university', nights_open: 30, file: 'backend/crawler-os/webQueries.js', human_action: 'The query builder needs a code change.' }
+    for (const queue of [unknown, []]) {
+      const { text } = buildOwnerReport({}, { now: new Date('2026-09-09T12:00:00Z'), amy: { report: { run_id: 'old', completed_at: '2026-09-09T11:00:00Z', approval_queue: queue, convergence: { unclosable_by_any_lever: [cached, ...unclosable] } } } })
+      expect(text).toMatch(/Coverage gap — cause unverified/)
+      expect(text).not.toMatch(/NO LEVER CAN CLOSE THIS: institution_recall_miss/)
+      expect(text).not.toContain('The query builder needs a code change.')
+      expect(text).toMatch(/NO LEVER CAN CLOSE THIS: pipeline_guard_escape/)
+    }
   })
   it('learns from healthy profiles without learning from degraded or unknown siblings', () => {
     const healthy = evaluate('ok')
