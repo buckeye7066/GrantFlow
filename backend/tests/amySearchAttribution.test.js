@@ -1,4 +1,6 @@
 import { describe, it, expect } from 'vitest'
+import Database from 'better-sqlite3'
+import { readLatestAmyReport, readAmyApprovalQueue } from '../services/amy/amyReportStore.js'
 import { evaluateDiscovery, buildAnyaHandoff } from '../services/amy/amyReport.js'
 import { runAmyAnyaSamPipeline } from '../services/amy/amyPipeline.js'
 import { buildApprovalQueue } from '../services/amy/crawlerTuner.js'
@@ -16,6 +18,25 @@ function evaluate(status, covered = false, empty = false) {
 }
 
 describe('search degradation does not prove a query-builder defect', () => {
+  it('normalizes legacy persisted evidence consistently through both report-store reads', async () => {
+    const db = new Database(':memory:')
+    try {
+      db.exec('CREATE TABLE system_kv (key TEXT PRIMARY KEY, value TEXT, updated_at TEXT)')
+      const legacy = { id: 'institution_recall_miss:college_university', lever: 'query_breadth', actionability: 'code_change', code_brief: { file: 'backend/crawler-os/webQueries.js' }, evidence: { subjects: ['Example College'] }, nights_open: 30 }
+      const entries = [['amy_last_report', { run_id: 'old', approval_queue: [legacy] }], ['amy_approval_queue', { updated_run_id: 'old', items: [legacy] }]]
+      for (const [key, value] of entries) db.prepare('INSERT INTO system_kv VALUES (?, ?, ?)').run(key, JSON.stringify(value), '2026-09-01T12:00:00Z')
+      const report = await readLatestAmyReport(db)
+      const queue = await readAmyApprovalQueue(db)
+      expect(queue.items).toEqual(report.approval_queue)
+      expect(queue.items[0].actionability).toBe('blocked')
+      expect(queue.items[0].attribution.status).toBe('inconclusive')
+      expect(queue.items[0].code_brief).toBeUndefined()
+      expect(queue.items[0].nights_open).toBe(30)
+      expect(queue.updated_run_id).toBe('old')
+      const stored = JSON.parse(db.prepare('SELECT value FROM system_kv WHERE key = ?').get('amy_approval_queue').value)
+      expect(stored.items[0]).toEqual(legacy)
+    } finally { db.close() }
+  })
   it('learns from healthy profiles without learning from degraded or unknown siblings', () => {
     const healthy = evaluate('ok')
     const degraded = evaluate('degraded_results')
@@ -140,6 +161,7 @@ describe('search degradation does not prove a query-builder defect', () => {
     expect(normalized.actionability).toBe('blocked')
     expect(normalized.attribution.status).toBe('inconclusive')
     expect(normalized.code_brief).toBeUndefined()
+    expect(normalized.rationale.match(/Historical subject history is incomplete/g)).toHaveLength(1)
     const evaluation = evaluate('ok')
     evaluation.findings.find(f => f.type === 'institution_recall_miss').evidence.schools = Array.from({ length: 205 }, (_, i) => `College ${i}`)
     const oversized = buildApprovalQueue([evaluation]).find(i => i.finding_type === 'institution_recall_miss')

@@ -229,7 +229,7 @@ export function normalizeApprovalItem(item) {
   const meta = itemActionability(normalized)
   return { ...normalized, actionability: meta.actionability, apply_surface: meta.surface, human_gate_reason: meta.why, requires_approval: false,
     ...(meta.actionability === ACTIONABILITY.BLOCKED ? { code_brief: undefined, target_file: null,
-      rationale: `Coverage gap remains open (${item.id}). ${attribution.reason}${item.evidence?.subject_history_incomplete ? ' Historical subject history is incomplete; recover the original receipts before resolving.' : ''}${item.evidence?.subjects?.length ? ` Missing subjects: ${item.evidence.subjects.join(', ')}.` : ' Historical subject evidence is unavailable; recover the prior receipt or run a targeted subject recheck before resolving.'}` } : {}) }
+      rationale: `Coverage gap remains open (${item.id}). ${attribution.reason}${item.evidence?.subjects?.length ? ` Missing subjects: ${item.evidence.subjects.join(', ')}.` : ' Historical subject evidence is unavailable; recover the prior receipt or run a targeted subject recheck before resolving.'}` } : {}) }
 }
 
 export function hydrateApprovalLedger(prev, receipts = []) {
