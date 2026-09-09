@@ -953,6 +953,21 @@ export async function runProfileDiscoveryLive({ db = getDb(), profileId, fetcher
     /* match-decision integrity is also re-asserted by the boot invariant net */
   }
 
+  // An automated gate rejection is not permanent owner intent. Reconsider its
+  // exact tombstone only after this own crawl has completed every match check.
+  // A fresh ACCEPT and all four truths still face the current pipeline gates.
+  if (!dryRun && String(ctx?.profile?.created_by ?? '') !== 'agent:amy') {
+    try {
+      const { revalidateAutomaticDismissalsAfterCrawl } = await import('./automaticDismissalRevalidation.js');
+      persisted.automaticDismissalRevalidation = await revalidateAutomaticDismissalsAfterCrawl(db, {
+        profileId, run, idRemap: persisted?.idRemap,
+      });
+    } catch (error) {
+      persisted.automaticDismissalRevalidation = { revalidated: 0, failed: true, reason: String(error?.message || error) };
+      console.warn('[crawler-os] automatic dismissal revalidation failed; tombstones retained', { profileId, code: error?.code ?? error?.name });
+    }
+  }
+
   // ROBERT SEARCHES THE PREPOPULATED ITEM LIST WITHOUT BEING ASKED (owner
   // directive 2026-09-05): derive the profile's needs plan (program vehicle,
   // venture items, ...) and run the item search for its open needs, persisting

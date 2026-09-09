@@ -84,6 +84,7 @@ async function prunePipelineRejects(db, memStore, idRemap) {
         grantRow,
         opportunity: liveOpp,
         reason: 'crawler_os_reject',
+        userId: 'system_crawler_os',
       });
       dismissed += 1;
     }
