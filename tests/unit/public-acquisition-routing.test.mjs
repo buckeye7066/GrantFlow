@@ -36,7 +36,6 @@ test('Vercel serves public sitemap routes from distinct HTML documents', () => {
 
   assert.equal(rewrites.get('/welcome'), '/welcome.html')
   assert.equal(rewrites.get('/privacy'), '/privacy.html')
-  assert.equal(rewrites.get('/((?!assets/).*)'), '/index.html')
   assert.notEqual(rewrites.get('/welcome'), rewrites.get('/privacy'))
 })
 
@@ -90,4 +89,16 @@ test('landing copy does not promise eligibility, awards, or autonomous submissio
   }
   assert.match(landing, /why each result may fit/i)
   assert.match(landing, /only confirmed evidence is treated as an external submission/i)
+})
+
+test('SPA deep links work while update metadata and runtime assets stay outside fallbacks', () => {
+  const vercel = JSON.parse(read('vercel.json'))
+  const fallbacks = vercel.rewrites.filter((rule) => rule.destination === '/index.html')
+    .map((rule) => new RegExp('^' + rule.source + '$'))
+  for (const base of ['', '/grantflow']) {
+    assert.ok(fallbacks.some((pattern) => pattern.test(base + '/Dashboard')))
+    for (const asset of ['/assets/main.js', '/app-update.json', '/app-update-1234-abcd.js', '/app-update-1234-abcd.css']) {
+      assert.ok(fallbacks.every((pattern) => !pattern.test(base + asset)), base + asset)
+    }
+  }
 })

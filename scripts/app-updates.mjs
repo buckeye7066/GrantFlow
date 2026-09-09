@@ -16,6 +16,8 @@ export default function appUpdates({ app }) {
   const bundleVersion = `1.0.${Date.now()}`;
   return {
     name: 'app-release-updates',
+    // Vite removes inlined HTML entry chunks before user post plugins run.
+    enforce: 'post',
     apply: 'build',
     config() { return { define: { 'import.meta.env.VITE_APP_UPDATE_VERSION': JSON.stringify(bundleVersion) } }; },
     configResolved(value) { config = value; },
