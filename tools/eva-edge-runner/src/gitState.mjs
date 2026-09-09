@@ -473,7 +473,10 @@ export function ensureWorkspaceDependencies(workspaceRoot, {
       // shell only on Windows preserves both portability and the injection
       // boundary.
       shell: platform === 'win32',
-      env: { ...baseLaunchEnv(process.env), ...(repairStore ? { npm_config_store_dir: repairStore } : {}) },
+      // These installs have no terminal. pnpm must be allowed to replace its
+      // runner-owned modules directory after a lockfile/store change without
+      // asking an interactive confirmation that can never be answered.
+      env: { ...baseLaunchEnv(process.env), CI: 'true', ...(repairStore ? { npm_config_store_dir: repairStore } : {}) },
     }) } finally {
       if (repairStore) rmSync(repairStore, { recursive: true, force: true })
     }

@@ -42,6 +42,27 @@ describe('AcademicWorks award answers', () => {
       amounts: { amount_min: 12000, amount_max: 12000, amount_status: 'known' } })
   })
 
+  it('retains the official description when AcademicWorks places it inside its section header', async () => {
+    const body = `<main><header class="section-header main"><h3>${stipend.title}</h3>
+      <p>The NSF CyberCorps Scholarship for Service program trains cybersecurity professionals.
+      For more information contact <a href="mailto:aces@uwf.edu">aces@uwf.edu</a>.</p></header>
+      <dl><dt>Award</dt><dd>$0.00</dd></dl>
+      <p>Complete the General Application to be considered. Award recipients must complete
+      a government internship and participate in professional development activities.
+      Applications require all requested supporting materials before the deadline.</p></main>`
+    const result = await read(stipend, body, 'https://uwf.academicworks.com/opportunities/9430')
+    expect(result).toMatchObject({ page_read: true, found: false, amount_status: 'contact_required' })
+    expect(result.amount_text).toBe('Award: $0.00. For more information contact aces@uwf.edu.')
+  })
+
+  it('does not borrow a contact instruction outside the named award description', async () => {
+    const body = page(stipend.title, '$0.00')
+      .replace(`<h3>${stipend.title}</h3>`, `<header><h3>${stipend.title}</h3></header>`)
+    const result = await read(stipend, body, 'https://uwf.academicworks.com/opportunities/9430')
+    expect(result).toMatchObject({ page_read: false, found: false, reason: 'structured_award_zero_unresolved' })
+    expect(result.amount_status).toBeUndefined()
+  })
+
   it.each([
     ['wrong heading', page('A Different Award', 'Varies', `<p>See ${scholarship.title}.</p>`)],
     ['missing field', page(scholarship.title, 'Varies').replace('<dt>Award</dt>', '<dt>Other</dt>')],
