@@ -391,13 +391,15 @@ export async function enrichAmountViaListingPage(row, deps = {}) {
     }
 
     // Page-owned section headings are narrower evidence than a generic catalog
-    // title, so they must win when both occur on one listing page. Otherwise a
-    // sibling amount near an earlier generic H1 can be assigned to this row.
-    const anchorTitles = [...(entry.anchorTitles || []), row?.title].filter(Boolean)
-    const anchorCandidates = anchorTitles.map((title) => extractAnchoredAmounts(text, title))
-    const result = anchorCandidates.find((candidate) =>
-      candidate.anchored && (candidate.amounts || candidate.amount_status || candidate.amount_text)
-    ) || anchorCandidates.find((candidate) => candidate.anchored) || { anchored: false }
+    // title. If one is present, even without a number, it owns the answer and
+    // must prevent a sibling amount near an earlier generic H1 from leaking in.
+    const selectAnchor = (titles) => {
+      const candidates = titles.filter(Boolean).map((title) => extractAnchoredAmounts(text, title))
+      return candidates.find((candidate) =>
+        candidate.anchored && (candidate.amounts || candidate.amount_status || candidate.amount_text)
+      ) || candidates.find((candidate) => candidate.anchored) || null
+    }
+    const result = selectAnchor(entry.anchorTitles || []) || selectAnchor([row?.title]) || { anchored: false }
     if (!result.anchored) {
       if (pageLevelFallback(entry, text)) {
         // The row points at a known umbrella/index page that we successfully

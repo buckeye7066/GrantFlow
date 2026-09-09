@@ -446,6 +446,23 @@ describe('official title-specific pages close the recurring amount-recall gap', 
     expect(result.amounts).toMatchObject({ amount_min: 1000, amount_max: 3000 })
   })
 
+  it('does not fall back to a sibling amount after finding an amountless page-owned anchor', async () => {
+    const sourceUrl = 'https://www.ohio.edu/admissions/tuition/transfer-scholarships'
+    const amountlessOwnedSection = [
+      'Transfer Scholarships. A separate sibling program awards range from $8,000 to $9,999.',
+      'Opportunities for Transfer Students. Current eligibility and enrollment requirements are listed here.',
+      'Contact admissions for program guidance and application deadlines.',
+      'Additional transfer resources explain credit evaluation and orientation requirements.',
+    ].join(' ')
+    const result = await enrichAmountViaListingPage(
+      { title: 'Transfer Scholarships', source_url: sourceUrl },
+      { fetcher: okFetcher(asHtml(amountlessOwnedSection)) },
+    )
+
+    expect(result).toMatchObject({ attempted: true, page_read: true, found: false })
+    expect(result.amounts).toBeUndefined()
+  })
+
   it('never falls through to sibling numbers when a registered umbrella status marker disappears', async () => {
     const changedPage = UWF_FRESHMAN_TEXT.replace(
       'Awards and requirements are subject to change annually.',
