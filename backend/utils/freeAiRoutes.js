@@ -163,17 +163,16 @@ async function invokeRoutes({
   maxTokens,
   jsonOnly,
   timeoutMs,
+  signal,
 }) {
   const errors = []
-  const deadlineAt = Date.now() + Math.max(500, Number(timeoutMs) || 10_000)
+  const budgetMs = timeoutMs === null || timeoutMs === undefined ? 10_000 : Number(timeoutMs)
+  const deadlineAt = Date.now() + (Number.isFinite(budgetMs) ? Math.max(0, budgetMs) : 10_000)
   for (let index = 0; index < routes.length; index += 1) {
     const remainingMs = deadlineAt - Date.now()
-    if (remainingMs <= 500) break
+    if (signal?.aborted || remainingMs <= 500) break
     const route = routes[index]
     try {
-      const built = await (clientFactory ? clientFactory(route) : clientFor(route))
-      const client = built?.client ?? built
-      if (!client?.chat?.completions?.create) throw new Error('route is not OpenAI-compatible')
       const systemText = [
         system ? String(system) : null,
         jsonOnly ? 'Return ONLY valid JSON (no markdown, no prose).' : null,
@@ -184,15 +183,22 @@ async function invokeRoutes({
       ]
       const routesLeft = Math.max(1, routes.length - index)
       const completion = await withLLMTimeout(
-        client.chat.completions.create({
-          model: route.model,
-          messages,
-          temperature,
-          max_tokens: maxTokens,
-        }),
+        async attemptSignal => {
+          const built = await (clientFactory ? clientFactory(route) : clientFor(route))
+          attemptSignal.throwIfAborted()
+          const client = built?.client ?? built
+          if (!client?.chat?.completions?.create) throw new Error('route is not OpenAI-compatible')
+          return client.chat.completions.create({
+            model: route.model,
+            messages,
+            temperature,
+            max_tokens: maxTokens,
+          }, { signal: attemptSignal })
+        },
         {
           timeoutMs: Math.max(500, Math.floor(remainingMs / routesLeft)),
           label: `Free AI route ${route.id}`,
+          signal,
         },
       )
       const raw = String(completion?.choices?.[0]?.message?.content ?? '').trim()
@@ -212,6 +218,7 @@ async function invokeRoutes({
       if (!json || typeof json !== 'object') throw new Error('route returned invalid JSON')
       return { ...common, json }
     } catch (error) {
+      if (signal?.aborted) break
       errors.push(safeError(error))
       log.warn(`Free AI route ${route.id} failed; trying the next configured route`)
     }

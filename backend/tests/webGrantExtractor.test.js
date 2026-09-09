@@ -1,5 +1,5 @@
 /** Unit tests for the live profile-blind web extractor. */
-import { describe, it, expect, vi } from 'vitest'
+import { afterEach, describe, it, expect, vi } from 'vitest'
 import {
   htmlToText,
   extractOpportunitiesFromPage,
@@ -15,6 +15,8 @@ const longPage = `
   <p>Applicants may submit one proposal during the current funding cycle.</p>
   <a href="/apply">Apply now</a>
 </main></body></html>`
+
+afterEach(() => vi.useRealTimers())
 
 describe('htmlToText', () => {
   it('strips scripts/styles/nav and collapses whitespace', () => {
@@ -33,6 +35,19 @@ describe('htmlToText', () => {
 })
 
 describe('extractOpportunitiesFromPage', () => {
+  it('passes the page budget and abort signal into its provider adapter', async () => {
+    const invoke = vi.fn().mockResolvedValue({ ok: true, json: { opportunities: [] } })
+    await extractOpportunitiesFromPage({ pageUrl: 'https://fixture.invalid/grant', html: longPage }, { invoke, openai: null, timeoutMs: 1234 })
+    expect(invoke.mock.calls[0][0].timeoutMs).toBeGreaterThan(0)
+    expect(invoke.mock.calls[0][0].timeoutMs).toBeLessThanOrEqual(1234)
+    expect(invoke.mock.calls[0][0].signal).toBeInstanceOf(AbortSignal)
+  })
+  it('does not start an adapter request after the page is already aborted', async () => {
+    const controller = new AbortController(); controller.abort()
+    const invoke = vi.fn().mockResolvedValue({ ok: false })
+    expect(await extractOpportunitiesFromPage({ pageUrl: 'https://fixture.invalid/grant', html: longPage }, { invoke, openai: null, signal: controller.signal })).toEqual([])
+    expect(invoke).not.toHaveBeenCalled()
+  })
   it('extracts page-supported facts without receiving profile or query context', async () => {
     const invoke = vi.fn().mockResolvedValue({
       ok: true,
