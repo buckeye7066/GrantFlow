@@ -9,6 +9,7 @@
  */
 
 import { describe, it, expect } from 'vitest'
+import { computeMatchDecision } from '../services/matchEngine.js'
 import { normalizeOpportunity } from '../services/opportunityNormalizer.js'
 
 const BASE = {
@@ -55,5 +56,43 @@ describe('normalizeOpportunity reads eligibility_text', () => {
   it('"must be a male" prose sets the male restriction (the men-only twin gate)', () => {
     const n = normalizeOpportunity({ ...BASE, description: 'Applicants must be a male student.' })
     expect(n.requiresGender).toBe('male')
+  })
+})
+
+describe('persisted unrestricted applicant tokens are not entity restrictions', () => {
+  const directory = {
+    id: 'bradley-directory', title: 'Bradley County, TN — County & city government assistance programs (USA.gov directory)',
+    description: 'Official index of city, county, and town government websites for locally administered housing, utility and emergency assistance.',
+    sponsor: 'USA.gov', opportunity_kind: 'DIRECTORY', is_national: true,
+    source_url: 'https://www.usa.gov/local-governments',
+  }
+  it.each([['*'], ['any'], ['all'], ['anyone'], ['unrestricted'], [' * ']])('does not create a literal wildcard entity bar: %j', (token) => {
+    const n = normalizeOpportunity({ ...directory, entity_types_allowed: JSON.stringify([token]) })
+    expect(n.entityTypesAllowed).toEqual([])
+    expect(n.applicabilityUnknown).toBe(true)
+  })
+  it.each(['individual', 'nonprofit', 'business'])('canonical need-first scoring retains the unrestricted resource for %s', (primary_type) => {
+    const result = computeMatchDecision({ id: 'p1', primary_type, state: 'TN' }, { ...directory, entity_types_allowed: '["*"]' }, {
+      profileSections: { basic_information: { state: 'TN' }, needs: { needs: ['housing', 'utility assistance'] } },
+    })
+    expect(result.decision).toBe('REVIEW')
+    expect(result.explanation).not.toMatch(/Opportunity is for \*/)
+  })
+  it('specific incompatible eligibility still rejects with or without a wildcard', () => {
+    for (const types of [['nonprofit'], ['*', 'nonprofit']]) {
+      const result = computeMatchDecision({ id: 'p1', primary_type: 'individual', state: 'TN' }, {
+        ...directory, entity_types_allowed: types, description: 'Only nonprofit organizations may apply.',
+      }, { profileSections: { basic_information: { state: 'TN' } } })
+      expect(result.decision).toBe('REJECT')
+    }
+  })
+  it('wildcard never defeats geographic or explicit population restrictions', () => {
+    const result = computeMatchDecision({ id: 'p1', primary_type: 'individual', state: 'OH' }, {
+      ...directory, entity_types_allowed: '["*"]', is_national: false, state: 'TN',
+    }, { profileSections: { basic_information: { state: 'OH' } } })
+    expect(result.decision).toBe('REJECT')
+  })
+  it('keeps a specific restriction even beside a wildcard', () => {
+    expect(normalizeOpportunity({ ...directory, entity_types_allowed: ['*', 'nonprofit'] }).entityTypesAllowed).toEqual(['nonprofit'])
   })
 })

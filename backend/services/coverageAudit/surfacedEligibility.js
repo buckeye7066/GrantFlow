@@ -63,15 +63,11 @@ function num(v) { const n = Number(v); return Number.isFinite(n) ? n : null }
  * drive eligibility/scoring are needed; the facade rebuilds the canonical opp.
  */
 export function liveOppToOs(row = {}) {
-  // The live funding_opportunities table does NOT persist the OS matching
-  // fields (applicant_types lives only in-memory during a crawl). Passing []
-  // here made the engine treat the opportunity as serving NOBODY and
-  // hard-reject at 0 — the sweep then falsely demoted REAL eligible matches
-  // (2026-07-06: NIH Parent STTR for a biotech scored reject@0 with [] but
-  // review@80 with honest types). Reconstruct like ingest does: conservative
-  // text inference, else '*' (unknown = NEUTRAL, never a penalty — canonical
-  // missing-data doctrine; the engine still scores actual relevance).
-  const storedApplicants = parseListMaybe(row.applicant_types)
+  // The catalog persists eligibility under entity_types_allowed. Preserve
+  // those source facts (including '*' = no restriction) before inferring from
+  // prose: "government websites" describes this directory, not its applicants.
+  const storedApplicants = [row.entity_types_allowed, row.eligible_applicant_types, row.applicant_types]
+    .map(parseListMaybe).find(types => types.length > 0) ?? []
   let applicantTypes = storedApplicants
   if (applicantTypes.length === 0) {
     try { applicantTypes = inferCandidateProfile(row, {}).applicant_types ?? [] } catch { applicantTypes = [] }

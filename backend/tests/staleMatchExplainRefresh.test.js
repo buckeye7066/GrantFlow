@@ -289,3 +289,30 @@ describe('four-truth proof survives the drain', () => {
     expect(JSON.parse(row.match_explain_json).four_truth_proof).toBeUndefined()
   })
 })
+
+
+it('real canonical rescore preserves an unrestricted directory through integrity cleanup', async () => {
+  const { normalizePersistedMatchDecisionIntegrity } = await import('../services/matching/matchDecisionIntegrity.js')
+  const raw = makeDb()
+  try {
+    raw.exec('ALTER TABLE funding_opportunities ADD COLUMN entity_types_allowed TEXT')
+    seedPair(raw, { matcherVersion: 'crawler-os', explain: { legacy: true } })
+    raw.prepare(`UPDATE funding_opportunities SET title = ?, description = ?, sponsor = 'USA.gov', opportunity_kind = 'DIRECTORY', entity_types_allowed = '["*"]', state = 'TN', is_national = 0, source_url = ?, application_url = NULL WHERE id = 'o1'`).run(
+      'Bradley County, TN — County & city government assistance programs (USA.gov directory)',
+      'Official USA.gov index of city, county, and town government websites — the front door to locally administered assistance (housing, utility, emergency, human services) that never appears in federal or state catalogs.',
+      'https://www.usa.gov/local-governments',
+    )
+    raw.prepare("UPDATE profile_opportunity_matches SET match_score = 7, match_decision = 'review' WHERE id = 'm1'").run()
+    const db = wrap(raw)
+    const result = await runStaleMatchExplainRefresh(db, { deps: { loadProfileContext: async () => ({
+      profile: { id: 'p1', primary_type: 'individual', state: 'TN' },
+      sections: { basic_information: { state: 'TN' }, needs: { needs: ['housing', 'utility assistance'] } },
+    }) } })
+    expect(result.refreshed).toBe(1)
+    await normalizePersistedMatchDecisionIntegrity(db, { profileId: 'p1' })
+    const match = raw.prepare("SELECT * FROM profile_opportunity_matches WHERE id = 'm1'").get()
+    expect(match).toBeTruthy()
+    expect(match.match_decision).toBe('review')
+    expect(match.match_score).toBeGreaterThanOrEqual(7)
+  } finally { raw.close() }
+})
