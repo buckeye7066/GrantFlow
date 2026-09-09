@@ -94,7 +94,7 @@
       "destination": "/index.html"
     },
     {
-      "source": "/((?!assets/|app-update(?:[.]json$|-[A-Za-z0-9-]+[.](?:js|css)$)).*)",
+      "source": "/((?!grantflow/|assets/|app-update(?:[.]json$|-[A-Za-z0-9-]+[.](?:js|css)$)).*)",
       "destination": "/index.html"
     }
   ],

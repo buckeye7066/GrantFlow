@@ -131,14 +131,16 @@ assert(
   hasRewrite(vercel, '/privacy', '/privacy.html'),
   'the crawlable /privacy route must use its distinct privacy document',
 )
-assert(
-  hasRewrite(vercel, '/grantflow/((?!assets/).*)', '/index.html'),
-  'vercel.json must keep the /grantflow SPA fallback so deep links do not 404',
-)
-assert(
-  hasRewrite(vercel, '/((?!assets/).*)', '/index.html'),
-  'vercel.json must keep the root SPA fallback so deep links do not 404',
-)
+const spaFallbacks = (vercel.rewrites || []).filter((rule) => rule.destination === '/index.html')
+  .map((rule) => new RegExp('^' + rule.source + '$'))
+for (const base of ['', '/grantflow']) {
+  assert(spaFallbacks.some((pattern) => pattern.test(base + '/Dashboard')),
+    'vercel.json must preserve SPA deep links at ' + (base || '/'))
+  for (const asset of ['/assets/main.js', '/app-update.json', '/app-update-1234-abcd.js', '/app-update-1234-abcd.css']) {
+    assert(spaFallbacks.every((pattern) => !pattern.test(base + asset)),
+      'vercel.json must exclude static update resources from SPA fallback: ' + base + asset)
+  }
+}
 assert(
   Array.isArray(vercel.redirects) && vercel.redirects.some((redirect) =>
     redirect?.source === '/grantflow/welcome' &&
