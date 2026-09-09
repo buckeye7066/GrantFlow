@@ -280,8 +280,19 @@ test('recommendations carry the DESCRIPTION — the text the generic-only cap ev
   // drops the description, Amy degrades to title-only and re-flags rows the cap
   // deliberately rescued via a concrete description anchor (the El Paso County
   // General Assistance shape, 2026-08-02).
-  const d = deps();
-  const thesis = buildThesis(SAMPLE_VFD_PROFILE);
+  const d = deps({
+    grantsGov: [{ id: 12345, number: 'FIRE-1', title: 'Fire Equipment Grant', agency: 'FEMA' }],
+    routes: { fetchOpportunity: { errorcode: 0, data: {
+      id: 12345, opportunityNumber: 'FIRE-1', opportunityTitle: 'Fire Equipment Grant',
+      synopsis: {
+        opportunityId: 12345,
+        synopsisDesc: 'Funding for fire response equipment and emergency operations.',
+        applicantTypes: [{ id: '13', description: 'Nonprofit organizations' }],
+        responseDateStr: '2099-12-31-00-00-00', costSharing: false,
+      },
+    } } },
+  });
+  const thesis = buildThesis({ ...SAMPLE_VFD_PROFILE, type: 'nonprofit' });
   const r = await runDiscovery(d, { thesis, matchProfiles: [thesis], runId: 'run_desc' });
   assert.ok(r.recommendations.length >= 1, 'fixture run must recommend something for this guard to bite');
   for (const rec of r.recommendations) {

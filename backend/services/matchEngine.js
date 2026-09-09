@@ -4692,7 +4692,8 @@ export function computeMatchDecision(rawProfile, rawOpportunity, opts = {}) {
   )
   const canonicalMissingEligibilityFields = [
     ...(eligibilityEval.missingFields ?? []),
-    ...(applicantTypeEval.decision === 'review' && applicantTypeEval.reason === 'profile_applicant_type_missing'
+    ...(applicantTypeEval.decision === 'review' &&
+      ['profile_applicant_type_missing', 'federal_applicant_identity_unconfirmed'].includes(applicantTypeEval.reason)
       ? ['profile.applicant_type']
       : []),
   ].filter((value, index, values) => values.indexOf(value) === index)

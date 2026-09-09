@@ -8,8 +8,21 @@
  */
 
 export const GRANTS_GOV_SEARCH2_URL = 'https://api.grants.gov/v1/api/search2'
+export const GRANTS_GOV_FETCH_OPPORTUNITY_URL = 'https://api.grants.gov/v1/api/fetchOpportunity'
 export const GRANTS_GOV_DETAIL_URL = 'https://www.grants.gov/search-results-detail/'
 export const GRANTS_GOV_VIEW_URL = 'https://www.grants.gov/view-opportunity/'
+
+/** Positive per-award figures only; API placeholders and ranges stay unknown. */
+export function parseApiAmount(value) {
+  if (value === null || value === undefined) return null
+  const raw = String(value).trim().toLowerCase()
+  if (raw === '' || raw === 'none' || raw === 'null' || raw === 'n/a' || raw === 'na') return null
+  const cleaned = raw.replace(/[$,\s]/g, '')
+  if (!/^\d+(?:\.\d+)?$/.test(cleaned)) return null
+  const num = Number.parseFloat(cleaned)
+  if (!Number.isFinite(num) || num <= 0) return null
+  return num
+}
 
 const cleanIdentityPart = (value) => {
   if (value === null || value === undefined) return null

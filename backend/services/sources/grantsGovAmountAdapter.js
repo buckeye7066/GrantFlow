@@ -62,6 +62,7 @@
 
 import { createLogger } from '../../utils/logger.js'
 import { AMOUNT_CONFIDENCE_STRUCTURED } from '../awardAmountExtractor.js'
+import { GRANTS_GOV_FETCH_OPPORTUNITY_URL, parseApiAmount } from '../../../shared/grantsGovProtocol.js'
 import {
   GRANTS_GOV_SEARCH2_URL,
   GRANTS_GOV_API_KEY_ENV,
@@ -72,7 +73,7 @@ import {
 const log = createLogger('service:grantsGovAmountAdapter')
 
 /** Grants.gov single-opportunity detail API (award figures live here, not in search2). */
-export const GRANTS_GOV_FETCH_OPPORTUNITY_URL = 'https://api.grants.gov/v1/api/fetchOpportunity'
+export { GRANTS_GOV_FETCH_OPPORTUNITY_URL }
 
 /** Network timeout for one API call. */
 const API_TIMEOUT_MS = 20_000
@@ -104,18 +105,7 @@ const RE_GRANTS_GOV_HOST = /(?:^|\/\/|\.)grants\.gov(?:\/|$)/i
  *
  * Exported for tests.
  */
-export function parseApiAmount(value) {
-  if (value === null || value === undefined) return null
-  const raw = String(value).trim().toLowerCase()
-  if (raw === '' || raw === 'none' || raw === 'null' || raw === 'n/a' || raw === 'na') return null
-  // Strip formatting ($, commas) but NOT digits/decimal — a value that is not a
-  // clean number after this is not something we are willing to guess about.
-  const cleaned = raw.replace(/[$,\s]/g, '')
-  if (!/^\d+(?:\.\d+)?$/.test(cleaned)) return null
-  const num = Number.parseFloat(cleaned)
-  if (!Number.isFinite(num) || num <= 0) return null
-  return num
-}
+export { parseApiAmount }
 
 /** Is this catalog row a Grants.gov opportunity? Pure; exported for tests. */
 export function isGrantsGovRow(row) {

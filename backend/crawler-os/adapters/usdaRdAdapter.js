@@ -7,6 +7,7 @@
 // agencyCode/title instead of the sponsor string.
 
 import { createBaseAdapter } from './baseAdapter.js';
+import { enrichGrantsGovCandidate } from './grantsGovDetail.js';
 import { OPPORTUNITY_KIND } from '../contract.js';
 import { grantsSearchParseCfg } from './grantsGovAdapter.js';
 import {
@@ -33,6 +34,7 @@ export function createUsdaRdAdapter() {
     source_id: 'usda_rd',
     family: 'api',
     requiredEnv: [], // public API
+    enrichCandidate: enrichGrantsGovCandidate,
     buildRequests(thesis, source) {
       return buildCrawlerQueries(thesis, source, { limit: 4 }).map((keyword) => ({
         url: GRANTS_GOV_SEARCH2_URL,
@@ -51,7 +53,7 @@ export function createUsdaRdAdapter() {
       if (!raw || (!raw.external_id && !raw.title)) return null;
       if (!agencyLooksLike(raw, USDA_PATTERNS)) return null;
       const identity = resolveGrantsGovIdentity(raw);
-      const profile = inferCandidateProfile(raw, source);
+      const profile = inferCandidateProfile(raw, {});
       const fundingFlags = inferFundingFlags(raw);
       return {
         external_id: identity.sourceId,
@@ -63,8 +65,8 @@ export function createUsdaRdAdapter() {
         is_rolling: false,
         apply_url: identity.detailUrl,
         info_url: identity.detailUrl,
-        applicant_types: profile.applicant_types,
-        need_categories: profile.need_categories,
+        applicant_types: [],
+        need_categories: profile.need_categories.filter(type => type !== '*'),
         geography: source?.geography ?? { national: true, states: [] },
         is_loan: fundingFlags.is_loan,
         requires_cost_share: fundingFlags.requires_cost_share,

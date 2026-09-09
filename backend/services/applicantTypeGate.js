@@ -556,6 +556,47 @@ export function evaluateApplicantTypeEligibility(opportunity, profileApplicantTy
     return { decision: 'review', reason: 'profile_applicant_type_missing' }
   }
 
+  // A federal detail response can name a narrower legal applicant than its
+  // coarse search bucket: an independent school district is not every school,
+  // and a state government is not every public agency. Preserve those source
+  // restrictions across crawl, persisted matching and pipeline admission.
+  let provenance = opportunity?.field_provenance
+  if (typeof provenance === 'string') {
+    try { provenance = JSON.parse(provenance) } catch { provenance = null }
+  }
+  const applicantEvidence = provenance?.applicant_types
+  const codes = applicantEvidence?.source === 'grants.gov' && applicantEvidence?.method === 'fetchOpportunity'
+    ? applicantEvidence.allowed_codes : null
+  const sourceApplicantIdentities = {
+    '00': ['state_government', 'state_agency'],
+    '01': ['county_government'],
+    '02': ['municipality', 'municipal_government', 'city_government', 'township_government'],
+    '04': ['special_district'],
+    '05': ['school_district'],
+    '06': ['higher_education', 'university', 'college', 'institution'],
+    '07': ['tribal_government'],
+    '08': ['local_housing_authority', 'housing_authority', 'public_housing_authority'],
+    '11': ['tribal_organization'],
+    '12': ['nonprofit'],
+    '13': ['nonprofit'],
+    '20': ['higher_education', 'university', 'college', 'institution'],
+    '21': ['individual'],
+    '22': ['business'],
+    '23': ['business'],
+  }
+  if (Array.isArray(codes) && codes.length) {
+    const declared = profileApplicantType instanceof Set ? [...profileApplicantType]
+      : Array.isArray(profileApplicantType) ? [...profileApplicantType] : [profileApplicantType]
+    declared.push(context.profile?.primary_type, context.sections?.basic_information?.profile_category)
+    const identities = new Set(declared.flatMap(type => {
+      const token = normalizeApplicantToken(type)
+      return [token, resolveProfileType(token), ...getParentChain(token)].filter(Boolean)
+    }))
+    if (!codes.some(code => sourceApplicantIdentities[code]?.some(type => identities.has(type)))) {
+      return { decision: 'review', reason: 'federal_applicant_identity_unconfirmed', required_applicant_codes: codes }
+    }
+  }
+
   const oppText = gatherOppText(opportunity)
   const explicitTypes = gatherExplicitTypes(opportunity)
   const softenStructured = looksLikeIndividualAssistance(opportunity)

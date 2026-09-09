@@ -95,6 +95,8 @@ export async function runDiscovery(deps, opts = {}) {
   const researchLeads = [];
   const researchLeadKeys = new Set();
   const storedRealKeys = new Map(); // real-world opportunity identity -> canonical stored id (cross-source dedup)
+  const candidateDetailCache = new Map(); // one official detail read per identity across all source lanes
+  let candidateDetailDeadline = null; // a slow detail API cannot pin a crawler worker indefinitely
   let totalRejected = 0;
   // Per-source ACCEPT/score tally for the DISCOVERING profile. The admin Crawl
   // Coverage dashboard's Accepted / Avg-match columns rendered "—" for every run
@@ -332,11 +334,39 @@ export async function runDiscovery(deps, opts = {}) {
       };
 
       for (const raw of candidates) {
-        const cand = adapter.mapCandidate(raw, { thesis, source });
+        let cand = adapter.mapCandidate(raw, { thesis, source });
         if (!cand) continue;
         sr.parsed_candidates += 1;
+        let candidateEvidence = evidence;
+        if (typeof adapter.enrichCandidate === 'function') {
+          if (candidateDetailDeadline === null) {
+            candidateDetailDeadline = Math.min(clock() + 60_000, Number.isFinite(opts.deadlineMs) ? opts.deadlineMs : Infinity);
+          }
+          const detailFetcher = { async fetch(url, init) {
+            let detail;
+            try { detail = await fetcher.fetch(url, init); }
+            catch (error) { detail = { ok: false, error: String(error?.message ?? error), status: null }; }
+            sr.fetched += 1;
+            sr.fetch_attempts += Number.isFinite(detail.attempts) ? detail.attempts : 1;
+            sr.fetch_retries += Number.isFinite(detail.retries) ? detail.retries : 0;
+            sr.response_bytes += Number.isFinite(detail.responseBytes) ? detail.responseBytes : 0;
+            if (detail.error === 'response_too_large') sr.oversize_responses += 1;
+            recordFetch(store, runId, { source_id: sourceId, url, status: detail.status, ok: detail.ok, content_hash: detail.contentHash, error: detail.error });
+            return detail;
+          } };
+          try {
+            const enriched = await adapter.enrichCandidate(cand, { fetcher: detailFetcher, cache: candidateDetailCache, deadlineMs: candidateDetailDeadline, clock });
+            cand = enriched.candidate;
+            candidateEvidence = enriched.evidence ?? evidence;
+            if (enriched.reason) {
+              recordRejection(store, runId, { source_id: sourceId, reason: 'detail_evidence_unavailable', detail: enriched.reason, title: cand.title, url: cand.info_url });
+            }
+          } catch (error) {
+            recordRejection(store, runId, { source_id: sourceId, reason: 'detail_evidence_unavailable', detail: String(error?.message ?? error), title: cand.title, url: cand.info_url });
+          }
+        }
 
-        const verdict = enforceReality(cand, { thesis, source, evidence });
+        const verdict = enforceReality(cand, { thesis, source, evidence: candidateEvidence });
         if (!verdict.ok) {
           sr.rejected += 1; totalRejected += 1;
           if (!firstRejectReason) firstRejectReason = String(verdict.reason ?? 'rejected');
@@ -344,7 +374,7 @@ export async function runDiscovery(deps, opts = {}) {
           continue;
         }
 
-        const opp = normalize(cand, verdict, { source, evidence });
+        const opp = normalize(cand, verdict, { source, evidence: candidateEvidence });
 
         // Cross-source dedup: the same real-world opportunity (e.g. a USDA grant)
         // can be surfaced by both the grants_gov catch-all and a specialized
