@@ -9,6 +9,7 @@
 import { createHash } from 'crypto'
 import { normalizeConditionTerm } from '../config/conditionTerms.js'
 import { resolveApplicantType } from './profileHelpers.js'
+import { crawlerApplicantTypesFor, resolveProfileType } from './profileTypeRegistry.js'
 import { NAMED_CONDITION_FLAGS } from '../config/conditionSpecificity.js'
 
 const FALSEY_TEXT_VALUES = new Set([
@@ -447,6 +448,18 @@ export function normalizeEntityType(raw) {
   if (!raw || typeof raw !== 'string') return null
   const key = raw.toLowerCase().trim().replace(/[\s-]+/g, '_')
   if (ENTITY_TYPE_ALIAS_MAP[key]) return ENTITY_TYPE_ALIAS_MAP[key]
+  // Registered leaf types share the crawler's declared applicant family.
+  // A museum is a nonprofit and a county government is an organization;
+  // passing their raw ids into the entity gate falsely rejects both. Keep
+  // explicit legacy mappings above, and do not turn "other" or custom types
+  // into an invented individual identity from search-routing defaults.
+  const registered = resolveProfileType(key)
+  if (registered && registered !== 'other') {
+    const inherited = crawlerApplicantTypesFor(registered)
+      .map((type) => ENTITY_TYPE_ALIAS_MAP[type])
+      .find(Boolean)
+    if (inherited) return inherited
+  }
   // Unmapped free-text org types ("Biotechnology / research organization")
   // used to leak through as literal entityTypes, silently failing every
   // entityType === '...' gate downstream. Recognizably org-shaped strings

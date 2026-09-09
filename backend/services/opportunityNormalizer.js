@@ -845,6 +845,17 @@ export function normalizeOpportunity(rawOpp) {
   const explicitEntityTypes = safeParseArray(rawOpp.entity_types_allowed)
     .filter(type => !['*', 'any', 'all', 'anyone', 'unrestricted'].includes(String(type).trim().toLowerCase()))
   const textEntityTypes = extractEntityTypesFromText(text)
+  // Government applicants were recognized by the hard institutional gate but
+  // absent from ENTITY_PATTERNS, so even an affirmative who-can-apply sentence
+  // remained applicabilityUnknown. Read this narrow positive statement only
+  // from eligibility fields: a government sponsor is not an applicant rule.
+  const applicantProse = [
+    ...safeParseArray(rawOpp.eligibility_bullets),
+    typeof rawOpp.eligibility_text === 'string' ? rawOpp.eligibility_text : '',
+  ].join(' ').replace(/\s+/g, ' ').toLowerCase()
+  if (/(?:^|[.!?;] *)(?:local governments?|county governments?|municipalities|public agencies)(?: applicants?)? (?:may apply|are eligible)\b/.test(applicantProse)) {
+    textEntityTypes.push('organization')
+  }
   let entityTypesAllowed
   let applicabilityUnknown = false
   if (explicitEntityTypes.length > 0) {

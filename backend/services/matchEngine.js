@@ -1377,9 +1377,19 @@ function eligibilityMatchesApplicantType(opportunity, profile) {
     government: ['government', 'municipal', 'state', 'local government', 'public sector'],
   }
 
-  const profileTypesToCheck = applicantTypesSet?.size ? Array.from(applicantTypesSet) : [profileType]
+  // Match the declared type through the same registry hierarchy the hard
+  // applicant gate uses. Otherwise school_district cannot earn evidence for
+  // "school", or disabled_adult for "individual", and the four-truth gate
+  // withholds every direct result despite a compatible source statement.
+  // Expand only the PROFILE side: an individual never inherits student-only
+  // eligibility, and the opportunity's restrictions remain unchanged.
+  const declaredTypes = applicantTypesSet?.size ? Array.from(applicantTypesSet) : [profileType]
+  const profileTypesToCheck = [...new Set(declaredTypes.flatMap((type) => {
+    const canonical = resolveProfileType(type)
+    return [type, canonical, ...getParentChain(canonical || type)].filter(Boolean)
+  }))]
   const keywords = profileTypesToCheck
-    .flatMap((t) => typeKeywords[t] || [t])
+    .flatMap((t) => typeKeywords[t] || [t.replace(/_/g, ' ')])
     .filter(Boolean)
     .map((t) => String(t))
 
