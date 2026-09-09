@@ -55,6 +55,7 @@
  */
 
 import { createLogger } from '../../utils/logger.js'
+import { healthyRecallCoverage, recallAttribution } from './searchAttribution.js'
 
 const log = createLogger('amy:approvalLedger')
 
@@ -72,6 +73,7 @@ export const ACTIONABILITY = Object.freeze({
   AUTO: 'auto',
   OWNER_API: 'owner_api',
   CODE_CHANGE: 'code_change',
+  BLOCKED: 'blocked',
 })
 
 /**
@@ -134,7 +136,7 @@ export const LEVER_REGISTRY = Object.freeze({
   query_breadth: Object.freeze({
     actionability: ACTIONABILITY.CODE_CHANGE,
     surface: null,
-    why: 'buildWebQueries is code. The DATA-side half of this lever is archetype_query_learning, which Amy does apply herself; a class that keeps firing after the steering store has been recording it for weeks is evidence the QUERY BUILDER needs the change, and no approval can make that edit.',
+    why: 'Healthy search responses leave a measured recall gap for code investigation across query generation, execution, extraction, and matching. They do not by themselves prove a query-builder defect.',
   }),
   amount_adapter: Object.freeze({
     actionability: ACTIONABILITY.CODE_CHANGE,
@@ -206,6 +208,42 @@ export function isOwnerActionable(lever) {
   return leverActionability(lever).actionability === ACTIONABILITY.OWNER_API
 }
 
+function itemAttribution(item) {
+  const attribution = item.attribution || recallAttribution([])
+  return item.evidence?.subject_history_incomplete
+    ? { ...attribution, status: 'inconclusive', reason: 'Historical subject history is incomplete; recover the original receipts before resolving.' }
+    : attribution
+}
+
+export function itemActionability(item) {
+  if (item?.lever === 'query_breadth' && itemAttribution(item).status !== 'search_verified') {
+    return { actionability: ACTIONABILITY.BLOCKED, surface: 'Healthy search rerun with evidence for the missing subjects', why: itemAttribution(item).reason }
+  }
+  return leverActionability(item?.lever)
+}
+
+export function normalizeApprovalItem(item) {
+  if (item?.lever !== 'query_breadth') return item
+  const attribution = itemAttribution(item)
+  const normalized = { ...item, attribution }
+  const meta = itemActionability(normalized)
+  return { ...normalized, actionability: meta.actionability, apply_surface: meta.surface, human_gate_reason: meta.why, requires_approval: false,
+    ...(meta.actionability === ACTIONABILITY.BLOCKED ? { code_brief: undefined, target_file: null,
+      rationale: `Coverage gap remains open (${item.id}). ${attribution.reason}${item.evidence?.subject_history_incomplete ? ' Historical subject history is incomplete; recover the original receipts before resolving.' : ''}${item.evidence?.subjects?.length ? ` Missing subjects: ${item.evidence.subjects.join(', ')}.` : ' Historical subject evidence is unavailable; recover the prior receipt or run a targeted subject recheck before resolving.'}` } : {}) }
+}
+
+export function hydrateApprovalLedger(prev, receipts = []) {
+  if (!prev?.entries) return prev
+  return { ...prev, entries: Object.fromEntries(Object.entries(prev.entries).map(([id, entry]) => {
+    if (entry.lever !== 'query_breadth' || entry.evidence?.subjects?.length) return [id, entry]
+    const item = receipts.filter(r => r.run_id && r.run_id === entry.last_run_id).flatMap(r => r.items || []).find(i => i.id === id && i.evidence?.subjects?.length)
+    // Older queues retained at most six subjects as a display preview. A full
+    // preview is not proof that no seventh subject existed.
+    const evidence = item ? { ...item.evidence, ...(!item.attribution && item.evidence.subjects.length >= 6 ? { subject_history_incomplete: true } : {}) } : null
+    return [id, item ? { ...entry, evidence, finding_type: item.finding_type, latest_item: { ...item, evidence } } : entry]
+  })) }
+}
+
 function toIso(at) {
   if (!at) return new Date().toISOString()
   if (at instanceof Date) return at.toISOString()
@@ -225,12 +263,37 @@ function toIso(at) {
  *   actionability / apply_surface attached (never a filtered subset — a
  *   structural gap must stay visible).
  */
-export function foldApprovalLedger(prev, { items = [], runId = null, at = null } = {}) {
+export function foldApprovalLedger(prev, { items = [], evaluations = null, runId = null, at = null } = {}) {
   const nowIso = toIso(at)
   const dayKey = etDayKey(new Date(nowIso))
   const base = prev && typeof prev === 'object' ? prev : {}
   const prevEntries = base.entries && typeof base.entries === 'object' ? base.entries : {}
-  const list = Array.isArray(items) ? items : []
+  const list = (Array.isArray(items) ? items : []).map(item => {
+    if (item.lever !== 'query_breadth') return item
+    const previous = prevEntries[item.id]?.resolved_at ? null : prevEntries[item.id]
+    const outstanding = (previous?.evidence?.subjects || []).filter(subject =>
+      !healthyRecallCoverage({ ...previous, evidence: { subjects: [subject] } }, evaluations || []))
+    const currentSubjects = item.evidence?.subjects || []
+    const subjects = [...new Set([...currentSubjects, ...outstanding])]
+    const incomplete = Boolean((previous && !previous.evidence?.subjects?.length) || previous?.evidence?.subject_history_incomplete || item.evidence?.subject_history_incomplete || subjects.length > 200)
+    const carried = outstanding.some(subject => !currentSubjects.includes(subject))
+    return { ...item,
+      evidence: { ...item.evidence, subjects: subjects.slice(0, 200), ...(incomplete ? { subject_history_incomplete: true } : {}) },
+      ...(carried || incomplete ? { attribution: { ...recallAttribution([]), reason: 'Earlier missing subjects still require healthy coverage evidence; current findings do not resolve them.' } } : {}),
+    }
+  })
+  // An absent finding during failed/unmeasured search does not establish a
+  // repair. Keep its original key and clock, and expose the held item too.
+  for (const entry of Object.values(prevEntries)) {
+    if (entry.resolved_at || entry.lever !== 'query_breadth' || list.some(i => i.id === entry.id)) continue
+    const categoryEvals = (evaluations || []).filter(e => e.category === entry.category)
+    const uncertain = recallAttribution(categoryEvals)
+    if (!healthyRecallCoverage(entry, categoryEvals)) {
+      const subjects = (entry.evidence?.subjects || []).filter(subject =>
+        !healthyRecallCoverage({ ...entry, evidence: { subjects: [subject] } }, categoryEvals))
+      list.push({ ...(entry.latest_item || entry), evidence: { ...entry.evidence, subjects }, attribution: { ...uncertain, status: 'inconclusive', reason: 'The previous coverage gap remains open until healthy search demonstrates coverage of its missing subjects.' }, code_brief: undefined, target_file: null })
+    }
+  }
 
   // Idempotence: re-folding the SAME run must not age anything a second time.
   // Without this a retried/duplicated run would inflate runs_seen and (on a
@@ -263,6 +326,10 @@ export function foldApprovalLedger(prev, { items = [], runId = null, at = null }
       lever: item?.lever ?? prevEntry?.lever ?? null,
       category: item?.category ?? prevEntry?.category ?? null,
       severity: item?.severity ?? prevEntry?.severity ?? null,
+      finding_type: item.finding_type ?? prevEntry?.finding_type ?? null,
+      evidence: item.evidence ?? prevEntry?.evidence ?? null,
+      attribution: item.attribution ?? null,
+      latest_item: { id, lever: item.lever, category: item.category, severity: item.severity, finding_type: item.finding_type, evidence: item.evidence, rationale: item.rationale },
       // A REOPENED item restarts its clock but keeps the fact it reopened:
       // "closed then came back" is a different story from "never closed".
       first_seen_at: reopened ? nowIso : (prevEntry?.first_seen_at || nowIso),
@@ -340,7 +407,8 @@ function openStale(entries) {
 }
 
 function decorateOne(item, entry) {
-  const meta = leverActionability(item?.lever)
+  item = normalizeApprovalItem(item)
+  const meta = itemActionability(item)
   return {
     ...item,
     actionability: meta.actionability,
@@ -414,9 +482,20 @@ export async function saveApprovalLedger(db, ledger) {
  * carries registry actionability so the report can never regress to the old
  * ageless "Needs your approval" line.
  */
-export async function recordApprovalQueue(db, { items = [], runId = null, at = null } = {}) {
-  const prev = await readApprovalLedger(db)
-  const fold = foldApprovalLedger(prev, { items, runId, at })
+export async function recordApprovalQueue(db, { items = [], evaluations = null, runId = null, at = null } = {}) {
+  let prev = await readApprovalLedger(db)
+  if (Object.values(prev?.entries || {}).some(e => e.lever === 'query_breadth' && !e.evidence?.subjects?.length)) {
+    const receipts = []
+    for (const key of ['amy_approval_queue', 'amy_last_report']) {
+      try {
+        const row = await db.prepare('SELECT value FROM system_kv WHERE key = ?').get(key)
+        const value = JSON.parse(row?.value || 'null')
+        if (value) receipts.push({ run_id: value.updated_run_id || value.run_id, items: value.items || value.approval_queue || [] })
+      } catch { /* Unrecoverable evidence stays explicitly unknown. */ }
+    }
+    prev = hydrateApprovalLedger(prev, receipts)
+  }
+  const fold = foldApprovalLedger(prev, { items, evaluations, runId, at })
   if (!fold.duplicate && ledgerPersistEnabled()) {
     await saveApprovalLedger(db, fold.ledger)
   }

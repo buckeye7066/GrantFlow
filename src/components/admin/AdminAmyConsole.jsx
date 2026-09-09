@@ -380,7 +380,10 @@ export default function AdminAmyConsole() {
                     <Badge variant="outline" className="bg-sky-50 text-sky-700 border-sky-200">Amy applies this</Badge>
                   )}
                   {item.actionability === 'code_change' && (
-                    <Badge variant="outline" className="bg-slate-100 text-slate-700 border-slate-200">needs a code change</Badge>
+                    <Badge variant="outline" className="bg-slate-100 text-slate-700 border-slate-200">{item.lever === 'query_breadth' ? 'needs code investigation' : 'needs a code change'}</Badge>
+                  )}
+                  {item.actionability === 'blocked' && (
+                    <Badge variant="outline" className="bg-amber-50 text-amber-900 border-amber-200">coverage gap — cause unverified</Badge>
                   )}
                   {Number(item.nights_open) > 0 && (
                     <Badge variant="outline" className={item.stale ? 'bg-red-50 text-red-700 border-red-200' : ''}>

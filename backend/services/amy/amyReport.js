@@ -23,6 +23,7 @@ import { CRAWLER_OUTCOME } from '../../crawler-os/contract.js'
 import { titleStatesTerm } from '../../config/profileDerivedFacts.js'
 import { classifyKnownNonLeaf } from '../../config/fundingResultFilters.js'
 import { blindSpotForGate } from './pipelineGuardEscapeAudit.js'
+import { searchEvidence, recallAttribution } from './searchAttribution.js'
 
 /** Needs that mean a profile legitimately WANTS student aid (engine's carve-out). */
 const STUDENT_AID_NEEDS = ['student_aid', 'cost_of_attendance', 'scholarship']
@@ -265,6 +266,7 @@ export function evaluateDiscovery(scenario, profileId, result, opts = {}) {
     category: scenario?.category,
     label: scenario?.label,
     profile_id: profileId,
+    search_evidence: searchEvidence(result?.run?.web_lane),
     // The Amy run is the cohort boundary. The crawler run below is a separate
     // execution id and may differ per profile, so retaining only `run_id`
     // cannot prove that fifty evaluations belong to the same cohort.
@@ -814,6 +816,10 @@ export function evaluateDiscovery(scenario, profileId, result, opts = {}) {
   return {
     ...baseEvidence,
     status,
+    recall_coverage: {
+      institution_recall_miss: thesisSchools.filter(s => titlesReference(recTitles, s)),
+      hyperlocal_recall_miss: thesisCounty && recTitles.some(t => titleStatesTerm(thesisCounty, t)) ? [thesis.location.county] : [],
+    },
     stored,
     accepted: accepted.length,
     review: review.length,
@@ -959,15 +965,32 @@ export function buildGuardEscapeEvaluations(auditResult) {
 export function buildAnyaHandoff({ runId, evaluations = [], meta = {} }) {
   const allFindings = []
   for (const ev of evaluations) {
-    for (const f of ev.findings || []) allFindings.push(f)
+    for (const f of ev.findings || []) {
+      if (![FINDING_TYPES.INSTITUTION_RECALL_MISS, FINDING_TYPES.HYPERLOCAL_RECALL_MISS].includes(f.type)) {
+        allFindings.push(f)
+        continue
+      }
+      // The pipeline dispatches directly from finding.file. Preserve uncertain
+      // recall as a finding without sending its historical query-builder guess
+      // to Anya as an implicated code file.
+      const attribution = recallAttribution([ev])
+      const healthy = attribution.status === 'search_verified'
+      allFindings.push({ ...f, attribution,
+        actionability: healthy ? 'code_investigation' : 'blocked',
+        file: healthy ? f.file : null,
+        line: healthy ? f.line : null,
+        message: `Measured ${f.type} remains for ${ev.category || 'unknown category'}. ${attribution.reason} This evidence does not establish a query-builder defect.`,
+      })
+    }
   }
 
   const startedAt = meta.startedAt || new Date().toISOString()
   const completedAt = meta.completedAt || new Date().toISOString()
   const durationMs = Math.max(0, Date.parse(completedAt) - Date.parse(startedAt))
 
-  const filesWithFindings = new Set(allFindings.map((f) => f.file))
-  const byFile = tally(allFindings, (f) => f.file)
+  const targetedFindings = allFindings.filter(f => f.file)
+  const filesWithFindings = new Set(targetedFindings.map((f) => f.file))
+  const byFile = tally(targetedFindings, (f) => f.file)
   const recommendedFocus = Object.entries(byFile)
     .sort((a, b) => b[1] - a[1])
     .map(([file, count]) => ({ file, findings: count }))

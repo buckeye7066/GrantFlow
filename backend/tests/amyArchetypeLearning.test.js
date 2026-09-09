@@ -74,13 +74,13 @@ describe('classifyThesisArchetype', () => {
 })
 
 describe('buildArchetypeLearningUpdate (pure)', () => {
-  const zeroEval = (archetype, status = 'zero') => ({ archetype, status, findings: [] })
-  const missEval = (archetype, type) => ({ archetype, status: 'ok', findings: [{ type }] })
+  const zeroEval = (archetype, status = 'zero') => ({ archetype, status, findings: [], search_evidence: { status: 'healthy' } })
+  const missEval = (archetype, type) => ({ archetype, status: 'ok', findings: [{ type }], search_evidence: { status: 'healthy' } })
 
   it('learns low_results only with enough evidence (>= minEvidence AND >= 50% of cohort)', () => {
     // 2 of 4 student profiles zero → 50% with evidence 2 → learns.
     const update = buildArchetypeLearningUpdate(
-      [zeroEval('student'), zeroEval('student'), { archetype: 'student', status: 'ok', findings: [] }, { archetype: 'student', status: 'ok', findings: [] }],
+      [zeroEval('student'), zeroEval('student'), zeroEval('student', 'ok'), zeroEval('student', 'ok')],
       { runId: 'r1', at: 't1' },
     )
     expect(update.student.classes).toEqual(['low_results'])
@@ -89,7 +89,7 @@ describe('buildArchetypeLearningUpdate (pure)', () => {
 
     // 1 of 4 zero → below both gates → nothing learned.
     const none = buildArchetypeLearningUpdate(
-      [zeroEval('veteran'), { archetype: 'veteran', status: 'ok', findings: [] }, { archetype: 'veteran', status: 'ok', findings: [] }, { archetype: 'veteran', status: 'ok', findings: [] }],
+      [zeroEval('veteran'), zeroEval('veteran', 'ok'), zeroEval('veteran', 'ok'), zeroEval('veteran', 'ok')],
       { runId: 'r1' },
     )
     expect(none.veteran).toBeUndefined()
@@ -139,6 +139,16 @@ describe('buildArchetypeMetrics (per-run measurement)', () => {
 })
 
 describe('archetype learning persistence (system_kv)', () => {
+  it('retains older lesson provenance while healthy siblings add evidence in a mixed run', async () => {
+    const db = createDb()
+    try {
+      await saveArchetypeLearning(db, { student: { classes: ['institution_gap'], run_id: 'older' } }, { runId: 'older' })
+      await saveArchetypeLearning(db, { student: { classes: ['hyperlocal_gap'], run_id: 'mixed' } }, { runId: 'mixed', preserveArchetypes: ['student'], cohortArchetypes: {} })
+      const store = await getArchetypeLearning(db)
+      expect(store.archetypes.student.classes).toEqual(['institution_gap', 'hyperlocal_gap'])
+      expect(store.archetypes.student.class_provenance).toEqual({ institution_gap: 'older', hyperlocal_gap: 'mixed' })
+    } finally { db.close() }
+  })
   it('saves, reads, replaces, and clears healed archetypes', async () => {
     const db = createDb()
     try {
@@ -319,6 +329,7 @@ describe('end-to-end: an Amy run teaches the next student crawl', () => {
     const fakeDiscovery = async ({ floor }) => ({
       run: {
         run_id: 'r', stored: 0, sources: [],
+        web_lane: { search_provenance: [{ query_index: 0, provider: 'searxng', provenance: 'live', status: 'ok' }] },
         recommendations: [],
         zero_result: { zero_result_reason: 'no_sources_matched', missing_profile_fields: [] },
       },
