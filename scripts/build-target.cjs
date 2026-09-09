@@ -34,6 +34,15 @@ function options(args) {
   if (result.injectedHost && !result.dryRun) throw Error('--host is a dry-run testing option only. Actual builds always detect this machine.');
   return result;
 }
+function verifyBuildDependencies(host = process.platform, arch = process.arch, resolve = require.resolve) {
+  // GrantFlow's existing prebuild installs missing Linux natives. Refuse first
+  // so this selector never turns a build request into dependency installation.
+  if (host !== 'linux' || !['x64', 'arm64'].includes(arch)) return;
+  for (const dependency of ['@rollup/rollup-linux-' + arch + '-gnu', '@esbuild/linux-' + arch]) {
+    try { resolve(dependency); }
+    catch { throw Error('Missing build dependency ' + dependency + '. Install repository dependencies before building.'); }
+  }
+}
 function main(args) {
   const opts = options(args);
   if (opts.help) {
@@ -45,6 +54,7 @@ function main(args) {
   const selected = plan(opts.host, opts.target);
   console.log(JSON.stringify(selected, null, 2));
   if (opts.dryRun) return;
+  verifyBuildDependencies();
   for (const step of selected.commands) {
     const cwd = path.resolve(ROOT, step.cwd || '.');
     let command = step.command, args = step.args;
@@ -69,5 +79,5 @@ function main(args) {
 if (require.main === module) {
   try { main(process.argv.slice(2)); } catch (error) { console.error(error.message); process.exitCode = 1; }
 }
-module.exports = { plan, options };
+module.exports = { plan, options, verifyBuildDependencies };
 

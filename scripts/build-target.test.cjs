@@ -58,3 +58,12 @@ test('recipient override and command references remain valid', () => {
     }
   }
 });
+
+test('missing Linux natives refuse before the existing installing prebuild hook', () => {
+  const { verifyBuildDependencies } = require('./build-target.cjs');
+  const checked = [];
+  verifyBuildDependencies('linux', 'arm64', (name) => checked.push(name));
+  assert.deepEqual(checked, ['@rollup/rollup-linux-arm64-gnu', '@esbuild/linux-arm64']);
+  assert.throws(() => verifyBuildDependencies('linux', 'x64', () => { throw Error('missing'); }), /Missing build dependency/);
+  verifyBuildDependencies('win32', 'x64', () => { throw Error('must not inspect Linux dependencies'); });
+});
