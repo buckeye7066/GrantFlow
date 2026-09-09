@@ -1,0 +1,16 @@
+# Recovery model for an EVA-owned Family stack left behind by an interrupted
+# runner. `--remove-orphans` selects containers only by the explicit Compose
+# project label; these declarations let `down --volumes` also remove the four
+# known project volumes. No service, checkout file, bind mount, or env file is
+# needed to resolve this cleanup model.
+services: {}
+
+volumes:
+  pgdata:
+    name: eva-family-stewardship-navigator_pgdata
+  server_node_modules:
+    name: eva-family-stewardship-navigator_server_node_modules
+  uploads:
+    name: eva-family-stewardship-navigator_uploads
+  web_node_modules:
+    name: eva-family-stewardship-navigator_web_node_modules

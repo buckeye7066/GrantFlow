@@ -160,7 +160,14 @@ export function detectPortDrift({ output = '', declaredPorts = [] } = {}) {
 // A launched-but-unreadiable server is reported honestly (startup_failed),
 // never silently passed. A web app with no start_command falls back to the old
 // behavior (assume something external is already serving base_url).
-export async function launchWebApp({ app, manifest, log = () => {}, launchEnv = null, freePortFn = freePortAndWait }) {
+export async function launchWebApp({
+  app,
+  manifest,
+  log = () => {},
+  launchEnv = null,
+  freePortFn = freePortAndWait,
+  runPrelaunchFn = runPrelaunchCommand,
+}) {
   const startCmd = manifest.start_command
   const cwd = manifest.local_path || app?.local_path || null
   const probe = manifest.readiness_probe || {}
@@ -200,6 +207,40 @@ export async function launchWebApp({ app, manifest, log = () => {}, launchEnv = 
   const rawEnv = launchEnv || { ...process.env, ...(manifest.launch_env || manifest.env || {}) }
   const env = resolveDisposableLaunchEnv(rawEnv, cwd, manifest.disposable_data_root)
   let fixtureEnvFiles = []
+
+  // A detached runtime can outlive the runner process that started it. Family's
+  // Compose containers do exactly that after a hard runner kill, so checking
+  // their published ports first makes the next run block on EVA's own stale
+  // stack. The canonical manifest may declare a narrowly scoped cleanup command
+  // for this case. It runs only after prepareTestWorkspace has proved the cwd is
+  // an EVA-owned isolated clone, and before any port is inspected. We never
+  // promote legacy reset_command/cleanup metadata into executable preflight.
+  const prelaunchCommand = String(manifest.prelaunch_command || '').trim()
+  if (prelaunchCommand && prelaunchCommand.toLowerCase() !== 'n/a' && manifest.__eva_isolated_workspace === true) {
+    const prelaunch = runPrelaunchFn(prelaunchCommand, {
+      cwd,
+      env,
+      timeoutMs: Math.min(Number(manifest.max_runtime_ms) || 120000, 120000),
+    })
+    if (!prelaunch?.ok) {
+      const detail = String(prelaunch?.output || prelaunch?.error || '').trim()
+      const msg = `[launcher] ${manifest.app_id || app?.app_id}: prelaunch_command failed${prelaunch?.status == null ? '' : ` (${prelaunch.status})`}${detail ? `: ${detail}` : ''}`
+      log(msg)
+      return {
+        launched: true,
+        ready: false,
+        baseUrl,
+        failedProbeUrl: null,
+        exitInfos: [null],
+        outputTail: () => msg,
+        portDrift: [],
+        blockedPorts: [],
+        declaredPorts: [],
+        prelaunch,
+        stop: async () => {},
+      }
+    }
+  }
 
   // Pre-launch hygiene: a prior app (or a dev server the owner left running)
   // squatting this app's ports makes the new server fail to bind. Free them
@@ -414,6 +455,30 @@ export async function launchWebApp({ app, manifest, log = () => {}, launchEnv = 
 
   await sleep(Math.min(timeoutMs, 3000))
   return { launched: true, ready: starterMayExit || !requiredProcessExited(), baseUrl, failedProbeUrl: null, exitInfos, outputTail: output.diagnostic, pid: children[0]?.pid, portDrift: [], blockedPorts, declaredPorts, stop }
+}
+
+/** Run only the manifest's explicit isolated-workspace prelaunch command. */
+export function runPrelaunchCommand(command, { cwd, env, timeoutMs = 120000 } = {}) {
+  try {
+    const result = spawnSync(command, {
+      cwd,
+      shell: true,
+      env,
+      encoding: 'utf8',
+      timeout: timeoutMs,
+      windowsHide: true,
+    })
+    const output = [result.stderr, result.stdout].filter(Boolean).join('\n').trim()
+    return {
+      ok: !result.error && result.status === 0,
+      status: result.status,
+      signal: result.signal,
+      error: result.error ? String(result.error.message || result.error) : null,
+      output,
+    }
+  } catch (error) {
+    return { ok: false, status: null, signal: null, error: String(error?.message || error), output: '' }
+  }
 }
 
 // Bounded capture of a launched server's console output. Keeps only the LAST

@@ -29,7 +29,11 @@ import { computeMatchDecision, isResearchLead } from './matchEngine.js';
 import { isVerifiedDirectFundingRecommendation } from './fundingTruthPolicy.js';
 import { upsertSource, upsertOpportunity, upsertMatch, recordRejection } from './storage.js';
 import { OPPORTUNITY_KIND, TRUST_TIER, MATCH_DECISION, canonicalOpportunityKey } from './contract.js';
-import { buildWebQueries } from './webQueries.js';
+import {
+  buildWebQueries,
+  hasPersistentQueryShortfall,
+  PERSISTENT_QUERY_ANCHOR_COUNT,
+} from './webQueries.js';
 // Pure URL canonicalizer (tracking-param strip) — from the SHARED urlCanonical
 // module, NOT the blind link inventory, so the live lane stays blind-import-free.
 import { canonicalizeUrl } from './urlCanonical.js';
@@ -517,13 +521,30 @@ export async function runWebDiscoveryLane(deps, opts = {}) {
   const builtQueries = buildWebQueries(thesis, { max: maxQueries, seed });
   // EXTRA QUERIES (opts.extraQueries): the applyable-floor archetype directive's
   // query patterns (initiative agent #3). They run ALONGSIDE the profile's own
-  // web queries — additive, deduped, and placed FIRST so a bounded run always
-  // reaches them. They lower no bar: every hit is fetched, extracted,
-  // reality-gated and scored exactly like a built query's hit.
+  // web queries — additive and deduped. They lower no bar: every hit is fetched,
+  // extracted, reality-gated and scored exactly like a built query's hit.
   const extra = (Array.isArray(opts.extraQueries) ? opts.extraQueries : [])
     .map((q) => String(q || '').trim())
     .filter(Boolean);
-  const queries = extra.length ? [...new Set([...extra, ...builtQueries])] : builtQueries;
+  let queries = builtQueries;
+  if (extra.length) {
+    // The applyable-floor caller can supply six directive queries. Six full
+    // eight-hit SERPs fill the 44-page queue before a learned rotating query
+    // runs. On persistent shortfalls, keep the directive anchors first, then
+    // schedule the builder's two anchors plus its first rotating slot before
+    // resuming the directives. Query/page/provider budgets and every downstream
+    // gate stay unchanged. Unlearned runs retain their prior exact ordering.
+    const builtEarlyCount = PERSISTENT_QUERY_ANCHOR_COUNT + 1;
+    const ordered = hasPersistentQueryShortfall(thesis)
+      ? [
+          ...extra.slice(0, PERSISTENT_QUERY_ANCHOR_COUNT),
+          ...builtQueries.slice(0, builtEarlyCount),
+          ...extra.slice(PERSISTENT_QUERY_ANCHOR_COUNT),
+          ...builtQueries.slice(builtEarlyCount),
+        ]
+      : [...extra, ...builtQueries];
+    queries = [...new Set(ordered)];
+  }
   result.queries = queries;
   for (const [queryIndex, q] of queries.entries()) {
     if (pages.length - result.seeded >= maxPages) break;

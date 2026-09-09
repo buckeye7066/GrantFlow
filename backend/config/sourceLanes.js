@@ -25,7 +25,7 @@
 // The registry is pure data with no imports of its own, so reading it here
 // cannot re-create the cycle this module exists to break.
 import { STATE_BENEFITS_SOURCE_IDS, STATE_HOUSING_AGENCY_SOURCE_ID } from '../crawler-os/sourceRegistry.js';
-import { normalizeConditionTerm } from './conditionTerms.js';
+import { normalizeConditionTerm, conditionTermVariants } from './conditionTerms.js';
 
 export const LANES = Object.freeze([
   { lane: 'federal_grants', label: 'Federal grants' },
@@ -321,10 +321,11 @@ export function conditionCoveredBySource(condition, source, overlay = null) {
     ...(Array.isArray(source.keywords) ? source.keywords : []),
     ...(Array.isArray(source.need_categories) ? source.need_categories : []),
   ]
-    .map((t) => String(t || '').toLowerCase().replace(/_/g, ' ').trim())
+    .map((t) => normalizeConditionTerm(t))
     .filter((t) => t.length >= 4 && !GENERIC_CONDITION_WORDS.has(t));
 
-  return terms.some((term) => containsTerm(raw, term) || containsTerm(term, raw));
+  return conditionTermVariants(raw).some((alias) =>
+    terms.some((term) => containsTerm(alias, term) || containsTerm(term, alias)));
 }
 
 /** Stable key for a condition across the gap scoreboard and the adoption overlay. */
@@ -380,14 +381,15 @@ export const GENERIC_HEALTH_DESCRIPTORS = Object.freeze(new Set([
  */
 export function sourceServesDeclaredCondition(source, declaredTerms = []) {
   const terms = (Array.isArray(source?.keywords) ? source.keywords : [])
-    .map((t) => String(t || '').toLowerCase().replace(/_/g, ' ').trim())
+    .map((t) => normalizeConditionTerm(t))
     .filter((t) => t.length >= 4 && !GENERIC_CONDITION_WORDS.has(t));
   if (terms.length === 0) return false;
   for (const declared of declaredTerms || []) {
     const raw = normalizeConditionTerm(declared);
     if (!raw || raw.length < 4) continue;
     if (GENERIC_CONDITION_WORDS.has(raw) || GENERIC_HEALTH_DESCRIPTORS.has(raw)) continue;
-    if (terms.some((term) => containsTerm(raw, term) || containsTerm(term, raw))) return true;
+    if (conditionTermVariants(raw).some((alias) =>
+      terms.some((term) => containsTerm(alias, term) || containsTerm(term, alias)))) return true;
   }
   return false;
 }

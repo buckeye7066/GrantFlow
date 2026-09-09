@@ -64,6 +64,50 @@ test('registry and canonical manifests agree on repository identity for every ap
   }
 })
 
+test('Family EVA compose is isolated from the owner stack and publishes only dedicated fleet ports', () => {
+  const family = manifestById('family-stewardship-navigator')
+  const project = 'eva-family-stewardship-navigator'
+  const overrideName = 'family-stewardship-navigator.eva.yml'
+  const cleanupName = 'family-stewardship-navigator.eva-cleanup.yml'
+  const commands = [family.start_command, family.stop_command, family.reset_command, family.cleanup]
+
+  for (const command of commands) {
+    assert.match(command, new RegExp(`docker compose .*--project-name ${project}`))
+    assert.match(command, /--file docker-compose\.yml/)
+    assert.match(command, new RegExp(`--file .*${overrideName.replaceAll('.', '\\.')}`))
+  }
+  assert.match(family.start_command, / up --build$/)
+  for (const command of [family.stop_command, family.reset_command, family.cleanup]) {
+    assert.match(command, / down --volumes --remove-orphans/)
+  }
+
+  assert.equal(family.readiness_probe.port, 45109)
+  assert.equal(family.base_url, 'http://127.0.0.1:45209')
+  assert.equal(family.launch_env.PORT, '45109')
+  assert.equal(family.launch_env.VITE_API_URL, 'http://127.0.0.1:45109/api')
+  assert.equal(family.launch_env.CORS_ORIGIN, 'http://127.0.0.1:45209')
+  assert.equal(family.launch_env.DB_HOST_PORT, '45409')
+  assert.deepEqual(family.allowlist.ports, [45209, 45109, 45409])
+
+  assert.match(family.prelaunch_command, new RegExp(`docker compose .*--project-name ${project}`))
+  assert.match(family.prelaunch_command, new RegExp(`--file .*${cleanupName.replaceAll('.', '\\.')}`))
+  assert.match(family.prelaunch_command, / down --volumes --remove-orphans$/)
+  assert.doesNotMatch(family.prelaunch_command, /docker-compose\.yml/)
+
+  const override = readFileSync(join(MANIFEST_DIR, '..', 'compose', overrideName), 'utf8')
+  assert.match(override, /ports:\s*!override\s*[\s\S]*127\.0\.0\.1:45409:5432/)
+  assert.match(override, /ports:\s*!override\s*[\s\S]*127\.0\.0\.1:45109:3001/)
+  assert.match(override, /ports:\s*!override\s*[\s\S]*127\.0\.0\.1:45209:5173/)
+  assert.match(override, /VITE_API_URL:\s*["']?http:\/\/127\.0\.0\.1:45109\/api["']?/)
+  assert.equal((override.match(/restart:\s*["']?no["']?/g) || []).length, 3)
+
+  const cleanup = readFileSync(join(MANIFEST_DIR, '..', 'compose', cleanupName), 'utf8')
+  assert.match(cleanup, /services:\s*\{\}/)
+  for (const volume of ['pgdata', 'server_node_modules', 'uploads', 'web_node_modules']) {
+    assert.match(cleanup, new RegExp(`name: eva-family-stewardship-navigator_${volume}`))
+  }
+})
+
 test('offline/no-spend manifests never require a paid AI key that policy says must stay unset', () => {
   const paidKey = /^(?:ANTHROPIC|OPENAI|GEMINI|LLM)_API_KEY$/i
   const noSpendPolicy = /no (?:real )?(?:anthropic|openai|llm|ai).*spend|leave .*key.*unset|do not connect (?:a )?real .*key/i
@@ -166,10 +210,12 @@ test('repaired portfolio manifests preserve their current repository contracts',
 
   const factory = manifestById('factory-deck')
   assert.equal(factory.repo, 'buckeye7066/local-ai-factory')
-  assert.deepEqual(factory.nightly_critical_journeys, ['app-identifies-itself'])
-  assert.deepEqual(factory.weekly_full_journeys, ['app-identifies-itself'])
-  assert.equal(factory.journeys.some((journey) => journey.id === 'demo-mode-visible'), false)
-  assert.equal(factory.coverage.some((item) => (item.journeys || []).includes('demo-mode-visible')), false)
+  assert.ok(factory.nightly_critical_journeys.includes('demo-mode-visible'), 'a current check must retain the historical finding id so a real pass can close it')
+  assert.ok(factory.weekly_full_journeys.includes('demo-mode-visible'))
+  const factoryDemo = factory.journeys.find((journey) => journey.id === 'demo-mode-visible')
+  assert.ok(factoryDemo?.steps.every((step) => ['goto', 'waitForSelector'].includes(step.action)), 'checking the offline demo control must never click or start a Factory run')
+  assert.ok(factoryDemo?.assert.some((check) => check.selector.includes('input[type=') && check.value === 'Offline demo'), 'the journey must check the actual offline-demo control')
+  assert.ok(factory.coverage.some((item) => (item.journeys || []).includes('demo-mode-visible')))
 
   const geneMap = manifestById('genemap-discovery')
   assert.equal(geneMap.node_engine, '>=24', 'the runner must enforce GeneMap current package Node engine before launch')

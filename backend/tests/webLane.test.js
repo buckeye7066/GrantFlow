@@ -248,6 +248,62 @@ describe('runWebDiscoveryLane', () => {
     }
   })
 
+  it('executes fresh rotated queries on a later shortfall retry before the page queue fills', async () => {
+    const retryThesis = {
+      applicant_types: ['student', 'individual'],
+      is_student: true,
+      needs: ['scholarship', 'education', 'housing', 'fafsa', 'first_gen'],
+      location: { state: 'TN', city: 'Murfreesboro' },
+      interest_terms: ['nursing', 'biology'],
+      schools: ['Example University'],
+      learned_gaps: { classes: ['low_results', 'result_floor_shortfall'] },
+    }
+    const run = async (seed, extraQueries = [], runThesis = retryThesis) => {
+      const executed = []
+      const searchWeb = async (query, { count }) => {
+        executed.push(query)
+        return Array.from({ length: count }, (_, hit) => ({
+          url: `https://search-fixture.invalid/${seed}/${executed.length}/${hit}`,
+          title: `Result ${hit}`,
+          snippet: '',
+        }))
+      }
+      const res = await runWebDiscoveryLane(
+        { store: createMemoryStore(), fetcher: fakeFetcher({}), searchWeb, extractOpportunities: vi.fn() },
+        { thesis: runThesis, runId: `shortfall-${seed}`, maxQueries: 28, resultsPerQuery: 8, maxPages: 44, seed, extraQueries },
+      )
+      return { executed, res }
+    }
+
+    const first = await run(0)
+    const next = await run(14)
+
+    expect(first.executed).toHaveLength(6)
+    expect(next.executed).toHaveLength(6)
+    expect(first.executed.slice(0, 2)).toEqual([
+      'scholarship grant funding student',
+      'education grant funding student',
+    ])
+    expect(next.executed.slice(0, 2)).toEqual(first.executed.slice(0, 2))
+    expect(next.executed.some((query) => !first.executed.includes(query))).toBe(true)
+    expect(next.res.search_provenance).toHaveLength(6)
+
+    // The real result-floor repair caller adds six archetype directives. Their
+    // anchors must run without consuming every page-bound search slot.
+    const directiveQueries = Array.from({ length: 6 }, (_, i) => `directive query ${i + 1}`)
+    const firstWithDirectives = await run(0, directiveQueries)
+    const nextWithDirectives = await run(14, directiveQueries)
+    expect(firstWithDirectives.executed).toHaveLength(6)
+    expect(nextWithDirectives.executed).toHaveLength(6)
+    expect(nextWithDirectives.executed.slice(0, 2)).toEqual(directiveQueries.slice(0, 2))
+    expect(nextWithDirectives.executed[5]).toBe(directiveQueries[2])
+    expect(nextWithDirectives.executed.some((query) => !firstWithDirectives.executed.includes(query))).toBe(true)
+    expect(nextWithDirectives.res.queries).toEqual(expect.arrayContaining(directiveQueries))
+
+    const unlearned = await run(14, directiveQueries, { ...retryThesis, learned_gaps: null })
+    expect(unlearned.executed).toEqual(directiveQueries)
+  })
+
   describe('seed pages (owner rule: a source found for a profile gets added)', () => {
     const realOpp = {
       title: 'Tennessee Disability Small Grants',

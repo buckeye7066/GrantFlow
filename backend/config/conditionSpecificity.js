@@ -36,7 +36,7 @@
  * Pure predicates, no I/O.
  */
 
-import { normalizeConditionTerm as normalizeDiagnosisTerm } from './conditionTerms.js'
+import { normalizeConditionTerm as normalizeDiagnosisTerm, conditionTermVariants } from './conditionTerms.js'
 import {
   GENERIC_HEALTH_DESCRIPTORS,
   GENERIC_CONDITION_WORDS,
@@ -126,7 +126,7 @@ export function opportunityStatesCondition(oppText, conditions = []) {
   const hay = String(oppText ?? '').toLowerCase()
   if (!hay) return null
   for (const condition of conditions) {
-    if (containsTerm(hay, condition)) return condition
+    if (conditionTermVariants(condition).some((term) => containsTerm(hay, term))) return condition
     const tokens = condition
       .split(/\s+/)
       .filter((t) => t.length >= 4 && !GENERIC_CONDITION_WORDS.has(t) && !GENERIC_HEALTH_DESCRIPTORS.has(t))

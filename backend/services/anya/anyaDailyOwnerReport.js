@@ -697,7 +697,7 @@ export function buildOwnerReport(run = {}, { now = null, amy = null, gaps = null
       : evaFailed > 0
         ? `${evaFailed} user-journey fail${evaFailed === 1 ? '' : 's'}`
         : evaFresh
-          ? 'user-journeys clear'
+          ? (evaSummary.testing_complete ? 'user-journeys clear' : 'user-tests incomplete')
           : 'user-tests stale'
   const subject = evaPart
     ? `[GrantFlow] Anya daily — ${clean ? 'code clear' : `${needsHuman.length} code (${counts.critical}C/${counts.high}H)`} · ${evaPart}`

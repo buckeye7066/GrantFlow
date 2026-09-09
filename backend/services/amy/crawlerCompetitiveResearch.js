@@ -92,13 +92,19 @@ export const CURRENT_APPROACH = [
   'GrantFlow discovers funding via crawler-os: structured adapters for official feeds',
   '(grants.gov, sam.gov, SBIR, NIH RePORTER, USASpending, Federal Register, state portals),',
   'PLUS an open-web lane (SearXNG/Brave search -> LLM extraction of grant pages).',
+  'Private-foundation discovery already includes the propublica_990 API adapter:',
+  'it searches IRS 990 grantmakers by need category and geography and returns',
+  'funder PROGRAM rows without inventing an application URL or deadline.',
   'Queries are thesis-driven per profile (buildWebQueries from needs + geography +',
   'applicant type). Extracted opportunities are deduped by a canonical key, scored',
   'per-profile by a data-point matchEngine (matched fields / total x eligibility x geo',
   'gates), and award dollar amounts are extracted conservatively from the funder\'s own',
-  'page (precision over recall). Weak spots we know about: hyperlocal/community funder',
-  'recall, per-award amount coverage (~18% of catalog), and relevance precision',
-  '(false positives) on ambiguous profiles.',
+  'page (precision over recall). An embedding-based semantic recall supplement is',
+  'already implemented behind SEMANTIC_RECALL (default off); its candidates still',
+  'pass the existing eligibility and geography gates. Adding semantic recall from',
+  'scratch is therefore not a missing capability; enabling or improving it requires',
+  'measured recall/precision and cost evidence. Areas to measure include hyperlocal',
+  'funder recall, per-award amount coverage, and precision on ambiguous profiles.',
 ].join(' ')
 
 /** Domains that are listicle/aggregator noise for ENGINEERING research (not code). */
@@ -291,7 +297,9 @@ const ANALYSIS_SYSTEM =
   'open-source funding-crawler sources found on the web. Identify ONLY techniques that ' +
   'are plausibly MORE OPTIMAL than the current approach for surfacing real, relatable ' +
   'funding to end-user profiles. Be skeptical: if a source does not clearly beat the ' +
-  'current approach, do not include it. Never invent a source or URL not in the input.'
+  'current approach, do not include it. Do not recommend adding a capability that ' +
+  'the current approach already implements; identify the specific improvement and ' +
+  'evidence needed to establish a benefit. Never invent a source or URL not in the input.'
 
 function buildAnalysisPrompt(candidates) {
   const lines = candidates.map(

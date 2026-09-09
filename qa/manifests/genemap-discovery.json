@@ -6,11 +6,11 @@
   "runtime_type": "web",
   "node_engine": ">=24",
   "start_command": "corepack pnpm --filter @genemap/api start:eva & corepack pnpm --filter @genemap/web dev",
-  "stop_command": "taskkill-by-port",
+  "stop_command": "corepack pnpm --filter @genemap/api stop:eva",
   "readiness_probe": { "type": "http", "path": "/readyz", "port": 45102, "timeout_ms": 180000, "warm_paths": ["/@vite/client"] },
   "base_url": "http://127.0.0.1:45202",
   "test_target": "disposable-local-instance",
-  "required_env": ["CORS_ORIGINS", "SKIP_LLM_KEY_CHECK", "ADMIN_EMAILS"],
+  "required_env": ["JWT_SECRET", "JWT_REFRESH_SECRET", "COOKIE_SECRET", "CORS_ORIGINS", "SKIP_LLM_KEY_CHECK", "ADMIN_EMAILS"],
   "launch_env": {
     "NODE_ENV": "development",
     "PORT": "45102",
@@ -22,10 +22,26 @@
     "DISABLE_MODEL_PUBLICATION": "1",
     "ADMIN_EMAILS": "eva-admin@example.com"
   },
+  "launch_env_generated": {
+    "JWT_SECRET": "hex32",
+    "JWT_REFRESH_SECRET": "hex32",
+    "COOKIE_SECRET": "hex32"
+  },
+  "$prereq_comment": "The repo-owned start:eva launcher creates a fresh loopback-only PostgreSQL cluster under %LOCALAPPDATA%/GeneMap/EVA/<repo-id> on Windows (or the OS temp directory on other platforms), migrates it, and removes it on shutdown. Its fixed owner marker and per-repository path survive isolated-workspace git cleanup so start:eva can stop a cluster left by forced task-tree termination before reinitializing it. The runner-reset .eva-tmp/eva-runner root contains no PostgreSQL state. The launcher discovers one complete PostgreSQL installation through PG_BIN, PATH, or the standard PostgreSQL 16 Windows install; it never connects to the installed PostgreSQL service or an inherited DATABASE_URL.",
+  "prerequisites": [
+    {
+      "id": "genemap-disposable-postgres-tools",
+      "type": "executable",
+      "command": "powershell",
+      "args": ["-NoProfile", "-NonInteractive", "-Command", "$bin = if ($env:PG_BIN) { $env:PG_BIN } else { Join-Path $env:ProgramFiles 'PostgreSQL\\16\\bin' }; foreach ($tool in @('initdb.exe','pg_ctl.exe','createdb.exe')) { if (-not (Test-Path -LiteralPath (Join-Path $bin $tool) -PathType Leaf)) { exit 1 } }; & (Join-Path $bin 'initdb.exe') --version"],
+      "name": "PostgreSQL 16 disposable-cluster tools",
+      "remedy": "Install PostgreSQL 16 command-line tools or set GeneMap's owner EVA_APP_ENV PG_BIN override to the bin directory containing initdb.exe, pg_ctl.exe, and createdb.exe"
+    }
+  ],
   "seed_command": null,
   "reset_command": null,
-  "cleanup": "rm -rf .eva-tmp/genemap-discovery && drop disposable test database",
-  "disposable_data_root": ".eva-tmp/genemap-discovery",
+  "cleanup": "corepack pnpm --filter @genemap/api stop:eva",
+  "disposable_data_root": ".eva-tmp/eva-runner",
   "max_runtime_ms": 900000,
   "concurrency_class": "db-heavy",
   "adapters": ["web"],
@@ -39,10 +55,10 @@
   ],
   "allowlist": {
     "hosts": ["localhost", "127.0.0.1", "::1"],
-    "ports": [45202, 45102],
+    "ports": [45202, 45102, 45402],
     "routes": ["/Login", "/PrivacyPolicy", "/readyz", "/api/auth/*"],
-    "file_roots": [".eva-tmp/genemap-discovery"],
-    "processes": ["node", "pnpm"]
+    "file_roots": [".eva-tmp/eva-runner", "%LOCALAPPDATA%/GeneMap/EVA"],
+    "processes": ["node", "pnpm", "postgres", "pg_ctl", "initdb", "createdb"]
   },
   "nightly_critical_journeys": ["app-identifies-itself", "reach-register"],
   "weekly_full_journeys": ["app-identifies-itself", "reach-register", "public-privacy-policy"],
