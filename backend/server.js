@@ -2507,6 +2507,7 @@ app.use('/api/vehicles', vehiclesRouter);
 app.use('/api/preferences', preferencesRouter);
 // Incognito module endpoints (gated by user custom preferences)
 app.use('/api/incognito', incognitoRouter);
+app.use('/api/advertisements', lazyRouter('./routes/advertisements.js'));
 app.use('/api/version', versionRouter);
 // Geo Crawl (admin-only) — register BEFORE generic `app.use('/api', …)` routers so it is never shadowed.
 app.use('/api/geo-crawl', lazyRouter('./routes/geoCrawl.js', (mod) => mod.default({ uploadDir: uploadsDir, getOpenAI: null })));
