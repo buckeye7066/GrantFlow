@@ -1302,7 +1302,15 @@ export async function ensureTailoredApplicationsTableStep(db, { logger = console
  * Order matters (dependency-ordered): the sqlite/dialect-agnostic table
  * creations run first because downstream agent code paths depend on them.
  */
+export async function ensureAdvertisements(db, { logger = console } = {}) {
+  return runStep('owner advertisements', '[database]', logger, async () => {
+    const { ADVERTISEMENT_SCHEMA } = await import('../services/advertisements.js')
+    await db.exec(ADVERTISEMENT_SCHEMA)
+  })
+}
+
 const SCHEMA_INVARIANT_STEPS = [
+  ['advertisements', ensureAdvertisements],
   ['agent_subsystem', ensureAgentSubsystem],
   ['funding_opportunity_reality_gate', ensureFundingOpportunityRealityGate],
   ['application_task_check', ensureApplicationTaskCheck],

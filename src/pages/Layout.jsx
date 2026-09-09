@@ -39,6 +39,8 @@ import ProBonoBanner from '@/components/banners/ProBonoBanner.jsx'
 import FreePeriodNotice from '@/components/banners/FreePeriodNotice.jsx'
 import { resolveAccountDisplayName } from '@/lib/accountDisplayName'
 import MaintenanceGate from '@/components/maintenance/MaintenanceGate.jsx'
+import AdvertisementPanel from '@/components/advertisements/AdvertisementPanel.jsx'
+import ShareGrantFlowButton from '@/components/shared/ShareGrantFlowButton.jsx'
 import NotificationBell from '@/components/notifications/NotificationBell'
 import LoginAnnouncementModal from '@/components/announcements/LoginAnnouncementModal'
 import AppBreadcrumb from '@/components/shared/AppBreadcrumb'
@@ -303,6 +305,7 @@ export default function Layout({ children }) {
               </button>
             </div>
 
+            <ShareGrantFlowButton />
             <LanguageSwitcher className="w-full justify-start" />
 
             {isAdmin ? (
@@ -376,6 +379,7 @@ export default function Layout({ children }) {
               {!onboardingBusy ? <LoginAnnouncementModal /> : null}
               {!isAdmin ? <OnboardingSequencer endUser /> : null}
               {shouldShowPageGuide({ isAdmin, activeProfileId }) ? <EndUserPageGuide /> : null}
+              <AdvertisementPanel key={user?.id || "guest"} />
               {children}
             </div>
           </div>
