@@ -4,8 +4,8 @@
   "version": "1.0.1",
   "type": "module",
   "mobile": {
-    "//": "Lowest NATIVE app version this web bundle is safe to run on, published into dist/mobile/latest.json by scripts/build-mobile-bundle.mjs. OTA replaces the web bundle only, so raise this when a web bundle starts REQUIRING native code an older app does not carry — the app then says 'a new app version is required' instead of applying a bundle that cannot work.",
-    "//versionLine": "MUST be expressed on the version line the SHIPPED app actually carries. .github/workflows/android-build.yml sets ANDROID_VERSION_NAME=1.0.${github.run_number}, so real APKs are 1.0.<run>, NOT 1.1 — a floor of '1.1' compares GREATER than '1.0.47' and would tell every real device a new app is required, killing OTA outright. Any floor must therefore look like '1.0.<run>' of the first build that carries the required native code.",
+    "//": "Lowest NATIVE app version this web bundle is safe to run on, published into dist/mobile/latest.json by scripts/build-mobile-bundle.mjs. OTA replaces the web bundle only, so raise this when a web bundle starts REQUIRING native code an older app does not carry \u2014 the app then says 'a new app version is required' instead of applying a bundle that cannot work.",
+    "//versionLine": "MUST be expressed on the version line the SHIPPED app actually carries. .github/workflows/android-build.yml sets ANDROID_VERSION_NAME=1.0.${github.run_number}, so real APKs are 1.0.<run>, NOT 1.1 \u2014 a floor of '1.1' compares GREATER than '1.0.47' and would tell every real device a new app is required, killing OTA outright. Any floor must therefore look like '1.0.<run>' of the first build that carries the required native code.",
     "//why-empty": "Empty = no floor, which is correct today: @capacitor/local-notifications and @capacitor/app are new NATIVE plugins, but the JS degrades silently where they are absent (the OS notification simply does not appear) and the in-app update prompt still works, so this bundle is safe on every existing build.",
     "minNativeVersion": ""
   },
@@ -62,7 +62,7 @@
     "doctor": "node scripts/doctor.mjs",
     "dns:godaddy:vercel": "node ./scripts/godaddy-set-vercel-dns.mjs",
     "smoke:apply-engine": "node backend/scripts/smoke-apply-engine.mjs",
-    "test": "npm run check:profile-metadata && npm run lint:ci && npm run typecheck && npm run build && npm run unit",
+    "test": "npm run check:profile-metadata && npm run lint:ci && npm run typecheck && npm run build && npm run unit && npm run test:build-target",
     "test:all": "npm run test && npm run smoke:install && npm run smoke && npm run e2e",
     "preview": "vite preview",
     "backend": "node backend/start.js",
@@ -131,7 +131,9 @@
     "memory:note": "node scripts/obsidian-memory.mjs note",
     "predev": "npm run memory:startup",
     "prestart": "npm run memory:startup",
-    "test:ux": "node node_modules/playwright/cli.js test -c tests/ux/playwright.config.mjs"
+    "test:ux": "node node_modules/playwright/cli.js test -c tests/ux/playwright.config.mjs",
+    "build:target": "node scripts/build-target.cjs",
+    "test:build-target": "node --test scripts/build-target.test.cjs"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.124.0",

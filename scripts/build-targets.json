@@ -1,0 +1,111 @@
+{
+  "name": "GrantFlow",
+  "defaults": {
+    "win32": "windows",
+    "darwin": "web",
+    "linux": "web"
+  },
+  "guidance": "Install repository dependencies and platform toolchains first. Auto uses the build host; explicit target names the recipient. iOS/Safari use web; native Apple distribution requires separate signing and existing release procedures.",
+  "targets": {
+    "web": {
+      "format": "web",
+      "output": "dist/",
+      "notice": "Browser build for web; no native installer or Apple signing. Recipients sign in with their own account.",
+      "commands": [
+        {
+          "command": "npm",
+          "args": [
+            "run",
+            "build"
+          ]
+        }
+      ]
+    },
+    "safari": {
+      "format": "web",
+      "output": "dist/",
+      "notice": "Browser build for safari; no native installer or Apple signing. Recipients sign in with their own account.",
+      "commands": [
+        {
+          "command": "npm",
+          "args": [
+            "run",
+            "build"
+          ]
+        }
+      ]
+    },
+    "ios": {
+      "format": "web",
+      "output": "dist/",
+      "notice": "Browser build for ios; no native installer or Apple signing. Recipients sign in with their own account.",
+      "commands": [
+        {
+          "command": "npm",
+          "args": [
+            "run",
+            "build"
+          ]
+        }
+      ]
+    },
+    "windows": {
+      "format": "web",
+      "output": "dist/",
+      "notice": "Browser/PWA build only; GrantFlow has no windows native desktop installer. Recipients sign in separately.",
+      "commands": [
+        {
+          "command": "npm",
+          "args": [
+            "run",
+            "build"
+          ]
+        }
+      ]
+    },
+    "macos": {
+      "format": "web",
+      "output": "dist/",
+      "notice": "Browser/PWA build only; GrantFlow has no macos native desktop installer. Recipients sign in separately.",
+      "commands": [
+        {
+          "command": "npm",
+          "args": [
+            "run",
+            "build"
+          ]
+        }
+      ]
+    },
+    "android": {
+      "format": "Android debug APK",
+      "output": "android/app/build/outputs/apk/debug/app-debug.apk",
+      "notice": "Debug-signed test APK, not a production release. Requires installed Capacitor dependencies, Java21 and Android SDK. Use the existing gated release workflow for production signing.",
+      "commands": [
+        {
+          "command": "npm",
+          "args": [
+            "run",
+            "build"
+          ]
+        },
+        {
+          "command": "capacitor",
+          "args": [
+            "sync",
+            "android"
+          ],
+          "cwd": "."
+        },
+        {
+          "command": "gradle",
+          "args": [
+            "assembleDebug",
+            "--no-daemon"
+          ],
+          "cwd": "android"
+        }
+      ]
+    }
+  }
+}
