@@ -594,8 +594,18 @@ test('EVA tests an isolated origin/main snapshot while leaving dirty feature wor
     realGit(producer, ['commit', '-m', 'main v2'])
     realGit(producer, ['push', 'origin', 'main'])
 
-    const second = prepareTestWorkspace(source, 'sample-app', { dataDir })
-    assert.equal(second.ok, true)
+    let fetchAttempts = 0
+    const second = prepareTestWorkspace(source, 'sample-app', {
+      dataDir,
+      exec: (command, args, options) => {
+        if (args.includes('fetch') && ++fetchAttempts < 3) {
+          return { status: 128, stdout: '', stderr: 'fatal: unable to access remote: Recv failure: Connection was reset' }
+        }
+        return spawnSync(command, args, options)
+      },
+    })
+    assert.equal(second.ok, true, second.reason)
+    assert.equal(fetchAttempts, 3)
     assert.equal(second.cwd, first.cwd, 'the dedicated clone is safely reused')
     assert.equal(second.state.sha, realGit(producer, ['rev-parse', 'HEAD']))
     assert.notEqual(second.state.sha, first.state.sha, 'a later origin/main commit gets distinct full provenance')
@@ -685,6 +695,60 @@ test('a repointed source origin is refused before an authoritative clone is crea
     assert.match(result.reason, /origin identity mismatch/)
     assert.equal(existsSync(isolatedWorkspacePath(dataDir, 'grantflow')), false)
     assert.equal(readFileSync(join(source, 'app.txt'), 'utf8'), 'main\n')
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('authoritative fetch retries are bounded and never launch cached refs after failure', () => {
+  const root = mkdtempSync(join(tmpdir(), 'eva-fetch-retry-'))
+  const source = join(root, 'source')
+  const dataDir = join(root, 'eva-data')
+  try {
+    mkdirSync(source)
+    realGit(source, ['init', '-b', 'main'])
+    realGit(source, ['config', 'user.email', 'eva@example.test'])
+    realGit(source, ['config', 'user.name', 'EVA Test'])
+    writeFileSync(join(source, 'app.txt'), 'current main\n')
+    realGit(source, ['add', 'app.txt'])
+    realGit(source, ['commit', '-m', 'main'])
+    const initial = prepareTestWorkspace(source, 'sample', { dataDir, installDependencies: false })
+    assert.equal(initial.ok, true, initial.reason)
+    for (const fixture of [
+      { error: 'Recv failure: Connection was reset', attempts: 3, budget: 180000 },
+      { error: 'Recv failure: Connection was reset', attempts: 1, budget: 200 },
+      { error: 'Authentication failed; Recv failure', attempts: 1, budget: 180000 },
+      { error: 'Repository not found', attempts: 1, budget: 180000 },
+      { error: 'server certificate verification failed', attempts: 1, budget: 180000 },
+      { error: 'fatal: unknown failure', attempts: 1, budget: 180000 },
+    ]) {
+      const fetchTimeouts = []
+      const mutations = []
+      writeFileSync(join(initial.cwd, 'app.txt'), 'EVA sentinel before failed freshness check\n')
+      const result = prepareTestWorkspace(source, 'sample', {
+        dataDir,
+        timeoutMs: fixture.budget,
+        installDependencies: false,
+        exec: (command, args, options) => {
+          if (args.includes('fetch')) {
+            fetchTimeouts.push(options.timeout)
+            assert.equal(options.env.EVA_RUNNER_SECRET, undefined)
+            assert.equal(options.env.EVA_APP_ENV, undefined)
+            return { status: 128, stdout: '', stderr: fixture.error }
+          }
+          if (args.some((arg) => ['checkout', 'reset', 'clean'].includes(arg))) mutations.push(args)
+          return spawnSync(command, args, options)
+        },
+      })
+      assert.equal(result.ok, false, fixture.error)
+      assert.equal(result.isolated, false)
+      assert.match(result.reason, /freshness could not be verified/)
+      assert.equal(fetchTimeouts.length, fixture.attempts, fixture.error)
+      assert.ok(fetchTimeouts.every((value) => value > 0 && value <= fixture.budget))
+      assert.deepEqual(mutations, [], 'failed fetch never permits checkout/reset/clean from cached refs')
+      assert.equal(readFileSync(join(initial.cwd, 'app.txt'), 'utf8'), 'EVA sentinel before failed freshness check\n')
+      assert.equal(readFileSync(join(source, 'app.txt'), 'utf8'), 'current main\n')
+    }
   } finally {
     rmSync(root, { recursive: true, force: true })
   }

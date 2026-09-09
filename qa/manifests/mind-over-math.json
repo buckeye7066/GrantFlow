@@ -69,11 +69,11 @@
       "severity": "critical",
       "steps": [
         { "action": "goto", "url": "/" },
-        { "action": "waitForSelector", "selector": "body" }
+        { "action": "waitForSelector", "selector": "h1:has-text('Mind Over Math')", "timeout": 30000 }
       ],
-      "assert": [{ "type": "text_visible", "selector": "body", "value": "Mind Over Math" }],
+      "assert": [{ "type": "text_visible", "selector": "h1", "value": "Mind Over Math" }],
       "user_impact": "If the app shell does not load, no student can reach any lesson or solver.",
-      "candidate_files": ["src/App.tsx", "src/pages/Login.tsx"]
+      "candidate_files": ["src/App.jsx", "src/components/AuthScreen.jsx"]
     },
     {
       "id": "reach-register",
@@ -81,13 +81,13 @@
       "severity": "high",
       "steps": [
         { "action": "goto", "url": "/" },
-        { "action": "waitForSelector", "selector": "body" },
+        { "action": "waitForSelector", "selector": "h1:has-text('Mind Over Math')", "timeout": 30000 },
         { "action": "click", "selector": "a:has-text('Register'), button:has-text('Register'), a:has-text('Sign up'), button:has-text('Sign up')" },
-        { "action": "wait", "ms": 800 }
+        { "action": "waitForSelector", "selector": "form button[type='submit']:has-text('Create account')" }
       ],
       "assert": [{ "type": "text_visible", "selector": "body", "value": "Create account" }],
       "user_impact": "A prospective student who cannot reach registration cannot self-onboard (with INVITE_ONLY=false in the test env).",
-      "candidate_files": ["src/pages/Login.tsx", "src/pages/Register.tsx"]
+      "candidate_files": ["src/components/AuthScreen.jsx"]
     }
   ]
 }

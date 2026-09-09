@@ -180,17 +180,18 @@ export function recoverDockerDesktop({
 }
 
 /** Is a runtime command callable through the exact sanitized child PATH? */
-export function probeExecutable({ command, args = ['--version'], env = process.env, timeoutMs = 10000, run = spawnSync } = {}) {
+export function probeExecutable({ command, args = ['--version'], env = process.env, timeoutMs = 10000, run = spawnSync, platform = process.platform } = {}) {
   if (!command || typeof command !== 'string') return { ok: false, detail: 'executable name is missing' }
   try {
-    // shell:true is required for npm.cmd/pnpm.cmd/npx.cmd on Windows. Commands
-    // come only from the versioned manifest's fixed runtime allowlist; no user
-    // input is interpolated here.
+    // Only Windows batch launchers need cmd.exe. Native executable arguments
+    // must stay separate: routing PowerShell -Command through cmd interprets
+    // its &, parentheses, and redirects before PowerShell receives the script.
+    const batchLauncher = /\.(?:cmd|bat)$/i.test(command) || /^(?:npm|pnpm|npx|corepack)$/i.test(command)
     const res = run(command, Array.isArray(args) ? args : [], {
       encoding: 'utf8',
       timeout: timeoutMs,
       windowsHide: true,
-      shell: process.platform === 'win32',
+      shell: platform === 'win32' && batchLauncher,
       env,
     })
     if (res && res.status === 0) {

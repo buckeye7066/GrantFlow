@@ -172,6 +172,11 @@ test('repaired portfolio manifests preserve their current repository contracts',
   }
 
   const castle = manifestById('family-castle-clash')
+  assert.equal(castle.readiness_probe.port, 45110)
+  assert.equal(castle.base_url, 'http://127.0.0.1:45110')
+  assert.equal(castle.launch_env.PORT, '45110')
+  assert.equal(castle.launch_env.FCC_HOST, '127.0.0.1')
+  assert.deepEqual(castle.allowlist.ports, [45110])
   const castleIdentity = castle.journeys.find((journey) => journey.id === 'app-identifies-itself')
   const castleRegister = castle.journeys.find((journey) => journey.id === 'register-offline-account')
   assert.ok(castleIdentity.steps.some((step) => step.selector === "img[alt='Family Castle Clash']"))

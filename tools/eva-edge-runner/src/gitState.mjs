@@ -499,6 +499,34 @@ export function ensureWorkspaceDependencies(workspaceRoot, {
 }
 
 
+// A transient transport failure must not make a whole app unavailable, but
+// freshness is never inferred from cached refs. Only this idempotent fetch is
+// retried, at most three times within the original (maximum three-minute)
+// budget. Identity checks happen before it; checkout/reset happen after success.
+function fetchAuthoritativeOrigin(repository, opts) {
+  const budgetMs = Math.min(180000, Number.isFinite(opts.timeoutMs) && opts.timeoutMs > 0 ? opts.timeoutMs : 180000)
+  const deadline = performance.now() + budgetMs
+  let result
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const remaining = Math.floor(deadline - performance.now())
+    if (remaining <= 0 && result) break
+    result = runGit(repository, ['fetch', '--quiet', '--prune', 'origin', '+refs/heads/*:refs/remotes/origin/*'], {
+      ...opts,
+      timeoutMs: Math.max(1, remaining),
+    })
+    if (result.ok) return result
+    const error = `${result.stderr} ${result.stdout}`
+    // Authentication, missing refs/repositories, trust, and local corruption
+    // need intervention. Never retry them even when stderr also mentions curl.
+    if (/authentication failed|could not read username|permission denied|repository.*not found|couldn't find remote ref|certificate|ssl peer|dubious ownership|bad object|not a git repository/i.test(error)) break
+    if (!/connection (?:was )?reset|connection timed out|operation timed out|temporary failure in name resolution|could not resolve host|recv failure|send failure|remote end hung up unexpectedly|HTTP[\/ ]2.*(?:stream|framing)|requested URL returned error: 50[234]/i.test(error)) break
+    const delayMs = 1000 * (attempt + 1)
+    if (attempt === 2 || deadline - performance.now() <= delayMs) break
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, delayMs)
+  }
+  return result
+}
+
 function resolveAuthoritativeRef(repository, opts) {
   for (const branch of ['main', 'master']) {
     const ref = `origin/${branch}`
@@ -604,7 +632,7 @@ export function prepareTestWorkspace(localPath, appId, {
     writeFileSync(join(target, '.git', 'eva-owned.json'), JSON.stringify({ app_id: String(appId), expected_repo: expected, clone_source: cloneSource }), 'utf8')
   }
 
-  const fetched = runGit(target, ['fetch', '--quiet', '--prune', 'origin', '+refs/heads/*:refs/remotes/origin/*'], opts)
+  const fetched = fetchAuthoritativeOrigin(target, opts)
   if (!fetched.ok) {
     return workspaceFailure(localPath, sourceState, `origin freshness could not be verified in EVA clone: ${fetched.stderr || fetched.stdout || 'git fetch failed'}`)
   }
