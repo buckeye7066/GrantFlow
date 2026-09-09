@@ -95,8 +95,11 @@ const UWF_TRANSFER_TEXT = [
   'Students should review the separate qualifications for each transfer scholarship opportunity.',
 ].join(' ')
 const OHIO_TRANSFER_TEXT = [
-  'Transfer Scholarships.',
-  'Ohio University transfer merit scholarships provide from $1,000 to $3,000 toward tuition expenses.',
+  // Production htmlToText() starts at the page's <main>; the H1
+  // "Transfer Scholarships" sits outside it. This is the exact page-owned
+  // heading and concatenated heading/body shape observed on 2026-09-09.
+  'Opportunities for Transfer StudentsMerit scholarships are available in limited quantity for transfer students.',
+  'These awards are competitive and provide from $1,000 to $3,000 toward tuition expenses.',
   'A separate Phi Theta Kappa scholarship provides $3,000 to eligible transfer students.',
   'Awards are applied to tuition after admission and enrollment requirements are confirmed.',
 ].join(' ')
@@ -379,7 +382,7 @@ describe('official title-specific pages close the recurring amount-recall gap', 
     {
       title: 'Transfer Scholarships',
       sourceUrl: UWF_ROOT,
-      expectedFetchUrl: 'https://uwf.edu/admissions/undergraduate/cost-and-financial-aid/awards-and-scholarships/transfer-scholarships/',
+      expectedFetchUrl: 'https://uwf.edu/admissions/transfer/transfer-scholarships/',
       body: UWF_TRANSFER_TEXT,
     },
     {

@@ -95,7 +95,7 @@ export const LISTING_PAGES = Object.freeze([
     matchHosts: Object.freeze(['uwf.edu', 'www.uwf.edu']),
     matchPaths: Object.freeze(['/admissions/undergraduate/cost-and-financial-aid/awards-and-scholarships']),
     matchTitles: Object.freeze(['Transfer Scholarships']),
-    fetchUrl: 'https://uwf.edu/admissions/undergraduate/cost-and-financial-aid/awards-and-scholarships/transfer-scholarships/',
+    fetchUrl: 'https://uwf.edu/admissions/transfer/transfer-scholarships/',
     pageLevelStatus: Object.freeze({
       status: 'varies',
       phrases: Object.freeze(['Value: Amounts Vary']),
@@ -107,6 +107,11 @@ export const LISTING_PAGES = Object.freeze([
     matchPaths: Object.freeze(['/admissions/tuition/transfer-scholarships']),
     matchTitles: Object.freeze(['Transfer Scholarships']),
     fetchUrl: 'https://www.ohio.edu/admissions/tuition/transfer-scholarships',
+    // Ohio renders the page H1 outside <main>; htmlToText() correctly removes
+    // that surrounding chrome and begins at this page-owned section heading.
+    // Keep the alternate anchor registry-owned so a generic row title never
+    // authorizes a whole-page or sibling amount.
+    anchorTitles: Object.freeze(['Opportunities for Transfer Students']),
   }),
   Object.freeze({
     id: 'howard_transfer_scholarships',
@@ -382,7 +387,10 @@ export async function enrichAmountViaListingPage(row, deps = {}) {
       }
     }
 
-    const result = extractAnchoredAmounts(text, row?.title)
+    const anchorTitles = [row?.title, ...(entry.anchorTitles || [])].filter(Boolean)
+    const result = anchorTitles
+      .map((title) => extractAnchoredAmounts(text, title))
+      .find((candidate) => candidate.anchored) || { anchored: false }
     if (!result.anchored) {
       if (pageLevelFallback(entry, text)) {
         // The row points at a known umbrella/index page that we successfully
