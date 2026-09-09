@@ -93,9 +93,12 @@ export const LISTING_PAGES = Object.freeze([
   Object.freeze({
     id: 'uwf_transfer_scholarships',
     matchHosts: Object.freeze(['uwf.edu', 'www.uwf.edu']),
-    matchPaths: Object.freeze(['/admissions/undergraduate/cost-and-financial-aid/awards-and-scholarships']),
+    matchPaths: Object.freeze([
+      '/admissions/undergraduate/cost-and-financial-aid/awards-and-scholarships',
+      '/admissions/transfer/transfer-scholarships',
+    ]),
     matchTitles: Object.freeze(['Transfer Scholarships']),
-    fetchUrl: 'https://uwf.edu/admissions/undergraduate/cost-and-financial-aid/awards-and-scholarships/transfer-scholarships/',
+    fetchUrl: 'https://uwf.edu/admissions/transfer/transfer-scholarships/',
     pageLevelStatus: Object.freeze({
       status: 'varies',
       phrases: Object.freeze(['Value: Amounts Vary']),
@@ -107,6 +110,11 @@ export const LISTING_PAGES = Object.freeze([
     matchPaths: Object.freeze(['/admissions/tuition/transfer-scholarships']),
     matchTitles: Object.freeze(['Transfer Scholarships']),
     fetchUrl: 'https://www.ohio.edu/admissions/tuition/transfer-scholarships',
+    // Ohio renders the page H1 outside <main>; htmlToText() correctly removes
+    // that surrounding chrome and begins at this page-owned section heading.
+    // Keep the alternate anchor registry-owned so a generic row title never
+    // authorizes a whole-page or sibling amount.
+    anchorTitles: Object.freeze(['Opportunities for Transfer Students']),
   }),
   Object.freeze({
     id: 'howard_transfer_scholarships',
@@ -382,7 +390,16 @@ export async function enrichAmountViaListingPage(row, deps = {}) {
       }
     }
 
-    const result = extractAnchoredAmounts(text, row?.title)
+    // Page-owned section headings are narrower evidence than a generic catalog
+    // title. If one is present, even without a number, it owns the answer and
+    // must prevent a sibling amount near an earlier generic H1 from leaking in.
+    const selectAnchor = (titles) => {
+      const candidates = titles.filter(Boolean).map((title) => extractAnchoredAmounts(text, title))
+      return candidates.find((candidate) =>
+        candidate.anchored && (candidate.amounts || candidate.amount_status || candidate.amount_text)
+      ) || candidates.find((candidate) => candidate.anchored) || null
+    }
+    const result = selectAnchor(entry.anchorTitles || []) || selectAnchor([row?.title]) || { anchored: false }
     if (!result.anchored) {
       if (pageLevelFallback(entry, text)) {
         // The row points at a known umbrella/index page that we successfully

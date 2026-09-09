@@ -95,8 +95,11 @@ const UWF_TRANSFER_TEXT = [
   'Students should review the separate qualifications for each transfer scholarship opportunity.',
 ].join(' ')
 const OHIO_TRANSFER_TEXT = [
-  'Transfer Scholarships.',
-  'Ohio University transfer merit scholarships provide from $1,000 to $3,000 toward tuition expenses.',
+  // Production htmlToText() starts at the page's <main>; the H1
+  // "Transfer Scholarships" sits outside it. This is the exact page-owned
+  // heading and concatenated heading/body shape observed on 2026-09-09.
+  'Opportunities for Transfer StudentsMerit scholarships are available in limited quantity for transfer students.',
+  'These awards are competitive and provide from $1,000 to $3,000 toward tuition expenses.',
   'A separate Phi Theta Kappa scholarship provides $3,000 to eligible transfer students.',
   'Awards are applied to tuition after admission and enrollment requirements are confirmed.',
 ].join(' ')
@@ -166,6 +169,15 @@ describe('registry routing', () => {
       'uwf_transfer_scholarships',
     )
     expect(findListingPageEntry({ title: 'Other Scholarships', source_url: UWF_ROOT })).toBeNull()
+  })
+
+  it('keeps the replacement UWF transfer URL inside the exact-title adapter', () => {
+    expect(
+      findListingPageEntry({
+        title: 'Transfer Scholarships',
+        source_url: 'https://uwf.edu/admissions/transfer/transfer-scholarships/',
+      })?.id,
+    ).toBe('uwf_transfer_scholarships')
   })
 })
 
@@ -379,7 +391,7 @@ describe('official title-specific pages close the recurring amount-recall gap', 
     {
       title: 'Transfer Scholarships',
       sourceUrl: UWF_ROOT,
-      expectedFetchUrl: 'https://uwf.edu/admissions/undergraduate/cost-and-financial-aid/awards-and-scholarships/transfer-scholarships/',
+      expectedFetchUrl: 'https://uwf.edu/admissions/transfer/transfer-scholarships/',
       body: UWF_TRANSFER_TEXT,
     },
     {
@@ -417,6 +429,38 @@ describe('official title-specific pages close the recurring amount-recall gap', 
 
     expect(result).toMatchObject({ attempted: true, page_read: true, found: true })
     expect(result.amounts).toMatchObject({ amount_min: 1000, amount_max: 3000 })
+  })
+
+  it('prefers the page-owned anchor when the generic row title has a nearby sibling amount', async () => {
+    const sourceUrl = 'https://www.ohio.edu/admissions/tuition/transfer-scholarships'
+    const bothHeadings = [
+      'Transfer Scholarships. A separate sibling program awards range from $8,000 to $9,999.',
+      OHIO_TRANSFER_TEXT,
+    ].join(' ')
+    const result = await enrichAmountViaListingPage(
+      { title: 'Transfer Scholarships', source_url: sourceUrl },
+      { fetcher: okFetcher(asHtml(bothHeadings)) },
+    )
+
+    expect(result).toMatchObject({ attempted: true, page_read: true, found: true })
+    expect(result.amounts).toMatchObject({ amount_min: 1000, amount_max: 3000 })
+  })
+
+  it('does not fall back to a sibling amount after finding an amountless page-owned anchor', async () => {
+    const sourceUrl = 'https://www.ohio.edu/admissions/tuition/transfer-scholarships'
+    const amountlessOwnedSection = [
+      'Transfer Scholarships. A separate sibling program awards range from $8,000 to $9,999.',
+      'Opportunities for Transfer Students. Current eligibility and enrollment requirements are listed here.',
+      'Contact admissions for program guidance and application deadlines.',
+      'Additional transfer resources explain credit evaluation and orientation requirements.',
+    ].join(' ')
+    const result = await enrichAmountViaListingPage(
+      { title: 'Transfer Scholarships', source_url: sourceUrl },
+      { fetcher: okFetcher(asHtml(amountlessOwnedSection)) },
+    )
+
+    expect(result).toMatchObject({ attempted: true, page_read: true, found: false })
+    expect(result.amounts).toBeUndefined()
   })
 
   it('never falls through to sibling numbers when a registered umbrella status marker disappears', async () => {
