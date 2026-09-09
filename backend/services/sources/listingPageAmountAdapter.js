@@ -234,7 +234,7 @@ function normalizedTitle(value) {
 // description. A title window can miss it; whole-page extraction can take a
 // dollar figure from a supplemental question. Read only the uniquely labeled
 // field on a page that identifies this exact award.
-function readStructuredAward(row, body, text) {
+function readStructuredAward(row, body) {
   const unresolved = (reason) => ({ attempted: true, page_read: false, transient: false, found: false, reason })
   const $ = load(body)
   const headings = $('h1,h2,h3').filter((_i, el) => normalizedTitle($(el).text()) === normalizedTitle(row.title))
@@ -249,7 +249,11 @@ function readStructuredAward(row, body, text) {
     // The source displays zero for this stipend and directs readers to its
     // contact. Preserve both statements; do not assert a real zero-dollar
     // stipend or borrow the separate scholarship's full-tuition benefit.
-    const contact = text.match(/\bfor more information contact\s+[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/i)
+    // AcademicWorks puts the description inside the named award's header.
+    // Generic page cleaning removes headers as navigation, including this one.
+    const description = headings.first().parent().clone()
+    description.find('script,style,noscript,svg,nav,form,iframe').remove()
+    const contact = description.text().replace(/\s+/g, ' ').match(/\bfor more information contact\s+[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/i)
     if (!contact) return unresolved('structured_award_zero_unresolved')
     return { ...answer, amount_status: 'contact_required', amount_text: `Award: ${value}. ${contact[0]}.` }
   }
@@ -412,7 +416,7 @@ export async function enrichAmountViaListingPage(row, deps = {}) {
       return { attempted: true, page_read: false, transient: false, found: false, reason: 'thin_page' }
     }
 
-    if (entry.structuredAward) return readStructuredAward(row, res.body, text)
+    if (entry.structuredAward) return readStructuredAward(row, res.body)
 
     const sourceStatus = pageLevelStatus(entry, text)
     if (sourceStatus) {

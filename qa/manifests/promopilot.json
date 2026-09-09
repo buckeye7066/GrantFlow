@@ -33,7 +33,7 @@
   "allowlist": {
     "hosts": ["localhost", "127.0.0.1", "::1"],
     "ports": [8090],
-    "routes": ["/", "/healthz"],
+    "routes": ["/", "/healthz", "/signin.html"],
     "file_roots": [".eva-tmp/promopilot"],
     "processes": ["node", "npm"]
   },
@@ -45,7 +45,7 @@
     "unautomated_features": ["Channels panel", "Apps & books campaign manager", "Recent posts log"]
   },
   "coverage": [
-    { "feature": "Token login / unlock view", "journeys": ["app-identifies-itself", "login-view-renders"] },
+    { "feature": "Owner sign-in form", "journeys": ["app-identifies-itself", "login-view-renders"] },
     { "feature": "Channels panel", "unautomated_reason": "behind the single-owner token login; add-app/upload-asset flows require an authenticated token session not yet wired into fixtures" },
     { "feature": "Apps & books campaign manager", "unautomated_reason": "requires token login; any campaign action risks touching the posting scheduler, and real posting is prohibited" },
     { "feature": "Recent posts log", "unautomated_reason": "requires token login and posting history; posting itself is prohibited so the log stays empty in a disposable instance" }
@@ -67,17 +67,21 @@
     },
     {
       "id": "login-view-renders",
-      "name": "Token unlock view renders an input for the admin token",
+      "name": "Private workspace redirects to the owner-key sign-in form",
       "severity": "high",
       "steps": [
         { "action": "goto", "url": "/" },
-        { "action": "waitForSelector", "selector": "input" },
-        { "action": "wait", "ms": 500 }
+        { "action": "waitForSelector", "selector": "form#signin input[name=token][type=password]" },
+        { "action": "waitForSelector", "selector": "form#signin button[type=submit]" }
       ],
-      "assert": [{ "type": "text_visible", "selector": "body", "value": "token" }],
+      "assert": [
+        { "type": "url_contains", "value": "/signin.html" },
+        { "type": "text_visible", "selector": "form#signin", "value": "Owner key" },
+        { "type": "text_visible", "selector": "form#signin button[type=submit]", "value": "Sign in" }
+      ],
       "expected_console_errors": ["401 (unauthorized)", "status of 401"],
       "user_impact": "Without the token unlock input, the single-owner login is impossible and the whole console is locked out.",
-      "candidate_files": ["public/index.html", "public/app.js"]
+      "candidate_files": ["public/signin.html", "public/signin.js", "src/ownerAccess.js"]
     }
   ]
 }

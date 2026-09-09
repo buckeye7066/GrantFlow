@@ -113,6 +113,41 @@ test('dependency installs use the Windows command shell for fixed package-manage
   }
 })
 
+test('headless pnpm can replace an existing modules directory without an interactive prompt', () => {
+  const root = mkdtempSync(join(tmpdir(), 'eva-headless-pnpm-'))
+  const workspace = join(root, 'workspace')
+  const previousCi = process.env.CI
+  const previousSecret = process.env.EVA_RUNNER_SECRET
+  process.env.CI = 'false'
+  process.env.EVA_RUNNER_SECRET = 'must-not-reach-the-package-manager'
+  try {
+    mkdirSync(join(workspace, 'node_modules'), { recursive: true })
+    writeFileSync(join(workspace, 'pnpm-lock.yaml'), 'lockfileVersion: 9')
+    const result = ensureWorkspaceDependencies(workspace, {
+      dataDir: join(root, 'data'),
+      appId: 'factory-deck',
+      platform: 'win32',
+      exec: (command, args, options) => {
+        assert.equal(command, 'corepack')
+        assert.deepEqual(args, ['pnpm', 'install', '--frozen-lockfile'])
+        assert.equal(options.env.EVA_RUNNER_SECRET, undefined)
+        return options.env.CI === 'true'
+          ? { status: 0 }
+          : { status: 1, stderr: 'ERR_PNPM_ABORTED_REMOVE_MODULES_DIR_NO_TTY' }
+      },
+    })
+    assert.deepEqual(result.failed, [])
+    assert.deepEqual(result.installed, ['.'])
+    assert.equal(process.env.CI, 'false', 'only the install subprocess receives CI mode')
+  } finally {
+    if (previousCi === undefined) delete process.env.CI
+    else process.env.CI = previousCi
+    if (previousSecret === undefined) delete process.env.EVA_RUNNER_SECRET
+    else process.env.EVA_RUNNER_SECRET = previousSecret
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
 test('a lockfile marker cannot bless a damaged dependency cache', () => {
   const root = mkdtempSync(join(tmpdir(), 'eva-broken-cache-'))
   const workspace = join(root, 'workspace')
