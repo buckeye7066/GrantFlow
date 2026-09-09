@@ -604,17 +604,15 @@ export const DIAGNOSTIC_CHECKS = Object.freeze([
         return { ok: true, summary: `GOAL: full cohort clean — ${label}.${store.goal_notified_at ? '' : ' Owner notification pending.'}` }
       }
       if (latest.issues > 0 || counts.unevaluated > 0 || counts.inconsistent) {
-        // Recall-miss classes are exactly what a degraded search backend
-        // produces (bing-only junk SERPs can't surface institution pages), so
-        // attach the live provider diagnosis: the owner reads WHY, not just
-        // WHAT (the 2026-07-28 institution_recall_miss ×6 class).
+        // Current provider health informs the next diagnostic step, not the
+        // historical cause of every cohort recall finding.
         let providerHealth = null
         try {
           const { probeSearchProviderHealth } = await import('../searchProviderHealth.js')
           providerHealth = await probeSearchProviderHealth()
         } catch { providerHealth = null }
         const envDegraded = providerHealth && !providerHealth.skipped && providerHealth.verdict !== 'healthy'
-        const envNote = envDegraded ? ` Environment diagnosis: search backend ${providerHealth.verdict} — ${providerHealth.detail}.` : ''
+        const envNote = envDegraded ? ` Current provider check (not historical run attribution): search backend ${providerHealth.verdict} — ${providerHealth.detail}.` : ''
         return {
           ok: false,
           summary: `${label}. Top classes: ${topTypes || 'n/a'}.${envNote}`,
@@ -629,9 +627,7 @@ export const DIAGNOSTIC_CHECKS = Object.freeze([
             runs: latest.runs || [],
             ...(providerHealth && !providerHealth.skipped ? { search_provider_health: { verdict: providerHealth.verdict, detail: providerHealth.detail } } : {}),
           },
-          recommended_fix: envDegraded
-            ? 'The search backend is degraded (see search_provider_health evidence) — fix the environment first (restart searxng-search, check Brave 402) and expect the next cohort to recover; only misses that persist on a HEALTHY backend need a code change.'
-            : 'Each issue example names its finding types (amyReport FINDING_TYPES) — ineligible_match/false_positive route to the matchEngine eligibility gates, institution/hyperlocal recall misses route to buildWebQueries breadth, field-mapping/geo misses route to profileIntelligence. Amy\'s own tuning levers (floor/weights/coverage/archetype lessons) act on these automatically; whatever persists across days needs a code change.',
+          recommended_fix: 'Keep each finding open until its own evidence supports resolution. For recall gaps, degraded or unknown provider evidence requires a provider-health check first, then an exact-subject recheck. Healthy provider evidence from the evaluated run plus exact-subject coverage may warrant code investigation; repetition alone does not prove a code defect. Investigate eligibility and field-mapping findings against their own evidence.',
           confidence: 0.9,
         }
       }
@@ -1771,7 +1767,7 @@ export const DIAGNOSTIC_CHECKS = Object.freeze([
           providerHealth = await probeSearchProviderHealth()
         } catch { providerHealth = null }
         const envDegraded = providerHealth && !providerHealth.skipped && providerHealth.verdict !== 'healthy'
-        const envNote = envDegraded ? ` Environment diagnosis: search backend ${providerHealth.verdict} — ${providerHealth.detail}.` : ''
+        const envNote = envDegraded ? ` Current provider check (not historical run attribution): search backend ${providerHealth.verdict} — ${providerHealth.detail}.` : ''
         return {
           ok: false,
           summary: `Google-bar REGRESSION: fleet web-parity ${latestParity} is ${Math.round((median - latestParity) * 10) / 10} points below the trailing median of the last ${priorParities.length} run(s) (${median}) — the system got WORSE vs a plain web search.${envNote}`,

@@ -252,7 +252,7 @@ describe('buildOwnerReport — competitive crawler research section', () => {
     expect(text).toMatch(/async 990 ingestion/)
     expect(text).toMatch(/add a 990 adapter/)
     expect(html).toMatch(/Competitive crawler research/)
-    expect(html).toMatch(/Techniques worth stealing/)
+    expect(html).toMatch(/Candidates for evaluation/)
   })
 
   it('omits the section entirely when there is no research data', () => {
