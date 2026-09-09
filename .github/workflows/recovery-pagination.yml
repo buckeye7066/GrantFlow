@@ -1,0 +1,32 @@
+name: Pagination recovery workspace
+on:
+  push:
+    branches: [recovery/propublica-pagination-20260909]
+    paths: [.github/workflows/recovery-pagination.yml]
+permissions:
+  contents: read
+jobs:
+  snapshot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - name: Archive tracked source and test dependencies only
+        run: |
+          mkdir -p /tmp/recovery
+          git archive --format=tar.gz --output=/tmp/recovery/source.tar.gz HEAD
+          tar -czf /tmp/recovery/dependencies.tar.gz node_modules
+          git rev-parse HEAD > /tmp/recovery/commit.txt
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: grantflow-pagination-workspace
+          path: /tmp/recovery/
+          retention-days: 1
+          if-no-files-found: error
