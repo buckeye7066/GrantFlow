@@ -182,6 +182,27 @@ test('a journey still EXECUTES — removing the skip path did not disable the ru
   assert.equal(journeys[0].status, 'passed', 'the journey really ran')
 })
 
+test('an Electron journey executes its app-owned launch verifier command', async () => {
+  const manifest = {
+    app_id: 'electron-fixture',
+    runtime_type: 'electron',
+    allowlist: { processes: [process.execPath] },
+    nightly_critical_journeys: ['launch'],
+    journeys: [{
+      id: 'launch',
+      name: 'Launch verifier',
+      command: process.execPath,
+      args: ['-e', "process.stdout.write('verify-launch OK')"],
+      expect_exit_code: 0,
+      expect_stdout_matches: 'verify-launch OK',
+      timeout_ms: 5000,
+    }],
+  }
+
+  const journeys = await runAppJourneys({ app: { app_id: 'electron-fixture' }, manifest })
+  assert.equal(journeys[0].status, 'passed', 'the verifier command really ran')
+})
+
 test('CLI journeys receive only the resolved app environment, never runner or cross-app secrets', async () => {
   const priorSecret = process.env.EVA_RUNNER_SECRET
   const priorOverrides = process.env.EVA_APP_ENV

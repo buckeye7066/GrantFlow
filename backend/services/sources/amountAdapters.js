@@ -35,7 +35,7 @@ import { enrichAmountViaListingPage, isListingPageRow } from './listingPageAmoun
  * invariant uses this version to reopen rows that were permanently attempted
  * before the new adapter existed, exactly once per registry revision.
  */
-export const AMOUNT_ADAPTER_REGISTRY_VERSION = 1
+export const AMOUNT_ADAPTER_REGISTRY_VERSION = 2
 
 /**
  * The registry.

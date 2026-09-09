@@ -227,6 +227,14 @@ test('repaired portfolio manifests preserve their current repository contracts',
   assert.deepEqual(geneMap.journeys.find((journey) => journey.id === 'app-identifies-itself')?.candidate_files, ['apps/web/pages/Login.jsx'])
   assert.deepEqual(geneMap.journeys.find((journey) => journey.id === 'reach-register')?.candidate_files, ['apps/web/pages/Login.jsx'])
   assert.deepEqual(geneMap.journeys.find((journey) => journey.id === 'public-privacy-policy')?.candidate_files, ['apps/web/pages/PrivacyPolicy.jsx'])
+
+  const forgePress = manifestById('forgepress')
+  const forgePressLaunch = forgePress.journeys.find((journey) => journey.id === 'app-launches')
+  assert.equal(forgePressLaunch?.command, 'node')
+  assert.deepEqual(forgePressLaunch?.args, ['tools/verify-launch.cjs'])
+  assert.equal(forgePressLaunch?.expect_exit_code, 0)
+  assert.equal(forgePressLaunch?.expect_stdout_matches, 'verify-launch OK')
+  assert.ok(forgePress.allowlist?.processes?.includes('node'))
 })
 
 for (const { file, manifest } of manifests) {

@@ -80,17 +80,21 @@ export async function runAppJourneys({ app, manifest, baseUrl = null, captureDir
   const critical = manifest?.nightly_critical_journeys || []
   const journeyDefs = (manifest?.journeys || []).filter((j) => critical.length === 0 || critical.includes(j.id))
 
-  const CLI_RUNTIMES = new Set(['cli', 'python-cli', 'powershell'])
+  // Electron apps may declare an app-owned, non-interactive verifier command.
+  // The command adapter preserves the same executable allowlist, isolated
+  // environment, timeout, exit-code, stdout, and retry contract used by CLI
+  // journeys while the app's verifier owns the real BrowserWindow lifecycle.
+  const COMMAND_RUNTIMES = new Set(['cli', 'python-cli', 'powershell', 'electron'])
   const WEB_RUNTIMES = new Set(['web', 'mobile-web'])
 
   for (const jd of journeyDefs) {
     let runOne
     if (WEB_RUNTIMES.has(manifest.runtime_type)) {
       runOne = () => runWebJourney({ baseUrl, journey: jd, captureDir })
-    } else if (CLI_RUNTIMES.has(manifest.runtime_type) && jd.command) {
+    } else if (COMMAND_RUNTIMES.has(manifest.runtime_type) && jd.command) {
       runOne = () => runCliJourney({ manifest, journey: jd, launchEnv })
     } else {
-      // No adapter yet for this runtime (electron/api/windows-ui) or a journey
+      // No adapter yet for this runtime (api/windows-ui) or a journey
       // with no runnable command. Report BLOCKED with the reason — never a
       // fabricated pass, never a crash.
       journeys.push({
