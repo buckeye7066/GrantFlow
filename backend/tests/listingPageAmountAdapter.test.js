@@ -422,6 +422,22 @@ describe('official title-specific pages close the recurring amount-recall gap', 
     expect(result.amounts).toMatchObject({ amount_min: 1000, amount_max: 3000 })
   })
 
+  it('prefers an evidenced page-owned anchor when the generic row title also appears without an amount', async () => {
+    const sourceUrl = 'https://www.ohio.edu/admissions/tuition/transfer-scholarships'
+    const bothHeadings = [
+      'Transfer Scholarships. General transfer information and navigation.',
+      'Overview details '.repeat(80),
+      OHIO_TRANSFER_TEXT,
+    ].join(' ')
+    const result = await enrichAmountViaListingPage(
+      { title: 'Transfer Scholarships', source_url: sourceUrl },
+      { fetcher: okFetcher(asHtml(bothHeadings)) },
+    )
+
+    expect(result).toMatchObject({ attempted: true, page_read: true, found: true })
+    expect(result.amounts).toMatchObject({ amount_min: 1000, amount_max: 3000 })
+  })
+
   it('never falls through to sibling numbers when a registered umbrella status marker disappears', async () => {
     const changedPage = UWF_FRESHMAN_TEXT.replace(
       'Awards and requirements are subject to change annually.',

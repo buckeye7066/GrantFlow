@@ -388,9 +388,10 @@ export async function enrichAmountViaListingPage(row, deps = {}) {
     }
 
     const anchorTitles = [row?.title, ...(entry.anchorTitles || [])].filter(Boolean)
-    const result = anchorTitles
-      .map((title) => extractAnchoredAmounts(text, title))
-      .find((candidate) => candidate.anchored) || { anchored: false }
+    const anchorCandidates = anchorTitles.map((title) => extractAnchoredAmounts(text, title))
+    const result = anchorCandidates.find((candidate) =>
+      candidate.anchored && (candidate.amounts || candidate.amount_status || candidate.amount_text)
+    ) || anchorCandidates.find((candidate) => candidate.anchored) || { anchored: false }
     if (!result.anchored) {
       if (pageLevelFallback(entry, text)) {
         // The row points at a known umbrella/index page that we successfully
