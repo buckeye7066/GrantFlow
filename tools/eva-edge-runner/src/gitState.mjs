@@ -358,6 +358,31 @@ function declaredRuntimeExportTargets(value, targets = new Set(), condition = nu
   return targets
 }
 
+function isContainedRegularFile(packageDir, target) {
+  if (typeof target !== 'string' || !target.trim()) return false
+  const root = resolve(packageDir)
+  const candidate = resolve(root, target)
+  const prefix = root.endsWith(sep) ? root : `${root}${sep}`
+  if (!candidate.startsWith(prefix)) return false
+  try { return statSync(candidate).isFile() } catch { return false }
+}
+
+function isPrismaCliPhantomRootExport(packageDir, pkg, target, bins) {
+  // Prisma's published CLI package has long declared this absent root export
+  // (confirmed in 6.19.3 and 7.5.0; prisma/prisma#29406). SermonSmith executes
+  // the CLI (`prisma generate`) and imports @prisma/client, so reinstalling the
+  // identical tarball can never repair this unused mapping. Exempt only that
+  // exact target when the CLI and declaration surfaces are structurally whole.
+  // This does not claim that `require('prisma')` works.
+  return pkg.name === 'prisma' &&
+    pkg.main === 'build/index.js' &&
+    target === './build/types.js' &&
+    !existsSync(resolve(packageDir, target)) &&
+    isContainedRegularFile(packageDir, pkg.types) &&
+    bins.length > 0 &&
+    bins.every((bin) => isContainedRegularFile(packageDir, bin))
+}
+
 export function missingDependencyEntrypoints(dependencyDir) {
   if (!existsSync(dependencyDir)) return []
   let root
@@ -394,12 +419,10 @@ export function missingDependencyEntrypoints(dependencyDir) {
       ? [pkg.bin]
       : (pkg.bin && typeof pkg.bin === 'object' ? Object.values(pkg.bin) : [])
     for (const target of bins) {
-      if (typeof target === 'string' && target.trim()) {
-        try { if (!statSync(resolve(dir, target)).isFile()) broken = true } catch { broken = true }
-      }
+      if (typeof target === 'string' && target.trim() && !isContainedRegularFile(dir, target)) broken = true
     }
     for (const target of declaredRuntimeExportTargets(pkg.exports)) {
-      try { if (!statSync(resolve(dir, target)).isFile()) broken = true } catch { broken = true }
+      if (!isContainedRegularFile(dir, target) && !isPrismaCliPhantomRootExport(dir, pkg, target, bins)) broken = true
     }
     if (broken) missing.push(pkg.name || label)
   }

@@ -227,6 +227,50 @@ test('dependency validation rejects directories at declared bin and export file 
   } finally { rmSync(root, { recursive: true, force: true }) }
 })
 
+test('dependency validation accepts only the structurally complete Prisma CLI phantom root export', () => {
+  const root = mkdtempSync(join(tmpdir(), 'eva-prisma-cli-export-'))
+  const dependencyDir = join(root, 'node_modules')
+  const packageDir = join(dependencyDir, 'prisma')
+  const manifest = {
+    name: 'prisma',
+    main: 'build/index.js',
+    bin: { prisma: 'build/index.js' },
+    types: './dist/cli/src/types.d.ts',
+    exports: { '.': { default: './build/types.js' } },
+  }
+  const writeManifest = (value = manifest) => writeFileSync(join(packageDir, 'package.json'), JSON.stringify(value))
+  try {
+    mkdirSync(join(packageDir, 'build'), { recursive: true })
+    mkdirSync(join(packageDir, 'dist', 'cli', 'src'), { recursive: true })
+    writeFileSync(join(packageDir, 'build', 'index.js'), '#!/usr/bin/env node\n')
+    writeFileSync(join(packageDir, 'dist', 'cli', 'src', 'types.d.ts'), 'export type PrismaArgs = unknown\n')
+    writeManifest()
+
+    assert.deepEqual(missingDependencyEntrypoints(dependencyDir), [])
+
+    rmSync(join(packageDir, 'build', 'index.js'))
+    mkdirSync(join(packageDir, 'build', 'index.js'))
+    assert.deepEqual(missingDependencyEntrypoints(dependencyDir), ['prisma'], 'a directory cannot substitute for the CLI file')
+
+    rmSync(join(packageDir, 'build', 'index.js'), { recursive: true })
+    writeFileSync(join(packageDir, 'build', 'index.js'), '#!/usr/bin/env node\n')
+    rmSync(join(packageDir, 'dist', 'cli', 'src', 'types.d.ts'))
+    assert.deepEqual(missingDependencyEntrypoints(dependencyDir), ['prisma'], 'the declaration file remains required')
+
+    writeFileSync(join(packageDir, 'dist', 'cli', 'src', 'types.d.ts'), 'export type PrismaArgs = unknown\n')
+    writeManifest({ ...manifest, exports: { '.': { default: ['./build/types.js', './build/other.js'] } } })
+    assert.deepEqual(missingDependencyEntrypoints(dependencyDir), ['prisma'], 'every other root export remains required')
+
+    writeFileSync(join(root, 'outside-bin.js'), '#!/usr/bin/env node\n')
+    writeManifest({ ...manifest, bin: { prisma: '../../outside-bin.js' } })
+    assert.deepEqual(missingDependencyEntrypoints(dependencyDir), ['prisma'], 'the CLI file must remain inside the package')
+
+    writeFileSync(join(root, 'outside-types.d.ts'), 'export type Escaped = unknown\n')
+    writeManifest({ ...manifest, types: '../../outside-types.d.ts' })
+    assert.deepEqual(missingDependencyEntrypoints(dependencyDir), ['prisma'], 'the declaration file must remain inside the package')
+  } finally { rmSync(root, { recursive: true, force: true }) }
+})
+
 test('dependency validation accepts a legitimate type-only package with an empty main', () => {
   const root = mkdtempSync(join(tmpdir(), 'eva-type-only-package-'))
   const dependencyDir = join(root, 'node_modules')

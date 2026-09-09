@@ -131,6 +131,85 @@ test('a protected occupied port aborts before spawn/readiness can test the wrong
   }
 })
 
+test('an isolated prelaunch command runs before port preflight without invoking legacy reset metadata', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'eva-prelaunch-order-'))
+  const events = []
+  try {
+    const launch = await launchWebApp({
+      app: { app_id: 'fixture', local_path: root },
+      manifest: {
+        app_id: 'fixture',
+        local_path: root,
+        __eva_isolated_workspace: true,
+        start_command: 'this-command-must-never-run',
+        prelaunch_command: 'cleanup-only-eva-project',
+        reset_command: 'legacy-reset-must-never-run',
+        readiness_probe: { port: 45109 },
+      },
+      runPrelaunchFn: (command) => {
+        events.push(command)
+        return { ok: true, status: 0, output: '' }
+      },
+      freePortFn: (port) => {
+        events.push(`preflight:${port}`)
+        return { port, freed: false, blockedBy: [{ pid: '7', name: 'com.docker.backend' }] }
+      },
+    })
+    assert.deepEqual(events, ['cleanup-only-eva-project', 'preflight:45109'])
+    assert.equal(launch.ready, false)
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('prelaunch commands are confined to isolated EVA workspaces and failures abort before port inspection', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'eva-prelaunch-guard-'))
+  try {
+    let calls = 0
+    const outside = await launchWebApp({
+      app: { app_id: 'fixture', local_path: root },
+      manifest: {
+        app_id: 'fixture',
+        local_path: root,
+        start_command: 'this-command-must-never-run',
+        prelaunch_command: 'must-not-run-outside-eva',
+        readiness_probe: { port: 45109 },
+      },
+      runPrelaunchFn: () => {
+        calls += 1
+        return { ok: true, status: 0, output: '' }
+      },
+      freePortFn: (port) => ({ port, freed: false, blockedBy: [{ pid: '7', name: 'com.docker.backend' }] }),
+    })
+    assert.equal(calls, 0)
+    assert.equal(outside.ready, false)
+
+    let inspectedPorts = false
+    const failed = await launchWebApp({
+      app: { app_id: 'fixture', local_path: root },
+      manifest: {
+        app_id: 'fixture',
+        local_path: root,
+        __eva_isolated_workspace: true,
+        start_command: 'this-command-must-never-run',
+        prelaunch_command: 'cleanup-only-eva-project',
+        reset_command: 'legacy-reset-must-never-run',
+        readiness_probe: { port: 45109 },
+      },
+      runPrelaunchFn: () => ({ ok: false, status: 17, output: 'owned cleanup failed' }),
+      freePortFn: () => {
+        inspectedPorts = true
+        return { freed: true, blockedBy: [] }
+      },
+    })
+    assert.equal(inspectedPorts, false)
+    assert.equal(failed.ready, false)
+    assert.match(failed.outputTail(), /prelaunch_command failed.*owned cleanup failed/)
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
 test('process names normalize across .exe and case', () => {
   assert.equal(normalizeProcessName('Node.EXE'), 'node')
   assert.equal(normalizeProcessName('  python3.exe '), 'python3')

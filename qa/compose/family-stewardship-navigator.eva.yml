@@ -1,0 +1,21 @@
+# EVA's disposable Family Stewardship Navigator stack must never share the
+# owner's compose project, volumes, containers, or published ports. The
+# manifest supplies the explicit project name; these !override tags replace
+# (rather than append to) the base compose file's host-port bindings.
+services:
+  db:
+    restart: "no"
+    ports: !override
+      - "127.0.0.1:45409:5432"
+
+  server:
+    restart: "no"
+    ports: !override
+      - "127.0.0.1:45109:3001"
+
+  web:
+    restart: "no"
+    environment:
+      VITE_API_URL: "http://127.0.0.1:45109/api"
+    ports: !override
+      - "127.0.0.1:45209:5173"
