@@ -31,7 +31,6 @@ export function startAppUpdates(current, usableUpdate) {
       if (type === 'style' && !/text\/css/i.test(response.headers.get('content-type') || '')) throw new Error('Styles unavailable');
       if (type === 'json') return await response.json();
       const text = await response.text();
-      if (['script', 'style'].includes(type) && !text.trim()) throw new Error('Empty asset');
       return text;
     } finally { clearTimeout(timer); }
   }
@@ -157,7 +156,7 @@ export function startAppUpdates(current, usableUpdate) {
     document.addEventListener('pointerdown', observeWork, true);
     updateButton.disabled = true;
     message.hidden = false;
-    message.textContent = 'Checking that the update is ready…';
+    message.textContent = 'Checking that the update is readyâ€¦';
     try {
       if (navigator.onLine === false) throw new Error('Offline');
       // A cache-first worker can ignore fetch's no-store option. Activate the
