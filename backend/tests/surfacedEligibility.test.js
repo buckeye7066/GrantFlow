@@ -10,6 +10,7 @@ import { describe, it, expect } from 'vitest'
 import Database from 'better-sqlite3'
 import { verifiedFourTruthExplain } from './helpers/fourTruthFixture.js'
 import { reScoreSurfacedIneligible, liveOppToOs } from '../services/coverageAudit/surfacedEligibility.js'
+import { computeMatchDecision } from '../crawler-os/matchEngine.js'
 import { DEFAULT_MIN_SCORE } from '../config/matchThresholds.js'
 
 // The sweep's surfacing floor (see reScoreSurfacedIneligible): DEFAULT_MIN_SCORE
@@ -172,5 +173,27 @@ describe('reScoreSurfacedIneligible', () => {
     // A persisted list is passed through untouched.
     const stored = liveOppToOs({ id: 'p', title: 'T', applicant_types: '["veteran"]' })
     expect(stored.applicant_types).toEqual(['veteran'])
+  })
+})
+
+describe('persisted applicant eligibility survives live-to-OS reconstruction', () => {
+  const row = {
+    id: 'bradley-directory', title: 'Bradley County, TN — County & city government assistance programs (USA.gov directory)',
+    description: 'Official USA.gov index of city, county, and town government websites — the front door to locally administered assistance (housing, utility, emergency, human services) that never appears in federal or state catalogs.',
+    sponsor: 'USA.gov', opportunity_kind: 'DIRECTORY', source: 'usa_gov_local_governments',
+    source_url: 'https://www.usa.gov/local-governments', is_national: 1,
+  }
+  it('faithful rescore keeps the directory at REVIEW after the persisted round trip', () => {
+    const opportunity = liveOppToOs({ ...row, entity_types_allowed: '["*"]', categories: '["*"]', is_national: false, state: 'TN' })
+    const result = computeMatchDecision(opportunity, {
+      profile_id: 'p1', applicant_types: ['individual'], needs: ['housing', 'utility_assistance'],
+      location: { state: 'TN', county: 'Bradley County' },
+    }, { sections: { basic_information: { state: 'TN' }, needs: { needs: ['housing', 'utility assistance'] } } })
+    expect(result.decision).toBe('review')
+    expect(result.match_explain?.canonical_decision).not.toBe('REJECT')
+  })
+  it.each(['entity_types_allowed', 'eligible_applicant_types'])('uses the persisted %s instead of inferring government as the applicant', (field) => {
+    expect(liveOppToOs({ ...row, [field]: '["*"]' }).applicant_types).toEqual(['*'])
+    expect(liveOppToOs({ ...row, [field]: ['nonprofit'] }).applicant_types).toEqual(['nonprofit'])
   })
 })

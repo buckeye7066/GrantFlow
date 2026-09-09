@@ -840,7 +840,10 @@ export function normalizeOpportunity(rawOpp) {
   // CONSERVATIVE: do NOT default unknown to ['individual'].
   // Unknown applicability is tracked as applicabilityUnknown=true so the decision
   // engine can force REVIEW rather than producing a false ACCEPT.
+  // Registry fallback tokens state no applicant restriction; they are not
+  // literal entity types. Keep concrete restrictions in mixed lists.
   const explicitEntityTypes = safeParseArray(rawOpp.entity_types_allowed)
+    .filter(type => !['*', 'any', 'all', 'anyone', 'unrestricted'].includes(String(type).trim().toLowerCase()))
   const textEntityTypes = extractEntityTypesFromText(text)
   let entityTypesAllowed
   let applicabilityUnknown = false
