@@ -39,7 +39,7 @@ function verifyBuildDependencies(host = process.platform, arch = process.arch, r
   // so this selector never turns a build request into dependency installation.
   if (host !== 'linux' || !['x64', 'arm64'].includes(arch)) return;
   for (const dependency of ['@rollup/rollup-linux-' + arch + '-gnu', '@esbuild/linux-' + arch]) {
-    try { resolve(dependency); }
+    try { resolve(dependency + '/package.json'); }
     catch { throw Error('Missing build dependency ' + dependency + '. Install repository dependencies before building.'); }
   }
 }
