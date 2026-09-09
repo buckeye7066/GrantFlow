@@ -91,8 +91,35 @@ describe('federal crawler qualifications come from the award detail', () => {
   })
 
   it('recognizes the stated nonprofit identity when the source explicitly permits nonprofits', async () => {
-    const result = await discover({ type: 'nonprofit', detailTypes: [{ id: '13', description: 'Nonprofits without 501(c)(3) status' }] })
+    const result = await discover({ type: 'nonprofit', detailTypes: [{ id: '13', description: 'Nonprofits without 501(c)(3) status' }], sectionOverrides: { nonprofit_compliance: { is_501c3: false } } })
     expect(result.run.recommendations).toHaveLength(1)
+  })
+
+  it('preserves secondary applicant identities in a cross-profile thesis', async () => {
+    const result = await discover({ type: 'county_government', detailTypes: [{ id: '01', description: 'County governments' }] })
+    const live = { ...buildLivePageFactColumns(result.ops[0]), entity_types_allowed: ['government'] }
+    expect(evaluateApplicantTypeEligibility(live, 'government', { profile: { primary_type: 'government', applicantTypes: new Set(['government', 'county_government']) } }).decision).toBe('pass')
+  })
+
+  it('recognizes an explicitly unrestricted award without inventing applicant categories', async () => {
+    const result = await discover({ detailTypes: [{ id: '99', description: 'Unrestricted (open to any type of entity)' }] })
+    expect(result.run.recommendations).toHaveLength(1)
+    expect(JSON.parse(result.ops[0].applicant_types_json)).toEqual([])
+  })
+
+  it.each([['12', false], ['12', undefined], ['13', true], ['13', undefined]])('does not certify nonprofit code %s with unproven or incompatible tax status %s', async (code, status) => {
+    const result = await discover({ type: 'nonprofit', detailTypes: [{ id: code, description: 'Nonprofit organizations' }], sectionOverrides: { nonprofit_compliance: { is_501c3: status } } })
+    expect(result.run.recommendations).toEqual([])
+  })
+
+  it('recognizes confirmed 501(c)(3) status for a code-12 nonprofit award', async () => {
+    const result = await discover({ type: 'nonprofit', detailTypes: [{ id: '12', description: 'Nonprofits having 501(c)(3) status' }], sectionOverrides: { nonprofit_compliance: { is_501c3: true } } })
+    expect(result.run.recommendations).toHaveLength(1)
+  })
+
+  it('holds conflicting tax-status facts from different profile sections for review', async () => {
+    const result = await discover({ type: 'nonprofit', detailTypes: [{ id: '13', description: 'Nonprofits without 501(c)(3) status' }], sectionOverrides: { nonprofit_compliance: { is_501c3: false }, organization_details: { is_501c3_public_charity: true } } })
+    expect(result.run.recommendations).toEqual([])
   })
 
   it('uses the canonical business facts in the full profile, including after storage', async () => {
@@ -104,8 +131,8 @@ describe('federal crawler qualifications come from the award detail', () => {
     expect(evaluateApplicantTypeEligibility(live, 'organization').decision).toBe('review')
   })
 
-  it('honors the official structured cost-share requirement', async () => {
-    const result = await discover({ costSharing: true })
+  it.each([true, 'Yes'])('honors the official structured cost-share requirement: %s', async costSharing => {
+    const result = await discover({ costSharing })
     expect(result.run.recommendations).toEqual([])
   })
 

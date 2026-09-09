@@ -75,6 +75,7 @@ import {
   websitePurposeConflict,
 } from '../config/profileWebsitePurpose.js'
 import { resolveProfileType, getParentChain } from './profileTypeRegistry.js'
+import { grantsGovApplicantCodesFrom } from '../../shared/grantsGovProtocol.js'
 import { createLogger } from '../utils/logger.js'
 import {
   applyNeedFirstScoring,
@@ -1357,6 +1358,7 @@ function eligibilityMatchesApplicantType(opportunity, profile) {
   const profileType = resolveApplicantType(profile) || ''
 
   if ((!profileType || profileType.length === 0) && (!applicantTypesSet || applicantTypesSet.size === 0)) return false
+  if (grantsGovApplicantCodesFrom(opportunity)?.includes('99')) return true
 
   const typeKeywords = {
     // 'individual' and 'individual_need' are aliases — both share the same

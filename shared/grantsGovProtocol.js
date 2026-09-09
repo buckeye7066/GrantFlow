@@ -12,6 +12,17 @@ export const GRANTS_GOV_FETCH_OPPORTUNITY_URL = 'https://api.grants.gov/v1/api/f
 export const GRANTS_GOV_DETAIL_URL = 'https://www.grants.gov/search-results-detail/'
 export const GRANTS_GOV_VIEW_URL = 'https://www.grants.gov/view-opportunity/'
 
+/** Read applicant codes retained from the official award-detail capture. */
+export function grantsGovApplicantCodesFrom(opportunity) {
+  let provenance = opportunity?.field_provenance
+  if (typeof provenance === 'string') {
+    try { provenance = JSON.parse(provenance) } catch { return null }
+  }
+  const evidence = provenance?.applicant_types
+  return evidence?.source === 'grants.gov' && evidence?.method === 'fetchOpportunity' && Array.isArray(evidence.allowed_codes)
+    ? evidence.allowed_codes.map(code => String(code).trim()) : null
+}
+
 /** Positive per-award figures only; API placeholders and ranges stay unknown. */
 export function parseApiAmount(value) {
   if (value === null || value === undefined) return null

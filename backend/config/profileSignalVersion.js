@@ -51,12 +51,14 @@ export const PROFILE_SIGNAL_DERIVATION_FILES = Object.freeze([
   'backend/services/matchEngine.js',
   'backend/services/applicantTypeGate.js',
   'backend/crawler-os/fundingTruthPolicy.js',
+  'backend/services/opportunityNormalizer.js',
+  'shared/grantsGovProtocol.js',
 ])
 
 /**
  * sha256 over the LF-normalized concatenation of the files above, pinned by
  * `scripts/pin-signal-version.mjs`. The test recomputes it.
  */
-export const PROFILE_SIGNAL_DERIVATION_HASH = '5e6ae589092ad132ef78c7187f2e84e5a41be66649f8ee65396121766af09a1d'
+export const PROFILE_SIGNAL_DERIVATION_HASH = 'bda1147efaa4b4f3aebcf27b6498334b9a56a398ea6704c32c130bc87b801289'
 
 export default { PROFILE_SIGNAL_VERSION, PROFILE_SIGNAL_DERIVATION_FILES, PROFILE_SIGNAL_DERIVATION_HASH }

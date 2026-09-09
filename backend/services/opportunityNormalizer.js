@@ -11,6 +11,7 @@
  */
 
 import crypto from 'crypto'
+import { grantsGovApplicantCodesFrom } from '../../shared/grantsGovProtocol.js'
 import { normalizeNeedCategory, NEED_ALIAS_MAP } from './profileNormalizer.js'
 import { isWomenExclusiveOpportunityText } from '../config/demographicRestrictionPatterns.js'
 
@@ -858,7 +859,9 @@ export function normalizeOpportunity(rawOpp) {
   }
   let entityTypesAllowed
   let applicabilityUnknown = false
-  if (explicitEntityTypes.length > 0) {
+  if (grantsGovApplicantCodesFrom(rawOpp)?.includes('99')) {
+    entityTypesAllowed = [] // explicitly unrestricted; other eligibility constraints still apply
+  } else if (explicitEntityTypes.length > 0) {
     entityTypesAllowed = explicitEntityTypes
   } else if (textEntityTypes.length > 0) {
     entityTypesAllowed = textEntityTypes

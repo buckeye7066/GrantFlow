@@ -43,7 +43,8 @@
 import { safeParseArrayField } from './profileHelpers.js'
 import { FARM_APPLICANT_TOKENS, hasFarmIdentity, isFarmApplicantToken, normalizeApplicantToken } from './eligibility/farmIdentity.js'
 import { getParentChain, resolveProfileType } from './profileTypeRegistry.js'
-import { normalizeProfile } from './profileNormalizer.js'
+import { normalizeProfile, readNonprofit501c3Status } from './profileNormalizer.js'
+import { grantsGovApplicantCodesFrom } from '../../shared/grantsGovProtocol.js'
 
 // Registry roots that mean a person applies (individual-root family) vs an
 // organization applies. Derived from the canonical profileTypeRegistry so a new
@@ -561,13 +562,7 @@ export function evaluateApplicantTypeEligibility(opportunity, profileApplicantTy
   // coarse search bucket: an independent school district is not every school,
   // and a state government is not every public agency. Preserve those source
   // restrictions across crawl, persisted matching and pipeline admission.
-  let provenance = opportunity?.field_provenance
-  if (typeof provenance === 'string') {
-    try { provenance = JSON.parse(provenance) } catch { provenance = null }
-  }
-  const applicantEvidence = provenance?.applicant_types
-  const codes = applicantEvidence?.source === 'grants.gov' && applicantEvidence?.method === 'fetchOpportunity'
-    ? applicantEvidence.allowed_codes : null
+  const codes = grantsGovApplicantCodesFrom(opportunity)
   const sourceApplicantIdentities = {
     '00': ['state_government', 'state_agency'],
     '01': ['county_government'],
@@ -590,6 +585,9 @@ export function evaluateApplicantTypeEligibility(opportunity, profileApplicantTy
       : Array.isArray(profileApplicantType) ? [...profileApplicantType] : [profileApplicantType]
     declared.push(context.profile?.primary_type, context.sections?.basic_information?.profile_category,
       context.sections?.organization_details?.organization_type)
+    for (const collection of [context.profile?.applicantTypes, context.profile?.applicant_types]) {
+      declared.push(...(collection instanceof Set ? [...collection] : safeParseArrayField(collection, [])))
+    }
     const identities = new Set(declared.flatMap(type => {
       const token = normalizeApplicantToken(type)
       return [token, resolveProfileType(token), ...getParentChain(token)].filter(Boolean)
@@ -604,7 +602,13 @@ export function evaluateApplicantTypeEligibility(opportunity, profileApplicantTy
       buckets.add('business')
     }
     if (normalized?.isNonprofit) identities.add('nonprofit')
-    if (!codes.some(code => sourceApplicantIdentities[code]?.some(type => identities.has(type)))) {
+    const taxStatus = readNonprofit501c3Status(context.profile, context.sections)
+    if (!codes.some(code => {
+      if (code === '99') return true // the source explicitly permits every applicant type
+      if (code === '12' && taxStatus !== true) return false
+      if (code === '13' && taxStatus !== false) return false
+      return sourceApplicantIdentities[code]?.some(type => identities.has(type))
+    })) {
       return { decision: 'review', reason: 'federal_applicant_identity_unconfirmed', required_applicant_codes: codes }
     }
   }

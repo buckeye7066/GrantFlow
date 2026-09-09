@@ -63,7 +63,8 @@ export async function enrichGrantsGovCandidate(candidate, { fetcher, cache, dead
       amount_min: parseApiAmount(synopsis.awardFloor), amount_max: parseApiAmount(synopsis.awardCeiling),
       is_loan: candidate.is_loan === true || (Array.isArray(synopsis.fundingInstruments) &&
         synopsis.fundingInstruments.some(value => /^(?:(?:direct|guaranteed|insured) )?loans?$/i.test(String(value?.description ?? '').trim()))),
-      requires_cost_share: synopsis.costSharing === true,
+      requires_cost_share: candidate.requires_cost_share === true ||
+        ['true', 'yes', '1'].includes(String(synopsis.costSharing ?? '').trim().toLowerCase()),
       field_provenance: { ...(candidate.field_provenance ?? {}), applicant_types: {
         source: 'grants.gov', method: 'fetchOpportunity', opportunity_id: id,
         value: descriptions, allowed_codes: codes, descriptions, ...evidence,

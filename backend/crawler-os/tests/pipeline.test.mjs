@@ -287,7 +287,7 @@ test('recommendations carry the DESCRIPTION — the text the generic-only cap ev
       synopsis: {
         opportunityId: 12345,
         synopsisDesc: 'Funding for fire response equipment and emergency operations.',
-        applicantTypes: [{ id: '13', description: 'Nonprofit organizations' }],
+        applicantTypes: [{ id: '99', description: 'Unrestricted (open to any type of entity)' }],
         responseDateStr: '2099-12-31-00-00-00', costSharing: false,
       },
     } } },

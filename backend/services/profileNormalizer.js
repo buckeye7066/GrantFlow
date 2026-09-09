@@ -41,6 +41,20 @@ function asBoolNullable(v) {
   return null
 }
 
+/** Tax status is a separate stated fact; nonprofit identity alone cannot prove it. */
+export function readNonprofit501c3Status(profile = {}, sections = {}) {
+  const compliance = sections?.nonprofit_compliance ?? {}
+  const organization = sections?.organization_details ?? {}
+  const statuses = new Set(
+    [compliance.is_501c3, compliance.has_501c3, profile?.is_501c3, organization.is_501c3]
+      .map(asBoolNullable)
+      .filter((status) => status !== null),
+  )
+  if (asBoolNullable(organization.is_501c3_public_charity) === true ||
+      asBoolNullable(organization.is_501c3_private_foundation) === true) statuses.add(true)
+  return statuses.size === 1 ? [...statuses][0] : null
+}
+
 function hasSpecificTextValue(v) {
   if (v === null || v === undefined) return false
   if (typeof v === 'boolean') return v
