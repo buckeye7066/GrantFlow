@@ -5,12 +5,13 @@ import { Button } from '@/components/ui/button'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Progress } from '@/components/ui/progress'
 import { Loader2, RefreshCw, Download, CheckCircle2 } from 'lucide-react'
-import { version as APP_VERSION } from '../../../package.json'
+import { version as PACKAGE_VERSION } from '../../../package.json'
+const APP_VERSION = import.meta.env.VITE_APP_UPDATE_VERSION || PACKAGE_VERSION
 import {
   downloadAndApplyUpdate,
   fetchUpdateManifest,
   isNewerVersion,
-  parseVersion,
+  installedBundleVersion,
   requiresNativeUpdate,
 } from '@/lib/mobileUpdater'
 
@@ -45,8 +46,7 @@ export default function MobileUpdateCard() {
         if (cancelled) return
         // "builtin" means the bundle baked into the APK — its web version is
         // the package.json version captured at build time.
-        const v = current?.bundle?.version
-        setBundleVersion(parseVersion(v) ? v : APP_VERSION)
+        setBundleVersion(installedBundleVersion(current, APP_VERSION))
         if (current?.native) setNativeVersion(String(current.native))
       } catch (err) {
         // Plugin unavailable (e.g. old APK without it) — keep baked version.
@@ -186,3 +186,4 @@ export default function MobileUpdateCard() {
     </Card>
   )
 }
+

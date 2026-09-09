@@ -10,7 +10,8 @@
     "CapacitorUpdater": {
       "autoUpdate": false,
       "statsUrl": "",
-      "updateUrl": ""
+      "updateUrl": "",
+      "appReadyTimeout": 30000
     }
   }
 }

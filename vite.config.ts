@@ -3,6 +3,7 @@ import path from 'node:path'
 
 import { defineConfig, loadEnv } from 'vite'
 import react from '@vitejs/plugin-react'
+import appUpdates from './scripts/app-updates.mjs'
 import { deploymentVersionPlugin } from './scripts/deployment-version-plugin.mjs'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
@@ -21,7 +22,7 @@ export default defineConfig(({ mode }) => {
 
   return {
     base: assetBase,
-    plugins: [react(), deploymentVersionPlugin()],
+    plugins: [react(), deploymentVersionPlugin(), appUpdates({ app: 'grantflow' })],
     resolve: {
       alias: {
         // Every page-level Anya import passes through a React error boundary.
@@ -100,3 +101,4 @@ export default defineConfig(({ mode }) => {
     },
   }
 })
+

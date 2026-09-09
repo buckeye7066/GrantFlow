@@ -5,6 +5,7 @@ import {
   downloadAndApplyUpdate,
   fetchUpdateManifest,
   isNewerVersion,
+  installedBundleVersion,
   parseUpdateManifest,
   parseVersion,
   requireVerifiableBundle,
@@ -161,7 +162,7 @@ describe('requiresNativeUpdate', () => {
   it('never blocks an update on an unstated or unparseable floor', () => {
     expect(requiresNativeUpdate({}, '1.1')).toBe(false)
     expect(requiresNativeUpdate({ minNativeVersion: '' }, '1.1')).toBe(false)
-    expect(requiresNativeUpdate({ minNativeVersion: '1.2' }, '')).toBe(false)
+    expect(requiresNativeUpdate({ minNativeVersion: '1.2' }, '')).toBe(true)
     expect(requiresNativeUpdate(null, '1.1')).toBe(false)
   })
 })
@@ -366,4 +367,20 @@ describe('update origin', () => {
     )
     expect(parsed.url).toBe(good)
   })
+})
+
+it('rechecks the native floor before downloading, including unknown installed versions', async () => {
+  for (const native of ['', '1.0.1']) {
+    let downloaded = false
+    const updater = { current: async () => ({ native }), download: async () => { downloaded = true } }
+    await expect(downloadAndApplyUpdate({ manifest: { version: '1.0.9', url: 'https://updates.example/bundle.zip', sha256: SHA_A, minNativeVersion: '1.0.5' }, updater })).rejects.toThrow('signed app release')
+    expect(downloaded).toBe(false)
+  }
+})
+
+it("uses embedded web identity for builtin packages even when native version parses", () => {
+  const baked = "1.0.1800000000000"
+  expect(installedBundleVersion({ bundle: { id: "builtin", version: "1.0.200" } }, baked)).toBe(baked)
+  expect(installedBundleVersion({ bundle: { id: "downloaded", version: "1.0.1800000000100" } }, baked)).toBe("1.0.1800000000100")
+  expect(installedBundleVersion({ bundle: { version: "builtin" } }, baked)).toBe(baked)
 })

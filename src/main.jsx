@@ -1,3 +1,4 @@
+import NativeBootReady from '@/components/mobile/NativeBootReady'
 import ReactDOM from 'react-dom/client'
 import React from 'react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
@@ -21,18 +22,8 @@ capturePromoTouchFromLocation()
 // Register global window error / unhandledrejection -> owner-email reporting (once).
 initClientErrorReporting()
 
-// Native app only: confirm the active OTA bundle booted successfully so
-// @capgo/capacitor-updater does not roll it back (manual-update mode; see
-// src/lib/mobileUpdater.js and the Settings "App Updates" card).
-import('@capacitor/core')
-  .then(async ({ Capacitor }) => {
-    if (!Capacitor.isNativePlatform()) return
-    const { CapacitorUpdater } = await import('@capgo/capacitor-updater')
-    await CapacitorUpdater.notifyAppReady()
-  })
-  .catch(() => {
-    // Web build or plugin unavailable — nothing to confirm.
-  })
+// Acknowledge OTA health only after the React application commits a render.
+// An exception during initial rendering must leave the native rollback watchdog armed.
 
 // Global stale-chunk recovery. After a deploy, the open tab still references
 // chunk hashes that no longer exist; a dynamic import() then fails. lazyWithRetry
@@ -95,8 +86,10 @@ ReactDOM.createRoot(document.getElementById('root')).render(
       <LanguageProvider>
         <DashboardPreferencesProvider>
           <App />
+          <NativeBootReady />
         </DashboardPreferencesProvider>
       </LanguageProvider>
     </QueryClientProvider>
   </React.StrictMode>,
 )
+

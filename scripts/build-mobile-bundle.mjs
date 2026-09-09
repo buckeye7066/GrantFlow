@@ -34,7 +34,9 @@ const root = process.argv[2]
 const distDir = path.join(root, 'dist')
 const mobileDir = path.join(distDir, 'mobile')
 const pkg = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'))
-const version = pkg.version
+const identity = JSON.parse(fs.readFileSync(path.join(distDir, 'app-update.json'), 'utf8'))
+const version = identity.bundleVersion
+if (!/^\d+\.\d+\.\d+$/.test(version || '')) throw new Error('Build identity is missing a numeric bundleVersion. Run the web build first.')
 // The bundle is written INTO dist/mobile/ beside latest.json, so it is always
 // served from the same origin as the manifest. Hardcoding an origin here broke
 // exactly that invariant: the default said `axiombiolabs.org`, but that apex is
@@ -108,3 +110,4 @@ console.log(
     `and dist/mobile/latest.json -> ${manifest.url}` +
     (minNativeVersion ? ` (min native ${minNativeVersion})` : ''),
 )
+

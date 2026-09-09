@@ -32,6 +32,7 @@ function makeProject({ version = '2.3.4', mobile } = {}) {
   const dist = path.join(root, 'dist')
   fs.mkdirSync(path.join(dist, 'assets'), { recursive: true })
   fs.writeFileSync(path.join(dist, 'index.html'), '<!doctype html><title>fixture</title>')
+  fs.writeFileSync(path.join(dist, 'app-update.json'), JSON.stringify({ bundleVersion: version }))
   fs.writeFileSync(path.join(dist, 'assets', 'app.js'), 'console.log("fixture")')
   return root
 }
@@ -130,3 +131,16 @@ describe('build-mobile-bundle manifest', () => {
     expect(names).toContain('index.html')
   })
 })
+
+it('uses the built identity even when package.json stays unchanged', () => {
+  const root = makeProject({ version: '1.0.1' })
+  const marker = path.join(root, 'dist', 'app-update.json')
+  fs.writeFileSync(marker, JSON.stringify({ bundleVersion: '1.0.1788900000000' }))
+  const first = runBuild(root)
+  fs.writeFileSync(marker, JSON.stringify({ bundleVersion: '1.0.1788900000001' }))
+  const second = runBuild(root)
+  expect(first.version).toBe('1.0.1788900000000')
+  expect(second.version).toBe('1.0.1788900000001')
+  expect(second.sha256).not.toBe(first.sha256)
+})
+
