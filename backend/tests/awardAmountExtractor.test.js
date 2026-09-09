@@ -166,6 +166,46 @@ describe('extractAwardAmountsFromText — per-award dollar extraction', () => {
       expect(r.amount_text).toMatch(/covers 100% of tuition/i)
     })
 
+    it.each([
+      'Scholarships will award full tuition for up to two years',
+      'This scholarship awards full tuition.',
+      'A fellowship awarding full tuition.',
+      'This scholarship provides full tuition.',
+      'Scholarships provide full tuition.',
+      'A scholarship providing full tuition.',
+    ])('preserves affirmative tuition benefit without inventing dollars: %s', (text) => {
+      expect(extractAwardAmountsFromText(text)).toMatchObject({
+        amount_min: null, amount_max: null, amount_status: 'varies',
+        amount_text: expect.stringMatching(/(?:award|provid).*full tuition/i),
+      })
+    })
+
+    it.each([
+      'This scholarship does not award full tuition.',
+      'This scholarship will never provide full tuition.',
+      'This scholarship cannot provide tuition.',
+      'This scholarship provides everything except tuition.',
+      'Scholarships award support excluding tuition.',
+      'Applicants must provide tuition receipts.',
+      'Applicants must provide full tuition receipts.',
+      'Students must provide full tuition payments.',
+      'Families are required to provide full tuition.',
+      'Applicants provide full tuition documentation.',
+      'Students providing full tuition payment are eligible.',
+      'This program provides full tuition receipts for reimbursement claims.',
+      'Students receiving scholarships must provide full tuition.',
+      'Students eligible for in-state tuition may apply for an award.',
+    ])('does not infer coverage from negation, exclusions or requirements: %s', (text) => {
+      expect(extractAwardAmountsFromText(text).amount_status).toBe('not_listed')
+    })
+
+    it('keeps explicit numeric precedence over affirmative tuition wording', () => {
+      expect(extractAwardAmountsFromText('Provides full tuition up to $5,250 per year.'))
+        .toMatchObject({ amount_max: 5250, amount_status: 'range' })
+      expect(resolveOpportunityAmounts({ amount_max: 2500, description: 'Awards full tuition.' }))
+        .toMatchObject({ amount_max: 2500, amount_status: 'range' })
+    })
+
     it('reads "pays tuition" as tuition coverage', () => {
       const r = extractAwardAmountsFromText(
         'This scholarship pays tuition and is awarded beginning with the second semester of enrollment, renewable for a maximum of seven semesters and three summer semesters.',
