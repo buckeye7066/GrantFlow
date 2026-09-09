@@ -41,19 +41,24 @@ export default function appUpdates({ app }) {
         ];
       },
     },
-    generateBundle() {
+    generateBundle(_options, bundle = {}) {
+      manifest.assets = [
+        {path: clientName, kind: 'script'}, {path: cssName, kind: 'style'},
+        ...Object.values(bundle).filter((asset) => /\.(?:m?js|css)$/.test(asset.fileName)).map((asset) => ({path: asset.fileName, kind: asset.fileName.endsWith('.css') ? 'style' : 'script'})),
+      ];
       this.emitFile({ type: 'asset', fileName: 'app-update.json', source: JSON.stringify(manifest) });
       this.emitFile({ type: 'asset', fileName: clientName, source: `(${startAppUpdates.toString()})(${JSON.stringify(manifest)}, ${usableUpdate.toString()});` });
       this.emitFile({ type: 'asset', fileName: cssName, source: css });
     },
     async closeBundle() {
+      if (!manifest || !config) return;
       const outDir = path.resolve(config.root, config.build.outDir);
       for (const name of ['sw.js', 'service-worker.js']) {
         const filename = path.join(outDir, name);
         let source;
         try { source = await readFile(filename, 'utf8'); }
         catch (error) { if (error.code === 'ENOENT') continue; throw error; }
-        source += `\n// App release ${manifest.build}\nself.addEventListener('message', (event) => { if (event.data && event.data.type === 'APP_UPDATE_ACTIVATE') self.skipWaiting(); });\n`;
+        source += `\n// App release ${manifest.build}\nself.addEventListener('activate', (event) => event.waitUntil(self.clients.claim()));\nself.addEventListener('message', (event) => { if (event.data && event.data.type === 'APP_UPDATE_ACTIVATE') self.skipWaiting(); });\n`;
         await writeFile(filename, source);
       }
     },

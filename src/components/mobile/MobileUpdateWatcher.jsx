@@ -18,7 +18,7 @@ import {
   downloadAndApplyUpdate,
   fetchUpdateManifest,
   isNewerVersion,
-  parseVersion,
+  installedBundleVersion,
   requiresNativeUpdate,
 } from '@/lib/mobileUpdater'
 import { notifyUpdateAvailable } from '@/lib/mobileUpdateNotifier'
@@ -121,8 +121,7 @@ export default function MobileUpdateWatcher() {
         const { CapacitorUpdater } = await import('@capgo/capacitor-updater')
         const current = await CapacitorUpdater.current()
         if (cancelled) return
-        const v = current?.bundle?.version
-        bundleVersionRef.current = parseVersion(v) ? v : APP_VERSION
+        bundleVersionRef.current = installedBundleVersion(current, APP_VERSION)
         if (current?.native) nativeVersionRef.current = String(current.native)
       } catch {
         // Plugin unavailable — keep the baked package.json version.
@@ -189,6 +188,7 @@ export default function MobileUpdateWatcher() {
   }, [manifest])
 
   const dismiss = useCallback(() => {
+    if (installingRef.current) return
     if (manifest) dismissedVersionRef.current = manifest.version
     setOpen(false)
   }, [manifest])

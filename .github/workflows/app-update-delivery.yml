@@ -18,7 +18,7 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
-          node-version: '24'
+          node-version-file: '.nvmrc'
       - run: node --test scripts/app-updates.test.mjs
       - name: Install isolated browser test tools
         run: |

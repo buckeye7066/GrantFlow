@@ -5,6 +5,7 @@ import {
   downloadAndApplyUpdate,
   fetchUpdateManifest,
   isNewerVersion,
+  installedBundleVersion,
   parseUpdateManifest,
   parseVersion,
   requireVerifiableBundle,
@@ -377,3 +378,9 @@ it('rechecks the native floor before downloading, including unknown installed ve
   }
 })
 
+it("uses embedded web identity for builtin packages even when native version parses", () => {
+  const baked = "1.0.1800000000000"
+  expect(installedBundleVersion({ bundle: { id: "builtin", version: "1.0.200" } }, baked)).toBe(baked)
+  expect(installedBundleVersion({ bundle: { id: "downloaded", version: "1.0.1800000000100" } }, baked)).toBe("1.0.1800000000100")
+  expect(installedBundleVersion({ bundle: { version: "builtin" } }, baked)).toBe(baked)
+})

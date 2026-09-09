@@ -10,3 +10,5 @@ Incognito keeps remote web-bundle installation disabled. Android checks the exis
 
 Tests are build and client regression evidence. Physical-device installation, Safari/iOS behavior, and notifications with the app fully closed require separate device evidence and are not implied by a passing CI run.
 
+
+For a native OTA rollback, rebuild the known-good commit to publish a fresh numeric bundle version. Promoting an older immutable web deployment alone does not downgrade native bundles. Native comparisons remain newer-only to avoid replacing a newer signed app with a lagging web deployment; the updater watchdog retains its own failed-boot rollback.

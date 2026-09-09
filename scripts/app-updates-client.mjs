@@ -1,9 +1,9 @@
+/* global location, window, document, navigator, AbortController, localStorage, Notification, CustomEvent, DOMParser, fetch, setInterval, setTimeout, clearTimeout */
 /** Shared wire validation. Package versions are deliberately not release identity. */
 export function usableUpdate(value, current) {
   return Boolean(value && value.schema === 1 && value.app === current.app
     && typeof value.build === 'string' && /^[a-zA-Z0-9._-]{1,100}$/.test(value.build)
-    && value.build !== current.build && Number.isFinite(Date.parse(value.builtAt))
-    && Date.parse(value.builtAt) > Date.parse(current.builtAt));
+    && value.build !== current.build && Number.isFinite(Date.parse(value.builtAt)));
 }
 
 /** Runs as a standalone script so every app framework gets the same behavior. */
@@ -27,8 +27,43 @@ export function startAppUpdates(current, usableUpdate) {
     try {
       const response = await fetch(url, { cache: 'no-store', credentials: 'same-origin', signal: controller.signal });
       if (!response.ok || (response.url && new URL(response.url).origin !== location.origin)) throw new Error('Unavailable');
-      return type === 'json' ? await response.json() : await response.text();
+      if (type === 'script' && !/(?:java|ecma)script/i.test(response.headers.get('content-type') || '')) throw new Error('Script unavailable');
+      if (type === 'style' && !/text\/css/i.test(response.headers.get('content-type') || '')) throw new Error('Styles unavailable');
+      if (type === 'json') return await response.json();
+      const text = await response.text();
+      if (['script', 'style'].includes(type) && !text.trim()) throw new Error('Empty asset');
+      return text;
     } finally { clearTimeout(timer); }
+  }
+
+  async function readDeployed() {
+    const url = new URL(feedUrl);
+    url.searchParams.set('_check', `${Date.now()}-${Math.random().toString(36).slice(2)}`);
+    return request(url, 'json');
+  }
+
+  async function verifyAssets(html, release) {
+    const parsed = new DOMParser().parseFromString(html, 'text/html');
+    const assets = new Map();
+    for (const node of parsed.querySelectorAll('script[src],link[rel=stylesheet],link[rel=modulepreload]')) {
+      const raw = node.getAttribute('src') || node.getAttribute('href');
+      const url = new URL(raw, shellUrl);
+      if (url.origin !== location.origin) continue;
+      assets.set(url.href, node.getAttribute('rel') === 'stylesheet' ? 'style' : 'script');
+    }
+    for (const asset of release.assets || []) {
+      if (!asset || !['script', 'style'].includes(asset.kind) || typeof asset.path !== 'string') throw new Error('Invalid assets');
+      const url = new URL(asset.path, scriptUrl);
+      if (url.origin !== location.origin) throw new Error('Invalid asset origin');
+      assets.set(url.href, asset.kind);
+    }
+    const queue = [...assets];
+    await Promise.all(Array.from({length: Math.min(4, queue.length)}, async () => {
+      while (queue.length) {
+        const [url, kind] = queue.shift();
+        await request(url, kind);
+      }
+    }));
   }
 
   function showUpdate() {
@@ -71,12 +106,14 @@ export function startAppUpdates(current, usableUpdate) {
     if (busy || applying || document.visibilityState === 'hidden' || navigator.onLine === false) return;
     busy = true;
     try {
-      const url = new URL(feedUrl);
-      url.searchParams.set('_check', String(Date.now()));
-      const value = await request(url, 'json');
+      const value = await readDeployed();
       if (usableUpdate(value, current)) {
         available = value;
         showUpdate();
+      } else if (value?.schema === 1 && value.app === current.app && value.build === current.build) {
+        available = null;
+        banner?.remove();
+        banner = null;
       }
     } catch { /* Keep the working app available offline; retry on resume/online/interval. */ }
     finally { busy = false; }
@@ -95,7 +132,7 @@ export function startAppUpdates(current, usableUpdate) {
   async function activateWorker() {
     if (!navigator.serviceWorker) return;
     const registration = await navigator.serviceWorker.getRegistration(location.href);
-    if (!registration) return;
+    if (!registration || registration.scope !== new URL('./', scriptUrl).href) return;
     await Promise.race([registration.update().catch(() => {}), new Promise((resolve) => setTimeout(resolve, 5000))]);
     await waitForWorker(registration.installing);
     if (!registration.waiting) return;
@@ -103,9 +140,9 @@ export function startAppUpdates(current, usableUpdate) {
     worker.postMessage({ type: 'APP_UPDATE_ACTIVATE' });
     await waitForWorker(worker, ['activated', 'redundant']);
     if (registration.waiting === worker && worker.state !== 'activated') {
-      // Older workers may not understand activation messages. Unregister only
-      // this app's matching worker; never delete caches, IndexedDB, or profiles.
-      await registration.unregister();
+      // A legacy worker that cannot activate must not strand this page behind
+      // an unregistered controller. Keep the installation intact for retry.
+      throw new Error('Close and reopen the app to finish this legacy update');
     }
   }
 
@@ -113,6 +150,11 @@ export function startAppUpdates(current, usableUpdate) {
     if (!available || applying) return;
     if (!window.dispatchEvent(new CustomEvent('app-update:before-apply', { cancelable: true, detail: available }))) return;
     applying = true;
+    const startedAtUrl = location.href;
+    let workChanged = false;
+    const observeWork = (event) => { if (!banner?.contains(event.target)) workChanged = true; };
+    document.addEventListener('input', observeWork, true);
+    document.addEventListener('pointerdown', observeWork, true);
     updateButton.disabled = true;
     message.hidden = false;
     message.textContent = 'Checking that the update is ready…';
@@ -121,17 +163,28 @@ export function startAppUpdates(current, usableUpdate) {
       // A cache-first worker can ignore fetch's no-store option. Activate the
       // selected release's worker after the click, before validating its shell.
       await activateWorker();
+      const deployed = await readDeployed();
+      if (!usableUpdate(deployed, current)) throw new Error('No different deployed release');
+      available = deployed;
       const url = new URL(shellUrl);
       url.searchParams.set('_app_update', available.build);
       const html = await request(url, 'text');
       if (!html.includes(`app-update-${available.build}.js`)) throw new Error('Deployment is not ready');
+      await verifyAssets(html, available);
+      if (location.href !== startedAtUrl || workChanged) {
+        message.textContent = 'You made changes while checking. Save your work, then choose Update again.';
+        return;
+      }
+      if (!window.dispatchEvent(new CustomEvent('app-update:before-apply', {cancelable:true, detail:available}))) return;
       const destination = new URL(location.href);
       destination.searchParams.set('_app_update', available.build);
       // Normal navigation preserves the app's beforeunload unsaved-work guard.
       location.assign(destination.href);
-    } catch {
-      message.textContent = 'The update is not reachable yet. Your work is safe; try again when connected.';
+    } catch (error) {
+      message.textContent = error.message.startsWith('Close and reopen') ? error.message : 'The update is not reachable yet. Your work is safe; try again when connected.';
     } finally {
+      document.removeEventListener('input', observeWork, true);
+      document.removeEventListener('pointerdown', observeWork, true);
       applying = false;
       updateButton.disabled = false;
     }

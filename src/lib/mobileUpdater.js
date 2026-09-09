@@ -89,6 +89,12 @@ export function isNewerVersion(candidate, current) {
   return compareVersions(candidate, current) > 0
 }
 
+/** Use the embedded web identity when the plugin reports a builtin native version. */
+export function installedBundleVersion(current, bakedVersion) {
+  const bundle = current?.bundle
+  return bundle?.id !== 'builtin' && parseVersion(bundle?.version) ? String(bundle.version) : bakedVersion
+}
+
 /** Lowercase hex sha256 of the published bundle zip (64 hex chars). */
 const SHA256_HEX = /^[0-9a-f]{64}$/
 
@@ -320,4 +326,3 @@ export async function fetchUpdateManifest({ fetchImpl, feedUrl, timeoutMs = UPDA
   }
   return parseUpdateManifest(parsed, url)
 }
-
