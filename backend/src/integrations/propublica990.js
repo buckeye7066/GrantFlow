@@ -46,6 +46,18 @@ function nteeToMajorGroup(ntee) {
   return NTEE_LETTER_TO_GROUP[raw.charAt(0).toUpperCase()] || null
 }
 
+/** Accept only self-consistent, request-bound official pagination metadata. */
+function searchPagination(data, page) {
+  if (!data || typeof data !== 'object' || !Array.isArray(data.organizations)) return null
+  const { total_results: total, num_pages: count, cur_page: current, per_page: size } = data
+  if (![total, count, current, size].every(Number.isSafeInteger) ||
+      total < 0 || count < 0 || current !== page || size <= 0 ||
+      count !== Math.ceil(total / size) ||
+      (data.page_offset !== undefined && data.page_offset !== page * size)) return null
+  if (page >= count && data.organizations.length !== 0) return null
+  return { num_pages: count, cur_page: current, per_page: size, page_exhausted: page >= count }
+}
+
 /**
  * Search nonprofits/foundations by name.
  *
@@ -82,19 +94,34 @@ export async function searchOrganizations(query = {}) {
     if (cc) params['c_code[id]'] = cc
   }
 
-  const data = await requestJson({
-    provider: 'propublica.990',
-    url: `${PP_BASE}/search.json`,
-    method: 'GET',
-    params,
-    timeoutMs: 15_000,
-    maxRetries: 2,
-  })
+  let data
+  try {
+    data = await requestJson({
+      provider: 'propublica.990',
+      url: `${PP_BASE}/search.json`,
+      method: 'GET',
+      params,
+      timeoutMs: 15_000,
+      maxRetries: 2,
+    })
+  } catch (error) {
+    // The search API returns a structured 404 when the requested page lies
+    // beyond this query's last page. Other 404s and all outages remain errors.
+    const exhausted = error?.response?.status === 404
+      ? searchPagination(error.response.data, page)
+      : null
+    if (!exhausted?.page_exhausted) throw error
+    data = error.response.data
+  }
 
-  const orgs = Array.isArray(data?.organizations) ? data.organizations : []
+  if (!Array.isArray(data?.organizations)) {
+    throw new Error('[propublica.990] search response is missing the organizations array')
+  }
+  const pagination = searchPagination(data, page)
   return {
-    total_results: data?.total_results ?? orgs.length,
-    organizations: orgs.map(normalizeOrg),
+    total_results: data?.total_results ?? data.organizations.length,
+    organizations: data.organizations.map(normalizeOrg),
+    ...(pagination || {}),
   }
 }
 
