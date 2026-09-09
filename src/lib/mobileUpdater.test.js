@@ -372,7 +372,7 @@ it('rechecks the native floor before downloading, including unknown installed ve
   for (const native of ['', '1.0.1']) {
     let downloaded = false
     const updater = { current: async () => ({ native }), download: async () => { downloaded = true } }
-    await expect(downloadAndApplyUpdate({ manifest: { version: '1.0.9', sha256: SHA_A, minNativeVersion: '1.0.5' }, updater })).rejects.toThrow('signed app release')
+    await expect(downloadAndApplyUpdate({ manifest: { version: '1.0.9', url: 'https://updates.example/bundle.zip', sha256: SHA_A, minNativeVersion: '1.0.5' }, updater })).rejects.toThrow('signed app release')
     expect(downloaded).toBe(false)
   }
 })
