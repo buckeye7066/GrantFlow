@@ -62,12 +62,12 @@ export default function AdvertisementPanel() {
     let cancelled = false
     let objectUrl
     setImage(null); setImageLoaded(false); impression.current = false
-    if (ad?.id) advertisementApi.image(ad.id).then(blob => {
+    if (ad?.id && foreground) advertisementApi.image(ad.id).then(blob => {
       if (cancelled) return
       objectUrl = URL.createObjectURL(blob); setImage(objectUrl)
     }).catch(() => {})
     return () => { cancelled = true; if (objectUrl) URL.revokeObjectURL(objectUrl) }
-  }, [ad?.id, ad?.updated_at, userId])
+  }, [ad?.id, ad?.updated_at, userId, index, foreground])
 
   useEffect(() => {
     if (!ad || !imageLoaded || !visible || !foreground) return undefined
@@ -78,10 +78,10 @@ export default function AdvertisementPanel() {
       viewTicket.current = ticket
       count = setTimeout(() => {
         if (cancelled || document.visibilityState !== 'visible') return
-        advertisementApi.event(ad.id, 'impression', ticket).then(result => { if (!cancelled) impression.current = result.counted }).catch(() => {})
+        advertisementApi.event(ad.id, 'impression', ticket).then(result => { if (!cancelled) impression.current = result.accepted === true }).catch(() => {})
       }, 1100)
     }).catch(() => {})
-    const rotate = setTimeout(() => { if (active.length > 1) setIndex(value => value + 1) }, ad.duration_seconds * 1000)
+    const rotate = setTimeout(() => { setIndex(value => value + 1) }, ad.duration_seconds * 1000)
     return () => { cancelled = true; clearTimeout(count); clearTimeout(rotate) }
   }, [ad?.id, ad?.duration_seconds, active.length, imageLoaded, visible, foreground, feed.canManage])
 

@@ -3,7 +3,7 @@ import multer from 'multer'
 import rateLimit from 'express-rate-limit'
 import { ensureAuth } from '../middleware/auth.js'
 import { getAuthUserId } from '../utils/accessControl.js'
-import { createAdvertisements, issueAdvertisementTicket, isActiveAdvertisement, isAdvertisingOwner, MAX_AD_IMAGE_BYTES, recordAdvertisementEvent, validateAdvertisement, validateAdImage } from '../services/advertisements.js'
+import { createAdvertisements, hasViewedAdvertisementTicket, issueAdvertisementTicket, isActiveAdvertisement, isAdvertisingOwner, MAX_AD_IMAGE_BYTES, recordAdvertisementEvent, validateAdvertisement, validateAdImage } from '../services/advertisements.js'
 
 const router = express.Router()
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: MAX_AD_IMAGE_BYTES, files: 8, fields: 10, fieldSize: 3000 } })
@@ -65,7 +65,8 @@ router.post('/:id/view-ticket', eventsLimit, async (req, res) => {
 router.post('/:id/events', eventsLimit, async (req, res) => {
   if (await isAdvertisingOwner(req.db, req.user)) return res.json({ counted: false })
   const counted = await recordAdvertisementEvent(req.db, req.params.id, getAuthUserId(req.user), req.body?.kind, req.body?.ticket)
-  res.json({ counted })
+  const accepted = await hasViewedAdvertisementTicket(req.db, req.params.id, getAuthUserId(req.user), req.body?.ticket)
+  res.json({ counted, accepted })
 })
 
 router.use((error, req, res, next) => {

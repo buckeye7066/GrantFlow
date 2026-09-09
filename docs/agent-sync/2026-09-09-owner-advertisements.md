@@ -21,7 +21,8 @@
 - The browser requests a cryptographically random, database-issued display
   ticket only after a loaded image is at least 50% visible in the foreground.
   An impression then waits a continuous 1.1 seconds. The server independently
-  enforces account/creative binding, minimum one-second dwell, two-minute expiry,
+  enforces account/creative binding, minimum one-second dwell, bounded expiry (at least two minutes, extended for
+  longer custom slides),
   and one event of each kind per ticket. A second unique constraint deduplicates
   repeated tickets within a 30-second creative/viewer window. Clicks require an
   impression for the same ticket. Owner previews are excluded on the server.

@@ -92,8 +92,9 @@ CREATE TABLE IF NOT EXISTS advertisement_events (
 );
 CREATE TABLE IF NOT EXISTS advertisement_view_tickets (
   ticket_hash TEXT PRIMARY KEY, ad_id TEXT NOT NULL REFERENCES advertisements(id),
-  viewer_hash TEXT NOT NULL, issued_ms TEXT NOT NULL, expires_ms TEXT NOT NULL
+  viewer_hash TEXT NOT NULL, issued_ms TEXT NOT NULL, expires_ms TEXT NOT NULL, viewed_at TEXT
 );
+CREATE INDEX IF NOT EXISTS advertisement_view_tickets_expiry ON advertisement_view_tickets(expires_ms);
 CREATE INDEX IF NOT EXISTS advertisement_events_daily ON advertisement_events(ad_id, day, kind);
 `
 
@@ -122,10 +123,10 @@ const viewerHash = userId => createHash('sha256').update(`grantflow-ad-viewer:${
 const ticketHash = ticket => createHash('sha256').update(ticket).digest('hex')
 
 export async function issueAdvertisementTicket(db, adId, userId, now = Date.now()) {
-  const ad = await db.prepare('SELECT status, starts_at, ends_at FROM advertisements WHERE id = ?').get(adId)
+  const ad = await db.prepare('SELECT status, starts_at, ends_at, duration_seconds FROM advertisements WHERE id = ?').get(adId)
   if (!isActiveAdvertisement(ad, now)) return null
   const ticket = randomBytes(32).toString('hex')
-  await db.prepare('INSERT INTO advertisement_view_tickets (ticket_hash, ad_id, viewer_hash, issued_ms, expires_ms) VALUES (?, ?, ?, ?, ?)').run(ticketHash(ticket), adId, viewerHash(userId), String(now), String(now + 120000))
+  await db.prepare('INSERT INTO advertisement_view_tickets (ticket_hash, ad_id, viewer_hash, issued_ms, expires_ms) VALUES (?, ?, ?, ?, ?)').run(ticketHash(ticket), adId, viewerHash(userId), String(now), String(now + Math.max(120000, (Number(ad.duration_seconds) + 30) * 1000)))
   await db.prepare('DELETE FROM advertisement_view_tickets WHERE expires_ms < ?').run(String(now - 86400000))
   return ticket
 }
@@ -139,10 +140,12 @@ export async function recordAdvertisementEvent(db, adId, userId, kind, ticket, n
   // Pseudonymous signed-in account counts; no profile fields, IPs, or raw IDs.
   const viewer = viewerHash(userId)
   const hash = ticketHash(ticket)
-  if (kind === 'click') {
-    const impression = await db.prepare("SELECT ad_id FROM advertisement_events WHERE ticket_hash = ? AND ad_id = ? AND viewer_hash = ? AND kind = 'impression' LIMIT 1").get(hash, adId, viewer)
-    if (!impression) return false
-  }
+  if (kind === 'impression') {
+    // Consume viewing proof independently of aggregate dedupe: two legitimate
+    // displays inside a bucket still need a receipt for their subsequent click.
+    const proof = await db.prepare('UPDATE advertisement_view_tickets SET viewed_at = ? WHERE ticket_hash = ? AND ad_id = ? AND viewer_hash = ? AND viewed_at IS NULL AND issued_ms <= ? AND expires_ms > ?').run(new Date(now).toISOString(), hash, adId, viewer, String(now - 1000), String(now))
+    if (Number(proof?.changes ?? proof?.rowCount ?? 0) === 0) return false
+  } else if (!await hasViewedAdvertisementTicket(db, adId, userId, ticket, now)) return false
   // A cryptographically random, DB-issued display ticket is bound to one account
   // and creative, has a server-measured dwell and expiry, and is consumed once
   // per event kind by UNIQUE(ticket_hash, kind). The bucket dedupes fresh tickets.
@@ -151,4 +154,10 @@ export async function recordAdvertisementEvent(db, adId, userId, kind, ticket, n
     WHERE ticket_hash = ? AND ad_id = ? AND viewer_hash = ? AND issued_ms <= ? AND expires_ms > ?
     ON CONFLICT DO NOTHING`).run(adId, viewer, day, kind, String(Math.floor(now / 30000)), new Date(now).toISOString(), hash, hash, adId, viewer, String(now - 1000), String(now))
   return Number(result?.changes ?? result?.rowCount ?? 0) > 0
+}
+
+export async function hasViewedAdvertisementTicket(db, adId, userId, ticket, now = Date.now()) {
+  if (typeof ticket !== 'string' || !/^[a-f0-9]{64}$/u.test(ticket)) return false
+  const proof = await db.prepare('SELECT ticket_hash FROM advertisement_view_tickets WHERE ticket_hash = ? AND ad_id = ? AND viewer_hash = ? AND viewed_at IS NOT NULL AND expires_ms > ?').get(ticketHash(ticket), adId, viewerHash(userId), String(now))
+  return Boolean(proof)
 }

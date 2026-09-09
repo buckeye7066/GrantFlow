@@ -16,7 +16,7 @@ beforeEach(() => {
   vi.stubGlobal('IntersectionObserver', class { constructor(callback) { observe = callback } observe() {} disconnect() {} })
   URL.createObjectURL = vi.fn(() => 'blob:fixture'); URL.revokeObjectURL = vi.fn()
   advertisementApi.list.mockResolvedValue({ advertisements: [creative('one', 15), creative('two', 30)], canManage: false, serverTime: new Date().toISOString() })
-  advertisementApi.image.mockResolvedValue(new Blob(['image'], { type: 'image/png' })); advertisementApi.event.mockResolvedValue({ counted: true }); advertisementApi.ticket.mockResolvedValue({ ticket: 'fixture-ticket' })
+  advertisementApi.image.mockResolvedValue(new Blob(['image'], { type: 'image/png' })); advertisementApi.event.mockResolvedValue({ counted: true, accepted: true }); advertisementApi.ticket.mockResolvedValue({ ticket: 'fixture-ticket' })
 })
 afterEach(() => { cleanup(); vi.useRealTimers(); vi.unstubAllGlobals() })
 describe('visible foreground advertisements', () => {

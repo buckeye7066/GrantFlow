@@ -6,7 +6,7 @@ import { mkdtempSync, rmSync, readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import router from '../routes/advertisements.js'
-import { ADVERTISEMENT_SCHEMA, createAdvertisements, issueAdvertisementTicket, isAdvertisingOwner, recordAdvertisementEvent, validateAdvertisement, validateAdImage } from '../services/advertisements.js'
+import { ADVERTISEMENT_SCHEMA, createAdvertisements, hasViewedAdvertisementTicket, issueAdvertisementTicket, isAdvertisingOwner, recordAdvertisementEvent, validateAdvertisement, validateAdImage } from '../services/advertisements.js'
 
 const image = () => Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScLbtAAAAABJRU5ErkJggg==', 'base64')
 const input = () => ({ advertiser: 'Fixture only', headline: 'Local test creative', body: 'Test body', target_url: 'https://example.com/offer', duration_seconds: 15, starts_at: new Date(Date.now() - 60000).toISOString(), ends_at: new Date(Date.now() + 86400000).toISOString(), status: 'published' })
@@ -114,6 +114,23 @@ describe('real event accounting', () => {
     expect(metrics.body.totals[0]).toEqual({ ad_id: id, impressions: 3, clicks: 1, unique_viewers: 2 })
     expect(metrics.body.daily[0]).toMatchObject({ ad_id: id, day: new Date(now).toISOString().slice(0, 10), impressions: 3, clicks: 1, unique_viewers: 2 })
     expect(db.prepare('SELECT image_base64 FROM advertisements WHERE id = ?').get(id).image_base64).toBe(image().toString('base64'))
+  })
+  it('retains click attribution for a valid display whose impression was deduplicated, without allowing impression replay', async () => {
+    const [id] = await create(); const now = Math.floor(Date.now() / 30000) * 30000 + 5000
+    const first = await issueAdvertisementTicket(db, id, 'member', now - 2000)
+    const second = await issueAdvertisementTicket(db, id, 'member', now - 1000)
+    expect(await recordAdvertisementEvent(db, id, 'member', 'impression', first, now)).toBe(true)
+    expect(await recordAdvertisementEvent(db, id, 'member', 'impression', second, now)).toBe(false)
+    expect(await hasViewedAdvertisementTicket(db, id, 'member', second, now)).toBe(true)
+    expect(await recordAdvertisementEvent(db, id, 'member', 'click', second, now)).toBe(true)
+    expect(await recordAdvertisementEvent(db, id, 'member', 'impression', second, now + 30000)).toBe(false)
+    expect(await recordAdvertisementEvent(db, id, 'member', 'click', second, now + 30000)).toBe(false)
+  })
+  it('keeps attribution valid for an entire long custom slide', async () => {
+    const [id] = await create({ duration_seconds: 300 }); const now = Date.now()
+    const ticket = await issueAdvertisementTicket(db, id, 'member', now)
+    expect(await recordAdvertisementEvent(db, id, 'member', 'impression', ticket, now + 1100)).toBe(true)
+    expect(await recordAdvertisementEvent(db, id, 'member', 'click', ticket, now + 180000)).toBe(true)
   })
   it('requires an unexpired server-issued ticket bound to this account and creative, with a real server dwell', async () => {
     const [id] = await create(); const [other] = await create(); const now = Date.now()

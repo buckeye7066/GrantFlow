@@ -1,5 +1,6 @@
 import React, { useState } from 'react'
 import { Share2 } from 'lucide-react'
+import { copyTextToClipboard } from '@/utils/clipboard'
 
 import { GRANTFLOW_SHARE } from '@/lib/shareGrantFlow.js'
 
@@ -9,7 +10,7 @@ export default function ShareGrantFlowButton() {
     setStatus('')
     try {
       if (navigator.share) await navigator.share({ ...GRANTFLOW_SHARE })
-      else { await navigator.clipboard.writeText(GRANTFLOW_SHARE.url); setStatus('App link copied.') }
+      else { const copied = await copyTextToClipboard(GRANTFLOW_SHARE.url); setStatus(copied ? 'App link copied.' : 'Share this app link: ' + GRANTFLOW_SHARE.url) }
     } catch (error) {
       if (error.name !== 'AbortError') setStatus('Share this app link: ' + GRANTFLOW_SHARE.url)
     }

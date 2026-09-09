@@ -17,6 +17,7 @@ CREATE TABLE IF NOT EXISTS advertisement_events (
 );
 CREATE TABLE IF NOT EXISTS advertisement_view_tickets (
   ticket_hash TEXT PRIMARY KEY, ad_id TEXT NOT NULL REFERENCES advertisements(id),
-  viewer_hash TEXT NOT NULL, issued_ms TEXT NOT NULL, expires_ms TEXT NOT NULL
+  viewer_hash TEXT NOT NULL, issued_ms TEXT NOT NULL, expires_ms TEXT NOT NULL, viewed_at TEXT
 );
+CREATE INDEX IF NOT EXISTS advertisement_view_tickets_expiry ON advertisement_view_tickets(expires_ms);
 CREATE INDEX IF NOT EXISTS advertisement_events_daily ON advertisement_events(ad_id, day, kind);
