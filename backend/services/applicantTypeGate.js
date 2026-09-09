@@ -43,6 +43,7 @@
 import { safeParseArrayField } from './profileHelpers.js'
 import { FARM_APPLICANT_TOKENS, hasFarmIdentity, isFarmApplicantToken, normalizeApplicantToken } from './eligibility/farmIdentity.js'
 import { getParentChain, resolveProfileType } from './profileTypeRegistry.js'
+import { normalizeProfile } from './profileNormalizer.js'
 
 // Registry roots that mean a person applies (individual-root family) vs an
 // organization applies. Derived from the canonical profileTypeRegistry so a new
@@ -587,11 +588,22 @@ export function evaluateApplicantTypeEligibility(opportunity, profileApplicantTy
   if (Array.isArray(codes) && codes.length) {
     const declared = profileApplicantType instanceof Set ? [...profileApplicantType]
       : Array.isArray(profileApplicantType) ? [...profileApplicantType] : [profileApplicantType]
-    declared.push(context.profile?.primary_type, context.sections?.basic_information?.profile_category)
+    declared.push(context.profile?.primary_type, context.sections?.basic_information?.profile_category,
+      context.sections?.organization_details?.organization_type)
     const identities = new Set(declared.flatMap(type => {
       const token = normalizeApplicantToken(type)
       return [token, resolveProfileType(token), ...getParentChain(token)].filter(Boolean)
     }))
+    // Reuse canonical, structured business/nonprofit facts. A generic
+    // organization profile may document its business in another section.
+    const normalized = context.normalizedProfile ?? normalizeProfile(
+      context.profile ?? { primary_type: declared[0] }, context.sections ?? {},
+    )
+    if (normalized?.isBusiness || buckets.has('farm')) {
+      identities.add('business')
+      buckets.add('business')
+    }
+    if (normalized?.isNonprofit) identities.add('nonprofit')
     if (!codes.some(code => sourceApplicantIdentities[code]?.some(type => identities.has(type)))) {
       return { decision: 'review', reason: 'federal_applicant_identity_unconfirmed', required_applicant_codes: codes }
     }

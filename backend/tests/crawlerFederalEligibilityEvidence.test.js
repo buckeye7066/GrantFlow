@@ -3,16 +3,19 @@ import { runDiscovery, createMemoryStore } from '../crawler-os/index.js'
 import { buildProfileSignals } from '../services/profileHelpers.js'
 import { hasPositiveFourTruthProof, refreshFourTruthProof } from '../crawler-os/fundingTruthPolicy.js'
 import { enrichGrantsGovCandidate } from '../crawler-os/adapters/grantsGovDetail.js'
+import { buildLivePageFactColumns } from '../crawler-os/pageFacts.js'
+import { evaluateApplicantTypeEligibility } from '../services/applicantTypeGate.js'
 
 const SEARCH = 'https://api.grants.gov/v1/api/search2'
 const DETAIL = 'https://api.grants.gov/v1/api/fetchOpportunity'
 
-async function discover({ type = 'school_district', detailTypes = [{ id: '05', description: 'Independent school districts' }], detailStatus = 200, detailId = 363825, costSharing = false, instrument = 'Grant' } = {}) {
+async function discover({ type = 'school_district', detailTypes = [{ id: '05', description: 'Independent school districts' }], detailStatus = 200, detailId = 363825, costSharing = false, instrument = 'Grant', sectionOverrides = {} } = {}) {
   const profile = { id: 'federal-evidence-fixture', primary_type: type, state: 'FL', needs: ['education'] }
   const sections = {
     basic_information: { profile_category: type, state: 'FL' },
     programs_services: { focus_areas: ['education'], interests: ['classroom supplies'] },
     narrative: { primary_goal: 'Education funding for classroom supplies.' },
+    ...sectionOverrides,
   }
   const thesis = { profile_id: profile.id, applicant_types: ['school'], needs: ['education'], needs_defaulted: false, location: { state: 'FL' } }
   Object.defineProperty(thesis, '_profileContext', { value: { profile, sections, signals: buildProfileSignals({ profile, sections }) } })
@@ -71,6 +74,17 @@ describe('federal crawler qualifications come from the award detail', () => {
     expect(result.run.recommendations).toEqual([])
   })
 
+  it('preserves the district restriction through storage into the live applicant gate', async () => {
+    const result = await discover()
+    const live = buildLivePageFactColumns(result.ops[0])
+    expect(live.field_provenance).toBeDefined()
+    expect(JSON.parse(live.field_provenance).applicant_types).toMatchObject({
+      value: ['Independent school districts'], allowed_codes: ['05'],
+    })
+    expect(evaluateApplicantTypeEligibility({ ...live, entity_types_allowed: ['school'] }, 'private_school').decision).toBe('review')
+    expect(evaluateApplicantTypeEligibility({ ...live, entity_types_allowed: ['school'] }, 'school_district').decision).toBe('pass')
+  })
+
   it('does not use an unknown additional-applicant category to widen a stated government restriction', async () => {
     const result = await discover({ detailTypes: [{ id: '01', description: 'County governments' }, { id: '25', description: 'Others (see additional eligibility)' }] })
     expect(result.run.recommendations).toEqual([])
@@ -79,6 +93,15 @@ describe('federal crawler qualifications come from the award detail', () => {
   it('recognizes the stated nonprofit identity when the source explicitly permits nonprofits', async () => {
     const result = await discover({ type: 'nonprofit', detailTypes: [{ id: '13', description: 'Nonprofits without 501(c)(3) status' }] })
     expect(result.run.recommendations).toHaveLength(1)
+  })
+
+  it('uses the canonical business facts in the full profile, including after storage', async () => {
+    const sections = { small_business_details: { business_name: 'Fixture Research Company', naics_code: '541715' } }
+    const result = await discover({ type: 'organization', detailTypes: [{ id: '23', description: 'Small businesses' }], sectionOverrides: sections })
+    expect(result.run.recommendations).toHaveLength(1)
+    const live = { ...buildLivePageFactColumns(result.ops[0]), entity_types_allowed: ['business'] }
+    expect(evaluateApplicantTypeEligibility(live, 'organization', { profile: { primary_type: 'organization' }, sections }).decision).toBe('pass')
+    expect(evaluateApplicantTypeEligibility(live, 'organization').decision).toBe('review')
   })
 
   it('honors the official structured cost-share requirement', async () => {

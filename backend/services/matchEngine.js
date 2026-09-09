@@ -4688,6 +4688,7 @@ export function computeMatchDecision(rawProfile, rawOpportunity, opts = {}) {
     {
       profile: rawProfileForApplicantType,
       sections: sectionsForApplicantType ?? {},
+      normalizedProfile: profileNorm,
     },
   )
   const canonicalMissingEligibilityFields = [

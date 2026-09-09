@@ -66,7 +66,7 @@ export async function enrichGrantsGovCandidate(candidate, { fetcher, cache, dead
       requires_cost_share: synopsis.costSharing === true,
       field_provenance: { ...(candidate.field_provenance ?? {}), applicant_types: {
         source: 'grants.gov', method: 'fetchOpportunity', opportunity_id: id,
-        allowed_codes: codes, descriptions, ...evidence,
+        value: descriptions, allowed_codes: codes, descriptions, ...evidence,
       } },
     },
     evidence,

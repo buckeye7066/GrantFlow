@@ -17,6 +17,11 @@ applicant gate on both fresh and persisted rows. A private school cannot inherit
 district-only eligibility, and a public agency cannot assume it is a state
 government. Unconfirmed identity stays REVIEW.
 
+The provenance entry includes the required `value`, so the shared persistence
+validator retains it. A round-trip regression verifies the restriction after
+saving. The applicant gate reuses canonical business and nonprofit facts from
+the whole profile, including business information on a generic organization.
+
 The shared four-truth validator refuses historical qualification claims whose
 capture is only Grants.gov Search2. Refresh preserves the original reality
 receipt and marks applicant qualification unproven. Signal version
