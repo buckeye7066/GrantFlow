@@ -4047,9 +4047,12 @@ export async function enforceAmountEnrichment(db, deps = {}) {
       return { scanned: 0, repaired: 0, enforced: !disabled }
     }
 
-    // Catalog rows worth enriching: linked to an ACTIVE pipeline grant, no
-    // numeric amount, no text yet (or explicitly not_listed), has a page, and
-    // NOT already attempted.
+    // Catalog rows worth enriching: the unattended sweep requires a link to
+    // an ACTIVE pipeline grant; an explicit nonempty opportunityIds scope may
+    // also name an unlinked catalog row for bounded maintenance after a
+    // temporary/synthetic grant link is removed. Both modes still require no
+    // numeric amount, no text yet (or explicitly not_listed), a page, and no
+    // completed attempt.
     //
     // The attempted-exclusion MUST be part of this query, not a JS filter after
     // it. The previous implementation SELECTed `LIMIT 200` and then dropped
