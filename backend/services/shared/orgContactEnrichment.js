@@ -17,7 +17,7 @@
  */
 
 const EMAIL_RX = /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g
-const MAILTO_RX = /mailto:([^"'>\s?]+)/gi
+const MAILTO_RX = /mailto:([^"'<>\s]*)/gi
 
 // Local parts that signal a role/inbox address (good org contacts).
 const ROLE_LOCALS = new Set([
@@ -57,14 +57,17 @@ function emailDomain(email) { return String(email).split('@')[1]?.toLowerCase().
 export function extractContactEmails(html) {
   const text = String(html || '')
   const found = new Set()
-  // A malformed percent escape belongs to this link, not the entire page.
-  // Remove mailto payloads from the raw pass so invalid or encoded addresses
-  // cannot be reintroduced as a different, seemingly valid contact.
-  const plainText = text.replace(MAILTO_RX, (_match, address) => {
-    try {
-      const e = decodeURIComponent(address).trim().toLowerCase()
-      if (e) found.add(e)
-    } catch { /* Ignore only this malformed URI; continue reading the page. */ }
+  // Remove the whole mailto URI from the raw pass. A header/body address is
+  // message content, not evidence of an organization's contact mailbox.
+  const plainText = text.replace(MAILTO_RX, (_match, payload) => {
+    // RFC 6068 separates recipients with literal commas before decoding.
+    const recipients = payload.split(/[?#]/, 1)[0].split(',')
+    for (const address of recipients) {
+      try {
+        const e = decodeURIComponent(address).trim().toLowerCase()
+        if (e) found.add(e)
+      } catch { /* Ignore this malformed recipient, not its valid neighbors. */ }
+    }
     return ' '
   })
   for (const e of plainText.match(EMAIL_RX) || []) found.add(e.trim().toLowerCase())
