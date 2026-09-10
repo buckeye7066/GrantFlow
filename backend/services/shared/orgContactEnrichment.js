@@ -57,12 +57,17 @@ function emailDomain(email) { return String(email).split('@')[1]?.toLowerCase().
 export function extractContactEmails(html) {
   const text = String(html || '')
   const found = new Set()
-  let m
-  while ((m = MAILTO_RX.exec(text))) {
-    const e = decodeURIComponent(m[1].split('?')[0]).trim().toLowerCase()
-    if (e) found.add(e)
-  }
-  for (const e of text.match(EMAIL_RX) || []) found.add(e.trim().toLowerCase())
+  // A malformed percent escape belongs to this link, not the entire page.
+  // Remove mailto payloads from the raw pass so invalid or encoded addresses
+  // cannot be reintroduced as a different, seemingly valid contact.
+  const plainText = text.replace(MAILTO_RX, (_match, address) => {
+    try {
+      const e = decodeURIComponent(address).trim().toLowerCase()
+      if (e) found.add(e)
+    } catch { /* Ignore only this malformed URI; continue reading the page. */ }
+    return ' '
+  })
+  for (const e of plainText.match(EMAIL_RX) || []) found.add(e.trim().toLowerCase())
   return [...found].filter((e) => {
     if (JUNK_LOCALS.has(localPart(e))) return false
     if (JUNK_DOMAIN_RX.test(e)) return false
