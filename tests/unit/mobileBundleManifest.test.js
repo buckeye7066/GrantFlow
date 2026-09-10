@@ -6,10 +6,10 @@
 import { execFileSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import fs from 'node:fs'
-import { createRequire } from 'node:module'
 import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { crc32, inflateRawSync } from 'node:zlib'
 
 import { afterEach, describe, expect, it } from 'vitest'
 
@@ -17,7 +17,6 @@ import { requiresNativeUpdate } from '../../src/lib/mobileUpdater.js'
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..')
 const script = path.join(repoRoot, 'scripts', 'build-mobile-bundle.mjs')
-const require = createRequire(import.meta.url)
 
 /** @type {string[]} */
 const tempRoots = []
@@ -44,6 +43,39 @@ function runBuild(root, env = {}) {
     stdio: 'pipe',
   })
   return JSON.parse(fs.readFileSync(path.join(root, 'dist', 'mobile', 'latest.json'), 'utf8'))
+}
+
+// Decode the real bundle independently with Node's DEFLATE/CRC implementation,
+// not the ZIP writer's library. A wrong filename, offset, checksum or payload
+// must fail even when the manifest correctly hashes a broken archive.
+function readBundle(root, version = '2.3.4') {
+  const bytes = fs.readFileSync(path.join(root, 'dist', 'mobile', `bundle-${version}.zip`))
+  const entries = new Map()
+  const count = bytes.readUInt16LE(bytes.length - 12)
+  let offset = bytes.readUInt32LE(bytes.length - 6)
+  for (let index = 0; index < count; index++) {
+    expect(bytes.readUInt32LE(offset)).toBe(0x02014b50)
+    const nameLength = bytes.readUInt16LE(offset + 28)
+    const name = bytes.subarray(offset + 46, offset + 46 + nameLength).toString('utf8')
+    const local = bytes.readUInt32LE(offset + 42)
+    expect(bytes.readUInt32LE(local)).toBe(0x04034b50)
+    const localFlags = bytes.readUInt16LE(local + 6)
+    const localMethod = bytes.readUInt16LE(local + 8)
+    // Android's OTA consumer uses ZipInputStream, not random-access central
+    // directory extraction. It cannot consume STORED entries with descriptors.
+    expect(localMethod === 0 && (localFlags & 8) !== 0,
+      `Android cannot stream STORED descriptor entry ${name}`).toBe(false)
+    const start = local + 30 + bytes.readUInt16LE(local + 26) + bytes.readUInt16LE(local + 28)
+    const compressed = bytes.subarray(start, start + bytes.readUInt32LE(offset + 20))
+    const method = bytes.readUInt16LE(offset + 10)
+    expect([0, 8]).toContain(method)
+    const contents = method === 0 ? compressed : inflateRawSync(compressed)
+    expect(contents.length).toBe(bytes.readUInt32LE(offset + 24))
+    expect(crc32(contents)).toBe(bytes.readUInt32LE(offset + 16))
+    entries.set(name, contents)
+    offset += 46 + nameLength + bytes.readUInt16LE(offset + 30) + bytes.readUInt16LE(offset + 32)
+  }
+  return entries
 }
 
 afterEach(() => {
@@ -124,11 +156,22 @@ describe('build-mobile-bundle manifest', () => {
     const root = makeProject({ version: '2.3.4' })
     runBuild(root)
     runBuild(root) // second pass: dist/mobile now exists from the first
-    const zipPath = path.join(root, 'dist', 'mobile', 'bundle-2.3.4.zip')
-    const AdmZip = require('adm-zip')
-    const names = new AdmZip(zipPath).getEntries().map((e) => e.entryName)
+    const names = [...readBundle(root).keys()]
     expect(names.some((n) => n.startsWith('mobile/'))).toBe(false)
     expect(names).toContain('index.html')
+  })
+
+  it('preserves nested Unicode filenames and exact binary asset contents', () => {
+    const root = makeProject()
+    fs.mkdirSync(path.join(root, 'dist', 'assets', 'nested'))
+    fs.writeFileSync(path.join(root, 'dist', 'assets', 'nested', 'résumé.bin'), Buffer.from([0, 1, 127, 128, 255]))
+    fs.writeFileSync(path.join(root, 'dist', '__proto__'), 'ordinary asset, not an object prototype')
+    runBuild(root)
+    const entries = readBundle(root)
+    expect(entries.get('index.html').toString()).toBe('<!doctype html><title>fixture</title>')
+    expect(entries.get('assets/app.js').toString()).toBe('console.log("fixture")')
+    expect(entries.get('assets/nested/résumé.bin')).toEqual(Buffer.from([0, 1, 127, 128, 255]))
+    expect(entries.get('__proto__').toString()).toBe('ordinary asset, not an object prototype')
   })
 })
 
@@ -143,4 +186,3 @@ it('uses the built identity even when package.json stays unchanged', () => {
   expect(second.version).toBe('1.0.1788900000001')
   expect(second.sha256).not.toBe(first.sha256)
 })
-

@@ -17,13 +17,10 @@
 //   npm run build:mobile-bundle   (build + this script)
 
 import { createHash } from 'node:crypto'
-import { createRequire } from 'node:module'
 import { fileURLToPath } from 'node:url'
 import fs from 'node:fs'
 import path from 'node:path'
-
-const require = createRequire(import.meta.url)
-const AdmZip = require('adm-zip')
+import { Zip, ZipDeflate } from 'fflate'
 
 // Project root. argv[2] is a test seam ONLY (tests/unit/mobileBundleManifest.test.js
 // points the real script at a temp tree so the published manifest can be
@@ -64,17 +61,44 @@ if (!fs.existsSync(path.join(distDir, 'index.html'))) {
 fs.rmSync(mobileDir, { recursive: true, force: true })
 fs.mkdirSync(mobileDir, { recursive: true })
 
-const zip = new AdmZip()
-for (const entry of fs.readdirSync(distDir, { withFileTypes: true })) {
-  if (entry.name === 'mobile') continue // never nest the feed inside its own bundle
-  const full = path.join(distDir, entry.name)
-  if (entry.isDirectory()) zip.addLocalFolder(full, entry.name)
-  else zip.addLocalFile(full)
+const chunks = []
+let finished = false
+const zip = new Zip((error, bytes, final) => {
+  if (error) throw error
+  chunks.push(bytes)
+  finished = final
+})
+
+function addDirectory(directory, prefix = '') {
+  for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+    if (!prefix && entry.name === 'mobile') continue // never nest the feed inside its own bundle
+    const full = path.join(directory, entry.name)
+    const name = prefix + entry.name
+    if (entry.isDirectory()) {
+      // Android's ZipInputStream cannot read STORED entries with streaming
+      // data descriptors. DEFLATE level 0 preserves empty directories while
+      // keeping the descriptor format compatible with the native OTA reader.
+      const folder = new ZipDeflate(`${name}/`, { level: 0 })
+      folder.attrs = 0x10
+      zip.add(folder)
+      folder.push(new Uint8Array(0), true)
+      addDirectory(full, `${name}/`)
+    } else {
+      // Per-entry streams preserve literal filenames (including __proto__)
+      // without treating a filename as an object property or extracting files.
+      const file = new ZipDeflate(name, { level: 6 })
+      zip.add(file)
+      file.push(fs.readFileSync(full), true)
+    }
+  }
 }
+addDirectory(distDir)
+zip.end()
+if (!finished) throw new Error('Mobile ZIP did not finish; no feed was published')
 
 const zipName = `bundle-${version}.zip`
 const zipPath = path.join(mobileDir, zipName)
-zip.writeZip(zipPath)
+fs.writeFileSync(zipPath, Buffer.concat(chunks))
 
 // Integrity: sha256 of the zip BYTES exactly as served. @capgo/capacitor-updater
 // hashes the downloaded zip with SHA-256 (Android CryptoCipher.calcChecksum ->
@@ -110,4 +134,3 @@ console.log(
     `and dist/mobile/latest.json -> ${manifest.url}` +
     (minNativeVersion ? ` (min native ${minNativeVersion})` : ''),
 )
-

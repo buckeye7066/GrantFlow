@@ -2,7 +2,7 @@ import crypto from 'node:crypto'
 import fs from 'node:fs/promises'
 import net from 'node:net'
 import path from 'node:path'
-import AdmZip from 'adm-zip'
+import { unzipSync } from 'fflate'
 
 const MAX_ARCHIVE_ENTRIES = 10_000
 const MAX_ARCHIVE_UNCOMPRESSED_BYTES = 250 * 1024 * 1024
@@ -70,22 +70,80 @@ function isProbablyText(buffer) {
   return controls / sample.length < 0.01
 }
 
+// fflate's metadata filter deliberately skips decompression, but does not
+// validate central-header signatures. Check the bounded directory envelope so
+// malformed bytes cannot masquerade as a DOCX just by containing its filenames.
+// All entry decoding/ZIP64 extra fields remain the ZIP library's responsibility.
+function assertZipDirectory(buffer) {
+  const lowerBound = Math.max(0, buffer.length - 65_557)
+  let end = buffer.length - 22
+  for (; end >= lowerBound; end--) {
+    if (buffer.readUInt32LE(end) === 0x06054b50 && end + 22 + buffer.readUInt16LE(end + 20) === buffer.length) break
+  }
+  if (end < lowerBound) throw new Error('Missing ZIP directory')
+  if (buffer.readUInt16LE(end + 4) !== 0 || buffer.readUInt16LE(end + 6) !== 0) throw new Error('Split ZIP is not a DOCX')
+  let count = buffer.readUInt16LE(end + 10)
+  let diskCount = buffer.readUInt16LE(end + 8)
+  let size = buffer.readUInt32LE(end + 12)
+  let offset = buffer.readUInt32LE(end + 16)
+  let directoryEnd = end
+  if (end >= 20 && buffer.readUInt32LE(end - 20) === 0x07064b50) {
+    if (buffer.readUInt32LE(end - 16) !== 0 || buffer.readUInt32LE(end - 4) !== 1) throw new Error('Split ZIP64 is not a DOCX')
+    const record = Number(buffer.readBigUInt64LE(end - 12))
+    if (!Number.isSafeInteger(record) || record < 0 || record + 56 > end - 20 || buffer.readUInt32LE(record) !== 0x06064b50) {
+      throw new Error('Invalid ZIP64 directory')
+    }
+    const recordSize = Number(buffer.readBigUInt64LE(record + 4))
+    if (!Number.isSafeInteger(recordSize) || recordSize < 44 || record + 12 + recordSize !== end - 20) throw new Error('Invalid ZIP64 envelope')
+    if (buffer.readUInt32LE(record + 16) !== 0 || buffer.readUInt32LE(record + 20) !== 0) throw new Error('Split ZIP64 is not a DOCX')
+    diskCount = Number(buffer.readBigUInt64LE(record + 24))
+    count = Number(buffer.readBigUInt64LE(record + 32))
+    size = Number(buffer.readBigUInt64LE(record + 40))
+    offset = Number(buffer.readBigUInt64LE(record + 48))
+    directoryEnd = record
+  }
+  if (!Number.isSafeInteger(count) || count === 0 || count > MAX_ARCHIVE_ENTRIES || count !== diskCount) throw new Error('Invalid ZIP entry count')
+  if (!Number.isSafeInteger(offset) || !Number.isSafeInteger(size) || offset < 0 || size < 0 || offset + size > directoryEnd) {
+    throw new Error('Invalid ZIP directory bounds')
+  }
+  const limit = offset + size
+  for (let index = 0; index < count; index++) {
+    if (offset + 46 > limit || buffer.readUInt32LE(offset) !== 0x02014b50) throw new Error('Invalid ZIP central header')
+    offset += 46 + buffer.readUInt16LE(offset + 28) + buffer.readUInt16LE(offset + 30) + buffer.readUInt16LE(offset + 32)
+    if (offset > limit) throw new Error('Truncated ZIP central header')
+  }
+  // The optional central-directory digital signature is not an archive member.
+  if (offset < limit && offset + 6 <= limit && buffer.readUInt32LE(offset) === 0x05054b50) offset += 6 + buffer.readUInt16LE(offset + 4)
+  if (offset !== limit) throw new Error('Inconsistent ZIP directory size')
+  return end
+}
+
 function inspectDocx(buffer) {
   try {
-    const archive = new AdmZip(buffer)
-    const entries = archive.getEntries()
-    if (entries.length === 0 || entries.length > MAX_ARCHIVE_ENTRIES) return false
+    const directoryEnd = assertZipDirectory(buffer)
+    let entryCount = 0
     let totalBytes = 0
     let hasContentTypes = false
     let hasWordDocument = false
-    for (const entry of entries) {
-      const name = String(entry.entryName || '').replace(/\\/g, '/')
-      if (!name || name.startsWith('/') || name.split('/').includes('..')) return false
-      totalBytes += Number(entry.header?.size || 0)
-      if (totalBytes > MAX_ARCHIVE_UNCOMPRESSED_BYTES) return false
+    // Pin the reader to the same verified footer. A comment may contain ZIP
+    // signatures; fflate otherwise accepts the nearest signature without
+    // checking its comment length and can inspect a different member list.
+    unzipSync(buffer.subarray(0, directoryEnd + 22), { filter(entry) {
+      entryCount++
+      const name = String(entry.name || '').replace(/\\/g, '/')
+      if (entryCount > MAX_ARCHIVE_ENTRIES || !name || name.startsWith('/') || /^[a-z]:/i.test(name) || name.includes('\0') || name.split('/').includes('..')) {
+        throw new Error('Unsafe DOCX archive member')
+      }
+      totalBytes += entry.originalSize
+      if (!Number.isSafeInteger(totalBytes) || totalBytes > MAX_ARCHIVE_UNCOMPRESSED_BYTES) {
+        throw new Error('DOCX archive exceeds expansion limit')
+      }
       if (name === '[Content_Types].xml') hasContentTypes = true
       if (name === 'word/document.xml') hasWordDocument = true
-    }
+      // Metadata only: never inflate attacker-controlled entry data or write
+      // archive members to disk during upload type detection.
+      return false
+    } })
     return hasContentTypes && hasWordDocument
   } catch {
     return false
