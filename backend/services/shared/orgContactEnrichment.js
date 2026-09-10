@@ -17,7 +17,7 @@
  */
 
 const EMAIL_RX = /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g
-const MAILTO_RX = /mailto:([^"'>\s?]+)/gi
+const MAILTO_RX = /mailto:([^"'<>\s]*)/gi
 
 // Local parts that signal a role/inbox address (good org contacts).
 const ROLE_LOCALS = new Set([
@@ -57,12 +57,20 @@ function emailDomain(email) { return String(email).split('@')[1]?.toLowerCase().
 export function extractContactEmails(html) {
   const text = String(html || '')
   const found = new Set()
-  let m
-  while ((m = MAILTO_RX.exec(text))) {
-    const e = decodeURIComponent(m[1].split('?')[0]).trim().toLowerCase()
-    if (e) found.add(e)
-  }
-  for (const e of text.match(EMAIL_RX) || []) found.add(e.trim().toLowerCase())
+  // Remove the whole mailto URI from the raw pass. A header/body address is
+  // message content, not evidence of an organization's contact mailbox.
+  const plainText = text.replace(MAILTO_RX, (_match, payload) => {
+    // RFC 6068 separates recipients with literal commas before decoding.
+    const recipients = payload.split(/[?#]/, 1)[0].split(',')
+    for (const address of recipients) {
+      try {
+        const e = decodeURIComponent(address).trim().toLowerCase()
+        if (e) found.add(e)
+      } catch { /* Ignore this malformed recipient, not its valid neighbors. */ }
+    }
+    return ' '
+  })
+  for (const e of plainText.match(EMAIL_RX) || []) found.add(e.trim().toLowerCase())
   return [...found].filter((e) => {
     if (JUNK_LOCALS.has(localPart(e))) return false
     if (JUNK_DOMAIN_RX.test(e)) return false
