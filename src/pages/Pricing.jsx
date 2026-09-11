@@ -1,4 +1,6 @@
 import React from 'react';
+import { useQuery } from '@tanstack/react-query';
+import { getTierCatalog } from '@/api/billing';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -11,11 +13,10 @@ import { isNativeApp } from '@/lib/platform';
 const pricingTiers = [
   {
     id: 'individual',
+    catalogTierId: 'individual',
     name: 'Individual / Family',
     icon: Heart,
     description: 'For individuals and families seeking assistance',
-    price: '$0 - $50',
-    priceDetail: 'Based on need',
     color: 'blue',
     features: [
       'Personalized profile matching',
@@ -28,11 +29,11 @@ const pricingTiers = [
   },
   {
     id: 'student',
+    catalogTierId: 'individual',
+    discountId: 'student',
     name: 'Student',
     icon: GraduationCap,
     description: 'For high school, college, and graduate students',
-    price: '$25 - $75',
-    priceDetail: 'Per semester',
     color: 'green',
     features: [
       'Scholarship matching',
@@ -45,11 +46,11 @@ const pricingTiers = [
   },
   {
     id: 'minister',
+    catalogTierId: 'individual',
+    discountId: 'minister',
     name: 'Minister / Clergy',
     icon: Church,
     description: 'For religious leaders and missionaries',
-    price: '$50 - $100',
-    priceDetail: 'Per year',
     color: 'purple',
     features: [
       'Faith-based opportunity matching',
@@ -62,11 +63,10 @@ const pricingTiers = [
   },
   {
     id: 'small-nonprofit',
+    catalogTierId: 'small_org',
     name: 'Small Nonprofit',
     icon: Users,
     description: 'Organizations with budget under $500K',
-    price: '$100 - $250',
-    priceDetail: 'Per month',
     color: 'orange',
     features: [
       'Full grant discovery',
@@ -75,15 +75,13 @@ const pricingTiers = [
       'Compliance tracking',
       'Priority support',
     ],
-    budgetRange: '< $500K',
   },
   {
     id: 'medium-nonprofit',
+    catalogTierId: 'mid_size',
     name: 'Medium Nonprofit',
     icon: Building,
     description: 'Organizations with budget $500K - $5M',
-    price: '$250 - $500',
-    priceDetail: 'Per month',
     color: 'cyan',
     features: [
       'Advanced grant discovery',
@@ -92,15 +90,13 @@ const pricingTiers = [
       'Custom reporting',
       'Dedicated account manager',
     ],
-    budgetRange: '$500K - $5M',
   },
   {
     id: 'large-org',
+    catalogTierId: 'large_org',
     name: 'Large Organization',
     icon: Building,
     description: 'Organizations with budget over $5M',
-    price: 'Custom',
-    priceDetail: 'Contact for pricing',
     color: 'slate',
     features: [
       'Enterprise features',
@@ -109,7 +105,6 @@ const pricingTiers = [
       'Custom integrations',
       'White-glove service',
     ],
-    budgetRange: '> $5M',
   },
 ];
 
@@ -147,10 +142,43 @@ const colorClasses = {
 };
 
 export default function Pricing() {
+  const nativeApp = isNativeApp();
+  // Prices, discounts and plan names come ONLY from the canonical catalog (the
+  // same cached query TierMatrix uses). Production 2026-09-11: hardcoded card
+  // prices ("$100 - $250 per month") and a 30-percent student discount
+  // contradicted the catalog rendered directly above them.
+  const { data: catalog, isLoading: catalogLoading } = useQuery({
+    queryKey: ['tier-catalog'],
+    queryFn: getTierCatalog,
+    staleTime: 5 * 60_000,
+    enabled: !nativeApp,
+  });
+  const catalogTier = (card) => (catalog?.tiers || []).find((t) => t.id === card.catalogTierId) || null;
+  const catalogDiscount = (id) => (catalog?.discounts || []).find((d) => d.id === id) || null;
+  const formatMonthly = (usd) => (Number(usd) === 0 ? 'Free' : `$${Number(usd).toLocaleString()}/mo`);
+  const cardPrice = (card) => {
+    if (catalogLoading) return '…';
+    const t = catalogTier(card);
+    return t && t.monthly_usd !== null && t.monthly_usd !== undefined ? formatMonthly(t.monthly_usd) : 'See plan table';
+  };
+  const cardBadge = (card) => {
+    const d = card.discountId ? catalogDiscount(card.discountId) : null;
+    if (d) return `${d.label}: ${d.percent}% off`;
+    return catalogTier(card)?.name || 'Plan';
+  };
+  const cardDescription = (card) => (card.discountId ? card.description : catalogTier(card)?.audience || card.description);
+  const cardNote = (card) => {
+    const t = catalogTier(card);
+    const d = card.discountId ? catalogDiscount(card.discountId) : null;
+    if (d && t) return `${t.name} plan, ${d.percent}% ${d.percent === 100 ? 'waived' : 'off'} once an administrator applies the ${d.label.toLowerCase()} discount.`;
+    if (t && t.hourly_usd) return `Hourly support: $${Number(t.hourly_usd).toLocaleString()}`;
+    return '';
+  };
+
   // Store policy: no plans, prices, or purchase steering in native builds.
-  if (isNativeApp()) {
+  if (nativeApp) {
     return (
-      <div className="min-h-screen bg-gradient-to-br from-slate-50 to-blue-50 p-6 md:p-8">
+      <div className="min-h-screen bg-gradient-to-br from-slate-50 to-blue-50 dark:from-slate-950 dark:to-slate-900 p-6 md:p-8">
         <div className="max-w-xl mx-auto pt-16">
           <Card>
             <CardHeader>
@@ -170,7 +198,7 @@ export default function Pricing() {
   }
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-50 to-blue-50 p-6 md:p-8">
+    <div className="min-h-screen bg-gradient-to-br from-slate-50 to-blue-50 dark:from-slate-950 dark:to-slate-900 p-6 md:p-8">
       <div className="max-w-7xl mx-auto">
         {/* Header */}
         <div className="text-center mb-12">
@@ -208,22 +236,22 @@ export default function Pricing() {
                   <div className="flex items-center justify-between mb-2">
                     <Icon className={`w-8 h-8 ${colors.icon}`} />
                     <Badge variant="outline" className={colors.badge}>
-                      {tier.priceDetail}
+                      {cardBadge(tier)}
                     </Badge>
                   </div>
                   <CardTitle className="text-2xl">{tier.name}</CardTitle>
                   <CardDescription className="text-sm">
-                    {tier.description}
+                    {cardDescription(tier)}
                   </CardDescription>
                 </CardHeader>
                 <CardContent className="space-y-6">
                   <div>
                     <div className="text-3xl font-bold text-slate-900">
-                      {tier.price}
+                      {cardPrice(tier)}
                     </div>
-                    {tier.budgetRange && (
+                    {cardNote(tier) && (
                       <p className="text-sm text-slate-600 mt-1">
-                        Annual budget: {tier.budgetRange}
+                        {cardNote(tier)}
                       </p>
                     )}
                   </div>
@@ -238,11 +266,7 @@ export default function Pricing() {
                   </ul>
 
                   <Link
-                    to={createPageUrl(
-                      tier.applicantTypes
-                        ? 'CreateProfile'
-                        : 'Organizations'
-                    )}
+                    to={createPageUrl('Organizations', { quickAdd: 1 })}
                     className="block"
                   >
                     <Button className="w-full" variant="outline">
@@ -265,30 +289,20 @@ export default function Pricing() {
               </CardTitle>
             </CardHeader>
             <CardContent className="space-y-3">
-              <div>
-                <h4 className="font-semibold text-sm mb-1">Student Discount</h4>
-                <p className="text-sm text-slate-600">
-                  Up to 30% off for currently enrolled students with valid student ID.
-                </p>
-              </div>
-              <div>
-                <h4 className="font-semibold text-sm mb-1">Minister Discount</h4>
-                <p className="text-sm text-slate-600">
-                  Special pricing for clergy, missionaries, and religious workers.
-                </p>
-              </div>
-              <div>
-                <h4 className="font-semibold text-sm mb-1">Hardship Discount</h4>
-                <p className="text-sm text-slate-600">
-                  Case-by-case discounts available for those facing financial hardship.
-                </p>
-              </div>
-              <div>
-                <h4 className="font-semibold text-sm mb-1">Pro Bono Services</h4>
-                <p className="text-sm text-slate-600">
-                  100% free services available for qualifying individuals and organizations.
-                </p>
-              </div>
+              {catalogLoading ? (
+                <p className="text-sm text-slate-600">Loading discounts…</p>
+              ) : (catalog?.discounts || []).length === 0 ? (
+                <p className="text-sm text-slate-600">Discount details are unavailable right now.</p>
+              ) : (
+                (catalog?.discounts || []).map((d) => (
+                  <div key={d.id}>
+                    <h4 className="font-semibold text-sm mb-1">{d.label}</h4>
+                    <p className="text-sm text-slate-600">
+                      {d.percent === 100 ? 'Fully waived.' : `${d.percent}% off any plan.`} {d.plain}
+                    </p>
+                  </div>
+                ))
+              )}
             </CardContent>
           </Card>
 
@@ -313,10 +327,12 @@ export default function Pricing() {
                     {import.meta.env.VITE_SUPPORT_EMAIL ?? 'support@grantflow.app'}
                   </a>
                 </div>
-                <div>
-                  <p className="text-sm font-semibold">Fax</p>
-                  <p className="text-sm text-slate-600">{import.meta.env.VITE_SUPPORT_FAX ?? ''}</p>
-                </div>
+                {import.meta.env.VITE_SUPPORT_FAX ? (
+                  <div>
+                    <p className="text-sm font-semibold">Fax</p>
+                    <p className="text-sm text-slate-600">{import.meta.env.VITE_SUPPORT_FAX}</p>
+                  </div>
+                ) : null}
               </div>
               <div className="pt-3">
                 <Link to={createPageUrl('Organizations')}>

@@ -790,7 +790,7 @@ export default function OrganizationProfile({
                                 <ExternalLink className="w-4 h-4" />
                               </Button>
                             )}
-                            <Link to={createPageUrl("SourceDetail", { id: source.id })}>
+                            <Link to={createPageUrl("SourceDirectory", { search: source.name })}>
                               <Button variant="outline" size="sm">
                                 View in Directory
                               </Button>

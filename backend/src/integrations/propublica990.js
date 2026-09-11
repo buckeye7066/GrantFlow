@@ -156,22 +156,48 @@ export async function getOrganization(ein) {
 }
 
 /**
- * Get 990 filing details.
+ * Get one 990 filing for an organization.
+ *
+ * ProPublica's Nonprofit Explorer API v2 has NO per-filing JSON endpoint:
+ * `/organizations/{ein}/{taxPeriod}.json` answers 404 (live 2026-09-11, which made
+ * GET /api/foundations/:ein/filing/:taxPeriod a 500 for every filing). Filings are
+ * listed on the organization record — `filings_with_data` carries the parsed 990
+ * fields, `filings_without_data` only a PDF link.
  *
  * @param {string} ein - EIN
  * @param {string} taxPeriod - e.g. "202012" (YYYYMM)
- * @returns {Promise<Object>}
+ * @returns {Promise<Object>} the filing; throws an error whose response.status is 404 when absent
  */
 export async function getFiling(ein, taxPeriod) {
   const cleanEin = String(ein).replace(/\D/g, '')
+  const period = String(taxPeriod).replace(/\D/g, '')
   const data = await requestJson({
     provider: 'propublica.990',
-    url: `${PP_BASE}/organizations/${cleanEin}/${taxPeriod}.json`,
+    url: `${PP_BASE}/organizations/${cleanEin}.json`,
     method: 'GET',
     timeoutMs: 15_000,
     maxRetries: 2,
   })
-  return data
+  const withData = Array.isArray(data?.filings_with_data) ? data.filings_with_data : []
+  const withoutData = Array.isArray(data?.filings_without_data) ? data.filings_without_data : []
+  const samePeriod = (row) => String(row?.tax_prd ?? '').replace(/\D/g, '') === period
+  const parsed = withData.find(samePeriod) ?? null
+  const filing = parsed ?? withoutData.find(samePeriod) ?? null
+  if (!filing) {
+    const error = new Error(`[propublica.990] no filing for EIN ${cleanEin} tax period ${period}`)
+    Object.defineProperty(error, 'response', { value: { status: 404, data: null } })
+    throw error
+  }
+  return {
+    ein: cleanEin,
+    organization_name: toTrimmedStringOrNull(data?.organization?.name),
+    tax_period: period,
+    tax_year: toNumberOrNull(filing.tax_prd_yr),
+    form_type: toTrimmedStringOrNull(filing.formtype_str) ?? filing.formtype ?? null,
+    has_data: Boolean(parsed),
+    pdf_url: toTrimmedStringOrNull(filing.pdf_url),
+    filing,
+  }
 }
 
 function normalizeOrg(raw) {

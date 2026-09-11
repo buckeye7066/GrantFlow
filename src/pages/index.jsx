@@ -91,6 +91,7 @@ const HamiltonCustomFields = lazy(() => import('./HamiltonCustomFields'), 'Hamil
 const HamiltonTaskDetail = lazy(() => import('./HamiltonTaskDetail'), 'HamiltonTaskDetail')
 const Landing = lazy(() => import('./Landing'), 'Landing')
 const PrivacyPolicy = lazy(() => import('./PrivacyPolicy'), 'PrivacyPolicy')
+const NotFound = lazy(() => import('./NotFound'), 'NotFound')
 
 function RouteLoading() {
   return (
@@ -218,6 +219,7 @@ function LayoutRoutes() {
           <Route path="/PricingRequired" element={withBoundary(<PricingRequired />, 'PricingRequired')} />
           <Route path="/ServiceAgreement" element={withBoundary(<ServiceAgreement />, 'ServiceAgreement')} />
           <Route path="/CheckoutRequired" element={withBoundary(<CheckoutRequired />, 'CheckoutRequired')} />
+          <Route path="*" element={withBoundary(<NotFound />, 'NotFound')} />
         </Routes>
       </Layout>
       <AdminPricingToastListener />

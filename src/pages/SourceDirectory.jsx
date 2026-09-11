@@ -65,7 +65,17 @@ import { useCrawlJobTracker } from '@/hooks/useCrawlJobTracker'
 import { createLogger } from '@/utils/logger'
 
 export default function SourceDirectory() {
-  const [searchQuery, setSearchQuery] = useState('');
+  // ?search=<source name> deep-links from other pages (OrganizationProfile
+  // "View in Directory"). Before 2026-09-11 that button targeted a
+  // nonexistent SourceDetail route and rendered a blank page.
+  const [searchQuery, setSearchQuery] = useState(() => {
+    if (typeof window === 'undefined') return '';
+    try {
+      return new URLSearchParams(window.location.search).get('search') || '';
+    } catch {
+      return '';
+    }
+  });
   const [selectedOrgId, setSelectedOrgId] = useState(null);
   const [sourceTypeFilter, setSourceTypeFilter] = useState('all');
   const [isDiscoverOpen, setIsDiscoverOpen] = useState(false);
