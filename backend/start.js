@@ -1,3 +1,4 @@
+import './installFetchGlobals.js'
 import dotenv from 'dotenv'
 import fs from 'node:fs'
 import path from 'node:path'
@@ -21,7 +22,7 @@ process.on('unhandledRejection', (reason, promise) => {
 })
 
 process.on('uncaughtException', (error) => {
-  console.error('[process] Uncaught exception:', error?.message || error)
+  console.error('[process] Uncaught exception:', error?.stack || error?.message || error)
   captureException(error instanceof Error ? error : new Error(String(error)), {
     source: 'process.uncaughtException',
   })

@@ -163,6 +163,15 @@ router.get('/federal/search', async (req, res) => {
   } catch (error) {
     routeLogger.error('[foundations/federal] error', error?.message)
     const upstreamStatus = Number(error?.response?.status)
+    if (upstreamStatus === 429) {
+      // SAM.gov's public key is capped per day; say when the catalog returns.
+      if (error?.retryAt) res.set('Retry-After', new Date(error.retryAt).toUTCString())
+      return res.status(503).json({
+        error: 'federal_listings_quota_exhausted',
+        upstream_status: 429,
+        retry_at: error?.retryAt || null,
+      })
+    }
     if (Number.isFinite(upstreamStatus) && upstreamStatus > 0) {
       return res.status(502).json({ error: 'federal_listings_unavailable', upstream_status: upstreamStatus })
     }

@@ -12,6 +12,11 @@ import axios from 'axios'
 const DEFAULT_TIMEOUT_MS = 20_000
 const DEFAULT_MAX_RETRIES = 3
 const DEFAULT_BASE_BACKOFF_MS = 400
+// Longest Retry-After worth waiting inside one request. SAM.gov answers a spent
+// daily quota with `Retry-After: <next UTC midnight>`; sleeping that (hours) kept
+// the shared SAM catalog promise pending, so every federal search hit the 30s
+// response timeout and no error was ever logged (live 2026-09-11).
+const DEFAULT_MAX_RETRY_AFTER_MS = 30_000
 
 export const GRANTFLOW_USER_AGENT = 'GrantFlow (Axiom BioLabs)'
 
@@ -36,6 +41,7 @@ export function __resetAxiosForTests() {
  * @property {any=} data
  * @property {number=} timeoutMs
  * @property {number=} maxRetries
+ * @property {number=} maxRetryAfterMs - longest Retry-After waited in-request; a longer one fails at once with `retryAt`
  * @property {string=} provider - label for logs/errors only (no secrets)
  */
 
@@ -88,6 +94,16 @@ function responseError(message, response) {
   return error
 }
 
+/** A 429 carries when the provider said to come back, so callers can report it. */
+function rateLimitError(provider, response, retryAfterMs, retriesExhausted) {
+  const reason = retriesExhausted
+    ? 'max retries exceeded'
+    : `Retry-After ${Math.round(retryAfterMs / 1000)}s exceeds the in-request wait cap`
+  const error = responseError(`[${provider}] HTTP 429 Too Many Requests (${reason})`, response)
+  if (retryAfterMs !== null) error.retryAt = new Date(Date.now() + retryAfterMs).toISOString()
+  return error
+}
+
 /**
  * Request JSON with retries/backoff.
  * Returns parsed JSON (axios `response.data`).
@@ -105,6 +121,7 @@ export async function requestJson(options) {
     data = undefined,
     timeoutMs = DEFAULT_TIMEOUT_MS,
     maxRetries = DEFAULT_MAX_RETRIES,
+    maxRetryAfterMs = DEFAULT_MAX_RETRY_AFTER_MS,
     provider = 'external',
   } = options || {}
 
@@ -140,11 +157,12 @@ export async function requestJson(options) {
 
       // Rate limit handling
       if (status === 429) {
-        if (isLast) {
-          throw responseError(`[${provider}] HTTP 429 Too Many Requests (max retries exceeded)`, res)
+        const retryAfterMs = parseRetryAfterMs(res.headers?.['retry-after'])
+        // A Retry-After past the cap says no retry inside this request can succeed.
+        if (isLast || (retryAfterMs !== null && retryAfterMs > maxRetryAfterMs)) {
+          throw rateLimitError(provider, res, retryAfterMs, isLast)
         }
 
-        const retryAfterMs = parseRetryAfterMs(res.headers?.['retry-after'])
         const waitMs = retryAfterMs ?? jitter(DEFAULT_BASE_BACKOFF_MS * Math.pow(2, attempt))
         await sleep(waitMs)
         continue
@@ -190,6 +208,7 @@ export async function requestJson(options) {
     ? responseError(`[${provider}] request failed${suffix}: ${message}`, lastErr.response)
     : new Error(`[${provider}] request failed${suffix}: ${message}`)
   if (code) failure.code = code
+  if (lastErr?.retryAt) failure.retryAt = lastErr.retryAt
   throw failure
 }
 

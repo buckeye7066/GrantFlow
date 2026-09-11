@@ -6,6 +6,7 @@ import {
 } from "@/api/foundations"
 import { listProfiles } from "@/api/profiles"
 import { apiFetch } from "@/api/client"
+import { federalSearchErrorMessage, isFederalQuotaError } from "./federalSearchError.js"
 import { scoreToMatchTier } from "@/lib/matchDisplayThresholds"
 import { useToast } from "@/components/ui/use-toast"
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card"
@@ -222,11 +223,13 @@ export default function FoundationSearch() {
   }, [nsfResults])
 
   // ── Federal query (prepopulated list; keyword refines) ───────────────────
-  const { data: fedResults, isLoading: fedLoading } = useQuery({
+  const { data: fedResults, isLoading: fedLoading, error: fedError } = useQuery({
     queryKey: ["federal-search", submittedFed],
     queryFn: () => searchFederalPrograms({ keyword: submittedFed || undefined }),
     enabled: true,
     staleTime: 120_000,
+    // A spent daily quota will not recover on retry; show when it returns instead.
+    retry: (failureCount, error) => !isFederalQuotaError(error) && failureCount < 1,
   })
   const fedOpps = useMemo(() => {
     const payload = fedResults?.data ?? fedResults ?? {}
@@ -674,8 +677,17 @@ export default function FoundationSearch() {
 
             <div className="space-y-3">
               <p className="text-sm text-slate-600">
-                {fedLoading ? "Loading federal programs..." : `${fedOpps.length} programs${submittedFed ? ` for "${submittedFed}"` : ""}`}
+                {fedLoading
+                  ? "Loading federal programs..."
+                  : fedError
+                    ? "Federal programs unavailable"
+                    : `${fedOpps.length} programs${submittedFed ? ` for "${submittedFed}"` : ""}`}
               </p>
+              {fedError && (
+                <p role="alert" className="text-sm text-amber-800 bg-amber-50 border border-amber-200 rounded-md px-3 py-2">
+                  {federalSearchErrorMessage(fedError)}
+                </p>
+              )}
               {fedOpps.map((opp, i) => {
                 const entry = fedScores.get(String(opp.source_id))
                 const score = entry?.match_score
