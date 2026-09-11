@@ -43,6 +43,21 @@ function trimSnapshotDocuments(documents) {
   })
 }
 
+// profiles.avatar_data is the durable BYTEA copy of the avatar image. buildProfileContext
+// reads the profile with SELECT *, so without this the raw image rode into every stored
+// snapshot as a byte-keyed JSON object (53MB for one JPEG; 2.9MB-average crawler_jobs rows
+// on 2026-09-11, which made GET /api/crawlers/jobs time out). No crawler reads the bytes;
+// avatar_url / avatar_content_type still identify the image.
+const SNAPSHOT_PROFILE_BLOB_KEYS = ['avatar_data']
+
+function stripSnapshotProfileBlobs(profile) {
+  if (!profile || typeof profile !== 'object') return profile
+  if (!SNAPSHOT_PROFILE_BLOB_KEYS.some((key) => Object.prototype.hasOwnProperty.call(profile, key))) return profile
+  const copy = { ...profile }
+  for (const key of SNAPSHOT_PROFILE_BLOB_KEYS) delete copy[key]
+  return copy
+}
+
 /**
  * Convert Set fields in signals to arrays for JSON serialization, and cap heavy
  * document text so the snapshot stays small.
@@ -63,6 +78,8 @@ export function prepareContextForSnapshot(context) {
   if (Array.isArray(context.documents)) {
     out.documents = trimSnapshotDocuments(context.documents)
   }
+  out.profile = stripSnapshotProfileBlobs(context.profile)
+  if (out.profile === undefined) delete out.profile
   return out
 }
 

@@ -6,6 +6,7 @@ import { dirname, join } from 'path'
 import { dispatchCrawlerJob } from '../services/crawlerDispatcher.js'
 import { createCrawlerJob, validateJobParameters, generateIdempotencyKey, findPendingRetryOf } from '../services/crawlerJobCreation.js'
 import { buildProfileContext, computeProfileDigest } from '../services/profileHelpers.js'
+import { prepareContextForSnapshot } from '../services/snapshotSerialization.js'
 import { resolveProfileForId } from '../utils/profileResolver.js'
 import { validatePagination } from '../utils/validation.js'
 import { createOpenAIClient } from '../utils/openaiClient.js'
@@ -490,12 +491,18 @@ router.get('/jobs', async (req, res) => {
       accessibleProfileIds,
     })
 
-    const limitValue = Number.isFinite(limit) ? limit : 100
-    const offsetValue = Number.isFinite(offset) ? offset : 0
+    const limitValue = Number.isFinite(limit) ? Math.min(Math.max(limit, 1), 500) : 100
+    const offsetValue = Number.isFinite(offset) ? Math.max(offset, 0) : 0
 
     const rows = await req.db
       .prepare(
-        `SELECT * FROM crawler_jobs ${clause} ORDER BY created_at DESC LIMIT ? OFFSET ?`,
+        // Explicit projection: profile_context_snapshot (multi-MB per job) belongs only on
+        // GET /jobs/:id. SELECT * made this status list time out on production 2026-09-11.
+        `SELECT id, created_at, started_at, completed_at, type, status, profile_id, organization_id,
+                parameters, result_count, result_meta, error, requested_by, idempotency_key,
+                dispatch_attempts, next_dispatch_at, retry_count, last_retry_at, last_heartbeat_at,
+                worker_id, attempt_count, claimed_at
+           FROM crawler_jobs ${clause} ORDER BY created_at DESC LIMIT ? OFFSET ?`,
       )
       .all(...params, limitValue, offsetValue)
 
@@ -1341,7 +1348,8 @@ router.post('/jobs/:id/retry', async (req, res) => {
     if (retryProfileId) {
       try {
         const context = await buildProfileContext(req.db, retryProfileId)
-        profileContextSnapshot = JSON.stringify(context)
+        // Same stored-snapshot contract as job creation and the dispatcher.
+        profileContextSnapshot = JSON.stringify(prepareContextForSnapshot(context))
       } catch (error) {
         console.warn('[crawlers] Failed to build profile context snapshot for retry:', error?.message)
         // Try to reuse old snapshot if available
