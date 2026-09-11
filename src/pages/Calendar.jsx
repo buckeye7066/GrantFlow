@@ -1,3 +1,4 @@
+import { GRANT_LIST_FULL_LIMIT } from '@/api/grantListLimits'
 import React, { useState, useMemo } from "react"
 import { useQuery } from "@tanstack/react-query"
 import { getCalendarDeadlines } from "@/api/foundations"
@@ -55,7 +56,7 @@ export default function Calendar() {
   // Also load grants from pipeline for the existing view
   const { data: grants = [] } = useQuery({
     queryKey: ["grants"],
-    queryFn: () => client.entities.Grant.list(),
+    queryFn: () => client.entities.Grant.list('-created_date', GRANT_LIST_FULL_LIMIT),
   })
   const { data: milestones = [] } = useQuery({
     queryKey: ["milestones"],

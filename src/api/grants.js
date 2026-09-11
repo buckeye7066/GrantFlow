@@ -1,7 +1,13 @@
 import { apiFetch } from './client'
+import { GRANT_LIST_FULL_LIMIT } from './grantListLimits'
 
 export function listGrants(filters = {}) {
   const params = new URLSearchParams()
+  // No limit means the backend's silent 100-row default page; ask for the
+  // full set unless the caller chose a limit.
+  if (filters.limit === undefined || filters.limit === null || filters.limit === '') {
+    params.set('limit', String(GRANT_LIST_FULL_LIMIT))
+  }
   Object.entries(filters)
     .filter(([, value]) => value !== undefined && value !== null && value !== '')
     .forEach(([key, value]) => params.set(key, String(value)))

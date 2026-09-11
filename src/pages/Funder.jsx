@@ -1,3 +1,4 @@
+import { GRANT_LIST_FULL_LIMIT } from '@/api/grantListLimits'
 import React, { useState, useMemo } from "react"
 import { HandCoins, Search, Mail, Phone, MapPin, Building2 } from "lucide-react"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
@@ -30,7 +31,7 @@ export default function Funder() {
   const { data: grants = [] } = useQuery({
     queryKey: ['grants'],
     queryFn: async () => {
-  const raw = await apiFetch('/api/grants')
+  const raw = await apiFetch(`/api/grants?limit=${GRANT_LIST_FULL_LIMIT}`)
   const list = normalizeList(raw)
   if (!Array.isArray(raw) && list.length === 0) {
     console.warn('[Funder] /api/grants returned unexpected shape:', typeof raw, raw)

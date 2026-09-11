@@ -1,8 +1,10 @@
+import { GRANT_LIST_FULL_LIMIT } from '@/api/grantListLimits'
 import React, { useMemo } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import {
   AlertTriangle,
   ArrowRight,
+  Bookmark,
   CheckCircle2,
   ClipboardList,
   Clock,
@@ -17,15 +19,23 @@ import { createPageUrl } from '@/utils'
 import { useAuthStore } from '@/stores/authStore'
 import { hasFullAdminWorkspace } from '@/lib/workspaceAccess'
 
+// Canonical stages (shared/pipelineStages.js PIPELINE_STAGES), in lifecycle
+// order, minus `archived`. GET /api/pipeline/stats returns these keys plus the
+// legacy aliases; `legacyKey` is read only when the canonical key is absent.
+// Production 2026-09-11: this list held the legacy keys only and had no
+// `saved` tile, so the admin Dashboard said "Tracking 115" and hid 27 saved
+// grants while the Pipeline board showed them.
 const statusOrder = [
   { key: 'discovered', label: 'Discovery', icon: Target, color: 'bg-blue-500/15 text-blue-700 dark:bg-blue-500/20 dark:text-blue-200' },
+  { key: 'saved', label: 'Saved', icon: Bookmark, color: 'bg-violet-500/15 text-violet-700 dark:bg-violet-500/20 dark:text-violet-200' },
   { key: 'interested', label: 'Interested', icon: ClipboardList, color: 'bg-indigo-500/15 text-indigo-700 dark:bg-indigo-500/20 dark:text-indigo-200' },
+  { key: 'gathering_documents', legacyKey: 'app_prep', label: 'Prep', icon: ClipboardList, color: 'bg-sky-500/15 text-sky-800 dark:bg-sky-500/20 dark:text-sky-200' },
   { key: 'drafting', label: 'Drafting', icon: Clock, color: 'bg-amber-500/15 text-amber-800 dark:bg-amber-500/20 dark:text-amber-200' },
-  { key: 'app_prep', label: 'Prep', icon: ClipboardList, color: 'bg-sky-500/15 text-sky-800 dark:bg-sky-500/20 dark:text-sky-200' },
-  { key: 'submission_ready', label: 'Ready to Submit', icon: ArrowRight, color: 'bg-emerald-500/15 text-emerald-800 dark:bg-emerald-500/20 dark:text-emerald-200' },
+  { key: 'ready_to_submit', legacyKey: 'submission_ready', label: 'Ready to Submit', icon: ArrowRight, color: 'bg-emerald-500/15 text-emerald-800 dark:bg-emerald-500/20 dark:text-emerald-200' },
   { key: 'submitted', label: 'Submitted', icon: CheckCircle2, color: 'bg-green-500/15 text-green-800 dark:bg-green-500/20 dark:text-green-200' },
+  { key: 'follow_up', label: 'Follow-up', icon: Clock, color: 'bg-teal-500/15 text-teal-800 dark:bg-teal-500/20 dark:text-teal-200' },
   { key: 'awarded', label: 'Awarded', icon: CheckCircle2, color: 'bg-lime-500/15 text-lime-800 dark:bg-lime-500/20 dark:text-lime-200' },
-  { key: 'rejected', label: 'Closed', icon: AlertTriangle, color: 'bg-rose-500/15 text-rose-800 dark:bg-rose-500/20 dark:text-rose-200' },
+  { key: 'declined', legacyKey: 'rejected', label: 'Closed', icon: AlertTriangle, color: 'bg-rose-500/15 text-rose-800 dark:bg-rose-500/20 dark:text-rose-200' },
 ]
 
 const hiddenPipelineStatuses = new Set(['rejected', 'withdrawn', 'deleted', 'archived', 'expired'])
@@ -35,9 +45,10 @@ const currency = new Intl.NumberFormat('en-US', {
   maximumFractionDigits: 0,
 })
 
-function resolveCount(stats, key) {
+function resolveCount(stats, key, legacyKey) {
   if (!stats) return 0
-  const value = stats[key]
+  let value = stats[key]
+  if ((value === undefined || value === null) && legacyKey) value = stats[legacyKey]
   if (value === undefined || value === null) return 0
   const num = Number(value)
   return Number.isFinite(num) ? num : 0
@@ -60,7 +71,7 @@ export default function PipelineStatusCard({ stats = {}, isLoading, hasError = f
   const grantsQuery = useQuery({
     queryKey: ['grants'],
     queryFn: async () => {
-      const response = await client.entities.Grant.list('-created_date')
+      const response = await client.entities.Grant.list('-created_date', GRANT_LIST_FULL_LIMIT)
       return Array.isArray(response) ? response : Array.isArray(response?.data) ? response.data : []
     },
     enabled: !isAdmin && !Array.isArray(grants),
@@ -79,7 +90,7 @@ export default function PipelineStatusCard({ stats = {}, isLoading, hasError = f
     }
   }, [grants, grantsQuery.data, isAdmin])
 
-  const total = statusOrder.reduce((sum, status) => sum + resolveCount(stats, status.key), 0)
+  const total = statusOrder.reduce((sum, status) => sum + resolveCount(stats, status.key, status.legacyKey), 0)
 
   if (!isAdmin) {
     return (
@@ -179,7 +190,7 @@ export default function PipelineStatusCard({ stats = {}, isLoading, hasError = f
 
         <div className="grid grid-cols-2 gap-3">
           {statusOrder.map((status) => {
-            const count = resolveCount(stats, status.key)
+            const count = resolveCount(stats, status.key, status.legacyKey)
             return (
               <div
                 key={status.key}

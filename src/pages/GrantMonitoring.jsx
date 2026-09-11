@@ -1,3 +1,4 @@
+import { GRANT_LIST_FULL_LIMIT } from '@/api/grantListLimits'
 import React, { useState, useMemo } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import client from '@/api/client';
@@ -57,7 +58,7 @@ export default function GrantMonitoring() {
 
   const { data: grants = [], isLoading: isLoadingGrants } = useQuery({
     queryKey: ['grants'],
-    queryFn: () => client.entities.Grant.list('-updated_date'),
+    queryFn: () => client.entities.Grant.list('-updated_date', GRANT_LIST_FULL_LIMIT),
   });
 
   const { data: allAlertConfigs = [], isLoading: isLoadingAlerts } = useQuery({

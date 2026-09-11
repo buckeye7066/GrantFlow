@@ -1,3 +1,6 @@
+import { GRANT_LIST_FULL_LIMIT } from './grantListLimits'
+
+const FULL_SET_LIST_RESOURCES = new Set(['grants', 'organizations', 'profiles'])
 import { env, getApiBasePrefixForFetch } from '@/config/env.js'
 import { createLogger } from '@/utils/logger'
 import { toast as showToast } from '@/components/ui/use-toast'
@@ -602,6 +605,11 @@ class APIClient {
 
   createEntityClient(resource) {
     const normalizedResource = resource.replace(/^\/+/, '');
+    // These list routes page with validatePagination: omitting `limit` returns
+    // a silent 100-row default page (bare array, no pagination metadata).
+    // Production 2026-09-11: callers that omitted a limit analyzed 91 of 125
+    // grants. Default them to the full set; other resources are unchanged.
+    const pagedFullSet = FULL_SET_LIST_RESOURCES.has(normalizedResource);
     const endpoint = normalizedResource.startsWith('api/')
       ? `/${normalizedResource}`
       : `/api/${normalizedResource}`;
@@ -653,6 +661,9 @@ class APIClient {
           params.set('sort', field);
           params.set('order', order);
         }
+        if (typeof limit !== 'number' && pagedFullSet) {
+          limit = GRANT_LIST_FULL_LIMIT;
+        }
         if (typeof limit === 'number') {
           params.set('limit', String(limit));
         }
@@ -664,6 +675,9 @@ class APIClient {
       
       filter: async (filters = {}) => {
         const params = new URLSearchParams();
+        if (pagedFullSet && (filters?.limit === undefined || filters?.limit === null || filters?.limit === '')) {
+          params.set('limit', String(GRANT_LIST_FULL_LIMIT));
+        }
         Object.entries(filters).forEach(([key, value]) => appendFilterValue(params, key, value));
         return this.fetch(buildUrl(params));
       },

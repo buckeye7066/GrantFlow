@@ -1,3 +1,4 @@
+import { GRANT_LIST_FULL_LIMIT } from '@/api/grantListLimits'
 import React, { useState, useMemo } from "react"
 import { LineChart, Award, DollarSign, Target, Download, TrendingUp } from "lucide-react"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
@@ -20,7 +21,7 @@ export default function AdvancedAnalytics() {
 
   const { data: grants = [] } = useQuery({
     queryKey: ['grants'],
-    queryFn: () => apiFetch('/api/grants'),
+    queryFn: () => apiFetch(`/api/grants?limit=${GRANT_LIST_FULL_LIMIT}`),
     staleTime: 60_000,
   })
 

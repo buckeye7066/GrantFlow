@@ -14,8 +14,13 @@ import FlashHighlighter from '@/components/shared/FlashHighlighter.jsx'
 import { useAuthStore } from '@/stores/authStore'
 import { useSettingsStore } from '@/stores/settingsStore'
 import { env } from '@/config/env.js'
+import { isTransientAuthCheckError, authCheckRetryDelaySeconds } from '@/lib/authBootstrapRetry.js'
 function App() {
   const [bootstrapped, setBootstrapped] = useState(false)
+  // Set while GET /api/auth/me is rate limited / failing server-side: the
+  // session is NOT known to be invalid, so we wait and re-check instead of
+  // rendering the sign-in page.
+  const [authRetrySeconds, setAuthRetrySeconds] = useState(null)
   const isAuthenticated = useAuthStore((state) => state.isAuthenticated)
   const guidedCycleTourStatus = useAuthStore((state) => state.guidedCycleTourStatus)
   const fetchPreferences = useSettingsStore((state) => state.fetchPreferences)
@@ -38,30 +43,42 @@ function App() {
     // Access tokens are memory-only. auth.me() first exchanges the HttpOnly
     // refresh cookie when this is a reload, then validates the resulting access
     // token against the canonical identity endpoint.
-    client.auth
-      .me()
-      .then((response) => {
-        if (response) {
-          setAuthenticatedUser(response)
-          // Reschedule the session refresh timer based on the validated/refreshed
-          // token expiry. This cancels any stale timer that hydrateFromStorage may
-          // have scheduled with an outdated expiry, preventing a redundant refresh
-          // call that could race with future API requests.
-          const { scheduleSessionRefresh } = useAuthStore.getState()
-          if (response.expiresIn || response.accessExpires || response.refreshExpires) {
-            scheduleSessionRefresh(response)
+    const attempt = () => {
+      client.auth
+        .me()
+        .then((response) => {
+          if (response) {
+            setAuthenticatedUser(response)
+            // Reschedule the session refresh timer based on the validated/refreshed
+            // token expiry. This cancels any stale timer that hydrateFromStorage may
+            // have scheduled with an outdated expiry, preventing a redundant refresh
+            // call that could race with future API requests.
+            const { scheduleSessionRefresh } = useAuthStore.getState()
+            if (response.expiresIn || response.accessExpires || response.refreshExpires) {
+              scheduleSessionRefresh(response)
+            }
+          } else {
+            clearState()
           }
-        } else {
+          setAuthRetrySeconds(null)
+          setBootstrapped(true)
+        })
+        .catch((error) => {
+          // A rate limit or server fault is not proof the session is invalid:
+          // keep the session and re-check after the server's retry hint.
+          if (isTransientAuthCheckError(error)) {
+            const seconds = authCheckRetryDelaySeconds(error)
+            setAuthRetrySeconds(seconds)
+            setTimeout(attempt, seconds * 1000)
+            return
+          }
+          // Token is invalid or expired, clear state
           clearState()
-        }
-      })
-      .catch(() => {
-        // Token is invalid or expired, clear state
-        clearState()
-      })
-      .finally(() => {
-        setBootstrapped(true)
-      })
+          setAuthRetrySeconds(null)
+          setBootstrapped(true)
+        })
+    }
+    attempt()
   }, []) // Empty dep array — bootstrap runs exactly once on mount
 
   // Load persisted UI preferences once auth bootstrap is complete and the user is
@@ -77,8 +94,10 @@ function App() {
 
   if (!bootstrapped) {
     return (
-      <div className="flex min-h-screen items-center justify-center bg-slate-50 text-sm text-slate-500">
-        Loading your workspace…
+      <div className="flex min-h-screen items-center justify-center bg-slate-50 text-sm text-slate-500" role="status">
+        {authRetrySeconds
+          ? `GrantFlow is busy right now. Retrying in ${authRetrySeconds}s — you are still signed in.`
+          : 'Loading your workspace…'}
       </div>
     )
   }

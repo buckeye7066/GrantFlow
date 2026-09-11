@@ -2,6 +2,8 @@ import { useMemo } from "react"
 import { useQuery } from "@tanstack/react-query"
 import { getBillingOverview, getTierCatalog } from "@/api/billing"
 import { useAuthStore } from "@/stores/authStore"
+import { hasFullAdminWorkspace } from "@/lib/workspaceAccess"
+import { isRealProfileId } from "@/api/profileIdGuards"
 
 /**
  * useTierEntitlements(profileId)
@@ -22,12 +24,20 @@ const CAP = {
 }
 
 export function useTierEntitlements(profileId) {
-  const isAdmin = useAuthStore((s) => s.isAdmin === true || s.user?.role === "admin")
+  // The auth store keeps the admin bit on `user.is_admin` (there is no
+  // top-level `isAdmin` and no `user.role`). Reading `s.isAdmin` answered
+  // "not admin" for every administrator, so the owner was gated by the selected
+  // profile's billing and the Automation tab requested
+  // GET /api/billing/me/__admin__ (404) in production (2026-09-11).
+  const isAdmin = useAuthStore((s) => s.isAdmin === true || hasFullAdminWorkspace(s.user))
+  // `__admin__` / "all" / "none" are UI-only selector values, never billing rows.
+  const billingProfileId =
+    isRealProfileId(profileId) && profileId !== "all" && profileId !== "none" ? profileId : null
 
   const billingQuery = useQuery({
-    queryKey: ["billing-overview", profileId],
-    queryFn: () => getBillingOverview(profileId),
-    enabled: Boolean(profileId) && !isAdmin,
+    queryKey: ["billing-overview", billingProfileId],
+    queryFn: () => getBillingOverview(billingProfileId),
+    enabled: Boolean(billingProfileId) && !isAdmin,
     staleTime: 60_000,
   })
   const catalogQuery = useQuery({
