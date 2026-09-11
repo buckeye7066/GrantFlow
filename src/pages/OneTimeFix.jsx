@@ -1,4 +1,5 @@
 
+import { GRANT_LIST_FULL_LIMIT } from '@/api/grantListLimits'
 import React, { useState, useEffect } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import client from '@/api/client';
@@ -18,7 +19,7 @@ export default function OneTimeFix() {
 
   const { data: grants, isLoading: isLoadingGrants, refetch: refetchGrants } = useQuery({
     queryKey: ['grantsToFix'],
-    queryFn: () => client.entities.Grant.list().then(all => all.filter(g => g.match_decision !== 'REJECT' && g.eligibility_status !== 'ineligible')),
+    queryFn: () => client.entities.Grant.list('-created_date', GRANT_LIST_FULL_LIMIT).then(all => all.filter(g => g.match_decision !== 'REJECT' && g.eligibility_status !== 'ineligible')),
   });
 
   const { data: organizations, isLoading: isLoadingOrgs } = useQuery({

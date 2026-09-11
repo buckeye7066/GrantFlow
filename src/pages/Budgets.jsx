@@ -1,3 +1,4 @@
+import { GRANT_LIST_FULL_LIMIT } from '@/api/grantListLimits'
 import React, { useState } from "react";
 import client from '@/api/client';
 import { useQuery } from "@tanstack/react-query";
@@ -35,7 +36,7 @@ export default function Budgets() {
 
   const { data: grants = [], isLoading: isLoadingGrants } = useQuery({
     queryKey: ['grants'],
-    queryFn: () => client.entities.Grant.list(),
+    queryFn: () => client.entities.Grant.list('-created_date', GRANT_LIST_FULL_LIMIT),
   });
 
   const { data: budgetItems = [], isLoading: isLoadingBudgets } = useQuery({

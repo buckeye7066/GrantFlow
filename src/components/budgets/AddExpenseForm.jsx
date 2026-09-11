@@ -1,4 +1,5 @@
 
+import { GRANT_LIST_FULL_LIMIT } from '@/api/grantListLimits'
 import React, { useState, useEffect } from "react";
 import client from '@/api/client';
 import { useMutation, useQueryClient, useQuery } from "@tanstack/react-query";
@@ -31,7 +32,7 @@ export default function AddExpenseForm({ grantId, onSuccess }) {
   const { data: grant } = useQuery({
     queryKey: ['grant', grantId],
     queryFn: async () => {
-      const grants = await client.entities.Grant.list();
+      const grants = await client.entities.Grant.list('-created_date', GRANT_LIST_FULL_LIMIT);
       const foundGrant = grants.find(g => g.id === grantId);
       return foundGrant ?? null;
     },

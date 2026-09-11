@@ -1,3 +1,4 @@
+import { GRANT_LIST_FULL_LIMIT } from '@/api/grantListLimits'
 import React, { useState, useMemo, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import client from '@/api/client';
@@ -134,7 +135,7 @@ export default function SourceDirectory() {
   // Query grants to check which opportunities are already in pipeline
   const { data: allGrants = [] } = useQuery({
     queryKey: ['grants'],
-    queryFn: () => client.entities.Grant.list(),
+    queryFn: () => client.entities.Grant.list('-created_date', GRANT_LIST_FULL_LIMIT),
     onError: (error) => {
       log.error('failed to load grants', error)
     },

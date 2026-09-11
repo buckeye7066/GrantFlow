@@ -1,3 +1,4 @@
+import { GRANT_LIST_FULL_LIMIT } from '@/api/grantListLimits'
 import React, { useMemo } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import {
@@ -70,7 +71,7 @@ export default function PipelineStatusCard({ stats = {}, isLoading, hasError = f
   const grantsQuery = useQuery({
     queryKey: ['grants'],
     queryFn: async () => {
-      const response = await client.entities.Grant.list('-created_date')
+      const response = await client.entities.Grant.list('-created_date', GRANT_LIST_FULL_LIMIT)
       return Array.isArray(response) ? response : Array.isArray(response?.data) ? response.data : []
     },
     enabled: !isAdmin && !Array.isArray(grants),
