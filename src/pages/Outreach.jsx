@@ -1,3 +1,4 @@
+import { GRANT_LIST_FULL_LIMIT } from '@/api/grantListLimits'
 import React, { useMemo, useState } from "react"
 import { Megaphone, Users, Mail, Phone, Calendar, Plus, Search } from "lucide-react"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
@@ -31,7 +32,7 @@ export default function Outreach() {
     queryKey: ['grants', activeProfileId],
     enabled: Boolean(activeProfileId),
     queryFn: () =>
-      apiFetch('/api/grants', {
+      apiFetch(`/api/grants?limit=${GRANT_LIST_FULL_LIMIT}`, {
         headers: { 'X-Profile-Id': activeProfileId },
       }),
     staleTime: 60_000,

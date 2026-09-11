@@ -41,3 +41,19 @@ test('no frontend caller reads the grants list without an explicit limit', () =>
   }
   assert.deepEqual(offenders, [], `Grant.list() without a limit gets a silent 100-row page:\n${offenders.join('\n')}`)
 })
+
+test('no frontend GET of /api/grants omits a limit', () => {
+  const offenders = []
+  // apiFetch('/api/grants') or apiFetch('/api/grants', {...}) with no query string.
+  const bare = /apiFetch\(\s*(['"`])\/api\/grants\1\s*([,)])/g
+  for (const file of walk(srcDir.pathname.replace(/^\/([A-Za-z]:)/, '$1'))) {
+    const text = fs.readFileSync(file, 'utf8')
+    for (const match of text.matchAll(bare)) {
+      const tail = text.slice(match.index, match.index + 200)
+      if (/method:\s*['"](POST|PUT|PATCH|DELETE)['"]/.test(tail)) continue
+      const line = text.slice(0, match.index).split('\n').length
+      offenders.push(`${path.relative(root.pathname.replace(/^\/([A-Za-z]:)/, '$1'), file)}:${line}`)
+    }
+  }
+  assert.deepEqual(offenders, [], `GET /api/grants without a limit gets a silent 100-row page:\n${offenders.join('\n')}`)
+})
