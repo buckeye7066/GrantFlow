@@ -41,3 +41,21 @@ describe('prepareContextForSnapshot document trimming', () => {
     expect(out.documents[0].extracted_text.length).toBe(4000)
   })
 })
+
+describe('prepareContextForSnapshot avatar bytes', () => {
+  // Live finding 2026-09-11: profiles.avatar_data (BYTEA) rode buildProfileContext's
+  // SELECT * into every stored snapshot as a byte-keyed JSON object - 53MB for one
+  // JPEG, 2.9MB-average rows, and GET /api/crawlers/jobs timed out shipping them.
+  it('drops profile avatar bytes but keeps the avatar reference', () => {
+    const bytes = Buffer.alloc(200000, 1)
+    const ctx = { profile: { id: 'p1', avatar_url: '/uploads/a.jpg', avatar_data: bytes, avatar_content_type: 'image/jpeg', display_name: 'Fixture' } }
+    const out = prepareContextForSnapshot(ctx)
+    expect(out.profile.avatar_data).toBeUndefined()
+    expect(out.profile.avatar_url).toBe('/uploads/a.jpg')
+    expect(out.profile.avatar_content_type).toBe('image/jpeg')
+    expect(out.profile.display_name).toBe('Fixture')
+    expect(JSON.stringify(out).length).toBeLessThan(1000)
+    // The caller's live context is not mutated.
+    expect(ctx.profile.avatar_data).toBe(bytes)
+  })
+})

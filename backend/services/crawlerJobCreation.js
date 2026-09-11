@@ -7,6 +7,7 @@
 
 import crypto from 'crypto'
 import { buildProfileContext, computeProfileDigest } from './profileHelpers.js'
+import { prepareContextForSnapshot } from './snapshotSerialization.js'
 import { validateJobStatus, validateZipCode, validateStateCode, validateUuid } from '../utils/dbValidation.js'
 import { CRAWLER_JOB_TYPES } from '../config/constants.js'
 import { isSupersededCrawlerType } from '../../shared/supersededCrawlerTypes.js'
@@ -226,7 +227,10 @@ export async function createCrawlerJob(db, options) {
   if (buildSnapshot && profileId) {
     try {
       const context = await buildProfileContext(db, profileId, { asOf: createdAtIso })
-      profileContextSnapshot = stableStringify(context)
+      // Same serialization contract as the dispatcher's ensureJobSnapshot: Sets become
+      // arrays (stableStringify would flatten them to {}), document text is capped, and
+      // avatar bytes are dropped.
+      profileContextSnapshot = stableStringify(prepareContextForSnapshot(context))
     } catch (snapshotErr) {
       console.warn('[createCrawlerJob] Failed to build profile context snapshot; proceeding without snapshot', {
         profileId,

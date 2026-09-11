@@ -1805,12 +1805,13 @@ router.get('/:id/report-packet', async (req, res) => {
              ELSE 4
            END,
            g.deadline ASC NULLS LAST,
-           g.created_date DESC`,
+           g.created_at DESC`,
       )
       .all(String(id))
   } catch (error) {
-    // Some legacy DBs don't have NULLS LAST or created_date. Fall back to
-    // a plain query that just sorts by id — never let this 500.
+    // grants carries created_at (never created_date — referencing it made this
+    // query fail on every call until 2026-09-11, so every packet silently used
+    // the id-ordered fallback). Fall back only for a DB without NULLS LAST.
     profileLogger.warn('[profiles] report-packet: rich grants query failed, using fallback', {
       id,
       err: error?.message,

@@ -210,8 +210,12 @@ router.put('/', async (req, res) => {
       if (key === 'custom_preferences') return // already handled above
       if (allowedFields.includes(key) && value !== undefined) {
         if (typeof value === 'boolean') {
+          // Bind 1/0, never a JS boolean: production Postgres stores these flags as
+          // INTEGER and node-pg sends a boolean as the text 'false', which INTEGER
+          // rejects (every save 500d on 2026-09-11). 1/0 is valid input for
+          // INTEGER, BOOLEAN and SQLite columns alike.
           updates.push(`${key} = ?`)
-          values.push(Boolean(value))
+          values.push(value ? 1 : 0)
         } else {
           updates.push(`${key} = ?`)
           values.push(value)
