@@ -91,10 +91,18 @@ router.get('/:ein/filing/:taxPeriod', async (req, res) => {
   try {
     const ein = String(req.params.ein).replace(/\D/g, '')
     const taxPeriod = String(req.params.taxPeriod)
+    if (ein.length !== 9 || !/^\d{6}$/.test(taxPeriod)) {
+      return res.status(400).json({ error: 'Provide a 9-digit EIN and a YYYYMM tax period' })
+    }
     const filing = await propublica.getFiling(ein, taxPeriod)
     res.json(filing)
   } catch (error) {
     routeLogger.error('[foundations/filing] error', error?.message)
+    const upstreamStatus = Number(error?.response?.status)
+    if (upstreamStatus === 404) return res.status(404).json({ error: 'filing_not_found' })
+    if (Number.isFinite(upstreamStatus) && upstreamStatus > 0) {
+      return res.status(502).json({ error: 'filing_source_unavailable', upstream_status: upstreamStatus })
+    }
     res.status(500).json(formatError(error))
   }
 })
@@ -154,6 +162,10 @@ router.get('/federal/search', async (req, res) => {
     res.json(results)
   } catch (error) {
     routeLogger.error('[foundations/federal] error', error?.message)
+    const upstreamStatus = Number(error?.response?.status)
+    if (Number.isFinite(upstreamStatus) && upstreamStatus > 0) {
+      return res.status(502).json({ error: 'federal_listings_unavailable', upstream_status: upstreamStatus })
+    }
     res.status(500).json(formatError(error))
   }
 })

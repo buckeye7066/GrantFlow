@@ -4411,7 +4411,7 @@ async function latestFinishedBlockerKind(db, { taskId, excludeRunId = null } = {
       .prepare(`
         SELECT blocker_kind FROM hamilton_autopilot_runs
          WHERE task_id = ?
-           AND (? IS NULL OR id != ?)
+           AND (CAST(? AS TEXT) IS NULL OR id != ?)
            AND status IN ('blocked','completed','submitted','failed')
          ORDER BY created_at DESC
          LIMIT 1

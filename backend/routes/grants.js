@@ -932,7 +932,7 @@ router.get('/:id', async (req, res) => {
       FROM grants g
       LEFT JOIN organizations o ON g.organization_id = o.id
       WHERE g.id = ?
-        AND (? IS NULL OR g.profile_id = ?)
+        AND (CAST(? AS TEXT) IS NULL OR g.profile_id = ?)
     `).get(req.params.id, grantAccess.profile_id ?? null, grantAccess.profile_id ?? null);
     
     if (!grant) {

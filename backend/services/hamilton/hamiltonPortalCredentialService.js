@@ -929,13 +929,15 @@ export async function listCredentialsAwaitingHandover(db, { profileId = null, li
   if (!db) return []
   await ensureSchema(db)
   const cap = Math.max(1, Math.min(500, Number(limit) || 100))
-  // Fully static SQL: the optional profile filter rides an `? IS NULL OR`
+  // Fully static SQL: the optional profile filter rides a `CAST(? AS TEXT) IS NULL OR`
   // predicate and the cap is a bound parameter, so scripts/codemod/safe-sql.mjs
   // sees no interpolation at all. (The assembled `WHERE ${where.join(…)}` /
   // `LIMIT ${cap}` this replaced tripped the frozen dynamic-SQL baseline —
   // that inventory is allowed to shrink and never to grow, so the fix is
   // static SQL, not a new baseline entry.) Both shapes already have precedent
-  // in this repo (routes/grants.js, agentControlStore.js) and work on the
+  // in this repo (routes/grants.js, agentControlStore.js). The CAST is load-bearing: a bare
+  // `? IS NULL` is an untyped parameter and Postgres rejects it with 42P18 (live
+  // GET /api/grants/:id outage 2026-09-11). Both work on the
   // SQLite and Postgres sides of the shim. The predicate still runs BEFORE
   // LIMIT, per the repo's SQL-predicate-before-LIMIT invariant.
   const pid = profileId ? String(profileId) : null
@@ -946,7 +948,7 @@ export async function listCredentialsAwaitingHandover(db, { profileId = null, li
               handover_attempts, handover_next_retry_at
          FROM hamilton_portal_credentials
         WHERE handover_status IN ('pending','blocked')
-          AND (? IS NULL OR profile_id = ?)
+          AND (CAST(? AS TEXT) IS NULL OR profile_id = ?)
         ORDER BY updated_at DESC
         LIMIT ?`,
     ).all(pid, pid, cap)
