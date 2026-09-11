@@ -129,7 +129,7 @@ function GlobalFreePeriodPanel({ onGrantGlobal, onRevokeGlobal, busy }) {
         }}>
           Give ALL 1 month free
         </Button>
-        <Button variant="ghost" size="sm" className="text-rose-600" disabled={busy} onClick={() => {
+        <Button variant="ghost" size="sm" className="text-rose-600 dark:text-rose-300" disabled={busy} onClick={() => {
           if (window.confirm('End the free period for EVERY account now? Accounts currently on a free week/month will resume normal billing immediately.')) onRevokeGlobal()
         }}>
           End all free periods
