@@ -12,7 +12,7 @@
  * plus the prompt contract (memory, scope, admin lifecycle) the model reads.
  */
 import request from 'supertest'
-import { describe, it, expect, beforeAll, beforeEach } from 'vitest'
+import { describe, it, expect, beforeAll, beforeEach, vi } from 'vitest'
 import { getAppAndDb, TEST_ADMIN_AUTH_HEADER } from './testServer.js'
 import {
   listRecentConversations, searchConversations, recallConversation, buildRecentConversationsBlock,
@@ -22,6 +22,17 @@ import {
 } from '../services/profileLifecycle.js'
 import { invokeTool, listToolMetadata } from '../services/anyaToolRegistry.js'
 import { CHAT_TOOL_WHITELIST, buildAnyaSystemPrompt } from '../services/anyaOrchestrator.js'
+
+// profile.runDiscovery's confirmed:true path calls the REAL runProfileDiscoveryLive
+// dynamically; stub it (keeping every other crawlerOsService export real, since
+// server.js's boot graph imports several of them statically) so the test can hand
+// back the actual {run, persisted, thesis, opportunities} envelope shape and pin
+// what the tool reports off it — see backend/services/crawlerOsService.js:1029.
+const { runProfileDiscoveryLiveMock } = vi.hoisted(() => ({ runProfileDiscoveryLiveMock: vi.fn() }))
+vi.mock('../services/crawlerOsService.js', async (importOriginal) => {
+  const actual = await importOriginal()
+  return { ...actual, runProfileDiscoveryLive: runProfileDiscoveryLiveMock }
+})
 
 const USER_A = { userId: 'user-a', id: 'user-a', isAdmin: false, accessibleProfileIds: new Set(['prof-a']), activeProfileId: 'prof-a' }
 const USER_B = { userId: 'user-b', id: 'user-b', isAdmin: false, accessibleProfileIds: new Set(['prof-b']), activeProfileId: 'prof-b' }
@@ -202,6 +213,44 @@ describe('Anya assistant powers', () => {
       await expect(invokeTool('profile.runDiscovery', { profileId: 'prof-b', confirmed: true }, { db, ctx: USER_A, user: USER_A })).rejects.toThrow(/Not authorized/)
       const preview = (await invokeTool('profile.runDiscovery', { profileId: 'prof-a' }, { db, ctx: USER_A, user: USER_A })).output
       expect(preview.confirmation_required).toBe(true)
+    })
+
+    it('profile.runDiscovery(confirmed:true) reports the REAL stored/matches/sources off the {run,persisted} envelope, never zeroed out', async () => {
+      // The real envelope shape (crawlerOsService.js:1029): { run, persisted, thesis, opportunities }.
+      // `run.stored`/`run.sources` and `persisted.matches` are where the real numbers live —
+      // nothing here is a top-level `result.stored`/`result.matches` field.
+      runProfileDiscoveryLiveMock.mockResolvedValueOnce({
+        run: {
+          run_id: 'run_1', profile_id: 'prof-a', planned: 3, stored: 7, rejected: 2,
+          sources: [
+            { source_id: 'benefits_gov', outcome: 'ok', stored: 5 },
+            { source_id: 'tn_benefits', outcome: 'ok', stored: 2 },
+            { source_id: 'dead_source', outcome: 'skipped', stored: 0 },
+          ],
+          web_lane: { queried: true, fetched: 3, extracted: 2 },
+        },
+        persisted: { opportunities: 7, matches: 4, sources: 3, rejected: 2 },
+        thesis: { profile_id: 'prof-a' },
+        opportunities: [],
+      })
+      const { output } = await invokeTool('profile.runDiscovery', { profileId: 'prof-a', confirmed: true }, { db, ctx: USER_A, user: USER_A })
+      expect(output.ok).toBe(true)
+      expect(output.skipped).toBeNull()
+      expect(output.stored).toBe(7)
+      expect(output.matches).toBe(4)
+      expect(output.sources_used).toEqual(expect.arrayContaining(['benefits_gov', 'tn_benefits', 'web_search']))
+      expect(output.sources_used).not.toContain('dead_source')
+    })
+
+    it('profile.runDiscovery(confirmed:true) reports an honest skip instead of a fabricated zero', async () => {
+      runProfileDiscoveryLiveMock.mockResolvedValueOnce({
+        run: { skipped: true, reason: 'profile_unconfigured', profile_id: 'prof-a', planned: 0, stored: 0, rejected: 0, sources: [] },
+        persisted: { opportunities: 0, matches: 0, sources: 0, rejected: 0, skipped: true, reason: 'profile_unconfigured' },
+      })
+      const { output } = await invokeTool('profile.runDiscovery', { profileId: 'prof-a', confirmed: true }, { db, ctx: USER_A, user: USER_A })
+      expect(output.ok).toBe(false)
+      expect(output.skipped).toBe('profile_unconfigured')
+      expect(output.stored).toBe(0)
     })
   })
 
