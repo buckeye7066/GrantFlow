@@ -55,6 +55,35 @@ const REEVE = {
 
 const BASE_PROFILE = { id: 'p-demo_stem_student', primary_type: 'individual', state: 'TN' }
 
+describe('a health answer that DENIES disability is not a disability signal (2026-09-12)', () => {
+  // Two real profiles state "No disability" in demographics AND in
+  // health_medical.disability_type; the health block counted the non-empty
+  // string, so both read as disabled and condition-specific programs (ECF
+  // CHOICES, PAN Foundation) were judged "unnamed" instead of "none".
+  it.each([
+    [['No disability']],
+    ['No disability'],
+    ['None'],
+    [['none']],
+    ['No known conditions'],
+    ['N/A'],
+  ])('disability_type %j reads as no disability', (value) => {
+    const n = normalizeProfile(BASE_PROFILE, { demographics: { disability_status: 'No disability' }, health_medical: { disability_type: value } }, null)
+    expect(n.hasChronicIllness).toBe(false)
+    expect(n.hasDisabilityNeed).toBe(false)
+    expect(n.needCategories).not.toContain('disability')
+  })
+
+  it.each([
+    [['mobility impairment']],
+    ['No vision in left eye'],
+    [['No disability', 'arthritis']],
+  ])('a real answer %j still reads as a disability', (value) => {
+    const n = normalizeProfile(BASE_PROFILE, { health_medical: { disability_type: value } }, null)
+    expect(n.hasChronicIllness).toBe(true)
+  })
+})
+
 /** Sections for the three profile variants. */
 const sectionsWith = ({ conditions = '', disabilityStatus = null, extraHealth = {} } = {}) => ({
   demographics: disabilityStatus ? { disability_status: disabilityStatus } : {},

@@ -38,7 +38,9 @@
 // outside is "elsewhere" (temporalRelatability), not a neutral unknown.
 // An intellectual/developmental disability program is condition-specific, and a
 // profile's IDD diagnosis (F70–F79, "mentally challenged") names that condition.
-export const PROFILE_SIGNAL_VERSION = '2026.09.12-3'
+// A health answer that DENIES disability ("No disability") is no longer read as
+// a disability signal (profileNormalizer).
+export const PROFILE_SIGNAL_VERSION = '2026.09.12-4'
 
 /** Repo-relative files whose content decides what the engine believes about a profile. */
 export const PROFILE_SIGNAL_DERIVATION_FILES = Object.freeze([
@@ -66,6 +68,6 @@ export const PROFILE_SIGNAL_DERIVATION_FILES = Object.freeze([
  * sha256 over the LF-normalized concatenation of the files above, pinned by
  * `scripts/pin-signal-version.mjs`. The test recomputes it.
  */
-export const PROFILE_SIGNAL_DERIVATION_HASH = '66c84873ab4ba809317f74293b5b7b310822cddd047abb6540a13267a362165d'
+export const PROFILE_SIGNAL_DERIVATION_HASH = '3a31d5e03818bf17e04a157021cf6faf2cea208a99eb0fb0917545e04b28e66b'
 
 export default { PROFILE_SIGNAL_VERSION, PROFILE_SIGNAL_DERIVATION_FILES, PROFILE_SIGNAL_DERIVATION_HASH }
