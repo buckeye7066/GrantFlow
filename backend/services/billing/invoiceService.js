@@ -29,7 +29,7 @@ import { sendEmail } from '../email.js'
 import { ADMIN_EMAIL } from '../../config/constants.js'
 import { createLogger } from '../../utils/logger.js'
 import { notifyProfile } from '../comms/commsService.js'
-import { suspendProfile, reactivateProfile, cadenceCycleDays } from './accountStatus.js'
+import { suspendProfile, reactivateProfile, cadenceCycleDays, readProfileLifecycleStatus } from './accountStatus.js'
 
 const log = createLogger('invoiceService')
 
@@ -122,6 +122,38 @@ async function isSyntheticProfile(db, profileId) {
     const row = await db.prepare('SELECT created_by FROM profiles WHERE id = ? LIMIT 1').get(String(profileId))
     return String(row?.created_by || '') === 'agent:amy'
   } catch { return false }
+}
+
+/**
+ * A deleted profile is never billed, chased, or suspended. "Deleted" is
+ * profiles.status = 'deleted' (soft delete) OR no profiles row at all (a hard
+ * delete cascades billing_accounts away, but billing_invoices has no FK, so its
+ * invoices outlive the profile). A failed read is NOT treated as deleted, so a
+ * transient error never voids a real invoice.
+ */
+async function isDeletedOrMissingProfile(db, profileId) {
+  const state = await readProfileLifecycleStatus(db, profileId)
+  if (!state) return false
+  return !state.exists || state.status === 'deleted'
+}
+
+/**
+ * Void every invoice on a deleted profile that still asks for money, so nothing
+ * dangling is chased. Called by the profile delete route; dunning applies the
+ * same rule to profiles deleted before this existed. Paid / pro bono / void
+ * rows are history and stay untouched. Restoring a profile does not un-void.
+ */
+export async function voidOpenInvoicesForDeletedProfile(db, { profileId } = {}) {
+  if (!profileId) return { ok: false, error: 'profile_id_required', voided: 0 }
+  await ensureInvoiceSchema(db)
+  const placeholders = OPEN_INVOICE_STATUSES.map(() => '?').join(',')
+  const res = await db.prepare(
+    `UPDATE billing_invoices SET status = 'void', settled_reason = 'profile_deleted'
+      WHERE profile_id = ? AND status IN (${placeholders})`,
+  ).run(String(profileId), ...OPEN_INVOICE_STATUSES)
+  const voided = Number(res?.changes ?? 0) || 0
+  log.info('open invoices voided — profile deleted', { profile_id: String(profileId), voided })
+  return { ok: true, profile_id: String(profileId), voided }
 }
 
 export function isNonRoutableEmail(email) {
@@ -260,6 +292,10 @@ export async function generateInvoiceForAccount(db, accountRow, { now = new Date
   if (!account?.profile_id) return null
   if (await isSyntheticProfile(db, account.profile_id)) {
     log.info('invoice skipped — synthetic (agent:amy) profile', { profile_id: account.profile_id })
+    return null
+  }
+  if (await isDeletedOrMissingProfile(db, account.profile_id)) {
+    log.info('invoice skipped — profile deleted', { profile_id: account.profile_id })
     return null
   }
   const cadence = normalizeCadence(accountRow.billing_cadence || account.billing_cadence)
@@ -426,7 +462,17 @@ export async function processDunning(db, { now = new Date() } = {}) {
   let reminded = 0
   let suspended = 0
   let voided = 0
+  let voidedDeleted = 0
   for (const inv of open || []) {
+    // A deleted profile is never reminded or suspended: suspending it would
+    // overwrite status 'deleted' and email a "paused" notice to someone who
+    // deleted their account. Void it (same rule the delete route applies).
+    if (await isDeletedOrMissingProfile(db, inv.profile_id)) {
+      await db.prepare(`UPDATE billing_invoices SET status = 'void', settled_reason = 'profile_deleted' WHERE id = ?`).run(inv.id)
+      log.info('invoice voided — profile deleted', { invoice_id: inv.id, profile_id: inv.profile_id })
+      voidedDeleted += 1
+      continue
+    }
     // Retire invoices that can never be paid: synthetic (agent:amy) profiles
     // and non-routable `.invalid` recipients. Voiding stops the daily reminder
     // -> bounce loop; existing bad rows heal on the next dunning pass.
@@ -466,7 +512,7 @@ export async function processDunning(db, { now = new Date() } = {}) {
       reminded += 1
     }
   }
-  return { reminded, suspended, voided, pro_bono_settled: reconciled.settled || 0 }
+  return { reminded, suspended, voided, voided_deleted_profile: voidedDeleted, pro_bono_settled: reconciled.settled || 0 }
 }
 
 /** Mark an invoice paid (Stripe webhook or admin) + lift any suspension. */
@@ -479,12 +525,17 @@ export async function markInvoicePaid(db, { invoiceId = null, profileId = null, 
   if (!inv) return { ok: false, error: 'invoice_not_found' }
 
   await db.prepare(`UPDATE billing_invoices SET status = 'paid', paid_at = ? WHERE id = ?`).run(new Date().toISOString(), inv.id)
-  // If the profile was suspended for this invoice, reactivate.
+  // If the profile was suspended for this invoice, reactivate — never a deleted
+  // profile (a late payment must not resurrect it).
+  let reactivated = false
   if (inv.status === 'suspended') {
-    try { await db.prepare(`UPDATE profiles SET status = 'active' WHERE id = ?`).run(inv.profile_id) } catch { /* status col */ }
+    try {
+      const res = await db.prepare(`UPDATE profiles SET status = 'active' WHERE id = ? AND COALESCE(status, '') <> 'deleted'`).run(inv.profile_id)
+      reactivated = res && typeof res.changes === 'number' ? res.changes > 0 : true
+    } catch { /* status col */ }
   }
-  log.info('invoice paid', { invoice_id: inv.id, profile_id: inv.profile_id, source })
-  return { ok: true, invoice_id: inv.id, profile_id: inv.profile_id, reactivated: inv.status === 'suspended' }
+  log.info('invoice paid', { invoice_id: inv.id, profile_id: inv.profile_id, source, reactivated })
+  return { ok: true, invoice_id: inv.id, profile_id: inv.profile_id, reactivated }
 }
 
 /**
@@ -496,13 +547,19 @@ export async function runBillingCycle(db, { now = new Date(), force = false } = 
   await ensureInvoiceSchema(db)
   let generated = 0
   try {
-    const accounts = await db.prepare('SELECT * FROM billing_accounts').all()
+    // Deleted profiles are never selected (soft delete keeps the profiles row,
+    // so the ON DELETE CASCADE never fires). generateInvoiceForAccount re-checks.
+    const accounts = await db.prepare(
+      `SELECT ba.* FROM billing_accounts ba
+         JOIN profiles p ON p.id = ba.profile_id
+        WHERE COALESCE(p.status, '') <> 'deleted'`,
+    ).all()
     for (const acc of accounts || []) {
       const r = await generateInvoiceForAccount(db, acc, { now }).catch((e) => { log.warn('generate failed', { profile_id: acc.profile_id, error: e?.message }); return null })
       if (r) generated += 1
     }
   } catch (err) { log.warn('runBillingCycle accounts query failed', { error: err?.message }) }
-  const dun = await processDunning(db, { now }).catch(() => ({ reminded: 0, suspended: 0, voided: 0, pro_bono_settled: 0 }))
+  const dun = await processDunning(db, { now }).catch(() => ({ reminded: 0, suspended: 0, voided: 0, voided_deleted_profile: 0, pro_bono_settled: 0 }))
   return { ran: true, generated, ...dun }
 }
 

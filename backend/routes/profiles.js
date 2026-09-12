@@ -14,6 +14,7 @@ import { buildProfileSectionPrompt, supportedSectionKeys } from '../prompts/prof
 import { PROFILE_SCHEMA, getDefaultSectionData, getFlatFieldToSectionMap } from '../config/profileSchema.js'
 import { dispatchCrawlerJob } from '../services/crawlerDispatcher.js'
 import { ensureBillingAccount, mapAccountRow } from '../services/billingAccounts.js'
+import { voidOpenInvoicesForDeletedProfile } from '../services/billing/invoiceService.js'
 import { linkProfileToAdmin } from '../utils/adminProfileLinks.js'
 import { safeParseJSON } from '../utils/safeJson.js'
 import { validatePagination } from '../utils/validation.js'
@@ -2446,6 +2447,18 @@ async function writeProfileTombstone(db, profileId, deletedBy, reason) {
   ).run(String(profileId), deletedBy || null, reason || null)
 }
 
+// A deleted profile must never be chased for money. A soft delete keeps the
+// profiles row (so billing_accounts' ON DELETE CASCADE never fires) and
+// billing_invoices has no FK at all, so void every open invoice explicitly.
+// Best-effort: billing cleanup must never fail the delete itself.
+async function voidDeletedProfileInvoices(db, profileId) {
+  try {
+    await voidOpenInvoicesForDeletedProfile(db, { profileId: String(profileId) })
+  } catch (billingErr) {
+    console.warn('[profiles] failed to void open invoices for deleted profile:', String(profileId), billingErr?.message || billingErr)
+  }
+}
+
 router.delete('/:id', async (req, res) => {
   const { id } = req.params
   const authUserId = req.ctx?.userId ?? null
@@ -2526,6 +2539,7 @@ router.delete('/:id', async (req, res) => {
     } catch (tombErr) {
       console.warn('[profiles] failed to write profile tombstone (soft-delete still applied):', String(id), tombErr?.message || tombErr)
     }
+    await voidDeletedProfileInvoices(req.db, id)
     console.warn('[profiles] Soft-deleted designated profile (tombstoned):', String(id))
     return res.status(204).send()
   }
@@ -2615,6 +2629,8 @@ router.delete('/:id', async (req, res) => {
         .run(id)
     }
   }
+
+  await voidDeletedProfileInvoices(req.db, id)
 
   // Clean up avatar file if it exists
   if (existing.avatar_url && existing.avatar_url.startsWith('/uploads/')) {
