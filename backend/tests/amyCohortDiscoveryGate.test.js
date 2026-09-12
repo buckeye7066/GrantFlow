@@ -329,7 +329,7 @@ describe('amy-cohort-3 — probe recall items are keyed by lever+finding type, n
     expect(items[0].actionability).toBe('code_change')
   })
 
-  it('a healthy probe night with no misses CLOSES the class item; a dead-extractor night holds it open as blocked', () => {
+  it('a healthy probe night for an UNRELATED subject never closes another subject\'s gap; a dead-extractor night also holds it open as blocked', () => {
     const night1 = foldApprovalLedger(null, { items: buildApprovalQueue([probeEval('a', 'Polk')]), evaluations: [probeEval('a', 'Polk')], runId: 'r1', at: '2026-09-12T12:00:00Z' })
     expect(Object.values(night1.ledger.entries).filter((e) => !e.resolved_at)).toHaveLength(1)
 
@@ -340,10 +340,25 @@ describe('amy-cohort-3 — probe recall items are keyed by lever+finding type, n
     expect(held.actionability).toBe('blocked')
     expect(held.evidence.subjects).toEqual(['Polk'])
 
-    const healthyCovered = evaluate({ lane: laneHealthy(), county: 'Fresno', recommendations: [rec('Fresno County Housing Trust Grant', 1)], sc: scenario('probe-d', 'probe:entity_d+none+housing') })
-    const night3 = foldApprovalLedger(night2.ledger, { items: buildApprovalQueue([healthyCovered]), evaluations: [healthyCovered], runId: 'r3', at: '2026-09-14T12:00:00Z' })
-    expect(night3.closed.map((c) => c.id)).toContain(`hyperlocal_recall_miss:${PROBE_ITEM_CATEGORY}`)
-    expect(Object.values(night3.ledger.entries).filter((e) => !e.resolved_at && e.lever === 'query_breadth')).toHaveLength(0)
+    // amy-cohort-3 BLOCKER fix (2026-09-12): a DIFFERENT probe cell (entity_d,
+    // county Fresno) running healthy with no miss of its own must NOT close
+    // the Polk item — Polk itself was never re-probed. Before the fix,
+    // `healthyProbeClassCoverage` treated ANY healthy probe of the finding
+    // type as proof the class had "stopped reproducing" and closed it here.
+    const healthyUnrelated = evaluate({ lane: laneHealthy(), county: 'Fresno', recommendations: [rec('Fresno County Housing Trust Grant', 1)], sc: scenario('probe-d', 'probe:entity_d+none+housing') })
+    const night3 = foldApprovalLedger(night2.ledger, { items: buildApprovalQueue([healthyUnrelated]), evaluations: [healthyUnrelated], runId: 'r3', at: '2026-09-14T12:00:00Z' })
+    expect(night3.closed.map((c) => c.id)).not.toContain(`hyperlocal_recall_miss:${PROBE_ITEM_CATEGORY}`)
+    const stillHeld = night3.decorated.find((i) => i.id === `hyperlocal_recall_miss:${PROBE_ITEM_CATEGORY}`)
+    expect(stillHeld).toBeTruthy()
+    expect(stillHeld.evidence.subjects).toEqual(['Polk'])
+    expect(Object.values(night3.ledger.entries).filter((e) => !e.resolved_at && e.lever === 'query_breadth')).toHaveLength(1)
+
+    // Only when a healthy probe SPECIFICALLY re-tests Polk and finds it covered
+    // does the class item close — a real re-probe, not a coincidence elsewhere.
+    const healthyPolkRetest = evaluate({ lane: laneHealthy(), county: 'Polk', recommendations: [rec('Polk County Housing Trust Grant', 1)], sc: scenario('probe-e', 'probe:entity_e+none+housing') })
+    const night4 = foldApprovalLedger(night3.ledger, { items: buildApprovalQueue([healthyPolkRetest]), evaluations: [healthyPolkRetest], runId: 'r4', at: '2026-09-15T12:00:00Z' })
+    expect(night4.closed.map((c) => c.id)).toContain(`hyperlocal_recall_miss:${PROBE_ITEM_CATEGORY}`)
+    expect(Object.values(night4.ledger.entries).filter((e) => !e.resolved_at && e.lever === 'query_breadth')).toHaveLength(0)
   })
 
   it('a present probe item carries only the subjects measured THIS run (never an ever-growing union of untested counties)', () => {

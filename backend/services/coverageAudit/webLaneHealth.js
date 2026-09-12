@@ -21,10 +21,19 @@
  *     each a BOUNDED summary (executed vs planned queries, provider counts,
  *     stage counters, provider_health, primary_attribution) — never the
  *     per-page ledger;
- *   - system_kv `web_lane_last_run:<profileId>`: the FULL bounded record of the
- *     profile's last run (query ledger, stage ledger, page ledger ≤ max_pages,
- *     seed outcomes) — one per profile, overwritten each run. The web-parity
- *     benchmark reads it (`getLastWebLaneRun`) to disposition web-only results.
+ *   - system_kv `web_lane_last_runs`: ONE row holding every profile's FULL
+ *     last-run record (query ledger, stage ledger, page ledger ≤ max_pages,
+ *     seed outcomes), keyed by profile id and LRU-capped at
+ *     LAST_RUN_MAX_PROFILES entries (evicting the oldest `at`). The web-parity
+ *     benchmark reads a single profile's slice via `getLastWebLaneRun`.
+ *     Before this bounded store, each profile got its OWN permanent
+ *     `web_lane_last_run:<profileId>` row that outlived the profile —
+ *     including Amy's nightly-reaped synthetic cohort, which mints a fresh
+ *     `randomUUID()` profile per run — so system_kv grew one row per profile
+ *     ever crawled, forever, with no TTL and no cleanup path (system_kv has no
+ *     `profile_id` column, so the profile-deletion sweep can never reach it).
+ *     A one-time lazy migration purges those legacy rows the first time this
+ *     module touches system_kv after upgrade; see purgeLegacyLastRunRowsOnce.
  *
  * Sam's `crawler.webLaneHealth` check reads the ring and reds out when the
  * judged runs are DEAD (queries ran, zero pages — the search layer) or
@@ -42,8 +51,22 @@ const log = createLogger('coverage:webLaneHealth')
 /** system_kv key holding the rolling web-lane health store. */
 export const KV_KEY = 'web_lane_health'
 
-/** system_kv key prefix for the per-profile last-run record. */
-export const LAST_RUN_KV_PREFIX = 'web_lane_last_run:'
+/** system_kv key holding every profile's last-run record (LRU-capped). */
+export const LAST_RUN_KV_KEY = 'web_lane_last_runs'
+
+/** Hard cap on distinct profiles retained in the last-run store, evicting the
+ *  entry with the oldest `at` first — the bound that replaces one permanent
+ *  system_kv row per profile ever crawled. */
+export const LAST_RUN_MAX_PROFILES = 200
+
+/** Legacy (pre-bounded-store) per-profile key prefix — one system_kv row per
+ *  profile that ever ran live discovery, never cleaned up even after the
+ *  profile (including Amy's nightly-reaped synthetics) was deleted. No longer
+ *  written; purged lazily on upgrade by purgeLegacyLastRunRowsOnce. */
+export const LEGACY_LAST_RUN_KV_PREFIX = 'web_lane_last_run:'
+
+/** system_kv flag key marking the legacy purge as already done (idempotent). */
+const LEGACY_LAST_RUN_PURGED_FLAG_KEY = 'web_lane_last_run_legacy_purged'
 
 /** How many recent lane runs to retain. */
 export const RECENT_CAP = 30
@@ -60,8 +83,8 @@ const DEFAULT_PAGE_LEDGER_CAP = 64
 /** Extraction failure classes that mean the EXTRACTOR (LLM path) failed, not the page. */
 const LLM_FAILURE_CLASSES = new Set(['llm_unavailable', 'llm_quota', 'llm_timeout', 'parse_error', 'unknown'])
 
-export function lastRunKvKey(profileId) {
-  return `${LAST_RUN_KV_PREFIX}${String(profileId ?? '').trim()}`
+function profileKey(profileId) {
+  return String(profileId ?? '').trim()
 }
 
 function num(v) {
@@ -102,8 +125,8 @@ function stageLedgerOf(telemetry) {
 }
 
 /**
- * PURE: the FULL bounded record of one lane run (persisted per profile under
- * `web_lane_last_run:<profileId>`). Every field is plain JSON.
+ * PURE: the FULL bounded record of one lane run (persisted per profile in the
+ * `web_lane_last_runs` bounded store). Every field is plain JSON.
  *
  * @param {object} telemetry  run.web_lane from runProfileDiscoveryLive
  * @param {{ profileId?:string|null, at?:string|null, trigger?:string|null }} meta
@@ -380,6 +403,22 @@ async function ensureKv(db) {
   await db.prepare('CREATE TABLE IF NOT EXISTS system_kv (key TEXT PRIMARY KEY, value TEXT, updated_at TEXT)').run()
 }
 
+/**
+ * One-time, idempotent cleanup of the pre-bounded-store per-profile rows
+ * (`web_lane_last_run:<profileId>`, unbounded, never cleaned up — see the
+ * module doc). Guarded by a flag row so a hot path (recordWebLaneRun runs on
+ * every live crawl) pays one extra indexed lookup forever after, not a scan.
+ * Best-effort: a failure here must never fail a crawl or a read.
+ */
+async function purgeLegacyLastRunRowsOnce(db) {
+  try {
+    const flag = await db.prepare('SELECT value FROM system_kv WHERE key = ?').get(LEGACY_LAST_RUN_PURGED_FLAG_KEY)
+    if (flag?.value) return
+    await db.prepare('DELETE FROM system_kv WHERE key LIKE ?').run(`${LEGACY_LAST_RUN_KV_PREFIX}%`)
+    await upsertKv(db, LEGACY_LAST_RUN_PURGED_FLAG_KEY, 'true', new Date().toISOString())
+  } catch { /* best-effort cleanup; never blocks a crawl or a read */ }
+}
+
 /** Read the rolling web-lane health store (Sam diagnostics / Anya tools). */
 export async function getWebLaneHealth(db) {
   if (!db?.prepare) return null
@@ -394,9 +433,40 @@ export async function getWebLaneHealth(db) {
   }
 }
 
+/** Read the bounded last-run store: { [profileId]: record }. Never throws. */
+async function readLastRunStore(db) {
+  try {
+    const row = await db.prepare('SELECT value FROM system_kv WHERE key = ?').get(LAST_RUN_KV_KEY)
+    if (!row?.value) return {}
+    const parsed = JSON.parse(row.value)
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {}
+  } catch {
+    return {}
+  }
+}
+
+/** Keep only the LAST_RUN_MAX_PROFILES most-recently-run profiles (by `at`),
+ *  evicting the oldest first — the LRU cap that replaces one permanent
+ *  system_kv row per profile ever crawled (Amy's reaped synthetics included). */
+function pruneLastRunStore(store) {
+  const ids = Object.keys(store)
+  if (ids.length <= LAST_RUN_MAX_PROFILES) return store
+  const keep = new Set(
+    ids
+      .map((id) => ({ id, at: Date.parse(store[id]?.at ?? '') || 0 }))
+      .sort((a, b) => b.at - a.at)
+      .slice(0, LAST_RUN_MAX_PROFILES)
+      .map((r) => r.id)
+  )
+  const next = {}
+  for (const id of ids) if (keep.has(id)) next[id] = store[id]
+  return next
+}
+
 /**
- * Read the profile's LAST full lane-run record (system_kv
- * `web_lane_last_run:<profileId>`). Returns null when none was recorded.
+ * Read one profile's LAST full lane-run record out of the bounded last-run
+ * store (system_kv `web_lane_last_runs`). Returns null when none was recorded
+ * or the profile aged out of the LRU cap.
  *
  * @param {object} db
  * @param {string} profileId
@@ -406,10 +476,9 @@ export async function getLastWebLaneRun(db, profileId) {
   if (!db?.prepare || !profileId) return null
   try {
     await ensureKv(db)
-    const row = await db.prepare('SELECT value, updated_at FROM system_kv WHERE key = ?').get(lastRunKvKey(profileId))
-    if (!row?.value) return null
-    const parsed = JSON.parse(row.value)
-    return parsed && typeof parsed === 'object' ? { ...parsed, recorded_at: row.updated_at ?? parsed.at ?? null } : null
+    const store = await readLastRunStore(db)
+    const parsed = store[profileKey(profileId)]
+    return parsed && typeof parsed === 'object' ? { ...parsed, recorded_at: parsed.at ?? null } : null
   } catch {
     return null
   }
@@ -424,8 +493,8 @@ async function upsertKv(db, key, value, now) {
 
 /**
  * Record one live lane run. Best-effort: never throws (health telemetry must
- * never fail a crawl). Writes the bounded ring entry AND the profile's full
- * last-run record.
+ * never fail a crawl). Writes the bounded ring entry AND upserts the
+ * profile's full last-run record into the bounded, LRU-capped last-run store.
  *
  * @param {object} db
  * @param {object} args { profileId, telemetry, at?, trigger? } — telemetry is
@@ -437,13 +506,16 @@ export async function recordWebLaneRun(db, { profileId = null, telemetry = null,
     const when = at ?? new Date().toISOString()
     const record = buildWebLaneRunRecord(telemetry, { profileId, at: when, trigger })
     await ensureKv(db)
+    await purgeLegacyLastRunRowsOnce(db)
     const prev = await getWebLaneHealth(db)
     const next = buildWebLaneHealthUpdate(prev, record)
     const now = next.updated_at || when
     await upsertKv(db, KV_KEY, JSON.stringify(next), now)
     if (profileId) {
       try {
-        await upsertKv(db, lastRunKvKey(profileId), JSON.stringify(record), now)
+        const store = await readLastRunStore(db)
+        store[profileKey(profileId)] = record
+        await upsertKv(db, LAST_RUN_KV_KEY, JSON.stringify(pruneLastRunStore(store)), now)
       } catch (err) {
         log.warn('web-lane last-run record failed (non-fatal)', { profile: profileId, error: err?.message })
       }
@@ -457,11 +529,12 @@ export async function recordWebLaneRun(db, { profileId = null, telemetry = null,
 
 export default {
   KV_KEY,
-  LAST_RUN_KV_PREFIX,
+  LAST_RUN_KV_KEY,
+  LAST_RUN_MAX_PROFILES,
+  LEGACY_LAST_RUN_KV_PREFIX,
   RECENT_CAP,
   JUDGE_LAST_N,
   MIN_RUNS_TO_JUDGE,
-  lastRunKvKey,
   buildWebLaneRunRecord,
   buildWebLaneRingEntry,
   buildWebLaneHealthUpdate,

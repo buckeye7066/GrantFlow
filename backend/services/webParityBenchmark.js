@@ -123,8 +123,27 @@ export const REGRESSION_POINTS = 10
 /** Top stored matches per profile compared against the web session. */
 export const MAX_STORED_MATCHES = 50
 
-/** Cap on the candidate gap queue (oldest entries beyond the cap are dropped). */
+/**
+ * Cap on the candidate gap queue. Eviction is CLASS-AWARE, never a blind
+ * positional slice (webparity-eviction, 2026-09-12): a row carrying a
+ * TERMINAL gate verdict (adopted/gated_out/dismissed/not_evaluated:exhausted)
+ * or a recorded DISPOSITION is evicted only after every plain pending row
+ * (never offered, never dispositioned) is gone — see appendGapCandidates.
+ */
 export const GAP_QUEUE_CAP = 200
+
+/**
+ * Even when the cap must be enforced against an all-dispositioned pending
+ * pool, at least this many of a profile's MOST RECENT dispositioned-pending
+ * rows are never evicted — the disposition (webparity-3/4) is itself the
+ * evidence a consumer reads to see WHY a page is still web-only, and losing
+ * every one of them for a profile reproduces the same silent-data-loss shape
+ * the terminal-row protection exists to prevent. This can push the queue
+ * past GAP_QUEUE_CAP in the (rare) case many profiles are simultaneously at
+ * their floor — the guarantee wins over the nominal cap rather than
+ * silently deleting evidence below it.
+ */
+export const GAP_QUEUE_MIN_DISPOSITIONED_PER_PROFILE = 20
 
 /**
  * Seeds handed to ONE discovery run. Each seed costs a fetch + an LLM
@@ -820,6 +839,72 @@ function gapCandidateKey(candidate) {
   return profileId && urlKey ? profileId + '|' + urlKey : ''
 }
 
+/** Most-recent-touch timestamp for a gap-queue row, for age-based eviction WITHIN a class. */
+function gapCandidateRecencyMs(row) {
+  const fields = ['resolved_at', 'disposition_at', 'not_refound_at', 'last_refound_at', 'found_at', 'first_found_at']
+  let best = 0
+  for (const f of fields) {
+    const t = Date.parse(row?.[f])
+    if (Number.isFinite(t) && t > best) best = t
+  }
+  return best
+}
+
+/**
+ * Bound the gap queue to GAP_QUEUE_CAP with a CLASS-AWARE eviction order,
+ * never a blind positional slice (webparity-eviction, 2026-09-12 — a HIGH
+ * finding against the prior `.slice(-GAP_QUEUE_CAP)`, which let the newest
+ * rows always win regardless of status and let a single night's blind trim
+ * evict an already-saturated queue's entire terminal gate-verdict history).
+ *
+ * Three classes, evicted in this priority order (lowest first):
+ *   1. plain pending   — never offered, no disposition recorded yet
+ *   2. dispositioned pending — carries a `disposition` (webparity-3/4
+ *      evidence for WHY it is still web-only), except the most recent
+ *      GAP_QUEUE_MIN_DISPOSITIONED_PER_PROFILE per profile, which are NEVER
+ *      evicted (a floor, not a preference — see the constant's doc)
+ *   3. terminal — a real gate verdict (adopted/gated_out/dismissed/
+ *      not_evaluated:exhausted); evicted only once classes 1 and 2 are
+ *      exhausted
+ * Within a class, the OLDEST row (by gapCandidateRecencyMs) is evicted first.
+ * Original relative order is preserved among survivors.
+ */
+function trimGapQueue(rows, cap = GAP_QUEUE_CAP) {
+  if (!Array.isArray(rows) || rows.length <= cap) return rows
+  const indexed = rows.map((row, i) => ({ row, i, ts: gapCandidateRecencyMs(row) }))
+  const terminal = []
+  const dispositionedPending = []
+  const plainPending = []
+  for (const item of indexed) {
+    if (isTerminalGapStatus(item.row?.status)) terminal.push(item)
+    else if (item.row?.disposition) dispositionedPending.push(item)
+    else plainPending.push(item)
+  }
+
+  const protectedIndexes = new Set()
+  const byProfile = new Map()
+  for (const item of dispositionedPending) {
+    const profileId = String(item.row?.profile_id || '')
+    if (!byProfile.has(profileId)) byProfile.set(profileId, [])
+    byProfile.get(profileId).push(item)
+  }
+  for (const items of byProfile.values()) {
+    items.sort((a, b) => b.ts - a.ts) // newest first
+    for (const item of items.slice(0, GAP_QUEUE_MIN_DISPOSITIONED_PER_PROFILE)) protectedIndexes.add(item.i)
+  }
+
+  const byAgeAscending = (a, b) => a.ts - b.ts
+  plainPending.sort(byAgeAscending)
+  const evictableDispositioned = dispositionedPending.filter((item) => !protectedIndexes.has(item.i)).sort(byAgeAscending)
+  terminal.sort(byAgeAscending)
+
+  const evictionOrder = [...plainPending, ...evictableDispositioned, ...terminal]
+  const toEvict = Math.min(rows.length - cap, evictionOrder.length)
+  const evictedIndexes = new Set(evictionOrder.slice(0, toEvict).map((item) => item.i))
+
+  return indexed.filter((item) => !evictedIndexes.has(item.i)).map((item) => item.row)
+}
+
 /**
  * Refresh the benchmark-owned pending queue to the latest scoped run.
  *
@@ -911,7 +996,7 @@ export async function appendGapCandidates(
     byKey.set(key, row)
   }
 
-  const candidates = [...byKey.values()].slice(-GAP_QUEUE_CAP)
+  const candidates = trimGapQueue([...byKey.values()], GAP_QUEUE_CAP)
   await kvSet(db, GAP_QUEUE_KV_KEY, { updated_at: at, candidates }, at)
   return {
     appended,
@@ -1509,8 +1594,12 @@ function readLaneLedger(laneLedger, laneDefaults) {
   const asQueryList = (value) => (Array.isArray(value) ? value : [])
     .map((q) => (typeof q === 'string' ? q : q?.query ?? q?.text ?? ''))
     .filter(Boolean)
-  const executed = new Set(asQueryList(run?.queries ?? run?.executed_queries ?? run?.queries_executed).map(queryKey))
-  const skipped = new Set(asQueryList(run?.skipped_budget ?? run?.queries_skipped_budget ?? run?.skipped_queries).map(queryKey))
+  // The REAL producer (coverageAudit/webLaneHealth.js buildWebLaneRunRecord)
+  // nests these under query_ledger — `run.queries` is executed-only strings,
+  // `run.skipped_budget` never exists at the top level. The bare top-level
+  // guesses are kept as a tolerant fallback for other/legacy ledger shapes.
+  const executed = new Set(asQueryList(run?.queries ?? run?.executed_queries ?? run?.queries_executed ?? run?.query_ledger?.executed).map(queryKey))
+  const skipped = new Set(asQueryList(run?.skipped_budget ?? run?.query_ledger?.skipped_budget ?? run?.queries_skipped_budget ?? run?.skipped_queries).map(queryKey))
   for (const q of Array.isArray(run?.queries) ? run.queries : []) {
     if (q && typeof q === 'object' && /skipped/i.test(String(q.status || ''))) {
       skipped.add(queryKey(q.query ?? q.text))

@@ -33,18 +33,50 @@ const AGENT_LABEL = {
 
 const POLL_MS = 7_000
 
+function runTimestamp(run) {
+  return run?.completed_at || run?.started_at || run?.created_at || null
+}
+
+// Local, non-shared relative-time formatter — mirrors the same-shaped helper
+// in NotificationBell.jsx (this codebase does not have a shared one).
+function formatRelativeTime(dateStr) {
+  if (!dateStr) return ''
+  const now = new Date()
+  const date = new Date(dateStr)
+  if (Number.isNaN(date.getTime())) return ''
+  const diffMs = now - date
+  const diffMin = Math.floor(diffMs / 60000)
+  if (diffMin < 1) return 'just now'
+  if (diffMin < 60) return `${diffMin}m ago`
+  const diffHours = Math.floor(diffMin / 60)
+  if (diffHours < 24) return `${diffHours}h ago`
+  const diffDays = Math.floor(diffHours / 24)
+  return `${diffDays}d ago`
+}
+
 /**
- * The most recent Sam-preflight block, if it is still the standing state of
- * the system (no success has superseded it). The server persists the NAMED
- * prerequisite + operator action on run.summary.blocked_by; this only decides
- * whether that record is current.
+ * The most recent Sam-preflight block, if it is still the STANDING state of
+ * the system. A block is standing only when it IS the most recent terminal
+ * run of any kind — not merely when no SUCCESS has superseded it. Comparing
+ * against `last_success` alone missed the case where a later run failed, was
+ * cancelled, or was stopped: that run is neither a success nor another block,
+ * so the old block kept reading as standing even though something newer had
+ * already happened. `highlights.last_terminal` is the single most recent run
+ * carrying ANY terminal status, so an id mismatch against it proves something
+ * newer occurred (see `getRunHighlights` in agentControlStore.js).
  */
 function standingPreflightBlock(highlights) {
   const blocked = highlights?.last_blocked
   if (!blocked || !blocked.summary?.blocked_by) return null
-  const blockedAt = blocked.completed_at || blocked.started_at || blocked.created_at || null
-  const successAt = highlights?.last_success?.completed_at || highlights?.last_success?.started_at || null
-  if (blockedAt && successAt && new Date(successAt).getTime() >= new Date(blockedAt).getTime()) return null
+  const latestTerminal = highlights?.last_terminal
+  if (latestTerminal && latestTerminal.id && blocked.id && latestTerminal.id !== blocked.id) {
+    // A different terminal run exists. getRunHighlights orders by completion
+    // time DESC and returns exactly one row, so a different id can only mean
+    // that OTHER run is the newer (or simultaneous) one — the block is
+    // superseded regardless of what that run's own status was.
+    return null
+  }
+  const blockedAt = runTimestamp(blocked)
   return { run: blocked, at: blockedAt, by: blocked.summary.blocked_by }
 }
 
@@ -116,6 +148,23 @@ function PreflightBlockedPanel({ block }) {
       ) : (
         <div className="mt-2 text-xs">{block.by.blocked_reason}</div>
       )}
+    </div>
+  )
+}
+
+/**
+ * Collapsed replacement for PreflightBlockedPanel once a later terminal run
+ * (success, failure, cancel, or stop) has superseded the block. The operator
+ * still sees THAT a block happened and when, without the stale prerequisite
+ * detail contradicting the run status shown elsewhere on the card.
+ */
+function SupersededPreflightBlockLine({ blockedRun, latestTerminal }) {
+  if (!blockedRun) return null
+  const blockedAgo = formatRelativeTime(runTimestamp(blockedRun))
+  const latestStatus = latestTerminal?.status || 'unknown'
+  return (
+    <div className="rounded border border-slate-200 bg-slate-50 p-2 text-xs text-slate-600 dark:border-slate-700 dark:bg-slate-800/40 dark:text-slate-300">
+      Last preflight block was {blockedAgo || 'earlier'}; the latest run since then {latestStatus}.
     </div>
   )
 }
@@ -415,8 +464,19 @@ export default function AgentControlCenter() {
         {/* Owner control for autonomous adversarial code repair (+ direct-to-main) */}
         <AdversarialRepairToggle />
 
-        {/* Why the last cycle did not run — named prerequisite + operator action */}
-        {!activeRun && preflightBlock ? <PreflightBlockedPanel block={preflightBlock} /> : null}
+        {/* Why the last cycle did not run — named prerequisite + operator action.
+            Only shown when the block IS the most recent terminal run; once a
+            later run (success, failure, cancel, stop) has happened, this
+            collapses to a one-line "was superseded" note instead of staying
+            up as a stale standing-blocked banner. */}
+        {!activeRun && preflightBlock ? (
+          <PreflightBlockedPanel block={preflightBlock} />
+        ) : !activeRun && status?.highlights?.last_blocked?.summary?.blocked_by ? (
+          <SupersededPreflightBlockLine
+            blockedRun={status.highlights.last_blocked}
+            latestTerminal={status.highlights.last_terminal}
+          />
+        ) : null}
 
         {/* Run details + events */}
         {activeRun ? (
@@ -438,7 +498,7 @@ export default function AgentControlCenter() {
               {status.highlights.last_blocked ? (
                 <div className={preflightBlock ? 'text-amber-800 dark:text-amber-300' : 'text-slate-500 dark:text-slate-400'}>
                   Last preflight block: {status.highlights.last_blocked.completed_at?.slice(0, 19) || '—'}
-                  {preflightBlock ? ' (standing — see above)' : ' (superseded by a later success)'}
+                  {preflightBlock ? ' (standing — see above)' : ' (superseded by a later run — see above)'}
                 </div>
               ) : null}
               <div className={status.highlights.last_failure_is_stale

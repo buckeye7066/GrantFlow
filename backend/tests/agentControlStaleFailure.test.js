@@ -72,3 +72,63 @@ describe('getRunHighlights — stale "Last failure"', () => {
     expect(h.last_failure_age_hours).toBeNull()
   })
 })
+
+// Pins the standing-preflight-block fix: the UI must not decide "still
+// standing" by comparing against `last_success` alone — a later run that
+// failed, was cancelled, or stopped also supersedes an old block. Highlights
+// exposes `last_terminal` (the single most recent run of ANY terminal status)
+// so the frontend can do that comparison correctly.
+describe('getRunHighlights — last_terminal (standing-block comparison)', () => {
+  let db
+  beforeEach(async () => {
+    db = makeDb()
+    await ensureSchema(db)
+  })
+
+  it('reports a lone blocked run as the last_terminal', async () => {
+    const at = new Date(Date.now() - 60 * 60 * 1000).toISOString()
+    insertRun(db, { id: 'blocked-1', status: 'blocked', completedAt: at })
+
+    const h = await getRunHighlights(db)
+    expect(h.last_terminal?.id).toBe('blocked-1')
+  })
+
+  it('a later FAILURE (not a success) becomes last_terminal, superseding an older block', async () => {
+    const blockedAt = new Date(Date.now() - 6 * 60 * 60 * 1000).toISOString() // 6h ago
+    const failedAt = new Date(Date.now() - 60 * 60 * 1000).toISOString() // 1h ago
+    insertRun(db, { id: 'blocked-1', status: 'blocked', completedAt: blockedAt })
+    insertRun(db, { id: 'failed-1', status: 'failed', completedAt: failedAt, errorMessage: 'robert error' })
+
+    const h = await getRunHighlights(db)
+    expect(h.last_blocked?.id).toBe('blocked-1')
+    expect(h.last_terminal?.id).toBe('failed-1')
+  })
+
+  it('a later CANCELLED/STOPPED run also becomes last_terminal', async () => {
+    const blockedAt = new Date(Date.now() - 6 * 60 * 60 * 1000).toISOString()
+    const stoppedAt = new Date(Date.now() - 60 * 60 * 1000).toISOString()
+    insertRun(db, { id: 'blocked-1', status: 'blocked', completedAt: blockedAt })
+    insertRun(db, { id: 'stopped-1', status: 'stopped', completedAt: stoppedAt })
+
+    const h = await getRunHighlights(db)
+    expect(h.last_terminal?.id).toBe('stopped-1')
+  })
+
+  it('a later non-terminal (running) row is NOT last_terminal — the block is still latest terminal', async () => {
+    const blockedAt = new Date(Date.now() - 60 * 60 * 1000).toISOString()
+    const runningAt = new Date().toISOString()
+    insertRun(db, { id: 'blocked-1', status: 'blocked', completedAt: blockedAt })
+    db.prepare(`
+      INSERT INTO agent_control_runs (id, run_type, status, started_at, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?)
+    `).run('running-1', 'full_cycle', 'running', runningAt, runningAt, runningAt)
+
+    const h = await getRunHighlights(db)
+    expect(h.last_terminal?.id).toBe('blocked-1')
+  })
+
+  it('no runs at all → last_terminal is null', async () => {
+    const h = await getRunHighlights(db)
+    expect(h.last_terminal).toBeNull()
+  })
+})

@@ -62,6 +62,19 @@ const RECEIPT_VERSION = 2
  */
 export const MEMBER_BASELINE_BUDGET_BYTES = 500_000
 
+/**
+ * Documented ceiling for the WHOLE persisted `system_kv amy_flywheel_cohort`
+ * value, asserted in `amyFlywheelCohort.test.js` against a synthetic
+ * RETENTION_DAYS x 50-member cohort. Only ONE receipt in the entire store may
+ * carry per-member baselines at a time — the latest receipt of TODAY, bounded
+ * by MEMBER_BASELINE_BUDGET_BYTES — because every other day is compacted the
+ * moment a later fold makes it no longer "today" (see buildCohortUpdate's
+ * frozen-day sweep). Without that sweep the store grew ~one uncompacted
+ * baseline-laden receipt PER RETAINED DAY (~0.3-0.5 MB/day, ~9-10 MB after 21
+ * days) instead of staying bounded to today's latest run.
+ */
+export const FLYWHEEL_STORE_BUDGET_BYTES = 1_500_000
+
 /** The owner's configured daily target (same env knob the scheduler uses). */
 export function dailyTarget() {
   const n = Number(process.env.AMY_DAILY_PROFILE_TARGET)
@@ -451,6 +464,25 @@ export function buildCohortUpdate(prev, {
   }
   days[dayKey] = day
 
+  // A day that is no longer TODAY is FROZEN: it will never fold another
+  // receipt, so nothing else will ever compact its last (until-now-latest)
+  // receipt's per-member baselines. Compaction above only fires when a NEW
+  // receipt folds into an EXISTING day — so without this, the day's FINAL
+  // receipt of the day stays uncompacted (up to MEMBER_BASELINE_BUDGET_BYTES)
+  // for the rest of its time in the store, and the persisted value grows
+  // roughly one bounded-but-uncompacted receipt PER RETAINED DAY instead of
+  // staying bounded to "today's latest run" (measured: ~9-10MB after 21 days
+  // of one run/day, vs a documented ceiling with this fix in place — see
+  // FLYWHEEL_STORE_BUDGET_BYTES). Cheap: only touches a day whose receipts
+  // still carry at least one baseline.
+  for (const key of Object.keys(days)) {
+    if (key === dayKey) continue
+    const other = days[key]
+    if (!other || !Array.isArray(other.run_receipts)) continue
+    if (!other.run_receipts.some((r) => Array.isArray(r?.members) && r.members.some((m) => m?.baseline))) continue
+    days[key] = { ...other, run_receipts: other.run_receipts.map(compactReceipt) }
+  }
+
   // Retention: keep the most recent RETENTION_DAYS keys (ISO keys sort).
   const keep = Object.keys(days).sort().slice(-RETENTION_DAYS)
   const trimmed = Object.fromEntries(keep.map((k) => [k, days[k]]))
@@ -609,6 +641,7 @@ export default {
   KV_KEY,
   RETENTION_DAYS,
   MEMBER_BASELINE_BUDGET_BYTES,
+  FLYWHEEL_STORE_BUDGET_BYTES,
   dailyTarget,
   etDayKey,
   isCleanEvaluation,

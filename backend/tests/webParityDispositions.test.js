@@ -53,7 +53,10 @@ import {
   readWebParityBenchmark,
   runWebParityBenchmark,
   disposeWebOnlyHit,
+  GAP_QUEUE_CAP,
+  GAP_QUEUE_MIN_DISPOSITIONED_PER_PROFILE,
 } from '../services/webParityBenchmark.js'
+import { buildWebLaneRunRecord } from '../services/coverageAudit/webLaneHealth.js'
 
 function makeDb() {
   const db = new Database(':memory:')
@@ -283,6 +286,90 @@ describe('webparity-7 appendGapCandidates retains pending candidates the run did
   })
 })
 
+// ── gap-queue eviction: terminal/dispositioned rows outrank plain pending ────
+
+describe('appendGapCandidates gap-queue eviction protects terminal + dispositioned rows over plain pending ones', () => {
+  it('evicts the OLDEST plain-pending rows (no disposition, no verdict) before touching any terminal or dispositioned-pending row, once the cap is exceeded', async () => {
+    const db = makeDb()
+    // Terminal rows: real gate verdicts — exactly the audit trail the finding says a blind slice destroys.
+    const terminal = Array.from({ length: 100 }, (_, i) => ({
+      url: `https://terminal${i}.org/grant`,
+      profile_id: 'g',
+      status: i % 2 === 0 ? 'adopted' : 'gated_out',
+      gate: i % 2 === 0 ? null : 'reality',
+      resolved_at: new Date(2026, 0, 1 + i).toISOString(),
+    }))
+    // Pending rows that carry a disposition explaining WHY they are still web-only.
+    const dispositionedPending = Array.from({ length: 50 }, (_, i) => ({
+      url: `https://pending-disp${i}.org/grant`,
+      profile_id: 'g',
+      status: 'candidate',
+      disposition: 'incorrectly_lost_qualified_source',
+      disposition_at: new Date(2026, 1, 1 + i).toISOString(),
+      found_at: new Date(2026, 1, 1 + i).toISOString(),
+    }))
+    // Plain pending: never offered, never dispositioned — the LOWEST-priority class, and much OLDER than everything else.
+    const oldPlainPending = Array.from({ length: 50 }, (_, i) => ({
+      url: `https://plain-old${i}.org/grant`,
+      profile_id: 'g',
+      status: 'candidate',
+      found_at: new Date(2020, 0, 1 + i).toISOString(),
+    }))
+    seedQueue(db, [...terminal, ...dispositionedPending, ...oldPlainPending]) // exactly GAP_QUEUE_CAP (200)
+
+    const freshPlainPending = Array.from({ length: 50 }, (_, i) => ({
+      url: `https://plain-new${i}.org/grant`,
+      title: `New ${i}`,
+      profile_id: 'g',
+    }))
+    const res = await appendGapCandidates(db, freshPlainPending, { now: new Date('2026-09-12T00:00:00Z') })
+    expect(res.total).toBe(GAP_QUEUE_CAP)
+
+    const queue = await readWebParityGapQueue(db)
+    const urls = new Set(queue.map((c) => c.url))
+
+    // ALL terminal rows survive — this is the exact audit trail the finding says gets destroyed.
+    for (const t of terminal) expect(urls.has(t.url)).toBe(true)
+    // ALL dispositioned-pending rows survive.
+    for (const d of dispositionedPending) expect(urls.has(d.url)).toBe(true)
+    // The old, never-dispositioned plain-pending rows are exactly what got evicted.
+    for (const p of oldPlainPending) expect(urls.has(p.url)).toBe(false)
+    // The freshly-seen plain-pending rows (younger) survive.
+    for (const p of freshPlainPending) expect(urls.has(p.url)).toBe(true)
+  })
+
+  it('keeps at least GAP_QUEUE_MIN_DISPOSITIONED_PER_PROFILE dispositioned rows per profile even when that pushes the queue past the nominal cap', async () => {
+    const db = makeDb()
+    // 11 profiles, each carrying EXACTLY the protected floor of dispositioned-pending
+    // rows and nothing else evictable (11 * 20 = 220 > GAP_QUEUE_CAP).
+    const profiles = Array.from({ length: 11 }, (_, i) => `profile${i}`)
+    const seeded = []
+    for (const profileId of profiles) {
+      for (let i = 0; i < GAP_QUEUE_MIN_DISPOSITIONED_PER_PROFILE; i++) {
+        seeded.push({
+          url: `https://${profileId}-disp${i}.org/grant`,
+          profile_id: profileId,
+          status: 'candidate',
+          disposition: 'incorrectly_lost_qualified_source',
+          disposition_at: new Date(2026, 0, 1 + i).toISOString(),
+        })
+      }
+    }
+    seedQueue(db, seeded)
+
+    const res = await appendGapCandidates(db, [], { now: new Date('2026-09-12T00:00:00Z') })
+    const queue = await readWebParityGapQueue(db)
+    for (const profileId of profiles) {
+      const count = queue.filter((c) => c.profile_id === profileId).length
+      expect(count).toBe(GAP_QUEUE_MIN_DISPOSITIONED_PER_PROFILE)
+    }
+    // The floor guarantee wins over the nominal cap in this edge case rather
+    // than silently deleting evidence below the guaranteed per-profile minimum.
+    expect(res.total).toBe(seeded.length)
+    expect(res.total).toBeGreaterThan(GAP_QUEUE_CAP)
+  })
+})
+
 // ── webparity-3/4: gated_out only on a recorded gate verdict ─────────────────
 
 describe('webparity-3/4 markGapCandidateOutcomes writes gated_out ONLY on a recorded gate verdict', () => {
@@ -463,6 +550,43 @@ describe('web-only dispositions (webparity-3/4/6) and the metric envelope', () =
     const legacyDead = disposeWebOnlyHit(base, { plan, laneLedger: deadLlm, laneDefaults, queueEntry: { status: 'gated_out' } })
     expect(legacyDead.disposition).toBe('extraction_failed')
     expect(legacyDead.evidence.legacy_gated_out_without_gate_record).toBe(true)
+  })
+
+  it('disposeWebOnlyHit reads skipped_budget from the REAL webLaneHealth.js record shape (query_ledger.skipped_budget), not a guessed top-level field', () => {
+    // A genuine lane telemetry object, run through the SAME builder
+    // production uses (backend/services/coverageAudit/webLaneHealth.js) —
+    // never a hand-typed fixture shaped like readLaneLedger's guesses.
+    const telemetry = {
+      ok: true,
+      queries: ['medical bills grants TN'],
+      queries_planned: ['medical bills grants TN', 'home repair grants TN'],
+      queries_executed: 1,
+      query_ledger: {
+        planned: [{ query: 'medical bills grants TN', tier: 'core' }, { query: 'home repair grants TN', tier: 'breadth' }],
+        executed: [{ query: 'medical bills grants TN', tier: 'core', provider: 'searxng', status: 'ok', result_count: 4, new_pages: 2 }],
+        skipped_budget: [{ query: 'home repair grants TN', tier: 'breadth' }],
+        skipped_duplicate: [],
+      },
+      search_provenance: [{ query: 'medical bills grants TN', status: 'ok' }],
+      results_per_query: 8,
+      max_pages: 44,
+      fetched: 10,
+      extracted: 4,
+      page_ledger: [],
+    }
+    const record = buildWebLaneRunRecord(telemetry, { profileId: 'g', at: '2026-09-12T00:00:00Z' })
+    // Sanity: the real record shape has NO top-level skipped_budget field —
+    // it is nested under query_ledger, which is exactly what readLaneLedger
+    // must read.
+    expect(record.skipped_budget).toBeUndefined()
+    expect(record.query_ledger.skipped_budget).toEqual([{ query: 'home repair grants TN', tier: 'breadth' }])
+
+    const laneDefaults = { resultsPerQuery: 8, maxPages: 44, maxQueries: 28 }
+    const plan = { queries: ['medical bills grants TN', 'home repair grants TN'], source: 'test' }
+    const item = { url: 'https://a.org/apply', canonical_key: 'a.org/apply', query: 'home repair grants TN', query_index: 1, rank: 3 }
+    const res = disposeWebOnlyHit(item, { plan, laneLedger: { available: true, run: record }, laneDefaults })
+    expect(res.disposition).toBe('generated_not_executed_cap')
+    expect(res.evidence.skipped_budget).toBe(true)
   })
 
   it('runWebParityBenchmark persists a disposition on EVERY web-only result, on the gap queue, and carries the envelope', async () => {

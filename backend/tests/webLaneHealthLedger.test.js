@@ -8,8 +8,10 @@
  *                       (with classified failures) is judged extraction_dead.
  *   weblane-1           skipped / no-crawl runs never count toward the DEAD
  *                       verdict; zero-page means "queries ran, nothing came back".
- *   getLastWebLaneRun   one bounded record per profile under
- *                       system_kv web_lane_last_run:<profileId> (lane E reads it).
+ *   getLastWebLaneRun   one bounded record per profile, held in ONE LRU-capped
+ *                       system_kv row (web_lane_last_runs, lane E reads it via
+ *                       getLastWebLaneRun) instead of a permanent
+ *                       per-profile row that survived the profile's deletion.
  */
 import { describe, it, expect } from 'vitest'
 import Database from 'better-sqlite3'
@@ -21,6 +23,8 @@ import {
   getLastWebLaneRun,
   buildWebLaneRunRecord,
   MIN_RUNS_TO_JUDGE,
+  LAST_RUN_KV_KEY,
+  LAST_RUN_MAX_PROFILES,
 } from '../services/coverageAudit/webLaneHealth.js'
 import { getCheckById } from '../services/sam/samRegistry.js'
 
@@ -80,7 +84,7 @@ describe('discovery-attrib-2 — the ring entry records effort and outcome truth
 })
 
 describe('getLastWebLaneRun — one bounded full record per profile', () => {
-  it('round-trips the full record (pages bounded) under web_lane_last_run:<profileId> and overwrites on the next run', async () => {
+  it('round-trips the full record (pages bounded) under the single web_lane_last_runs store and overwrites on the next run', async () => {
     const db = new Database(':memory:')
     try {
       await recordWebLaneRun(db, { profileId: 'p1', telemetry: laneTelemetry(), trigger: 'auth', at: '2026-09-12T10:00:00Z' })
@@ -99,8 +103,11 @@ describe('getLastWebLaneRun — one bounded full record per profile', () => {
       expect(second.at).toBe('2026-09-12T11:00:00Z')
       expect(second.extracted).toBe(3)
       expect(await getLastWebLaneRun(db, 'nobody')).toBeNull()
-      const rows = db.prepare("SELECT key FROM system_kv WHERE key LIKE 'web_lane_last_run:%'").all()
+      // ONE system_kv row holds every profile's last run — not one row per profile.
+      const rows = db.prepare('SELECT key FROM system_kv WHERE key = ?').all(LAST_RUN_KV_KEY)
       expect(rows).toHaveLength(1)
+      const legacyRows = db.prepare("SELECT key FROM system_kv WHERE key LIKE 'web_lane_last_run:%'").all()
+      expect(legacyRows).toHaveLength(0)
     } finally { db.close() }
   })
 
@@ -108,6 +115,48 @@ describe('getLastWebLaneRun — one bounded full record per profile', () => {
     const rec = buildWebLaneRunRecord(laneTelemetry({ page_ledger: Array.from({ length: 200 }, (_, i) => ({ url: `https://y.org/${i}` })), max_pages: 44 }), { profileId: 'p', at: 't' })
     expect(rec.pages).toHaveLength(44)
     expect(rec.pages_truncated).toBe(156)
+  })
+
+  it('250 distinct profiles leave at most LAST_RUN_MAX_PROFILES entries, keeping the newest', async () => {
+    const db = new Database(':memory:')
+    try {
+      const total = 250
+      for (let i = 0; i < total; i++) {
+        // Monotonically increasing timestamps so "newest" is unambiguous.
+        const at = new Date(Date.UTC(2026, 0, 1, 0, 0, i)).toISOString()
+        await recordWebLaneRun(db, { profileId: `synthetic-${i}`, telemetry: laneTelemetry(), trigger: 'amy', at })
+      }
+      const row = db.prepare('SELECT value FROM system_kv WHERE key = ?').get(LAST_RUN_KV_KEY)
+      const store = JSON.parse(row.value)
+      const ids = Object.keys(store)
+      expect(ids.length).toBeLessThanOrEqual(LAST_RUN_MAX_PROFILES)
+      expect(ids.length).toBe(LAST_RUN_MAX_PROFILES)
+      // The newest LAST_RUN_MAX_PROFILES profiles (highest index) survive; the
+      // oldest ones were evicted — this is the "capped harder" bound that
+      // stands in for per-profile-deletion cleanup for Amy's reaped synthetics.
+      expect(await getLastWebLaneRun(db, 'synthetic-0')).toBeNull()
+      expect(await getLastWebLaneRun(db, `synthetic-${total - 1}`)).not.toBeNull()
+      const oldestSurvivingIndex = total - LAST_RUN_MAX_PROFILES
+      expect(await getLastWebLaneRun(db, `synthetic-${oldestSurvivingIndex - 1}`)).toBeNull()
+      expect(await getLastWebLaneRun(db, `synthetic-${oldestSurvivingIndex}`)).not.toBeNull()
+      // Still exactly one row overall — the bound holds row COUNT to 1, not 250.
+      const rows = db.prepare('SELECT key FROM system_kv WHERE key = ?').all(LAST_RUN_KV_KEY)
+      expect(rows).toHaveLength(1)
+    } finally { db.close() }
+  })
+
+  it('purges legacy per-profile web_lane_last_run:<id> rows once, and never re-scans after', async () => {
+    const db = new Database(':memory:')
+    try {
+      db.exec('CREATE TABLE IF NOT EXISTS system_kv (key TEXT PRIMARY KEY, value TEXT, updated_at TEXT)')
+      db.prepare('INSERT INTO system_kv (key, value, updated_at) VALUES (?, ?, ?)')
+        .run('web_lane_last_run:orphan-1', JSON.stringify({ profile_id: 'orphan-1' }), '2026-01-01T00:00:00Z')
+      db.prepare('INSERT INTO system_kv (key, value, updated_at) VALUES (?, ?, ?)')
+        .run('web_lane_last_run:orphan-2', JSON.stringify({ profile_id: 'orphan-2' }), '2026-01-01T00:00:00Z')
+      await recordWebLaneRun(db, { profileId: 'p1', telemetry: laneTelemetry(), at: '2026-09-12T10:00:00Z' })
+      const legacyRows = db.prepare("SELECT key FROM system_kv WHERE key LIKE 'web_lane_last_run:%'").all()
+      expect(legacyRows).toHaveLength(0)
+    } finally { db.close() }
   })
 })
 

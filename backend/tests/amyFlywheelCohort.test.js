@@ -275,6 +275,61 @@ describe('buildCohortUpdate (pure fold)', () => {
     expect(keys.includes('2026-06-30')).toBe(true)
     expect(keys.includes('2026-06-01')).toBe(false)
   })
+
+  // HIGH fix (2026-09-12): per-member baselines made the persisted store grow
+  // ~one uncompacted, baseline-laden receipt PER RETAINED DAY (~0.3-0.5 MB/day)
+  // because `compactReceipt` only fires when a NEW receipt folds into an
+  // EXISTING day — a day's FINAL receipt, frozen once the calendar rolls over,
+  // was never revisited. Simulates RETENTION_DAYS (21) consecutive daily
+  // folds, one run/day, 50 planned members each, with realistic-size
+  // `member_baseline` payloads (capped generated/executed queries + extracted/
+  // admission titles, matching amyReport.js's own BASELINE_MAX_* caps).
+  it('the persisted store stays under a documented byte budget across RETENTION_DAYS of daily folds (amy-cohort-5 fix)', () => {
+    const bigBaseline = (seed) => {
+      const strings = (n, len) => Array.from({ length: n }, (_, i) => `${seed}-${i}-${'x'.repeat(len)}`)
+      return {
+        generated_queries: strings(30, 40).map((q) => ({ query: q, tier: 'CORE' })),
+        executed_queries: strings(30, 40).map((q, i) => ({
+          query_index: i, query: q, tier: 'CORE', provider: 'searxng', provenance: 'live', status: 'ok', result_count: 8,
+        })),
+        provider_health: { search: 'healthy', llm: 'healthy' },
+        extracted_candidates: { count: 20, titles: strings(20, 60) },
+        canonical_candidates: { stored: 6, deduped: 2, rejected: 4, run_stored: 6 },
+        qualification_decisions: {
+          accept: 1, review: 2, reject: 3, top_reject_reasons: {}, candidates_reached_engine: 6, verdict_source: 'pipeline_decision_tally',
+        },
+        admission_decisions: { recommendations: 10, titles: strings(10, 60) },
+        final_class: 'clean',
+      }
+    }
+    const dayMembers = (dayIndex) => Array.from({ length: 50 }, (_, i) => ({
+      ...clean(`${dayIndex}-${i}`),
+      member_baseline: bigBaseline(`${dayIndex}-${i}`),
+    }))
+
+    let store = null
+    for (let d = 1; d <= cohortModule.RETENTION_DAYS; d += 1) {
+      const key = `2026-05-${String(d).padStart(2, '0')}`
+      store = buildCohortUpdate(store, { dayKey: key, target: 50, evaluations: dayMembers(d) }).store
+    }
+
+    const keys = Object.keys(store.days)
+    expect(keys.length).toBe(cohortModule.RETENTION_DAYS)
+    // Every day EXCEPT the last-folded one is frozen and must be compacted —
+    // no baselines survive on a day that will never fold again.
+    for (const key of keys.slice(0, -1)) {
+      const receipts = store.days[key].run_receipts
+      expect(receipts.some((r) => r.members.some((m) => m.baseline))).toBe(false)
+    }
+    // The LATEST day's LATEST receipt is the one place baselines may still
+    // live, and it stays inside the per-receipt budget.
+    const latestKey = keys[keys.length - 1]
+    const latestReceipts = store.days[latestKey].run_receipts
+    expect(latestReceipts[latestReceipts.length - 1].members.some((m) => m.baseline)).toBe(true)
+
+    const totalBytes = Buffer.byteLength(JSON.stringify(store), 'utf8')
+    expect(totalBytes).toBeLessThan(cohortModule.FLYWHEEL_STORE_BUDGET_BYTES)
+  })
 })
 
 describe('recordFlywheelCohort (store + one-shot goal notification)', () => {

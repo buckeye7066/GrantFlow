@@ -102,13 +102,20 @@ function measurableEvaluations(evaluations = []) {
 }
 
 /**
- * Did a healthy adversarial probe of this class run this run? The class item
- * is re-tested by ANY probe whose recall detector for the finding type was
- * evaluated (recall_coverage carries the type) under a measurable lane.
+ * Was THIS specific subject (the missed county/school an earlier probe night
+ * flagged) re-tested by a healthy probe of the class and found NOT missing?
+ *
+ * amy-cohort-3 fix (2026-09-12): the class item must not close on ANY
+ * unrelated probe running healthy — `recall_coverage[type]` is populated as
+ * an array (often empty) for virtually every measurable evaluation, so that
+ * alone proves nothing about the flagged subject. A subject is only proven
+ * re-tested when a measurable probe evaluation's OWN `recall_coverage[type]`
+ * names it — i.e. that specific county/school was searched for again and the
+ * results actually referenced it. Mirrors `healthyRecallCoverage`'s per-subject
+ * check for catalog categories, adapted to the class's cross-cell category.
  */
-function healthyProbeClassCoverage(entry, measurable = []) {
-  const type = entry?.finding_type || String(entry?.id ?? '').split(':')[0]
-  return measurable.some((e) => isProbeCategory(e?.category) && Array.isArray(e?.recall_coverage?.[type]))
+function healthyProbeSubjectCoverage(subject, type, measurable = []) {
+  return measurable.some((e) => isProbeCategory(e?.category) && (e?.recall_coverage?.[type] || []).includes(subject))
 }
 
 /** How long a RESOLVED entry is retained (days) before it is dropped. */
@@ -321,10 +328,23 @@ export function foldApprovalLedger(prev, { items = [], evaluations = null, runId
   const measurable = measurableEvaluations(evaluations || [])
   const list = (Array.isArray(items) ? items : []).map(item => {
     if (item.lever !== 'query_breadth') return item
-    // amy-cohort-3: the probe CLASS item carries only the subjects measured
-    // THIS run. Probes never revisit a cell on purpose, so unioning every
-    // prior night's counties would grow an untestable list forever.
-    if (isProbeClassItem(item)) return item
+    // amy-cohort-3: the probe CLASS item's DISPLAYED `evidence.subjects` carries
+    // only the subjects measured THIS run — probes never revisit a cell on
+    // purpose, so unioning every prior night's counties into the visible list
+    // would grow an untestable wall of text forever. The subjects that are
+    // still an OPEN, unresolved gap are tracked separately in `open_subjects`
+    // (persisted on the ledger entry, never displayed as-is), and it is THAT
+    // set — not `evidence.subjects` — that decides whether the class item can
+    // ever close: a subject drops out only once a measurable probe of the
+    // class specifically re-tests it and finds it covered.
+    if (isProbeClassItem(item)) {
+      const previous = prevEntries[item.id]?.resolved_at ? null : prevEntries[item.id]
+      const type = item.finding_type || String(item.id ?? '').split(':')[0]
+      const prevOpen = Array.isArray(previous?.open_subjects) ? previous.open_subjects : (previous?.evidence?.subjects || [])
+      const stillOpen = prevOpen.filter(subject => !healthyProbeSubjectCoverage(subject, type, measurable))
+      const currentSubjects = item.evidence?.subjects || []
+      return { ...item, open_subjects: [...new Set([...currentSubjects, ...stillOpen])].slice(0, 200) }
+    }
     const previous = prevEntries[item.id]?.resolved_at ? null : prevEntries[item.id]
     const outstanding = (previous?.evidence?.subjects || []).filter(subject =>
       !healthyRecallCoverage({ ...previous, evidence: { subjects: [subject] } }, measurable))
@@ -342,15 +362,25 @@ export function foldApprovalLedger(prev, { items = [], evaluations = null, runId
   for (const entry of Object.values(prevEntries)) {
     if (entry.resolved_at || entry.lever !== 'query_breadth' || list.some(i => i.id === entry.id)) continue
     if (isProbeClassItem(entry)) {
-      // amy-cohort-3: the probe class is held open ONLY while no healthy probe
-      // of the class has re-run. Once a healthy probe night measured the class
-      // and the finding did not reproduce, the entry closes below
-      // (stopped_reproducing) and reopens honestly if it comes back.
-      if (healthyProbeClassCoverage(entry, measurable)) continue
+      // amy-cohort-3 fix: the probe class is held open ONLY while at least one
+      // of the SPECIFIC subjects it carries (the flagged county/school) has not
+      // itself been re-probed with healthy coverage. A healthy probe night for
+      // an UNRELATED cell never closes another subject's gap — only the exact
+      // subject needs to reappear, covered, in a measurable probe's own
+      // recall_coverage this run. Once every carried subject clears that bar
+      // the entry falls out of `list` here and closes below
+      // (stopped_reproducing); a subject that clears drops off the ledger, a
+      // newly-missed one joins it, and a night with no probe of the class at
+      // all leaves every subject exactly as open as it was.
+      const type = entry.finding_type || String(entry.id ?? '').split(':')[0]
+      const prevOpen = Array.isArray(entry.open_subjects) ? entry.open_subjects : (entry.evidence?.subjects || [])
+      const stillOpen = prevOpen.filter(subject => !healthyProbeSubjectCoverage(subject, type, measurable))
+      if (stillOpen.length === 0) continue
       list.push({
         ...(entry.latest_item || entry),
-        evidence: { ...entry.evidence },
-        attribution: { ...recallAttribution([]), status: 'inconclusive', reason: 'No adversarial probe of this class ran with healthy search and live extraction this run; the previous coverage gap remains open until a healthy probe night measures it.' },
+        evidence: { ...entry.evidence, subjects: stillOpen.slice(0, 200) },
+        open_subjects: stillOpen,
+        attribution: { ...recallAttribution([]), status: 'inconclusive', reason: 'No adversarial probe of this class re-tested the specific missing subject(s) with healthy coverage this run; the previous coverage gap remains open until a healthy probe measures it.' },
         code_brief: undefined,
         target_file: null,
       })
@@ -399,6 +429,10 @@ export function foldApprovalLedger(prev, { items = [], evaluations = null, runId
       severity: item?.severity ?? prevEntry?.severity ?? null,
       finding_type: item.finding_type ?? prevEntry?.finding_type ?? null,
       evidence: item.evidence ?? prevEntry?.evidence ?? null,
+      // The probe class's per-subject re-probe ledger (amy-cohort-3 fix): which
+      // flagged subjects have NOT yet been proven re-tested-and-covered. Only
+      // ever set for `isProbeClassItem` entries; absent everywhere else.
+      ...(item.open_subjects !== undefined ? { open_subjects: item.open_subjects } : {}),
       attribution: item.attribution ?? null,
       latest_item: { id, lever: item.lever, category: item.category, severity: item.severity, finding_type: item.finding_type, evidence: item.evidence, rationale: item.rationale },
       // A REOPENED item restarts its clock but keeps the fact it reopened:

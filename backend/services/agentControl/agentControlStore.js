@@ -509,6 +509,15 @@ function failureTimestamp(run) {
   return run?.completed_at || run?.started_at || run?.created_at || null
 }
 
+// The full terminal-status vocabulary (mirrors the list `setRunStatus` uses to
+// decide whether to stamp `completed_at`). `last_terminal` is the single most
+// recent run carrying ANY of these — used by the UI to tell whether an old
+// standing state (e.g. a Sam-preflight block) has been superseded by ANYTHING
+// newer, not just by a later SUCCESS.
+const TERMINAL_RUN_STATUSES = [
+  'completed', 'completed_noop', 'failed', 'blocked', 'cancelled', 'stopped', 'partial_stop', 'stop_failed',
+]
+
 /**
  * Latest terminal run of each kind, used by Mission Control summary.
  *
@@ -518,6 +527,12 @@ function failureTimestamp(run) {
  *                              when a success has occurred since it.
  *   - `last_failure_age_hours` age of the failure in whole hours.
  *   - `last_failure_superseded_by_success` true when last_success is newer.
+ *
+ * `last_terminal` is the single most recent run of ANY terminal status
+ * (success, failure, cancel, stop, or another block). A consumer deciding
+ * whether `last_blocked` is still the STANDING state must compare against
+ * this, not just against `last_success` — a later run that failed or was
+ * cancelled also supersedes an old block, even though it is not a success.
  */
 export async function getRunHighlights(db) {
   const empty = {
@@ -531,6 +546,8 @@ export async function getRunHighlights(db) {
     // Latest Sam-preflight block (terminal 'blocked'); its summary.blocked_by
     // names the unmet prerequisite + operator action for the UI.
     last_blocked: null,
+    // Latest run of ANY terminal status — see doc comment above.
+    last_terminal: null,
   }
   if (!db) return empty
   try {
@@ -549,6 +566,9 @@ export async function getRunHighlights(db) {
     const last_failure = await db
       .prepare(`SELECT * FROM agent_control_runs WHERE status IN ('failed','stop_failed','partial_stop') ORDER BY COALESCE(completed_at, started_at, created_at) DESC LIMIT 1`)
       .get()
+    const last_terminal = await db
+      .prepare(`SELECT * FROM agent_control_runs WHERE status IN (${TERMINAL_RUN_STATUSES.map(() => '?').join(',')}) ORDER BY COALESCE(completed_at, started_at, created_at) DESC LIMIT 1`)
+      .get(...TERMINAL_RUN_STATUSES)
 
     const failureRow = row(last_failure)
     const successRow = row(last_success)
@@ -580,6 +600,7 @@ export async function getRunHighlights(db) {
       last_failure_age_hours: ageHours,
       last_failure_superseded_by_success: supersededBySuccess,
       last_blocked: row(last_blocked),
+      last_terminal: row(last_terminal),
     }
   } catch {
     return empty

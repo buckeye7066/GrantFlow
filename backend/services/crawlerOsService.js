@@ -924,8 +924,9 @@ export async function runProfileDiscoveryLive({ db = getDb(), profileId, fetcher
   // Record the lane's per-run telemetry (executed vs planned queries, provider
   // verdicts, stage counters, extraction failure classes, primary attribution)
   // into the rolling system_kv ring Sam's crawler.webLaneHealth check reads,
-  // AND the profile's full bounded last-run record (web_lane_last_run:<id>)
-  // the web-parity benchmark reads. A dead search backend / exhausted LLM key
+  // AND the profile's full bounded last-run record (in the LRU-capped
+  // web_lane_last_runs store) the web-parity benchmark reads. A dead search
+  // backend / exhausted LLM key
   // degrades the lane to a silent no-op by design (it must never fail a crawl)
   // — this is the observability that makes that death visible as ITSELF, not
   // as a flood of hyperlocal gaps. Recorded for ALL live runs (including Amy's

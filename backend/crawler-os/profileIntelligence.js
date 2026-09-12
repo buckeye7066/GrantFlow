@@ -30,6 +30,10 @@ import { FARM_OCCUPATION_FLAG_KEYS, isAgricultureNaics } from '../services/eligi
 // thesis, so the declared need never produced a single query (hyperlocal-3,
 // measured on the faithful Amy intersection path 2026-09-12).
 import { CANONICAL_NEED_CATEGORIES } from '../constants/needCategories.js';
+// Only for recognizing a bare-TYPE artifact (see isTypeOnlyNeedArtifact) —
+// the SAME canonicalization pipelinePrecision.typeDerivedNeeds applies to
+// `primary_type`/`type`/`profile_type` for its own (different) purpose.
+import { normalizeNeedCategory } from '../services/profileNormalizer.js';
 
 const CANONICAL_NEED_IDS = new Set(CANONICAL_NEED_CATEGORIES.map((n) => n.id));
 
@@ -1180,13 +1184,50 @@ function applyNeedImplications(found) {
   }
 }
 
+/**
+ * A canonical need id that is IDENTICAL to what the profile's own bare
+ * structural TYPE (`primary_type` / `type` / `profile_type`) canonicalizes to
+ * is not a genuine declaration by itself — it is
+ * `pipelinePrecision.typeDerivedNeeds()`'s org-identity inference (minted for
+ * Gate 1.9's pipeline-admission need, "an org's need IS its own type")
+ * bleeding through `crawlerOsPersistenceCore`'s bridge into `need_categories`
+ * even when the profile has said LITERALLY NOTHING ELSE. Measured 2026-09-12:
+ * a blank `primary_type:'nonprofit'` profile with empty sections carries
+ * `need_categories:['nonprofit_ministry']` from that bridge alone, and once a
+ * canonical id no longer needs a NEED_KEYWORDS row to survive (the hyperlocal-3
+ * fix above), that lone artifact value defeated `needs_defaulted` for a
+ * profile that declared nothing.
+ *
+ * Excluded ONLY when the route's own type fallback exists
+ * (`profile_route.default_needs.length > 0` — nothing else this bare a value
+ * could be); a route with no known type default has nothing else to blame it
+ * on, so the value is trusted as the applicant's real declaration (this is
+ * exactly the fixture `declaredNeedSurvival.test.mjs` exercises with an empty
+ * `default_needs`). A need the profile ALSO states independently — in prose,
+ * in another declared field, or as a value NEED_KEYWORDS itself recognizes —
+ * still reaches `found` through the ordinary explicit/blob scan below; this
+ * only withholds a SOLITARY type-echo's power to disprove "nothing declared".
+ */
+function isTypeOnlyNeedArtifact(profile, token) {
+  const defaultNeeds = profile?.profile_route?.default_needs;
+  if (!Array.isArray(defaultNeeds) || defaultNeeds.length === 0) return false;
+  for (const raw of [profile?.primary_type, profile?.type, profile?.profile_type]) {
+    if (typeof raw !== 'string' || !raw.trim()) continue;
+    if (normalizeNeedCategory(raw) === token) return true;
+  }
+  return false;
+}
+
 function deriveNeeds(profile, blob) {
   const explicit = declaredNeedValues(profile)
     .map(lc)
     .filter(Boolean)
     // Bookkeeping tags mark HOW a profile is managed, not WHAT it needs —
     // 'designated'/'synthetic'/'individual' must never seed a need scan.
-    .filter((e) => !RESERVED_PROFILE_TAGS.has(e) && !RESERVED_PROFILE_TAGS.has(key(e)));
+    .filter((e) => !RESERVED_PROFILE_TAGS.has(e) && !RESERVED_PROFILE_TAGS.has(key(e)))
+    // See isTypeOnlyNeedArtifact — a value indistinguishable from the
+    // profile's own bare type must not, alone, prove a declaration.
+    .filter((e) => !isTypeOnlyNeedArtifact(profile, key(e)));
   const found = new Set();
   for (const e of explicit) addNeedPhrase(found, e);
   // WHOLE-WORD blob scan. Substring includes() was the phantom-need driver:
