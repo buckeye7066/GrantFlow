@@ -1,36 +1,34 @@
 /**
- * SAM.gov Federal Assistance Listings API Integration
+ * SAM.gov Federal Assistance Listings (CFDA) search.
  *
- * Provides the full CFDA (Catalog of Federal Domestic Assistance) database —
- * every federal program that provides grants, loans, or other assistance.
+ * Endpoint: https://sam.gov/api/prod/sgs/v1/search?index=cfda — SAM.gov's own
+ * site search, the same service crawler-os/adapters/samGovAdapter.js reads.
+ * Contract verified live from production on 2026-09-12:
+ * - KEYLESS; requires `Accept: application/hal+json` (else 406).
+ * - Free-text `q` (an empty `q` returns every listing), 0-based `page`, `size`
+ *   up to 100 (size=100 answered 200 in ~0.2s).
+ * - `is_active=true` restricts to active listings: q=housing returned 571 total
+ *   without it and 242 with it, with no inactive rows. `isActive=true` is ignored.
+ * - Response: `{ _embedded: { results: [...] }, page: { totalElements,
+ *   totalPages, number } }`. Results carry `programNumber`, `title`, `objective`,
+ *   `website`, `organizationHierarchy[]`, `assistanceTypes[].hierarchy[]`,
+ *   `eligibility.{applicant,beneficiary}.types[]`, `financial.obligations[]`,
+ *   `contacts`, `isActive` and `_id` (the FAL deep-link id).
  *
- * Endpoint: https://api.sam.gov/assistance-listings/v1/search
- * Requires: SAM_GOV_PUBLIC_API_KEY (same key as SAM opportunities)
- * Docs: https://open.gsa.gov/api/assistance-listings-api/
- *
- * Contract facts (verified live 2026-09-11 — the old client got every one wrong,
- * so GET /api/foundations/federal/search answered 500 for every query):
- * - The API serves ONLY `application/hal+json`; `Accept: application/json` is
- *   refused with 406 Not Acceptable.
- * - Responses are `{ totalRecords, pageSize, pageNumber, totalPages,
- *   assistanceListingsData: [...] }`.
- * - There is NO free-text search parameter (`keyword`/`keywords` are ignored and
- *   return the whole catalog); filters are codes (assistanceTypes F001…,
- *   applicantTypes ET…).
- * - Public keys are capped per DAY (10/day without a SAM role, 1,000/day with
- *   one). One upstream call per search would exhaust the key, so this module
- *   downloads the ~3k active listings once (pageSize 1000) and serves every
- *   keyword/type/applicant search from that cached catalog.
+ * Why not api.sam.gov/assistance-listings/v1 (used until 2026-09-12): it has no
+ * keyword search, its live API rejects pageSize above 100 (its own parameter
+ * table says 1000; the request failed with 400 "PageSize and pageNumber values
+ * must be greater than zero"), and the public key allows 10 requests a day. The
+ * active catalog is 2,872 listings (29 pages at 100), so the daily download that
+ * client depended on could never fit the quota.
  */
 
 import { requestJson } from './httpClient.js'
 import { toTrimmedStringOrNull, toNumberOrNull } from './types.js'
 
-const SAM_AL_BASE = 'https://api.sam.gov/assistance-listings/v1'
-const SAM_AL_HEADERS = Object.freeze({ Accept: 'application/hal+json' })
-const CATALOG_PAGE_SIZE = 1000
-const CATALOG_TTL_MS = 24 * 60 * 60 * 1000
-const CATALOG_MAX_REQUESTS = 12
+const SAM_SEARCH_URL = 'https://sam.gov/api/prod/sgs/v1/search'
+const SAM_SEARCH_HEADERS = Object.freeze({ Accept: 'application/hal+json' })
+const MAX_PAGE_SIZE = 100
 
 /** Assistance type words used by callers → SAM assistance type codes. */
 const ASSISTANCE_TYPE_CODES = Object.freeze({
@@ -51,14 +49,6 @@ const ASSISTANCE_TYPE_CODES = Object.freeze({
 
 const ASSISTANCE_TYPE_CODE_RX = /^[FN]\d{3}$/i
 
-let catalogCache = null // { fetchedAt: number, listings: object[] }
-let catalogInflight = null
-
-export function __resetAssistanceCatalogCacheForTests() {
-  catalogCache = null
-  catalogInflight = null
-}
-
 function normText(value) {
   return String(value ?? '')
     .toLowerCase()
@@ -67,90 +57,57 @@ function normText(value) {
     .trim()
 }
 
-function extractListings(data) {
-  const rows = data?.assistanceListingsData ??
-    data?._embedded?.assistanceListings ??
-    data?.assistanceListings ??
-    (Array.isArray(data) ? data : [])
+function resultsOf(data) {
+  const rows = data?._embedded?.results
   return Array.isArray(rows) ? rows : []
 }
 
-function listingKey(row) {
-  return String(row?.assistanceListingId ?? row?.programNumber ?? row?.programId ?? '').trim()
+function firstOf(value) {
+  if (Array.isArray(value)) return value[0] ?? null
+  if (value && typeof value === 'object') return value[0] ?? value['0'] ?? null
+  return null
 }
 
-async function downloadCatalog(apiKey) {
-  const byKey = new Map()
-  let totalRecords = null
-  let totalPages = null
-  for (let requests = 0; requests < CATALOG_MAX_REQUESTS; requests++) {
-    const data = await requestJson({
-      provider: 'sam.assistance',
-      url: `${SAM_AL_BASE}/search`,
-      method: 'GET',
-      headers: SAM_AL_HEADERS,
-      params: { api_key: apiKey, status: 'Active', pageSize: CATALOG_PAGE_SIZE, pageNumber: requests },
-      timeoutMs: 45_000,
-      maxRetries: 2,
-    })
-    const rows = extractListings(data)
-    if (totalRecords === null) totalRecords = toNumberOrNull(data?.totalRecords ?? data?.page?.totalElements)
-    if (totalPages === null) totalPages = toNumberOrNull(data?.totalPages ?? data?.page?.totalPages)
-    if (rows.length === 0) break
-    for (const row of rows) {
-      const key = listingKey(row) || `row-${byKey.size}`
-      if (!byKey.has(key)) byKey.set(key, row)
-    }
-    if (totalRecords !== null && byKey.size >= totalRecords) break
-    if (rows.length < CATALOG_PAGE_SIZE) break
-    // pageNumber is documented as 0-based while responses echo 1-based numbers;
-    // one extra request covers either convention (duplicates are de-duplicated).
-    if (totalPages !== null && requests + 1 >= totalPages + 1) break
-  }
-  const listings = [...byKey.values()]
-  if (listings.length === 0) {
-    // Loud, never a cached empty catalog: an empty answer would hide an outage for a day.
-    throw new Error('[sam.assistance] catalog download returned no listings')
-  }
-  return listings
+async function searchListings({ q, page, size, activeOnly = true }) {
+  const params = { index: 'cfda', q, page, size }
+  if (activeOnly) params.is_active = 'true'
+  const data = await requestJson({
+    provider: 'sam.assistance',
+    url: SAM_SEARCH_URL,
+    method: 'GET',
+    headers: SAM_SEARCH_HEADERS,
+    params,
+    timeoutMs: 20_000,
+    maxRetries: 2,
+  })
+  return { rows: resultsOf(data), total: toNumberOrNull(data?.page?.totalElements) }
 }
 
-async function loadCatalog(apiKey) {
-  if (catalogCache && Date.now() - catalogCache.fetchedAt < CATALOG_TTL_MS) return catalogCache.listings
-  if (!catalogInflight) {
-    catalogInflight = downloadCatalog(apiKey)
-      .then((listings) => {
-        catalogCache = { fetchedAt: Date.now(), listings }
-        return listings
-      })
-      .finally(() => {
-        catalogInflight = null
-      })
+/** Assistance types from the search hierarchy, plus any named on obligations. */
+function assistanceTypes(row) {
+  const out = []
+  const add = (code, name) => {
+    const c = String(code ?? '').trim().toUpperCase()
+    const n = toTrimmedStringOrNull(name)
+    if (!c && !n) return
+    if (c && out.some((t) => t.code === c)) return
+    out.push({ code: c, name: n })
   }
-  try {
-    return await catalogInflight
-  } catch (error) {
-    // Serve the last good catalog through an upstream outage or a spent daily quota.
-    if (catalogCache?.listings?.length) return catalogCache.listings
-    throw error
+  for (const entry of Array.isArray(row?.assistanceTypes) ? row.assistanceTypes : []) {
+    const levels = Array.isArray(entry?.hierarchy) ? entry.hierarchy : []
+    const leaf = levels.find((level) => ASSISTANCE_TYPE_CODE_RX.test(String(level?.code ?? ''))) ?? levels[levels.length - 1]
+    if (leaf) add(leaf.code, leaf.value ?? leaf.name)
   }
-}
-
-function obligationTypes(row) {
-  const obligations = row?.financialInformation?.obligations ?? row?.obligations
-  if (!Array.isArray(obligations)) return []
-  return obligations
-    .map((o) => ({
-      code: String(o?.assistanceType?.code ?? '').trim().toUpperCase(),
-      name: toTrimmedStringOrNull(o?.assistanceType?.name ?? (typeof o?.assistanceType === 'string' ? o.assistanceType : null)),
-    }))
-    .filter((t) => t.code || t.name)
+  for (const obligation of Array.isArray(row?.financial?.obligations) ? row.financial.obligations : []) {
+    add(obligation?.assistanceType?.code, obligation?.assistanceType?.value ?? obligation?.assistanceType?.name)
+  }
+  return out
 }
 
 function matchesAssistanceType(row, wanted) {
   const raw = String(wanted ?? '').trim()
   if (!raw) return true
-  const types = obligationTypes(row)
+  const types = assistanceTypes(row)
   const codes = ASSISTANCE_TYPE_CODE_RX.test(raw)
     ? [raw.toUpperCase()]
     : ASSISTANCE_TYPE_CODES[normText(raw).replace(/ /g, '_')]
@@ -159,37 +116,38 @@ function matchesAssistanceType(row, wanted) {
   return types.some((t) => normText(t.name).includes(needle))
 }
 
-function applicantTypeNames(row) {
-  const types = row?.criteriaForApplying?.applicant?.types
-  return Array.isArray(types) ? types.map((t) => toTrimmedStringOrNull(t?.name)).filter(Boolean) : []
+function eligibilityTypes(row, side) {
+  const types = row?.eligibility?.[side]?.types
+  return Array.isArray(types) ? types.map((t) => toTrimmedStringOrNull(t?.value ?? t?.name)).filter(Boolean) : []
+}
+
+function eligibilityInfo(row, side) {
+  return toTrimmedStringOrNull(row?.eligibility?.[side]?.additionalInfo ?? row?.eligibility?.[side]?.description)
 }
 
 function matchesApplicantType(row, wanted) {
   const needle = normText(wanted).replace(/ /g, '')
   if (!needle) return true
-  const hay = normText([...applicantTypeNames(row), row?.criteriaForApplying?.applicant?.description].join(' ')).replace(/ /g, '')
+  const hay = normText([
+    ...eligibilityTypes(row, 'applicant'),
+    ...eligibilityTypes(row, 'beneficiary'),
+    eligibilityInfo(row, 'applicant'),
+  ].join(' ')).replace(/ /g, '')
   return hay.includes(needle)
 }
 
-function searchText(row) {
-  return normText([
-    row?.assistanceListingId,
-    row?.title,
-    row?.popularLongName,
-    row?.popularShortName,
-    row?.overview?.objective,
-    row?.overview?.assistanceListingDescription,
-    row?.federalOrganization?.department,
-    row?.federalOrganization?.agency,
-    row?.federalOrganization?.office,
-  ].filter(Boolean).join(' '))
+/** The most specific organization in the hierarchy (the agency or office). */
+function agencyOf(row) {
+  const levels = Array.isArray(row?.organizationHierarchy) ? [...row.organizationHierarchy] : []
+  levels.sort((a, b) => (toNumberOrNull(b?.level) ?? 0) - (toNumberOrNull(a?.level) ?? 0))
+  return toTrimmedStringOrNull(levels[0]?.name)
 }
 
 /**
  * Search federal assistance listings (CFDA programs).
  *
  * @param {Object=} query
- * @param {string=} query.keyword - free text; every word must appear in the listing
+ * @param {string=} query.keyword - free text, passed to SAM.gov's search
  * @param {string=} query.assistanceType - grant, loan, insurance, … or a code (F001)
  * @param {string=} query.applicantType - state, local, nonprofit, individual, etc.
  * @param {number=} query.page - page number (1-based)
@@ -197,106 +155,61 @@ function searchText(row) {
  * @returns {Promise<{ total: number, opportunities: Array<import('./types.js').FundingOpportunity> }>}
  */
 export async function fetchAssistanceListings(query = {}) {
-  const apiKey = process.env.SAM_GOV_PUBLIC_API_KEY
-  if (!apiKey) {
-    console.warn('[samAssistanceListings] SAM_GOV_PUBLIC_API_KEY not set — skipping')
-    return { total: 0, opportunities: [] }
-  }
-
   const { keyword = '', assistanceType, applicantType } = query
   const page = Math.max(1, Math.floor(Number(query.page) || 1))
-  const limit = Math.max(1, Math.min(Math.floor(Number(query.limit) || 25), 100))
+  const limit = Math.max(1, Math.min(Math.floor(Number(query.limit) || 25), MAX_PAGE_SIZE))
 
-  const catalog = await loadCatalog(apiKey)
-  const tokens = normText(keyword).split(' ').filter(Boolean)
-  const matched = []
-  for (const row of catalog) {
-    if (!matchesAssistanceType(row, assistanceType)) continue
-    if (!matchesApplicantType(row, applicantType)) continue
-    if (tokens.length > 0) {
-      const hay = ` ${searchText(row)} `
-      if (!tokens.every((token) => hay.includes(token))) continue
-      const title = normText(row?.title)
-      matched.push({ row, titleHit: tokens.every((token) => title.includes(token)) })
-    } else {
-      matched.push({ row, titleHit: false })
-    }
-  }
-  // Title matches first, catalog order otherwise (stable sort).
-  matched.sort((a, b) => Number(b.titleHit) - Number(a.titleHit))
+  const { rows, total } = await searchListings({ q: String(keyword ?? '').trim(), page: page - 1, size: limit })
+  const kept = rows
+    .filter((row) => row?.isActive !== false)
+    .filter((row) => matchesAssistanceType(row, assistanceType))
+    .filter((row) => matchesApplicantType(row, applicantType))
 
-  const start = (page - 1) * limit
+  // Type and applicant filters apply to the rows on this page, so a filtered
+  // request reports the rows it kept instead of the service's unfiltered count.
+  const filtered = Boolean(String(assistanceType ?? '').trim() || String(applicantType ?? '').trim())
   return {
-    total: matched.length,
-    opportunities: matched.slice(start, start + limit).map(({ row }) => normalizeListing(row)),
+    total: filtered ? kept.length : (total ?? kept.length),
+    opportunities: kept.map(normalizeListing),
   }
 }
 
 /**
- * Get a single assistance listing by CFDA number.
+ * Get a single assistance listing by CFDA number (active or not).
  *
  * @param {string} cfda - e.g. "10.500"
  * @returns {Promise<import('./types.js').FundingOpportunity|null>}
  */
 export async function getAssistanceListing(cfda) {
-  const apiKey = process.env.SAM_GOV_PUBLIC_API_KEY
   const wanted = String(cfda ?? '').trim()
-  if (!apiKey || !wanted) return null
-
-  const cached = catalogCache?.listings?.find((row) => listingKey(row) === wanted)
-  if (cached) return normalizeListing(cached)
-
-  const data = await requestJson({
-    provider: 'sam.assistance',
-    url: `${SAM_AL_BASE}/search`,
-    method: 'GET',
-    headers: SAM_AL_HEADERS,
-    params: { api_key: apiKey, assistanceListingId: wanted, status: 'All' },
-    timeoutMs: 15_000,
-    maxRetries: 2,
-  })
-  const rows = extractListings(data)
-  const row = rows.find((r) => listingKey(r) === wanted) ?? rows[0]
+  if (!wanted) return null
+  const { rows } = await searchListings({ q: wanted, page: 0, size: 25, activeOnly: false })
+  const row = rows.find((r) => String(r?.programNumber ?? '').trim() === wanted)
   return row ? normalizeListing(row) : null
 }
 
-function latestAwardRange(row) {
-  const ranges = row?.financialInformation?.rangeAndAverageAssistance ?? row?.rangeAndAverageAssistance
-  if (!Array.isArray(ranges) || ranges.length === 0) return null
-  const sorted = [...ranges].sort((a, b) => (toNumberOrNull(b?.fiscalYear) ?? 0) - (toNumberOrNull(a?.fiscalYear) ?? 0))
-  return sorted.find((r) => toNumberOrNull(r?.maximumAwardAmount) !== null || toNumberOrNull(r?.minimumAwardAmount) !== null) ?? null
-}
-
 function normalizeListing(row) {
-  const cfda = toTrimmedStringOrNull(row?.assistanceListingId ?? row?.programNumber ?? row?.assistanceListingNumber)
-  const title = toTrimmedStringOrNull(row?.title ?? row?.programTitle) || 'Federal Assistance Program'
-  const agency = toTrimmedStringOrNull(
-    row?.federalOrganization?.agency ?? row?.federalOrganization?.department ?? row?.organizationName ?? row?.agency,
-  )
-  const objective = toTrimmedStringOrNull(
-    row?.overview?.objective ?? row?.overview?.assistanceListingDescription ?? row?.objective ?? row?.programObjective,
-  )
-  const applicantNames = applicantTypeNames(row)
-  const applicantDescription = toTrimmedStringOrNull(row?.criteriaForApplying?.applicant?.description ?? row?.applicantEligibility)
-  const beneficiaryTypes = row?.criteriaForApplying?.beneficiary?.types
-  const beneficiaryNames = Array.isArray(beneficiaryTypes) ? beneficiaryTypes.map((t) => toTrimmedStringOrNull(t?.name)).filter(Boolean) : []
-  const beneficiaryDescription = toTrimmedStringOrNull(row?.criteriaForApplying?.beneficiary?.description ?? row?.beneficiaryEligibility)
-  const types = obligationTypes(row)
+  const cfda = toTrimmedStringOrNull(row?.programNumber)
+  const title = toTrimmedStringOrNull(row?.title) || 'Federal Assistance Program'
+  const agency = agencyOf(row)
+  const objective = toTrimmedStringOrNull(row?.objective)
+  const applicantNames = eligibilityTypes(row, 'applicant')
+  const applicantDescription = eligibilityInfo(row, 'applicant')
+  const beneficiaryNames = eligibilityTypes(row, 'beneficiary')
+  const beneficiaryDescription = eligibilityInfo(row, 'beneficiary')
+  const types = assistanceTypes(row)
   const typeLabels = [...new Set(types.map((t) => t.name).filter(Boolean))]
-  const url = toTrimmedStringOrNull(row?.programWebPage ?? row?.websiteUrl ?? row?.url)
-  const hq = Array.isArray(row?.contacts?.headquarters) ? row.contacts.headquarters[0] : null
+  const website = toTrimmedStringOrNull(row?.website)
+  const falId = toTrimmedStringOrNull(row?._id)
+  const falUrl = falId ? `https://sam.gov/fal/${encodeURIComponent(falId)}/view` : null
+  const contact = firstOf(row?.contacts)
 
-  const range = latestAwardRange(row)
-  const amountMin = toNumberOrNull(range?.minimumAwardAmount)
-  const amountMax = toNumberOrNull(range?.maximumAwardAmount)
-  const fmt = (n) => `$${Number(n).toLocaleString()}`
-  let amountDescription = null
-  if (amountMin !== null && amountMax !== null) amountDescription = `Award range FY${range.fiscalYear}: ${fmt(amountMin)}–${fmt(amountMax)}`
-  else if (amountMax !== null) amountDescription = `Awards up to ${fmt(amountMax)} (FY${range.fiscalYear})`
+  // The search index carries no structured per-award range (only program-wide
+  // obligations, which are not what one applicant can receive), so amounts stay
+  // unset and the listing's own financial note is passed through as text.
+  const amountDescription = toTrimmedStringOrNull(row?.financial?.additionalInfo)?.slice(0, 500) ?? null
 
-  const samUrl = cfda ? `https://sam.gov/fal/${encodeURIComponent(cfda)}/view` : null
-
-  const codes = types.map((t) => t.code)
+  const codes = types.map((t) => t.code).filter(Boolean)
   const categories = ['federal', 'cfda']
   for (const label of typeLabels.map((l) => l.toLowerCase())) {
     if (label.includes('grant') || label.includes('cooperative agreement')) categories.push('grant')
@@ -312,11 +225,11 @@ function normalizeListing(row) {
   else if (beneficiaryDescription) bullets.push(`Beneficiaries: ${beneficiaryDescription.slice(0, 300)}`)
   if (typeLabels.length > 0) bullets.push(`Assistance types: ${typeLabels.join(', ')}`)
 
-  const contactInfo = hq
+  const contactInfo = contact
     ? {
-        name: toTrimmedStringOrNull(hq.fullName),
-        email: toTrimmedStringOrNull(hq.email),
-        phone: toTrimmedStringOrNull(hq.phone),
+        name: toTrimmedStringOrNull(contact.name ?? contact.fullName),
+        email: toTrimmedStringOrNull(contact.email),
+        phone: toTrimmedStringOrNull(contact.phone),
       }
     : null
 
@@ -325,12 +238,12 @@ function normalizeListing(row) {
     title: cfda ? `${cfda} — ${title}` : title,
     sponsor: agency,
     source: 'sam.assistance',
-    source_id: cfda || `sam-al-${Date.now()}`,
-    source_url: samUrl || url,
-    application_url: url,
+    source_id: cfda || falId || `sam-al-${Date.now()}`,
+    source_url: falUrl || website,
+    application_url: website,
     description: objective ? objective.slice(0, 2000) : null,
-    amount_min: amountMin,
-    amount_max: amountMax,
+    amount_min: null,
+    amount_max: null,
     amount_description: amountDescription,
     deadline: null,
     deadline_type: 'ongoing',

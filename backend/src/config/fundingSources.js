@@ -146,7 +146,7 @@ export const FUNDING_SOURCES = Object.freeze([
   },
   {
     id: 'sam.gov.opportunities',
-    name: 'SAM.gov Assistance Listings + Opportunities Public API',
+    name: 'SAM.gov Opportunities Public API',
     docs_url: 'https://open.gsa.gov/api/assistance-listings-api/',
     env_vars: ['SAM_GOV_PUBLIC_API_KEY'],
     key_required: true,
@@ -162,7 +162,7 @@ export const FUNDING_SOURCES = Object.freeze([
         'Set SAM_GOV_PUBLIC_API_KEY in local .env and Railway.',
       ],
       caveats:
-        'Identity-bound — cannot be automated. Personal keys without a SAM entity role are throttled to 10 requests/day and expire every 90 days. api.data.gov keys do NOT work here.',
+        'Identity-bound — cannot be automated. Personal keys without a SAM entity role are throttled to 10 requests/day and expire every 90 days. api.data.gov keys do NOT work here. Federal assistance listings (CFDA) search does NOT use this key: it reads SAM.gov\'s keyless site search.',
     },
   },
   {

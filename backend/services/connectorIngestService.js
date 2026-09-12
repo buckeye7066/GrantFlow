@@ -450,7 +450,8 @@ const SOURCES = [
   { key: 'grants.gov', run: ingestGrantsGov, keyed: false, gate: () => true },
   { key: 'federal.register', run: ingestFederalRegister, keyed: false, gate: (plan) => plan.federalApplicant },
   { key: 'simpler.grants.gov', run: ingestSimplerGrants, keyed: true, gate: () => Boolean(process.env.SIMPLER_GRANTS_API_KEY) },
-  { key: 'sam.assistance', run: ingestSamListings, keyed: true, gate: () => Boolean(process.env.SAM_GOV_PUBLIC_API_KEY) },
+  // SAM.gov's assistance-listings site search is keyless (no daily quota).
+  { key: 'sam.assistance', run: ingestSamListings, keyed: false, gate: () => true },
   { key: 'nih.reporter', run: ingestNihReporter, keyed: false, gate: (plan) => plan.wantsResearch },
   { key: 'nsf.awards', run: ingestNsfAwards, keyed: false, gate: (plan) => plan.wantsResearch },
   { key: 'propublica.990', run: ingestFoundations, keyed: false, gate: (plan) => plan.foundationSeeker },
