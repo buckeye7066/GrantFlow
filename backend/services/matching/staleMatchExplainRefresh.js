@@ -17,6 +17,7 @@ import {
   fundingTruthProofFrom,
   refreshFourTruthProof,
   failedFourTruths,
+  hasPositiveFourTruthProof,
 } from '../../config/fundingTruthPolicy.js'
 import { isFundingResource } from './fundingSourcePresentation.js'
 
@@ -271,6 +272,17 @@ export async function runStaleMatchExplainRefresh(db, opts = {}) {
       }
     }
 
+    // Keep linker admission provenance without turning historical eligibility
+    // into current evidence. The integrity sweep retains linker rows, while
+    // the display gate evaluates this fresh proof. Preserve an earlier positive
+    // proof only as history so a later recovery can explain the disagreement.
+    const explainToPersist = { ...explain }
+    if (verdictToWrite === null && storedDecision === 'accept' &&
+        previousProof && hasPositiveFourTruthProof({ four_truth_proof: previousProof }) &&
+        refreshedProof?.all_passed !== true) {
+      explainToPersist.previous_four_truth_proof = previousProof
+    }
+
     try {
       const res = await db.prepare(
         `UPDATE profile_opportunity_matches
@@ -283,7 +295,7 @@ export async function runStaleMatchExplainRefresh(db, opts = {}) {
           WHERE id = ?
             AND matcher_version = ?`,
       ).run(
-        JSON.stringify(explain),
+        JSON.stringify(explainToPersist),
         scoreToWrite,
         verdictToWrite,
         explanationToWrite,
