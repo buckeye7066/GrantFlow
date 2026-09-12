@@ -1138,6 +1138,10 @@ export function normalizeOpportunity(rawOpp) {
     isAlreadyAwarded,
     educationLevel,
     diseaseSpecific,
+    // The full text diseaseSpecific was decided from (title, description,
+    // sponsor, eligibility). The condition check reads it, so a requirement
+    // stated only in the description is matched against the same words.
+    conditionText: String(text ?? '').toLowerCase(),
     requiresDisasterContext,
     isDmeOrEquipment,
     isCaregiverProgram,

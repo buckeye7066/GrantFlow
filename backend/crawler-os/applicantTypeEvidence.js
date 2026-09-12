@@ -109,7 +109,13 @@ export function applicantTypeEvidence({ opportunity, canonical, previous = null 
   const bucket = matchedApplicantBucket(canonical)
   const result = { evidenced: false, via: null, bucket, stated_applicant_types: stated, eligibility_prose: prose }
 
-  if (!signals.includes('applicant_type')) return result
+  // The engine matched the applicant when it emitted the applicant_type signal
+  // OR its applicant-type gate passed. Some rows pass the gate on stated types
+  // without the signal (TennCare 1915(c) waivers for an owner-verified
+  // enrollee, 2026-09-12); requiring the signal alone withdrew them.
+  const gate = explain.applicant_type_gate ?? explain.applicantTypeGate ?? null
+  const engineMatched = signals.includes('applicant_type') || String(gate?.decision ?? '').toLowerCase() === 'pass'
+  if (!engineMatched) return result
   if (stated.length > 0) return { ...result, evidenced: true, via: 'stated_applicant_types' }
   if (grantsGovApplicantCodesFrom(opportunity)?.includes(UNRESTRICTED_APPLICANT_CODE)) {
     return { ...result, evidenced: true, via: 'unrestricted_applicant_code' }

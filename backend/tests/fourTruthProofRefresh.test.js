@@ -172,6 +172,25 @@ describe('applicant evidence: the funder must say who may apply', () => {
     expect(qualifies({ entity_types_allowed: '["*"]' }).passed).toBe(false)
   })
 
+  it("the engine's applicant-type gate pass counts as its match even without the applicant_type signal", () => {
+    // TennCare 1915(c) waivers for an owner-verified enrollee (prod 2026-09-12):
+    // the gate passed on the row's stated types, matchedSignals had no applicant_type.
+    const gateOnly = canonical({
+      match_explain: {
+        matchedSignals: ['geo:state', 'keywords', 'category', 'needs'],
+        applicant_type_gate: { decision: 'pass', reason: 'explicit_applicant_types_match', matched_bucket: 'individual' },
+      },
+    })
+    const leg = qualifies({ entity_types_allowed: '["individual","family","veteran","disabled","caregiver"]' }, gateOnly)
+    expect(leg.passed).toBe(true)
+    expect(leg.applicant_evidence_via).toBe('stated_applicant_types')
+
+    const neither = canonical({
+      match_explain: { matchedSignals: ['geo:state', 'needs'], applicant_type_gate: { decision: 'review', matched_bucket: null } },
+    })
+    expect(qualifies({ entity_types_allowed: '["individual"]' }, neither).passed).toBe(false)
+  })
+
   it('without a matched applicant bucket, prose cannot be evidence', () => {
     const noBucket = canonical({ match_explain: { matchedSignals: ['applicant_type', 'needs'] } })
     expect(qualifies({ eligibility_text: 'Open to individuals who live in the county' }, noBucket).passed).toBe(false)

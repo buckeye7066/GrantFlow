@@ -155,7 +155,10 @@ export function conditionSpecificAlignment({ profileNorm, signals = null, oppNor
   // pre-existing no-signal REJECT into a pass for every sparse profile.
   const hasSignal = Boolean(profileNorm?.hasDisabilityNeed || profileNorm?.hasChronicIllness)
   const conditions = namedProfileConditions(profileNorm, signals)
-  const text = oppText || [oppNorm?.title, ...(oppNorm?.keywords ?? [])].filter(Boolean).join(' ')
+  // A caller without the raw row (evaluateEligibility) gets the normalized full
+  // text: title-and-keywords alone missed a condition named only in the
+  // description, so ECF CHOICES read "condition not named" for its own enrollees.
+  const text = oppText || oppNorm?.conditionText || [oppNorm?.title, ...(oppNorm?.keywords ?? [])].filter(Boolean).join(' ')
   if (conditions.length > 0 && opportunityStatesCondition(text, conditions)) return 'named'
   return hasSignal ? 'unnamed' : 'none'
 }
