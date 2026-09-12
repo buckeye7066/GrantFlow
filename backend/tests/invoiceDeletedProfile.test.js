@@ -52,7 +52,10 @@ import {
   processDunning,
   markInvoicePaid,
   runBillingCycle,
+  reconcileProBonoAccounts,
+  settleInvoicesAsProBono,
 } from '../services/billing/invoiceService.js'
+import { mergeProfiles } from '../services/profileDedupeService.js'
 import { suspendProfile, reactivateProfile } from '../services/billing/accountStatus.js'
 import { ensureBillingAccount } from '../services/billingAccounts.js'
 import { expireCheckoutSessionForUrl, checkoutSessionIdFromUrl } from '../services/stripeService.js'
@@ -83,6 +86,7 @@ describe('deleted profiles are never billed', () => {
       'DELETE FROM billing_accounts',
       "DELETE FROM profile_sections WHERE profile_id LIKE 'del-%'",
       "DELETE FROM profiles WHERE id LIKE 'del-%'",
+      "DELETE FROM organizations WHERE id LIKE 'del-%'",
     ]) {
       try { db.prepare(sql).run() } catch { /* table variance */ }
     }
@@ -147,6 +151,26 @@ describe('deleted profiles are never billed', () => {
   }
 
   const markDeleted = (id) => db.prepare("UPDATE profiles SET status = 'deleted' WHERE id = ?").run(id)
+
+  /** A db whose profile lifecycle read succeeds `okReads` times, then throws. */
+  function dbWithLifecycleReadFailingAfter(okReads) {
+    let reads = 0
+    const wrapped = Object.create(db)
+    wrapped.prepare = (sql) => {
+      const stmt = db.prepare(sql)
+      if (!String(sql).includes('SELECT id, status FROM profiles')) return stmt
+      return {
+        get: async (...a) => {
+          reads += 1
+          if (reads > okReads) throw new Error('lifecycle read failed')
+          return stmt.get(...a)
+        },
+        all: async (...a) => stmt.all(...a),
+        run: async (...a) => stmt.run(...a),
+      }
+    }
+    return wrapped
+  }
 
   describe('invoice run', () => {
     it('runBillingCycle never invoices a deleted profile and still invoices an active one', async () => {
@@ -424,6 +448,159 @@ describe('deleted profiles are never billed', () => {
       expect(profileStatus('del-unread')).toBe('active')
       expect(sendEmail).not.toHaveBeenCalled()
       expect(notifyProfile).not.toHaveBeenCalled()
+    })
+  })
+
+  describe('review round two: every deletion writer, retried expiry, delivery re-check, atomic dunning, settle guard, zero-row writes', () => {
+    it('DELETE /api/organizations/:id voids every linked profile\'s open invoices and expires their links', async () => {
+      db.prepare('INSERT INTO organizations (id, name) VALUES (?, ?)').run('del-org-1', 'Org del-org-1')
+      await seedProfile('del-org-p1')
+      await seedProfile('del-org-p2')
+      db.prepare("UPDATE profiles SET organization_id = 'del-org-1' WHERE id IN ('del-org-p1', 'del-org-p2')").run()
+      const link = 'https://checkout.stripe.com/c/pay/cs_test_OrgDel01#fid'
+      seedInvoice({ id: 'del-org-inv1', profileId: 'del-org-p1', status: 'sent', issuedAt: daysAgo(2), link })
+      seedInvoice({ id: 'del-org-inv2', profileId: 'del-org-p2', status: 'suspended', issuedAt: daysAgo(12) })
+
+      const res = await request(app).delete('/api/organizations/del-org-1').set(TEST_ADMIN_AUTH_HEADER)
+
+      expect(res.status).toBe(200)
+      expect(profileStatus('del-org-p1')).toBe('deleted')
+      expect(profileStatus('del-org-p2')).toBe('deleted')
+      for (const id of ['del-org-inv1', 'del-org-inv2']) {
+        expect(invoice(id).status).toBe('void')
+        expect(invoice(id).settled_reason).toBe('profile_deleted')
+      }
+      expect(vi.mocked(expireCheckoutSessionForUrl).mock.calls.map((c) => c[0])).toContain(link)
+      expect(invoice('del-org-inv1').stripe_payment_link).toBeNull()
+    })
+
+    it('a profile merge voids the merged-away profile\'s open invoices after the transaction commits', async () => {
+      await seedProfile('del-merge-winner')
+      await seedProfile('del-merge-loser')
+      seedInvoice({ id: 'del-merge-inv', profileId: 'del-merge-loser', status: 'sent', issuedAt: daysAgo(2) })
+
+      await mergeProfiles(db, { winnerId: 'del-merge-winner', loserIds: ['del-merge-loser'], dryRun: false })
+
+      expect(invoice('del-merge-inv').status).toBe('void')
+      expect(invoice('del-merge-inv').settled_reason).toBe('profile_deleted')
+    })
+
+    it('a failed Checkout expiry keeps the link, and the next dunning sweep retries it and clears the link', async () => {
+      const id = 'del-designated-retry'
+      const link = 'https://checkout.stripe.com/c/pay/cs_test_Retry001#fid'
+      await seedProfile(id)
+      seedInvoice({ id: 'del-retry-inv', profileId: id, status: 'sent', issuedAt: daysAgo(2), link })
+      vi.mocked(expireCheckoutSessionForUrl).mockResolvedValueOnce({ ok: false, reason: 'stripe_expire_failed' })
+
+      const res = await request(app).delete(`/api/profiles/${id}`).set(TEST_ADMIN_AUTH_HEADER)
+      expect(res.status).toBe(204)
+      expect(invoice('del-retry-inv').status).toBe('void')
+      expect(invoice('del-retry-inv').stripe_payment_link).toBe(link)
+
+      const dun = await processDunning(db, { now: NOW })
+
+      expect(dun.payment_links_expired_on_retry).toBe(1)
+      expect(invoice('del-retry-inv').stripe_payment_link).toBeNull()
+      expect(vi.mocked(expireCheckoutSessionForUrl).mock.calls.filter((c) => c[0] === link)).toHaveLength(2)
+    })
+
+    it('a delete that lands during the org-name lookup still voids the invoice and sends no email', async () => {
+      await seedProfile('del-send-race')
+      const racy = dbWithHook('SELECT display_name FROM profiles', 'get', () => markDeleted('del-send-race'))
+      const row = db.prepare('SELECT * FROM billing_accounts WHERE profile_id = ?').get('del-send-race')
+
+      expect(await generateInvoiceForAccount(racy, row, { now: NOW })).toBeNull()
+
+      const rows = invoicesFor('del-send-race')
+      expect(rows).toHaveLength(1)
+      expect(rows[0].status).toBe('void')
+      expect(sendEmail).not.toHaveBeenCalled()
+    })
+
+    it('an unreadable lifecycle at delivery sends no email and leaves the invoice for the next cycle', async () => {
+      await seedProfile('del-send-unread')
+      const flaky = dbWithLifecycleReadFailingAfter(1)
+      const row = db.prepare('SELECT * FROM billing_accounts WHERE profile_id = ?').get('del-send-unread')
+
+      const created = await generateInvoiceForAccount(flaky, row, { now: NOW })
+
+      expect(created).toEqual(expect.objectContaining({ email_deferred: true }))
+      const rows = invoicesFor('del-send-unread')
+      expect(rows).toHaveLength(1)
+      expect(rows[0].status).toBe('sent')
+      expect(sendEmail).not.toHaveBeenCalled()
+    })
+
+    it('dunning never reminds or rewrites an invoice voided between its read and the reminder UPDATE', async () => {
+      await seedProfile('del-atomic-remind')
+      seedInvoice({ id: 'del-atomic-remind-inv', profileId: 'del-atomic-remind', status: 'sent', issuedAt: daysAgo(4) })
+      const racy = dbWithHook('SELECT created_by FROM profiles', 'get', () =>
+        db.prepare("UPDATE billing_invoices SET status = 'void', settled_reason = 'profile_deleted' WHERE id = ?").run('del-atomic-remind-inv'))
+
+      const res = await processDunning(racy, { now: NOW })
+
+      expect(res.reminded).toBe(0)
+      expect(invoice('del-atomic-remind-inv').status).toBe('void')
+      expect(sendEmail).not.toHaveBeenCalled()
+    })
+
+    it('dunning never suspends when the profile is deleted between its read and the suspension UPDATE', async () => {
+      await seedProfile('del-atomic-suspend')
+      seedInvoice({ id: 'del-atomic-suspend-inv', profileId: 'del-atomic-suspend', status: 'sent', issuedAt: daysAgo(10) })
+      const racy = dbWithHook('SELECT created_by FROM profiles', 'get', () => markDeleted('del-atomic-suspend'))
+      process.env.BILLING_ALLOW_SUSPEND_WITHOUT_STRIPE = 'true'
+
+      const res = await processDunning(racy, { now: NOW })
+
+      expect(res.suspended).toBe(0)
+      expect(invoice('del-atomic-suspend-inv').status).toBe('sent')
+      expect(profileStatus('del-atomic-suspend')).toBe('deleted')
+      expect(notifyProfile).not.toHaveBeenCalled()
+    })
+
+    it('the shared pro bono reconcile/settle never converts a deleted profile\'s invoice to pro_bono', async () => {
+      const link = 'https://checkout.stripe.com/c/pay/cs_test_ProBono01#fid'
+      await seedProfile('del-pb-direct', { status: 'deleted' })
+      db.prepare('UPDATE billing_accounts SET is_pro_bono = 1 WHERE profile_id = ?').run('del-pb-direct')
+      seedInvoice({ id: 'del-pb-direct-inv', profileId: 'del-pb-direct', status: 'sent', issuedAt: daysAgo(3), link })
+
+      const rec = await reconcileProBonoAccounts(db, { now: NOW })
+
+      expect(rec.settled).toBe(0)
+      const inv = invoice('del-pb-direct-inv')
+      expect(inv.status).toBe('void')
+      expect(inv.settled_reason).toBe('profile_deleted')
+      expect(vi.mocked(expireCheckoutSessionForUrl).mock.calls.map((c) => c[0])).toContain(link)
+      const direct = await settleInvoicesAsProBono(db, { profileId: 'del-pb-direct', now: NOW })
+      expect(direct).toEqual(expect.objectContaining({ settled: 0, skipped: 'profile_deleted' }))
+    })
+
+    it('a zero-row guarded status write is a refusal: missing profiles and an unreadable follow-up read get no notices', async () => {
+      const s = await suspendProfile(db, { profileId: 'del-missing-profile', reason: 'admin_suspend', suspendedBy: 'admin' })
+      expect(s).toEqual(expect.objectContaining({ ok: false, error: 'profile_not_found' }))
+      const r = await reactivateProfile(db, { profileId: 'del-missing-profile', reactivatedBy: 'admin' })
+      expect(r).toEqual(expect.objectContaining({ ok: false, error: 'profile_not_found' }))
+
+      const blind = dbWithUnreadableLifecycle()
+      const b = await suspendProfile(blind, { profileId: 'del-missing-profile-2', reason: 'admin_suspend', suspendedBy: 'admin' })
+      expect(b).toEqual(expect.objectContaining({ ok: false, error: 'not_updated' }))
+
+      expect(notifyProfile).not.toHaveBeenCalled()
+      expect(sendEmail).not.toHaveBeenCalled()
+    })
+
+    it('a non-Checkout payment link is terminal (never retried), and a missing Stripe key is not', async () => {
+      const actual = await vi.importActual('../services/stripeService.js')
+      expect(await actual.expireCheckoutSessionForUrl('https://pay.example/invoice/123'))
+        .toEqual(expect.objectContaining({ ok: false, reason: 'no_session_id', terminal: true }))
+      const saved = process.env.STRIPE_SECRET_KEY
+      delete process.env.STRIPE_SECRET_KEY
+      try {
+        const r = await actual.expireCheckoutSessionForUrl('https://checkout.stripe.com/c/pay/cs_test_Zz09')
+        expect(r.terminal).toBeUndefined()
+      } finally {
+        if (saved !== undefined) process.env.STRIPE_SECRET_KEY = saved
+      }
     })
   })
 

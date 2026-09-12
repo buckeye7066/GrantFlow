@@ -344,9 +344,20 @@ router.delete('/:id', ensureAuth, mutationRateLimiter, async (req, res) => {
     await req.db.prepare('UPDATE organizations SET deleted_at = CURRENT_TIMESTAMP WHERE id = ?').run(req.params.id);
 
     // Propagate soft-delete to linked profile so the matcher and Anya skip it
+    const linkedProfiles = await req.db
+      .prepare('SELECT id FROM profiles WHERE organization_id = ?')
+      .all(req.params.id);
     await req.db
       .prepare(`UPDATE profiles SET status = 'deleted', updated_at = CURRENT_TIMESTAMP WHERE organization_id = ?`)
       .run(req.params.id);
+    // A deleted profile keeps no open invoice or payable Stripe link. Best-effort:
+    // billing cleanup never fails the delete.
+    try {
+      const { voidInvoicesForDeletedProfiles } = await import('../services/billing/invoiceService.js');
+      await voidInvoicesForDeletedProfiles(req.db, (linkedProfiles || []).map((p) => p.id));
+    } catch (billingErr) {
+      console.warn('[organizations] failed to void invoices for deleted profiles:', billingErr?.message || billingErr);
+    }
     
     res.json({ success: true, message: 'Organization marked as deleted' });
   } catch (error) {

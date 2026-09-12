@@ -140,13 +140,22 @@ export function checkoutSessionIdFromUrl(url) {
  */
 export async function expireCheckoutSessionForUrl(url) {
   const sessionId = checkoutSessionIdFromUrl(url)
-  if (!sessionId) return { ok: false, reason: 'no_session_id' }
+  // Not a hosted Checkout URL: nothing can ever be expired, so retrying is pointless.
+  if (!sessionId) return { ok: false, reason: 'no_session_id', terminal: true }
   const stripe = createStripe()
   if (!stripe) return { ok: false, reason: 'stripe_not_configured', session_id: sessionId }
   try {
     const session = await stripe.checkout.sessions.expire(sessionId)
     return { ok: true, session_id: sessionId, status: session?.status || null }
   } catch (error) {
+    // Expire only works on an open session. If it is already expired or
+    // complete, the link can no longer be paid through it: treat as done.
+    try {
+      const session = await stripe.checkout.sessions.retrieve(sessionId)
+      if (session?.status && session.status !== 'open') {
+        return { ok: true, session_id: sessionId, status: session.status, already: true }
+      }
+    } catch { /* fall through to the failure below */ }
     console.warn('[stripeService] expireCheckoutSessionForUrl failed:', sessionId, error?.message)
     return { ok: false, reason: 'stripe_expire_failed', session_id: sessionId, error: error?.message || null }
   }

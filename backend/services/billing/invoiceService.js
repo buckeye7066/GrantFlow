@@ -158,7 +158,14 @@ async function voidOpenInvoicesOfDeletedProfiles(db) {
     const r = await voidOpenInvoicesForDeletedProfile(db, { profileId: row.profile_id })
     voided += r.voided || 0
   }
-  return { voided }
+  // Retry Checkout expiry for invoices already voided for profile_deleted whose
+  // link could not be expired earlier (a successful expiry clears the link).
+  const pendingLinks = await db.prepare(
+    `SELECT id, stripe_payment_link FROM billing_invoices
+      WHERE status = 'void' AND settled_reason = 'profile_deleted' AND stripe_payment_link IS NOT NULL`,
+  ).all()
+  const retried = await expireAndClearInvoiceLinks(db, pendingLinks)
+  return { voided, links_retried: (pendingLinks || []).filter((row) => row?.stripe_payment_link).length, links_expired_on_retry: retried.expired }
 }
 
 /**
@@ -181,40 +188,76 @@ export async function voidOpenInvoicesForDeletedProfile(db, { profileId } = {}) 
       WHERE profile_id = ? AND status IN (${safeOpenStatusPlaceholders})`,
   ).run(pid, ...OPEN_INVOICE_STATUSES)
   const voided = Number(res?.changes ?? 0) || 0
-  const links = await expireInvoicePaymentLinks((open || []).map((row) => row.stripe_payment_link))
+  const links = await expireAndClearInvoiceLinks(db, open)
   log.info('open invoices voided — profile deleted', { profile_id: pid, voided, links_expired: links.expired, links_not_expired: links.not_expired })
   return { ok: true, profile_id: pid, voided, links_expired: links.expired, links_not_expired: links.not_expired }
 }
 
 /**
- * Best-effort: expire the Stripe Checkout Session behind each voided invoice's
- * emailed payment link so it can no longer be paid. The session id is not
- * stored; stripeService derives it from the Checkout URL path. Never throws —
- * a Stripe outage must never fail a delete or a dunning pass — and a link that
- * could not be expired is counted and logged (markInvoicePaid still refuses to
- * turn the void invoice into paid if someone pays it anyway).
+ * Every writer that marks profiles deleted (the profile and organization
+ * delete routes, profile merge, the dedupe and orphan-maintenance scripts)
+ * calls this so no deleted profile keeps an open invoice or a payable link.
+ * Acts only on profiles whose lifecycle now reads deleted or missing, so a
+ * caller can never void a live profile's billing. Best-effort; never throws.
  */
-async function expireInvoicePaymentLinks(links) {
-  const urls = [...new Set((links || []).filter(Boolean).map(String))]
+export async function voidInvoicesForDeletedProfiles(db, profileIds = []) {
+  const ids = [...new Set((profileIds || []).filter(Boolean).map(String))]
+  let voided = 0
+  let failed = 0
+  for (const profileId of ids) {
+    try {
+      if (await profileBillingLifecycle(db, profileId) !== 'deleted') continue
+      const r = await voidOpenInvoicesForDeletedProfile(db, { profileId })
+      voided += r.voided || 0
+    } catch (err) {
+      failed += 1
+      log.warn('void invoices for deleted profile failed', { profile_id: profileId, error: err?.message })
+    }
+  }
+  return { profiles: ids.length, voided, failed }
+}
+
+/**
+ * Best-effort: expire the Stripe Checkout Session behind each voided invoice's
+ * emailed payment link, then clear the link so the invoice leaves the retry
+ * set. A link is cleared only when the session is expired (or already
+ * expired/paid) or can never be expired (not a Checkout URL); any other
+ * failure KEEPS the link, and the dunning sweep retries it every pass. The
+ * session id is not stored; stripeService derives it from the Checkout URL
+ * path. Never throws — a Stripe outage must never fail a delete or a dunning
+ * pass (markInvoicePaid still refuses to turn a void invoice into paid).
+ */
+async function expireAndClearInvoiceLinks(db, rows) {
+  const withLinks = (rows || []).filter((row) => row?.id && row?.stripe_payment_link)
   let expired = 0
   let notExpired = 0
-  if (!urls.length) return { expired, not_expired: notExpired }
+  if (!withLinks.length) return { expired, not_expired: notExpired }
   let expireFn = null
   try {
     const mod = await import('../stripeService.js')
     expireFn = mod?.expireCheckoutSessionForUrl
   } catch (err) { log.warn('stripe payment link expiry unavailable', { error: err?.message }) }
-  for (const url of urls) {
+  for (const row of withLinks) {
+    let r
     try {
-      const r = typeof expireFn === 'function' ? await expireFn(url) : { ok: false, reason: 'stripe_service_unavailable' }
+      r = typeof expireFn === 'function'
+        ? await expireFn(String(row.stripe_payment_link))
+        : { ok: false, reason: 'stripe_service_unavailable' }
+    } catch (err) {
+      r = { ok: false, reason: 'stripe_expire_threw', error: err?.message }
+    }
+    if (r?.ok || r?.terminal) {
+      try {
+        await db.prepare(`UPDATE billing_invoices SET stripe_payment_link = NULL WHERE id = ? AND status = 'void'`).run(row.id)
+      } catch (err) { log.warn('could not clear expired payment link', { invoice_id: row.id, error: err?.message }) }
       if (r?.ok) expired += 1
       else {
         notExpired += 1
-        log.warn('stripe payment link NOT expired for voided invoice', { reason: r?.reason || 'unknown', session_id: r?.session_id || null })
+        log.warn('payment link cannot be expired (not a Checkout Session); cleared', { invoice_id: row.id, reason: r?.reason || null })
       }
-    } catch (err) {
+    } else {
       notExpired += 1
-      log.warn('stripe payment link expiry threw for voided invoice', { error: err?.message })
+      log.warn('stripe payment link NOT expired for voided invoice; kept for retry', { invoice_id: row.id, reason: r?.reason || 'unknown', session_id: r?.session_id || null })
     }
   }
   return { expired, not_expired: notExpired }
@@ -415,18 +458,24 @@ export async function generateInvoiceForAccount(db, accountRow, { now = new Date
     due, status, recipient, paymentLink, now.toISOString(), dueAt,
     gross, proBono ? gross : 0, dbBool(db, proBono), proBono ? 'pro_bono' : null, paidAt)
 
-  // Re-check after the write: a delete that landed between the check above and
-  // this INSERT (its void sweep already done) must not leave a live invoice or
-  // send an email.
-  if (await profileBillingLifecycle(db, account.profile_id) === 'deleted') {
+  const orgName = await resolveOrgName(db, account.profile_id)
+
+  // Re-check immediately before delivery, after every other lookup: a delete
+  // that landed after the first check — even after its void sweep finished —
+  // must not leave a live invoice or send an email. An unreadable lifecycle
+  // sends nothing; the invoice stays for the next cycle's dunning pass.
+  const lifecycleAtSend = await profileBillingLifecycle(db, account.profile_id)
+  if (lifecycleAtSend === 'deleted') {
     await db.prepare(`UPDATE billing_invoices SET status = 'void', settled_reason = 'profile_deleted' WHERE id = ?`).run(id)
-    await expireInvoicePaymentLinks([paymentLink])
+    await expireAndClearInvoiceLinks(db, [{ id, stripe_payment_link: paymentLink }])
     log.info('invoice voided — profile deleted during generation', { profile_id: account.profile_id, invoice_id: id })
     return null
   }
-
-  const orgName = await resolveOrgName(db, account.profile_id)
-  if (recipient && !isNonRoutableEmail(recipient)) {
+  const emailDeferred = lifecycleAtSend === 'unknown'
+  if (emailDeferred) {
+    log.warn('invoice email NOT sent — profile lifecycle unreadable at delivery; left for the next cycle', { profile_id: account.profile_id, invoice_id: id })
+  }
+  if (!emailDeferred && recipient && !isNonRoutableEmail(recipient)) {
     const mail = buildInvoiceEmail({
       orgName, amountCents: due, periodStart: moment.period_start, periodEnd: moment.period_end, cadence,
       dueDate: dueAt ? dueAt.slice(0, 10) : null, paymentLink,
@@ -434,8 +483,18 @@ export async function generateInvoiceForAccount(db, accountRow, { now = new Date
     })
     await sendEmail({ to: recipient, cc: ownerCc(), subject: mail.subject, html: mail.html, text: mail.text })
   }
-  log.info(proBono ? 'pro bono statement generated' : 'invoice generated', { profile_id: account.profile_id, period: moment.period_key, amount_due: due, gross, emailed: Boolean(recipient) })
-  return { id, profile_id: account.profile_id, period_key: moment.period_key, amount_cents: due, gross_amount_cents: gross, is_pro_bono: proBono }
+  log.info(proBono ? 'pro bono statement generated' : 'invoice generated', { profile_id: account.profile_id, period: moment.period_key, amount_due: due, gross, emailed: Boolean(recipient) && !emailDeferred })
+  return { id, profile_id: account.profile_id, period_key: moment.period_key, amount_cents: due, gross_amount_cents: gross, is_pro_bono: proBono, email_deferred: emailDeferred }
+}
+
+/**
+ * Did a guarded UPDATE change a row? Real adapters report a row count (SQLite
+ * `changes`, Postgres rowCount as `changes`); 0 means the guard refused the
+ * transition. An adapter that reports no count is treated as applied.
+ */
+function writeApplied(result) {
+  if (!result || typeof result.changes !== 'number') return true
+  return result.changes > 0
 }
 
 /** Boolean bind value for the active dialect (better-sqlite3 rejects JS booleans). */
@@ -459,6 +518,20 @@ export async function settleInvoicesAsProBono(db, { profileId, now = new Date(),
   if (!profileId) return { ok: false, error: 'profile_id_required', settled: 0, reactivated: false }
   await ensureInvoiceSchema(db)
   const pid = String(profileId)
+  // Shared guard for every caller (dunning, POST /admin/pro-bono/reconcile, the
+  // account-update flag flip): a deleted profile's invoices are voided as
+  // profile_deleted, never settled as pro bono; an unreadable lifecycle does
+  // nothing.
+  const lifecycle = await profileBillingLifecycle(db, pid)
+  if (lifecycle === 'deleted') {
+    const v = await voidOpenInvoicesForDeletedProfile(db, { profileId: pid })
+    log.info('pro bono settlement skipped — profile deleted; open invoices voided', { profile_id: pid, voided: v.voided, by: settledBy })
+    return { ok: true, profile_id: pid, settled: 0, reactivated: false, skipped: 'profile_deleted', voided: v.voided }
+  }
+  if (lifecycle === 'unknown') {
+    log.warn('pro bono settlement skipped — profile lifecycle unreadable', { profile_id: pid, by: settledBy })
+    return { ok: false, profile_id: pid, settled: 0, reactivated: false, error: 'lifecycle_unreadable' }
+  }
   const placeholders = OPEN_INVOICE_STATUSES.map(() => '?').join(',')
   const open = await db.prepare(
     `SELECT id, status, amount_cents, gross_amount_cents FROM billing_invoices WHERE profile_id = ? AND status IN (${placeholders})`,
@@ -560,7 +633,7 @@ export async function processDunning(db, { now = new Date() } = {}) {
     }
     if (lifecycle === 'deleted') {
       await db.prepare(`UPDATE billing_invoices SET status = 'void', settled_reason = 'profile_deleted' WHERE id = ?`).run(inv.id)
-      await expireInvoicePaymentLinks([inv.stripe_payment_link])
+      await expireAndClearInvoiceLinks(db, [inv])
       log.info('invoice voided — profile deleted', { invoice_id: inv.id, profile_id: inv.profile_id })
       voidedDeleted += 1
       continue
@@ -584,7 +657,18 @@ export async function processDunning(db, { now = new Date() } = {}) {
     const cycleDays = Number(process.env.BILLING_SUSPEND_DAYS) || cadenceCycleDays(inv.cadence)
 
     if (ageDays >= cycleDays && canSuspend) {
-      await db.prepare(`UPDATE billing_invoices SET status = 'suspended', suspended_at = ? WHERE id = ?`).run(now.toISOString(), inv.id)
+      // Atomic transition: only an invoice still in the status we read, on a
+      // profile that is still not deleted, is suspended — a void or delete that
+      // landed after the read wins, and nothing is suspended or sent.
+      const suspendWrite = await db.prepare(
+        `UPDATE billing_invoices SET status = 'suspended', suspended_at = ?
+          WHERE id = ? AND status = ?
+            AND EXISTS (SELECT 1 FROM profiles p WHERE p.id = billing_invoices.profile_id AND COALESCE(p.status, '') <> 'deleted')`,
+      ).run(now.toISOString(), inv.id, inv.status)
+      if (!writeApplied(suspendWrite)) {
+        log.info('dunning suspend skipped — invoice or profile changed since read', { invoice_id: inv.id, profile_id: inv.profile_id })
+        continue
+      }
       // Single suspension path (sets profile status + notifies profile & admin
       // with how to lift). Pass the invoice's payment link when present.
       await suspendProfile(db, {
@@ -595,7 +679,15 @@ export async function processDunning(db, { now = new Date() } = {}) {
       }).catch((err) => log.warn('suspendProfile failed', { error: err?.message }))
       suspended += 1
     } else if (ageDays >= SECOND_NOTICE_DAYS() && inv.status === 'sent') {
-      await db.prepare(`UPDATE billing_invoices SET status = 'second_notice', reminders_sent = reminders_sent + 1, last_reminder_at = ? WHERE id = ?`).run(now.toISOString(), inv.id)
+      const remindWrite = await db.prepare(
+        `UPDATE billing_invoices SET status = 'second_notice', reminders_sent = reminders_sent + 1, last_reminder_at = ?
+          WHERE id = ? AND status = 'sent'
+            AND EXISTS (SELECT 1 FROM profiles p WHERE p.id = billing_invoices.profile_id AND COALESCE(p.status, '') <> 'deleted')`,
+      ).run(now.toISOString(), inv.id)
+      if (!writeApplied(remindWrite)) {
+        log.info('dunning reminder skipped — invoice or profile changed since read', { invoice_id: inv.id, profile_id: inv.profile_id })
+        continue
+      }
       const orgName = await resolveOrgName(db, inv.profile_id)
       if (inv.recipient_email) {
         const mail = buildInvoiceEmail({ orgName, amountCents: inv.amount_cents, periodStart: inv.period_start, periodEnd: inv.period_end, cadence: inv.cadence, dueDate: inv.due_at ? String(inv.due_at).slice(0, 10) : null, paymentLink: inv.stripe_payment_link, secondNotice: true })
@@ -609,6 +701,7 @@ export async function processDunning(db, { now = new Date() } = {}) {
     suspended,
     voided,
     voided_deleted_profile: (deletedSweep.voided || 0) + voidedDeleted,
+    payment_links_expired_on_retry: deletedSweep.links_expired_on_retry || 0,
     skipped_unreadable_profile: skippedUnreadable,
     pro_bono_settled: reconciled.settled || 0,
   }

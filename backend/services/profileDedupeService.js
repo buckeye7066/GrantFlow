@@ -670,7 +670,7 @@ export async function mergeProfiles(db, {
     throw new Error('loserIds must not include winnerId')
   }
 
-  return await db.withTransaction(async (tx) => {
+  const mergeResult = await db.withTransaction(async (tx) => {
     const winner = await tx
         .prepare('SELECT id, display_name, user_id, organization_id FROM profiles WHERE id = ?')
         .get(winnerId)
@@ -1005,6 +1005,18 @@ export async function mergeProfiles(db, {
       changes,
     }
   })
+  // Merged-away profiles are deleted: void their open invoices and payable
+  // links AFTER the transaction commits (never inside it — invoice schema DDL
+  // must not run in the merge transaction). Best-effort.
+  if (!mergeResult?.dry_run) {
+    try {
+      const { voidInvoicesForDeletedProfiles } = await import('./billing/invoiceService.js')
+      await voidInvoicesForDeletedProfiles(db, uniqueLoserIds)
+    } catch (err) {
+      console.warn('[profileDedupe] failed to void invoices for merged profiles:', err?.message || err)
+    }
+  }
+  return mergeResult
 }
 
 export function coerceDryRun(value, defaultDryRun = true) {

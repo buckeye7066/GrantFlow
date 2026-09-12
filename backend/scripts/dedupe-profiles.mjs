@@ -419,6 +419,14 @@ async function run() {
 
     await softDeleteProfile(duplicate)
     await tombstone(duplicate, keeper)
+    // A deleted profile keeps no open invoice or payable Stripe link (best-effort).
+    try {
+      const { voidInvoicesForDeletedProfiles } = await import('../services/billing/invoiceService.js')
+      const billing = await voidInvoicesForDeletedProfiles(db, [duplicate])
+      console.log(`     billing: voided ${billing.voided} open invoice(s) for ${duplicate}`)
+    } catch (err) {
+      console.warn(`     ! billing cleanup failed for ${duplicate}: ${err?.message || err}`)
+    }
 
     console.log(
       `  APPLIED: moved=${totalMoved} row(s), droppedConflicts=${totalConflicts}, ` +
