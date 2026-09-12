@@ -41,7 +41,8 @@
 // structured farm-declaration reader live in ONE registry so the discovery lane
 // and this gate cannot drift.
 import { safeParseArrayField } from './profileHelpers.js'
-import { FARM_APPLICANT_TOKENS, hasFarmIdentity, isFarmApplicantToken, normalizeApplicantToken } from './eligibility/farmIdentity.js'
+import { hasFarmIdentity, isFarmApplicantToken, normalizeApplicantToken } from './eligibility/farmIdentity.js'
+import { APPLICANT_BUCKET_TOKENS } from '../config/applicantBucketTokens.js'
 import { getParentChain, resolveProfileType } from './profileTypeRegistry.js'
 import { normalizeProfile, readNonprofit501c3Status } from './profileNormalizer.js'
 import { grantsGovApplicantCodesFrom } from '../../shared/grantsGovProtocol.js'
@@ -381,64 +382,18 @@ function gatherExplicitTypes(opportunity) {
   return out
 }
 
-/**
- * Population tokens that name a PERSON. Sourced from what the live registries
- * actually emit into `entity_types_allowed` (measured on the catalog replica:
- * `["individual","family","veteran","student"]`, `["individual","family",
- * "veteran","senior"]`, `["student","family"]`, `["individual","family",
- * "veteran","active_duty","guard_reserve","transitioning_service_member",
- * "military_spouse","student"]`, `["individual","student"]`). A row typed with
- * ONLY one of the narrower tokens must pass an individual profile, not
- * hard-mismatch it.
- */
-const INDIVIDUAL_APPLICANT_TOKENS = Object.freeze([
-  'individual', 'individuals', 'family', 'families', 'household', 'households',
-  'student', 'students', 'consumer', 'consumers', 'patient', 'patients',
-  'person', 'people', 'resident', 'residents',
-  'veteran', 'veterans', 'senior', 'seniors', 'elder', 'elders',
-  'caregiver', 'caregivers', 'parent', 'parents', 'youth', 'child', 'children',
-  'homeowner', 'homeowners', 'renter', 'renters', 'tenant', 'tenants',
-  'active_duty', 'guard_reserve', 'transitioning_service_member',
-  'military_spouse', 'survivor', 'survivors', 'disabled', 'low_income',
-])
-
+// The per-bucket applicant vocabulary (and why a farm also matches business
+// tokens) lives in config/applicantBucketTokens.js, shared with the four-truth
+// proof's prose reader so the two readers of "who may apply" cannot drift.
 function explicitMatchesBucket(types, profileBucket) {
   if (!types.length) return null
   const set = new Set(types)
   // A wildcard is an ABSENCE of a restriction, not a restriction that excludes
   // everyone. `withFallback()` writes `['*']` whenever a lane stated nothing.
   if ([...set].some((t) => WILDCARD_APPLICANT_TOKENS.has(t))) return 'pass'
-  switch (profileBucket) {
-    case 'individual':
-      if (INDIVIDUAL_APPLICANT_TOKENS.some((k) => set.has(k))) return 'pass'
-      break
-    case 'org':
-      if ([
-        'organization', 'organizations', 'nonprofit', 'nonprofits', 'non-profit',
-        '501c3', '501(c)(3)', 'church', 'school', 'institution', 'institutions',
-        'university', 'college', 'state', 'state_agency', 'government', 'public_agency',
-      ].some((k) => set.has(k))) return 'pass'
-      break
-    case 'business':
-      if ([
-        'small_business', 'business', 'businesses', 'enterprise', 'startup', 'entrepreneur', 'for_profit',
-      ].some((k) => set.has(k))) return 'pass'
-      break
-    case 'farm':
-      // A farm operation IS a for-profit business — USDA/FSA/SBA treat it as
-      // one, and crawler-os already widens farm → business on both sides of its
-      // own gate (crawler-os/matchEngine.js APPLICANT_TYPE_TO_CANONICAL_ALLOWED
-      // / OPPORTUNITY_APPLICANT_TYPE_TO_ALLOWED). So a farm applicant passes
-      // BOTH the agricultural-producer vocabulary and the business vocabulary.
-      if (FARM_APPLICANT_TOKENS.some((k) => set.has(k))) return 'pass'
-      if ([
-        'small_business', 'business', 'businesses', 'enterprise', 'startup', 'entrepreneur', 'for_profit',
-        'rural_business',
-      ].some((k) => set.has(k))) return 'pass'
-      break
-    default:
-      return null
-  }
+  const vocabulary = APPLICANT_BUCKET_TOKENS[profileBucket]
+  if (!vocabulary) return null
+  if (vocabulary.some((k) => set.has(k))) return 'pass'
   // We have explicit types but none match the profile's bucket → hard mismatch.
   return 'mismatch'
 }
