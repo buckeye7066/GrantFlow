@@ -33,7 +33,10 @@ import {
 } from '../config/linkLifecycleKinds.js'
 
 const REQUEST_TIMEOUT_MS = 10_000
-const BATCH_SIZE = 10
+// Public source services must not be flooded by backlog recovery. Together
+// with the batch delay this caps every host at two concurrent probes and
+// averages no more than one URL per second, including OpenStreetMap pointers.
+const BATCH_SIZE = 2
 const BATCH_DELAY_MS = 2_000
 const REVERIFY_AFTER_DAYS = 30
 // Refresh before the hard mission cutoff. Selecting only after day 30 creates
@@ -259,6 +262,7 @@ export async function checkUrl(url, opts = {}) {
 
   const tryProbe = async (method) => {
     try {
+      const osmHost = /(^|\.)openstreetmap\.org$/i.test(new URL(url).hostname)
       // safeFetch re-validates EVERY redirect hop. The previous
       // `fetch(..., { redirect: 'follow' })` cleared only the first URL, so a
       // crawled page answering `302 -> 169.254.169.254` walked straight past
@@ -267,7 +271,7 @@ export async function checkUrl(url, opts = {}) {
         method,
         // Match the browser document identity used by native crawl fetches.
         // node-fetch does not add native fetch's Sec-Fetch-Mode header itself.
-        headers: browserHeadersEnabled()
+        headers: browserHeadersEnabled() && !osmHost
           ? BROWSER_FETCH_HEADERS
           : {
               'User-Agent': 'Mozilla/5.0 (compatible; GrantFlowLinkVerifier/2.0; +https://app.axiombiolabs.org)',
@@ -551,6 +555,12 @@ export async function runLinkVerification(
               AND LOWER(COALESCE(link_status, '')) IN ('ok', 'redirect', 'verified')
               AND COALESCE(verification_error, '') = '')`
 
+  // Oldest evidence gets the next bounded slot, regardless of the last verdict.
+  // A broken pointer remains active and eligible after every failed probe;
+  // putting its status first repeatedly selects it ahead of the entire stale
+  // catalog. Hidden successes can cause the same starvation. Every persisted
+  // attempt advances last_verified_at, so ordering by that clock lets the
+  // backlog drain while repairs remain eligible. Status breaks ties only.
   const rows = await db
     .prepare(
       `
@@ -567,10 +577,11 @@ export async function runLinkVerification(
             AND (link_status = 'broken' OR last_verified_at IS NULL OR last_verified_at < ?
                  OR ${unexplainedHiddenSuccessSql})
             AND ${mutableLinkLifecycleSql()}
-          ORDER BY CASE WHEN link_status = 'broken' THEN 0
+          ORDER BY (last_verified_at IS NULL) DESC, last_verified_at ASC,
+                   CASE WHEN link_status = 'broken' THEN 0
                         WHEN ${unexplainedHiddenSuccessSql} THEN 1
                         ELSE 2 END,
-                   (last_verified_at IS NULL) DESC, last_verified_at ASC
+                   id ASC
         LIMIT ?
       `,
     )

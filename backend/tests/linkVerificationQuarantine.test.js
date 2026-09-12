@@ -258,6 +258,59 @@ describe('link verification quarantine', () => {
 
 
 describe('startup SQL-only link quarantine', () => {
+  it.each(['broken', 'hidden-success'])('drains overdue proof before repeating recent %s probes in bounded batches', async (recentKind) => {
+    const db = makeDb()
+    const dayMs = 24 * 60 * 60 * 1000
+    const recentAt = new Date(Date.now() - dayMs).toISOString()
+    const fetchImpl = async (url) => ({
+      status: String(url).includes('/recent-') && recentKind === 'broken' ? 404 : 200,
+      url: String(url),
+    })
+
+    try {
+      for (let index = 0; index < 2; index++) {
+        const id = `recent-${index}`
+        insertOpportunity(db, {
+          id,
+          url: `https://8.8.8.8/${id}`,
+          kind: 'directory',
+          status: recentKind === 'broken' ? 'broken' : 'ok',
+          hidden: recentKind === 'hidden-success' ? 1 : 0,
+        })
+        db.prepare('UPDATE funding_opportunities SET last_verified_at = ? WHERE id = ?').run(recentAt, id)
+      }
+      for (let index = 0; index < 4; index++) {
+        const id = `overdue-${index}`
+        insertOpportunity(db, { id, url: `https://8.8.8.8/${id}`, kind: 'directory', status: 'ok' })
+        db.prepare('UPDATE funding_opportunities SET last_verified_at = ? WHERE id = ?')
+          .run(new Date(Date.now() - (40 - index) * dayMs).toISOString(), id)
+      }
+
+      const first = await runLinkVerification(db, { limit: 2, fetchImpl, verifiedBy: 'backlog-first' })
+      expect(first).toMatchObject({ checked: 2, ok: 2 })
+      expect(db.prepare("SELECT id FROM funding_opportunities WHERE verified_by = 'backlog-first' ORDER BY id").all())
+        .toEqual([{ id: 'overdue-0' }, { id: 'overdue-1' }])
+
+      const second = await runLinkVerification(db, { limit: 2, fetchImpl, verifiedBy: 'backlog-second' })
+      expect(second).toMatchObject({ checked: 2, ok: 2 })
+      expect(db.prepare("SELECT id FROM funding_opportunities WHERE verified_by = 'backlog-second' ORDER BY id").all())
+        .toEqual([{ id: 'overdue-2' }, { id: 'overdue-3' }])
+
+      // Repairs still get their turn once the older proof has been refreshed.
+      const repair = await runLinkVerification(db, { limit: 2, fetchImpl, verifiedBy: 'backlog-repair' })
+      expect(repair.checked).toBe(2)
+      for (let index = 0; index < 2; index++) {
+        expect(readRow(db, `recent-${index}`)).toMatchObject({
+          link_status: recentKind === 'broken' ? 'broken' : 'ok',
+          is_active: 1,
+          is_hidden: 0,
+        })
+      }
+    } finally {
+      db.close()
+    }
+  })
+
   it('quarantines every lifecycle kind plus NULL/blank legacy rows and excludes pointers', async () => {
     const db = makeDb()
     const fetchSpy = vi.spyOn(globalThis, 'fetch')
