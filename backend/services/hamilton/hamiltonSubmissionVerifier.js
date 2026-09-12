@@ -396,7 +396,11 @@ export async function runSubmissionVerificationSweep(db, { limit = 3, now = Date
     // Dialect note: SQLite stores CURRENT_TIMESTAMP as 'YYYY-MM-DD HH:MM:SS'
     // while back-dated fixtures write ISO strings — datetime() normalizes
     // both; Postgres compares timestamptz to the ISO cutoff directly.
-    const recentEventSql = db?.dialect === 'postgres'
+    // Dialect-selected LITERAL predicate: two compile-time strings holding only
+    // a bound-parameter placeholder — no user input ever reaches this fragment
+    // (the cutoff is bound as `spacingCutoffIso` below), which is why the
+    // safe-sql gate accepts it under the `Safe` naming convention.
+    const recentEventSafeSql = db?.dialect === 'postgres'
       ? 'e2.created_at > CAST(? AS timestamptz)'
       : 'datetime(e2.created_at) > datetime(?)'
     const spacingCutoffIso = new Date(now - VERIFICATION_MIN_SPACING_MS).toISOString()
@@ -408,7 +412,7 @@ export async function runSubmissionVerificationSweep(db, { limit = 3, now = Date
           AND (SELECT COUNT(*) FROM application_task_events e
                 WHERE e.task_id = application_tasks.id AND e.step = ?) < ?
           AND NOT EXISTS (SELECT 1 FROM application_task_events e2
-                WHERE e2.task_id = application_tasks.id AND e2.step = ? AND ${recentEventSql})
+                WHERE e2.task_id = application_tasks.id AND e2.step = ? AND ${recentEventSafeSql})
         ORDER BY updated_at ASC
         LIMIT ?`,
     ).all(

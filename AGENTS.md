@@ -7,11 +7,13 @@ Read, in order, before doing any work in this repo:
    `.agent-edit-lock` exists at the repo root, do read-only work only.**
 2. `docs/agent-sync/` — dated cross-assistant session briefs; the newest file
    is the current state of in-flight work and owner directives. As of this
-   pass the newest file by commit date is
-   `docs/agent-sync/2026-08-05-funder-behavior-graph.md` (2026-08-05, later
-   same-day than `2026-08-05-discovery-lane-budget-awardable.md`) — do not
-   assume this pointer stays accurate; always list the directory and sort by
-   filename date to find the true latest.
+   pass the newest file is
+   `docs/agent-sync/2026-09-12-prodready-discovery-chain.md` (the
+   production-readiness chain: extraction-outage attribution, link-verifier
+   starvation behind the ten-day `/readyz` 503, Sam preflight naming, query
+   budget, Amy cohort, parity dispositions, Hamilton confirmation truth) — do
+   not assume this pointer stays accurate; always list the directory and sort
+   by filename date to find the true latest.
 3. `docs/canonical_rules.md` — the owner-ratified product rules.
 
 House rules that bind every assistant (Claude, Cursor, Codex/ChatGPT):
