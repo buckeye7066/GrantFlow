@@ -131,7 +131,7 @@ describe('deleted profiles are never billed', () => {
       if (!String(sql).includes(sqlFragment)) return stmt
       return {
         get: async (...a) => { const r = await stmt.get(...a); if (method === 'get') await after(); return r },
-        all: async (...a) => stmt.all(...a),
+        all: async (...a) => { const r = await stmt.all(...a); if (method === 'all') await after(); return r },
         run: async (...a) => { const r = await stmt.run(...a); if (method === 'run') await after(); return r },
       }
     }
@@ -483,6 +483,8 @@ describe('deleted profiles are never billed', () => {
 
       expect(invoice('del-merge-inv').status).toBe('void')
       expect(invoice('del-merge-inv').settled_reason).toBe('profile_deleted')
+      // Never repointed onto the keeper as a live balance.
+      expect(invoice('del-merge-inv').profile_id).toBe('del-merge-loser')
     })
 
     it('a failed Checkout expiry keeps the link, and the next dunning sweep retries it and clears the link', async () => {
@@ -517,18 +519,21 @@ describe('deleted profiles are never billed', () => {
       expect(sendEmail).not.toHaveBeenCalled()
     })
 
-    it('an unreadable lifecycle at delivery sends no email and leaves the invoice for the next cycle', async () => {
+    it('an unreadable lifecycle at delivery withdraws the undelivered invoice, and the next cycle regenerates and emails it', async () => {
       await seedProfile('del-send-unread')
       const flaky = dbWithLifecycleReadFailingAfter(1)
       const row = db.prepare('SELECT * FROM billing_accounts WHERE profile_id = ?').get('del-send-unread')
 
-      const created = await generateInvoiceForAccount(flaky, row, { now: NOW })
+      expect(await generateInvoiceForAccount(flaky, row, { now: NOW })).toBeNull()
+      expect(invoicesFor('del-send-unread')).toHaveLength(0)
+      expect(sendEmail).not.toHaveBeenCalled()
 
-      expect(created).toEqual(expect.objectContaining({ email_deferred: true }))
+      const next = await generateInvoiceForAccount(db, row, { now: NOW })
+      expect(next).toBeTruthy()
       const rows = invoicesFor('del-send-unread')
       expect(rows).toHaveLength(1)
       expect(rows[0].status).toBe('sent')
-      expect(sendEmail).not.toHaveBeenCalled()
+      expect(emailedTo()).toContain('del-send-unread@example.com')
     })
 
     it('dunning never reminds or rewrites an invoice voided between its read and the reminder UPDATE', async () => {
@@ -573,6 +578,66 @@ describe('deleted profiles are never billed', () => {
       expect(vi.mocked(expireCheckoutSessionForUrl).mock.calls.map((c) => c[0])).toContain(link)
       const direct = await settleInvoicesAsProBono(db, { profileId: 'del-pb-direct', now: NOW })
       expect(direct).toEqual(expect.objectContaining({ settled: 0, skipped: 'profile_deleted' }))
+    })
+
+    it('round three: a payment racing a delete that voids the invoice after the read stays void and alerts the owner to refund', async () => {
+      process.env.BILLING_OWNER_CC = 'owner-alerts@example.com'
+      try {
+        await seedProfile('del-paid-race')
+        seedInvoice({ id: 'del-paid-race-inv', profileId: 'del-paid-race', status: 'sent', issuedAt: daysAgo(3) })
+        const racy = dbWithHook('SELECT * FROM billing_invoices WHERE id = ?', 'get', () => {
+          markDeleted('del-paid-race')
+          db.prepare("UPDATE billing_invoices SET status = 'void', settled_reason = 'profile_deleted' WHERE id = ?").run('del-paid-race-inv')
+        })
+
+        const r = await markInvoicePaid(racy, { invoiceId: 'del-paid-race-inv', source: 'stripe_webhook' })
+
+        expect(r).toEqual(expect.objectContaining({ ok: true, status: 'void', payment_on_void: true, refund_needed: true, reactivated: false }))
+        const inv = invoice('del-paid-race-inv')
+        expect(inv.status).toBe('void')
+        expect(inv.paid_at).toBeTruthy()
+        expect(profileStatus('del-paid-race')).toBe('deleted')
+        const alert = vi.mocked(sendEmail).mock.calls.map((c) => c[0]).find((m) => m?.to === 'owner-alerts@example.com')
+        expect(alert?.subject).toMatch(/refund/i)
+      } finally {
+        delete process.env.BILLING_OWNER_CC
+      }
+    })
+
+    it('round three: an invoice voided mid-settlement stays void and keeps its link for the retry scan', async () => {
+      const link = 'https://checkout.stripe.com/c/pay/cs_test_SettleRace1#fid'
+      await seedProfile('del-settle-race')
+      db.prepare('UPDATE billing_accounts SET is_pro_bono = 1 WHERE profile_id = ?').run('del-settle-race')
+      seedInvoice({ id: 'del-settle-race-inv', profileId: 'del-settle-race', status: 'sent', issuedAt: daysAgo(3), link })
+      const racy = dbWithHook('SELECT id, status, amount_cents, gross_amount_cents FROM billing_invoices', 'all', () => {
+        markDeleted('del-settle-race')
+        db.prepare("UPDATE billing_invoices SET status = 'void', settled_reason = 'profile_deleted' WHERE id = ?").run('del-settle-race-inv')
+      })
+
+      const r = await settleInvoicesAsProBono(racy, { profileId: 'del-settle-race', now: NOW })
+
+      expect(r.settled).toBe(0)
+      const inv = invoice('del-settle-race-inv')
+      expect(inv.status).toBe('void')
+      expect(inv.settled_reason).toBe('profile_deleted')
+      expect(inv.stripe_payment_link).toBe(link)
+    })
+
+    it('round three: POST /api/admin/profiles/:id/hard-delete voids the profile\'s open invoices and expires the link', async () => {
+      const link = 'https://checkout.stripe.com/c/pay/cs_test_HardDel01#fid'
+      await seedProfile('del-hard-admin')
+      seedInvoice({ id: 'del-hard-admin-inv', profileId: 'del-hard-admin', status: 'second_notice', issuedAt: daysAgo(5), link })
+
+      const res = await request(app)
+        .post('/api/admin/profiles/del-hard-admin/hard-delete')
+        .set(TEST_ADMIN_AUTH_HEADER)
+        .send({ force: true, tombstone: false, reason: 'test' })
+
+      expect(res.status).toBeLessThan(300)
+      expect(profileStatus('del-hard-admin')).toBeUndefined()
+      expect(invoice('del-hard-admin-inv').status).toBe('void')
+      expect(invoice('del-hard-admin-inv').settled_reason).toBe('profile_deleted')
+      expect(vi.mocked(expireCheckoutSessionForUrl).mock.calls.map((c) => c[0])).toContain(link)
     })
 
     it('a zero-row guarded status write is a refusal: missing profiles and an unreadable follow-up read get no notices', async () => {

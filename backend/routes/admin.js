@@ -4464,6 +4464,16 @@ async function hardDeleteProfileById({ db, profileId, actorUserId, reason, tombs
       throw err
     }
   })
+
+  // billing_invoices has no FK, so its open invoices outlive the profile row:
+  // void them and expire their payment links after the transaction commits
+  // (the profile now reads as missing). Best-effort; never fails the delete.
+  try {
+    const { voidInvoicesForDeletedProfiles } = await import('../services/billing/invoiceService.js')
+    await voidInvoicesForDeletedProfiles(db, [pid])
+  } catch (billingErr) {
+    console.warn('[admin] failed to void invoices for hard-deleted profile:', pid, billingErr?.message || billingErr)
+  }
 }
 
 /**

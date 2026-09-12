@@ -471,11 +471,17 @@ export async function generateInvoiceForAccount(db, accountRow, { now = new Date
     log.info('invoice voided — profile deleted during generation', { profile_id: account.profile_id, invoice_id: id })
     return null
   }
-  const emailDeferred = lifecycleAtSend === 'unknown'
-  if (emailDeferred) {
-    log.warn('invoice email NOT sent — profile lifecycle unreadable at delivery; left for the next cycle', { profile_id: account.profile_id, invoice_id: id })
+  if (lifecycleAtSend === 'unknown') {
+    // Never leave an issued-but-undelivered invoice (dunning would chase a bill
+    // nobody received, and a pro bono statement would never go out): remove the
+    // row just inserted and expire its link, so the next cycle regenerates and
+    // emails it normally.
+    await db.prepare('DELETE FROM billing_invoices WHERE id = ? AND status = ?').run(id, status)
+    await expireAndClearInvoiceLinks(db, [{ id, stripe_payment_link: paymentLink }])
+    log.warn('invoice withdrawn before delivery — profile lifecycle unreadable; the next cycle regenerates it', { profile_id: account.profile_id, invoice_id: id, period: moment.period_key })
+    return null
   }
-  if (!emailDeferred && recipient && !isNonRoutableEmail(recipient)) {
+  if (recipient && !isNonRoutableEmail(recipient)) {
     const mail = buildInvoiceEmail({
       orgName, amountCents: due, periodStart: moment.period_start, periodEnd: moment.period_end, cadence,
       dueDate: dueAt ? dueAt.slice(0, 10) : null, paymentLink,
@@ -483,8 +489,8 @@ export async function generateInvoiceForAccount(db, accountRow, { now = new Date
     })
     await sendEmail({ to: recipient, cc: ownerCc(), subject: mail.subject, html: mail.html, text: mail.text })
   }
-  log.info(proBono ? 'pro bono statement generated' : 'invoice generated', { profile_id: account.profile_id, period: moment.period_key, amount_due: due, gross, emailed: Boolean(recipient) && !emailDeferred })
-  return { id, profile_id: account.profile_id, period_key: moment.period_key, amount_cents: due, gross_amount_cents: gross, is_pro_bono: proBono, email_deferred: emailDeferred }
+  log.info(proBono ? 'pro bono statement generated' : 'invoice generated', { profile_id: account.profile_id, period: moment.period_key, amount_due: due, gross, emailed: Boolean(recipient) })
+  return { id, profile_id: account.profile_id, period_key: moment.period_key, amount_cents: due, gross_amount_cents: gross, is_pro_bono: proBono }
 }
 
 /**
@@ -539,18 +545,25 @@ export async function settleInvoicesAsProBono(db, { profileId, now = new Date(),
   if (!open?.length) return { ok: true, profile_id: pid, settled: 0, reactivated: false }
 
   const nowIso = now.toISOString()
+  const settledRows = []
   for (const inv of open) {
     const gross = Number.isFinite(Number(inv.gross_amount_cents)) && inv.gross_amount_cents !== null
       ? Number(inv.gross_amount_cents)
       : Number(inv.amount_cents) || 0
-    await db.prepare(
+    // Atomic settlement: only an invoice still in the open status we read, on a
+    // profile that is still not deleted, is settled (and has its link cleared).
+    // A void that landed after the read wins and keeps its link for the retry scan.
+    const settleWrite = await db.prepare(
       `UPDATE billing_invoices
           SET status = ?, amount_cents = 0, gross_amount_cents = ?, pro_bono_credit_cents = ?, is_pro_bono = ?,
               settled_reason = ?, paid_at = COALESCE(paid_at, ?), stripe_payment_link = NULL
-        WHERE id = ?`,
-    ).run(PRO_BONO_INVOICE_STATUS, gross, gross, dbBool(db, true), 'pro_bono', nowIso, inv.id)
+        WHERE id = ? AND status = ?
+          AND EXISTS (SELECT 1 FROM profiles p WHERE p.id = billing_invoices.profile_id AND COALESCE(p.status, '') <> 'deleted')`,
+    ).run(PRO_BONO_INVOICE_STATUS, gross, gross, dbBool(db, true), 'pro_bono', nowIso, inv.id, inv.status)
+    if (writeApplied(settleWrite)) settledRows.push(inv)
+    else log.info('pro bono settlement skipped — invoice or profile changed since read', { invoice_id: inv.id, profile_id: pid })
   }
-  const hadSuspension = open.some((inv) => inv.status === 'suspended')
+  const hadSuspension = settledRows.some((inv) => inv.status === 'suspended')
   let reactivated = false
   if (hadSuspension) {
     let prof = null
@@ -560,8 +573,8 @@ export async function settleInvoicesAsProBono(db, { profileId, now = new Date(),
       reactivated = Boolean(r?.ok)
     }
   }
-  log.info('invoices settled as pro bono', { profile_id: pid, settled: open.length, reactivated, by: settledBy })
-  return { ok: true, profile_id: pid, settled: open.length, reactivated }
+  log.info('invoices settled as pro bono', { profile_id: pid, settled: settledRows.length, reactivated, by: settledBy })
+  return { ok: true, profile_id: pid, settled: settledRows.length, reactivated }
 }
 
 /**
@@ -716,11 +729,28 @@ export async function markInvoicePaid(db, { invoiceId = null, profileId = null, 
   else if (profileId) inv = await db.prepare(`SELECT * FROM billing_invoices WHERE profile_id = ? AND status IN ('sent','second_notice','suspended') ORDER BY issued_at DESC LIMIT 1`).get(profileId)
   if (!inv) return { ok: false, error: 'invoice_not_found' }
 
-  // A VOID invoice is never turned into 'paid' — a late payment on a deleted
-  // profile's emailed link must not rewrite history or touch the profile.
-  // Record that money arrived (paid_at), keep status 'void', and alert the
-  // owner so the payment can be refunded.
-  if (inv.status === 'void') {
+  if (inv.status === 'void') return recordPaymentOnVoidInvoice(db, inv, source)
+
+  // The paid transition refuses a VOID invoice in the UPDATE itself: a delete
+  // that voided the invoice after the read above wins, and the payment takes
+  // the refund path instead of rewriting it to 'paid'.
+  const paidWrite = await db.prepare(`UPDATE billing_invoices SET status = 'paid', paid_at = ? WHERE id = ? AND status <> 'void'`).run(new Date().toISOString(), inv.id)
+  if (!writeApplied(paidWrite)) {
+    const fresh = await db.prepare('SELECT * FROM billing_invoices WHERE id = ?').get(inv.id)
+    if (fresh?.status === 'void') return recordPaymentOnVoidInvoice(db, fresh, source)
+    return { ok: false, error: 'invoice_not_updated', invoice_id: inv.id, profile_id: inv.profile_id }
+  }
+  return finishPaidInvoice(db, inv, source)
+}
+
+/**
+ * A VOID invoice is never turned into 'paid' — a late payment on a deleted
+ * profile's emailed link must not rewrite history or touch the profile. Record
+ * that money arrived (paid_at), keep status 'void', and alert the owner so the
+ * payment can be refunded.
+ */
+async function recordPaymentOnVoidInvoice(db, inv, source) {
+  {
     try {
       await db.prepare(`UPDATE billing_invoices SET paid_at = COALESCE(paid_at, ?) WHERE id = ?`).run(new Date().toISOString(), inv.id)
     } catch (err) { log.warn('could not record payment on voided invoice', { invoice_id: inv.id, error: err?.message }) }
@@ -751,8 +781,10 @@ export async function markInvoicePaid(db, { invoiceId = null, profileId = null, 
       settled_reason: inv.settled_reason || null,
     }
   }
+}
 
-  await db.prepare(`UPDATE billing_invoices SET status = 'paid', paid_at = ? WHERE id = ?`).run(new Date().toISOString(), inv.id)
+/** After a confirmed paid write: lift a billing suspension (never a deleted profile). */
+async function finishPaidInvoice(db, inv, source) {
   // If the profile was suspended for this invoice, reactivate — never a deleted
   // profile (a late payment must not resurrect it).
   let reactivated = false

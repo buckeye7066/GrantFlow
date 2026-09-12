@@ -102,6 +102,10 @@ const HIGH_VALUE_TABLES = ['grants', 'documents', 'profile_documents', 'profile_
 // Tables we must never reassign/merge even though they carry a profile_id column:
 // the tombstone ledger keys on the (deleted) profile id itself.
 const EXCLUDED_TABLES = new Set(['profile_tombstones'])
+// Billing rows are never moved to the keeper: the duplicate's open invoices
+// (and their payable Stripe links) are voided once the duplicate is deleted,
+// instead of silently becoming the keeper's balance.
+const NOT_REPOINTED_TABLES = new Set(['billing_invoices', 'billing_accounts'])
 
 // ---- schema discovery ------------------------------------------------------
 
@@ -297,7 +301,7 @@ async function run() {
   for (const p of pairs) console.log(`   keeper=${p.keeper}  <-  duplicate=${p.duplicate}`)
   console.log('='.repeat(72))
 
-  const profileIdColumns = await discoverProfileIdColumns()
+  const profileIdColumns = (await discoverProfileIdColumns()).filter((c) => !NOT_REPOINTED_TABLES.has(c.table))
   console.log(`[dedupe] Discovered ${profileIdColumns.length} table(s) with a profile_id column.`)
 
   let abort = false
