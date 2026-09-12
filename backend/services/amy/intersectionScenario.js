@@ -40,8 +40,11 @@ import {
 } from './probeSpace.js'
 
 /** Category id used for an adversarial probe, so it never collides with a
- *  catalog category in `by_category` histograms or the coverage weighting. */
-export const ADVERSARIAL_CATEGORY_PREFIX = 'probe'
+ *  catalog category in `by_category` histograms or the coverage weighting.
+ *  Defined in amyConstants.js (a leaf module) and re-exported here so the
+ *  approval ledger can read it without importing probeSpace. */
+import { ADVERSARIAL_CATEGORY_PREFIX } from './amyConstants.js'
+export { ADVERSARIAL_CATEGORY_PREFIX }
 
 const FUNDING_BANDS_INDIVIDUAL = ['$1,500', '$3,000', '$5,000', '$9,000', '$15,000']
 const FUNDING_BANDS_ORG = ['$15,000', '$25,000', '$50,000', '$100,000', '$250,000']

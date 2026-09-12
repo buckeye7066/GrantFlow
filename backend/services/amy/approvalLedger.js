@@ -57,7 +57,7 @@
 import { createLogger } from '../../utils/logger.js'
 import { healthyRecallCoverage, recallAttribution } from './searchAttribution.js'
 import { discoveryGateFor } from './discoveryGate.js'
-import { ADVERSARIAL_CATEGORY_PREFIX } from './intersectionScenario.js'
+import { ADVERSARIAL_CATEGORY_PREFIX } from './amyConstants.js'
 
 const log = createLogger('amy:approvalLedger')
 
