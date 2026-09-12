@@ -4118,10 +4118,23 @@ CREATE TABLE IF NOT EXISTS agent_control_locks (
   owner_token TEXT,
   acquired_by TEXT,
   acquired_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-  expires_at DATETIME
+  expires_at DATETIME,
+  holder_instance_id TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_agent_control_locks_run        ON agent_control_locks(control_run_id);
 CREATE INDEX IF NOT EXISTS idx_agent_control_locks_expires    ON agent_control_locks(expires_at);
+
+-- Lightweight per-process liveness ledger (stale-lock-reclaim, 2026-09-12).
+-- See agentControlStore.js "STALE-HOLDER RECLAIM" for the full rationale.
+CREATE TABLE IF NOT EXISTS agent_control_instances (
+  instance_id TEXT PRIMARY KEY,
+  pid INTEGER,
+  hostname TEXT,
+  started_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  last_heartbeat_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_agent_control_instances_heartbeat ON agent_control_instances(last_heartbeat_at);
 
 CREATE TABLE IF NOT EXISTS agent_control_stop_requests (
   id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
