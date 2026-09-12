@@ -379,6 +379,10 @@ export function applyFloorAttempt(entry, {
       candidates_extracted: Number(evidence?.candidates_extracted) || 0,
       rejected_by_engine: Number(evidence?.rejected_by_engine) || 0,
       added_total: Number(evidence?.added_total) || 0,
+      // The crawl's own primary attribution (liveCrawlGapLearning.
+      // attributePrimaryGap) so the verdict names WHY: a healthy empty web
+      // and a dead extractor are different exhaustions (2026-09-12).
+      primary_attribution: typeof evidence?.primary_attribution === 'string' ? evidence.primary_attribution : null,
     }
     next.last_outcome = FLOOR_OUTCOME.EXHAUSTED
   }
@@ -396,7 +400,8 @@ export function describeExhaustion(entry) {
     `exhausted — searched ${e.lanes_queried} lane(s) and ${e.queries_issued} quer${e.queries_issued === 1 ? 'y' : 'ies'} ` +
     `over ${e.attempts} attempt(s); ${e.candidates_extracted} candidate(s) reached the engine, ` +
     `${e.rejected_by_engine} were rejected, ${e.added_total} were added. ` +
-    `Found ${e.found} of a requested ${e.target}.`
+    `Found ${e.found} of a requested ${e.target}.` +
+    (e.primary_attribution ? ` Primary cause on the last pass: ${e.primary_attribution}.` : '')
   )
 }
 

@@ -192,6 +192,39 @@ describe('sam check coverage.sweepHealth (the read side)', () => {
     } finally { db.close() }
   })
 
+  it('sweephealth-1: surfaces the result-floor / unconfigured / applyable counts + scan limit, wrapped in a metric envelope', async () => {
+    const db = kvDb()
+    try {
+      put(db, {
+        ok: true, status: 'completed', started_at: hoursAgo(2), recorded_at: hoursAgo(2),
+        summary: {
+          scanned: 30, with_gap: 14, needs_rediscovery: 12, surfacing_regressions: 1,
+          below_result_target: 12, unconfigured: 2, applyable_measured: 28, below_applyable_floor: 6,
+          audit_failures: 1, scan_limit: 500,
+        },
+        healed_count: 3,
+        result_floor: { below_target: 12, queued: 5, skipped_by_ledger: [{ profile_id: 'a' }, { profile_id: 'b' }], exhausted: [{ profile_id: 'c' }], unconfigured: [{ profile_id: 'u1' }, { profile_id: 'u2' }] },
+        code_version: { commit_sha: 'abc123def456', short_sha: 'abc123def456', runtime: 'test' },
+      }, hoursAgo(2))
+      const res = await check.run({ db })
+      expect(res.ok).toBe(true)
+      expect(res.evidence.gap_counts).toMatchObject({
+        scanned: 30, with_gap: 14, below_result_target: 12, unconfigured: 2,
+        applyable_measured: 28, below_applyable_floor: 6,
+        result_floor_exhausted: 1, result_floor_skipped_by_ledger: 2, scan_limit: 500,
+      })
+      expect(res.summary).toMatch(/below_result_target=12/)
+      expect(res.summary).toMatch(/unconfigured=2/)
+      expect(res.evidence.metric_envelope).toMatchObject({
+        measurement_window: { kind: 'point_in_time' },
+        evaluated_population: { kind: 'active_profiles' },
+        evaluated_count: 30,
+        unevaluated_count: 1,
+      })
+      expect(res.evidence.metric_envelope.code_version.short_sha).toBe('abc123def456')
+    } finally { db.close() }
+  })
+
   it('tolerates a legacy record without a status field (pre-heartbeat sweeps)', async () => {
     const db = kvDb()
     try {

@@ -51,6 +51,7 @@ export async function processCrawlerOsDiscoveryJob({ db, job, signal, deadlineMs
   const { run, persisted } = await runProfileDiscoveryLive({
     db,
     profileId: job.profile_id,
+    trigger: 'dispatcher',
     signal,
     // Leave time to persist the receipt before the dispatcher's hard timeout.
     deadlineMs: Number.isFinite(deadlineMs) ? deadlineMs - 5000 : null,

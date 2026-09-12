@@ -310,8 +310,18 @@ const oliviaBelow = [{
   surfaced_applyable_typed: 0, applyable_floor: 3,
 }]
 
+/** The REAL runProfileDiscoveryLive return shape (see profileResultFloorBackfill.test.js). */
+function liveResult(runOver = {}) {
+  return {
+    run: { run_id: 'r', profile_id: 'olivia', planned: 1, stored: 0, rejected: 0, sources: [], zero_result: null, ...runOver },
+    persisted: { opportunities: 0, matches: 0, sources: 0, rejected: 0, pipelinePruned: 0 },
+    thesis: {},
+    opportunities: [],
+  }
+}
+
 describe('runApplyableFloorBackfill (the archetype-discovery directive)', () => {
-  beforeEach(() => { runLiveMock = vi.fn(async () => ({ ok: true })); process.env.APPLYABLE_FLOOR_ALLOW_SHIM = '1' })
+  beforeEach(() => { runLiveMock = vi.fn(async () => liveResult()); process.env.APPLYABLE_FLOOR_ALLOW_SHIM = '1' })
   afterEach(() => { delete process.env.APPLYABLE_FLOOR_ALLOW_SHIM })
 
   it('runs the profile-type archetypes: seeds the known sources AND the query patterns', async () => {
@@ -325,7 +335,7 @@ describe('runApplyableFloorBackfill (the archetype-discovery directive)', () => 
         expect(extraQueries.length).toBeGreaterThan(0)            // query patterns run
         expect(extraQueries.some((q) => /small business/i.test(q))).toBe(true)
         addApplyableTypedRow(db)
-        return { ok: true, sources: [{}, {}], web: { queries: extraQueries, fetched: 3, extracted: 1 } }
+        return liveResult({ sources: [{}, {}], web_lane: { ok: true, queries: extraQueries, pages: 3, fetched: 3, extracted: 1, rejected: 0, provider_health: { search: 'healthy', llm: 'healthy' } } })
       })
       const res = await runApplyableFloorBackfill(db, { audits: oliviaBelow, maxHeal: 1 })
       expect(runLiveMock).toHaveBeenCalledTimes(1)
@@ -355,11 +365,28 @@ describe('runApplyableFloorBackfill (the archetype-discovery directive)', () => 
     const db = makeDb()
     try {
       // Fruitless: crawl runs, adds nothing.
-      runLiveMock = vi.fn(async () => ({ ok: true, sources: [{}], web: { queries: ['q'] } }))
+      runLiveMock = vi.fn(async () => liveResult({ sources: [{}], web_lane: { ok: true, queries: ['q'], pages: 2, fetched: 2, extracted: 1, rejected: 1, provider_health: { search: 'healthy', llm: 'healthy' } } }))
       await runApplyableFloorBackfill(db, { audits: oliviaBelow, maxHeal: 1 })
       let led = await readApplyableLedger(db)
       expect(led.profiles.olivia.attempts).toBe(1)
       expect(led.profiles.olivia.last_outcome).toBe('no_new_results')
+    } finally { db.close() }
+  })
+
+  it('a SKIPPED run in the real shape and a DEAD-lane run both spend no attempt (sweepheal-1)', async () => {
+    const db = makeDb()
+    try {
+      runLiveMock = vi.fn(async () => ({ run: { skipped: true, reason: 'profile_unconfigured', sources: [] }, persisted: { skipped: true, reason: 'profile_unconfigured' }, thesis: null }))
+      await runApplyableFloorBackfill(db, { audits: oliviaBelow, maxHeal: 1 })
+      let led = await readApplyableLedger(db)
+      expect(led.profiles.olivia.attempts).toBe(0)
+      expect(led.profiles.olivia.last_outcome).toBe('transient')
+
+      runLiveMock = vi.fn(async () => liveResult({ sources: [{}], web_lane: { ok: true, queries: ['q'], pages: 30, fetched: 28, extracted: 0, rejected: 0, provider_health: { search: 'healthy', llm: 'unavailable' }, primary_attribution: 'extraction_failed:llm_quota' } }))
+      await runApplyableFloorBackfill(db, { audits: oliviaBelow, maxHeal: 1 })
+      led = await readApplyableLedger(db)
+      expect(led.profiles.olivia.attempts).toBe(0)
+      expect(led.profiles.olivia.last_outcome).toBe('transient')
     } finally { db.close() }
   })
 
@@ -370,7 +397,7 @@ describe('runApplyableFloorBackfill (the archetype-discovery directive)', () => 
     delete process.env.APPLYABLE_FLOOR_ALLOW_SHIM
     const db = makeDb()
     try {
-      runLiveMock = vi.fn(async () => ({ ok: true }))
+      runLiveMock = vi.fn(async () => liveResult())
       const res = await runApplyableFloorBackfill(db, { audits: oliviaBelow, maxHeal: 1 })
       expect(res.deps).toEqual({ applyability: 'real', archetypes: 'real' })
       expect(res.note).toBeUndefined()

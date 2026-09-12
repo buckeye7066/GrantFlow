@@ -6076,7 +6076,7 @@ registerTool({
     }
     const { runProfileDiscoveryLive } = await import('./crawlerOsService.js')
     const started = Date.now()
-    const result = await runProfileDiscoveryLive({ db: context.db, profileId, timeBudgetMs: 25_000, deadlineMs: Date.now() + 28_000 })
+    const result = await runProfileDiscoveryLive({ db: context.db, profileId, timeBudgetMs: 25_000, deadlineMs: Date.now() + 28_000, trigger: 'anya' })
     const stored = Number(result?.stored ?? result?.count ?? result?.inserted ?? result?.total_found ?? 0) || 0
     return {
       ok: result?.success !== false && !result?.skipped,

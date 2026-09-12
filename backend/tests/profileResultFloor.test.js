@@ -43,7 +43,7 @@ import {
 } from '../services/coverageAudit/profileResultCoverageAudit.js'
 import { classifyGaps, GAP_CLASSES } from '../services/coverageAudit/liveCrawlGapLearning.js'
 import { POINTER_KINDS } from '../config/opportunityKindClasses.js'
-import { buildWebQueries } from '../crawler-os/webQueries.js'
+import { buildWebQueries, hasPersistentQueryShortfall } from '../crawler-os/webQueries.js'
 import { enforceProfileResultFloor } from '../startup/enforceInvariants.js'
 import {
   readFloorLedger,
@@ -264,12 +264,18 @@ describe('the backfill converges and a transient failure never burns a chance', 
 // ───────────────────── 4. THE SHORTFALL HAS A CONSUMER ──────────────────────
 
 describe('a shortfall reaches the crawler (never a write-only queue)', () => {
-  it('classifies a below-target profile into BOTH its own class and the one the query builder consumes', () => {
+  it('classifies a below-target profile into its OWN class, and the query builder consumes that class directly', () => {
     const classes = classifyGaps({ below_result_target: true, low_results: false })
     expect(classes).toContain('result_floor_shortfall')
-    // `low_results` is the class crawler-os/webQueries.js already reads. Emitting
-    // only the new class would have rebuilt the write-only-queue defect.
-    expect(classes).toContain('low_results')
+    // webq-10 / livegap-3 (2026-09-12): the `low_results` alias this test used to
+    // demand double-counted every floor shortfall in Sam's 7-day metric
+    // (result_floor_shortfall ×1,696 AND low_results ×1,696 were the SAME
+    // events). `low_results` is the audit's OWN <3-actionable alarm and is
+    // emitted only when the audit says so. The write-only-queue defect stays
+    // closed because crawler-os/webQueries.js reads result_floor_shortfall
+    // itself (hasPersistentQueryShortfall + its forced-query branch).
+    expect(classes).not.toContain('low_results')
+    expect(hasPersistentQueryShortfall({ learned_gaps: { classes } })).toBe(true)
     expect(GAP_CLASSES).toContain('result_floor_shortfall')
   })
 

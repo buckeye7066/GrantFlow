@@ -12,6 +12,17 @@
 // timeout, or unsupported evidence) yields []. No caller-supplied thesis/query is
 // accepted into the extractor, so this module cannot become a hidden second
 // matcher again.
+//
+// FAILURE CLASS (2026-09-12). Every failure used to be the SAME empty array, so
+// the web lane could not tell "this page lists no funding" from "no provider
+// answered". Between 2026-09-03 and 09-12 every LLM route was dead (OpenAI 429
+// credit exhausted, Anthropic 400 credit exhausted, both free Groq routes
+// failing) and the lane recorded `ok:true extracted:0 reason:null` on ~1,700
+// crawls, which the coverage audit then classified as recall gaps. The return
+// stays an ARRAY (every caller iterates it) but now carries a NON-ENUMERABLE
+// `extraction_failure` ({ class, detail, provider }) and `extraction_status`
+// ('ok' | 'empty' | 'failed') — the same pattern webSearchEngine uses for
+// `searchMeta`. Read it with `extractionFailureOf(result)`.
 
 import * as cheerio from 'cheerio';
 import { getOpenAIOptional, invokeJsonWithFallback } from '../utils/aiProviders.js';
@@ -60,30 +71,119 @@ function boundedHtml(html) {
     : html;
 }
 
-function makeProfileBlindLlm(deps = {}, deadlineAt) {
+/** The exact failure vocabulary the web lane's stage ledger tallies. */
+export const EXTRACTION_FAILURE_CLASSES = Object.freeze([
+  'llm_unavailable', 'llm_quota', 'llm_timeout', 'parse_error', 'page_too_short', 'unknown',
+]);
+
+const QUOTA_RX = /quota|credit|billing|insufficient|rate[_ ]?limit|\b429\b|\b402\b/i;
+
+function errText(e) {
+  if (e === null || e === undefined) return '';
+  if (typeof e === 'string') return e;
+  if (typeof e === 'object') {
+    const parts = [e.message, e.code, e.type, e.status !== null && e.status !== undefined ? String(e.status) : null, e.reason];
+    return parts.filter(Boolean).join(' ');
+  }
+  return String(e);
+}
+
+function looksLikeQuota(e) {
+  if (e === null || e === undefined) return false;
+  if (typeof e === 'object' && (e.status === 429 || e.status === 402 || e.credit_exhausted === true || e.isCreditExhaustion === true)) return true;
+  return QUOTA_RX.test(errText(e));
+}
+
+/**
+ * PURE: classify an extraction failure from either the provider ladder's
+ * result object (`invokeJsonWithFallback` shape: { ok, timedOut, aborted,
+ * openaiError, anthropicError, freeRouteErrors }) or a thrown error.
+ *
+ * @returns {{ class: string, detail: string|null }}
+ */
+export function classifyExtractionFailure(input) {
+  if (input instanceof Error) {
+    const msg = input.message || String(input);
+    if (/timeout|timed out|abort/i.test(msg) || input.name === 'AbortError') return { class: 'llm_timeout', detail: msg.slice(0, 160) };
+    if (looksLikeQuota(input)) return { class: 'llm_quota', detail: msg.slice(0, 160) };
+    return { class: 'unknown', detail: msg.slice(0, 160) };
+  }
+  if (!input || typeof input !== 'object') return { class: 'unknown', detail: input === null || input === undefined ? 'no_provider_result' : null };
+  if (input.timedOut === true || input.aborted === true) {
+    return { class: 'llm_timeout', detail: input.aborted === true ? 'aborted' : 'provider_ladder_timed_out' };
+  }
+  const errors = [input.openaiError, input.anthropicError, ...(Array.isArray(input.freeRouteErrors) ? input.freeRouteErrors : [])];
+  const seen = errors.filter((e) => e !== null && e !== undefined && e !== '');
+  if (seen.some(looksLikeQuota)) {
+    return { class: 'llm_quota', detail: seen.map(errText).filter(Boolean).join(' | ').slice(0, 200) || 'credit_or_quota_exhausted' };
+  }
+  if (seen.length === 0) return { class: 'llm_unavailable', detail: errText(input.error) || 'no_provider_configured' };
+  return { class: 'llm_unavailable', detail: seen.map(errText).filter(Boolean).join(' | ').slice(0, 200) };
+}
+
+/** Read the non-enumerable failure record off an extractor result (null when healthy). */
+export function extractionFailureOf(result) {
+  const f = result && typeof result === 'object' ? result.extraction_failure : null;
+  return f && typeof f === 'object' && f.class ? f : null;
+}
+
+function tagResult(list, { status, failure = null, provider = null }) {
+  const arr = Array.isArray(list) ? list : [];
+  Object.defineProperty(arr, 'extraction_status', { value: status, enumerable: false, configurable: true });
+  Object.defineProperty(arr, 'extraction_failure', {
+    value: failure ? Object.freeze({ class: failure.class, detail: failure.detail ?? null, provider: provider ?? failure.provider ?? null }) : null,
+    enumerable: false,
+    configurable: true,
+  });
+  return arr;
+}
+
+function makeProfileBlindLlm(deps = {}, deadlineAt, outcome) {
   const invoke = deps.invoke || invokeJsonWithFallback;
   const openai = deps.openai !== undefined ? deps.openai : getOpenAIOptional();
+  const record = (res) => {
+    outcome.calls += 1;
+    if (res && typeof res === 'object' && res.ok === true) {
+      outcome.ok = true;
+      outcome.provider = res.provider ?? null;
+      outcome.json = res.json ?? null;
+    } else {
+      outcome.failure = classifyExtractionFailure(res);
+    }
+    return res;
+  };
   return async ({ system, prompt, signal }) => {
     const timeoutMs = deadlineAt - Date.now();
-    if (signal?.aborted || timeoutMs <= 0) return null;
-    const call = Promise.resolve(invoke({
-      openai,
-      system,
-      prompt,
-      temperature: 0.1,
-      maxTokens: 1800,
-      timeoutMs,
-      signal,
-      anthropicModel: process.env.WEB_DISCOVERY_MODEL_ANTHROPIC || 'claude-haiku-4-5',
-      openaiModel: process.env.WEB_DISCOVERY_MODEL_OPENAI || 'gpt-4o-mini',
-    }));
+    if (signal?.aborted || timeoutMs <= 0) {
+      outcome.calls += 1;
+      outcome.failure = { class: 'llm_timeout', detail: signal?.aborted ? 'aborted' : 'deadline_exhausted' };
+      return null;
+    }
+    let call;
+    try {
+      call = Promise.resolve(invoke({
+        openai,
+        system,
+        prompt,
+        temperature: 0.1,
+        maxTokens: 1800,
+        timeoutMs,
+        signal,
+        anthropicModel: process.env.WEB_DISCOVERY_MODEL_ANTHROPIC || 'claude-haiku-4-5',
+        openaiModel: process.env.WEB_DISCOVERY_MODEL_OPENAI || 'gpt-4o-mini',
+      })).then(record, (err) => { outcome.calls += 1; outcome.failure = classifyExtractionFailure(err); throw err; });
+    } catch (err) {
+      outcome.calls += 1;
+      outcome.failure = classifyExtractionFailure(err);
+      throw err;
+    }
     if (!signal) return call;
     let onAbort;
     try {
       return await Promise.race([
         call,
         new Promise(resolve => {
-          onAbort = () => resolve(null);
+          onAbort = () => { if (!outcome.ok) outcome.failure = outcome.failure ?? { class: 'llm_timeout', detail: 'aborted' }; resolve(null); };
           signal.addEventListener('abort', onAbort, { once: true });
           if (signal.aborted) onAbort();
         }),
@@ -191,26 +291,46 @@ export async function extractOpportunitiesFromPage(
 ) {
   const cappedHtml = boundedHtml(html);
   const pageText = htmlToText(cappedHtml, MAX_WEB_EXTRACTION_TEXT_CHARS);
-  if (!pageUrl || pageText.length < MIN_TRUSTWORTHY_PAGE_TEXT_CHARS) return [];
+  if (!pageUrl) return tagResult([], { status: 'failed', failure: { class: 'unknown', detail: 'no_page_url' } });
+  if (pageText.length < MIN_TRUSTWORTHY_PAGE_TEXT_CHARS) {
+    return tagResult([], { status: 'failed', failure: { class: 'page_too_short', detail: `text_chars=${pageText.length}<${MIN_TRUSTWORTHY_PAGE_TEXT_CHARS}` } });
+  }
 
   const linkInventory = buildLinkInventory(htmlForLinkInventory(cappedHtml), { baseUrl: pageUrl });
   const timeoutMs = Number.isFinite(Number(deps.timeoutMs)) && Number(deps.timeoutMs) > 0
     ? Number(deps.timeoutMs)
     : DEFAULT_EXTRACTION_TIMEOUT_MS;
 
+  // The provider outcome is recorded by the LLM wrapper: extractPageFactsBlind
+  // deliberately never throws (every failure is [] inside it), so this is the
+  // ONLY place the failure class can be observed.
+  const outcome = { calls: 0, ok: false, failure: null, provider: null, json: null };
   let facts = [];
   try {
     facts = await extractPageFactsBlind(
       { pageUrl, pageText, linkInventory },
       {
-        llm: makeProfileBlindLlm(deps, Date.now() + timeoutMs),
+        llm: makeProfileBlindLlm(deps, Date.now() + timeoutMs, outcome),
         timeoutMs,
         signal: deps.signal,
       },
     );
   } catch (err) {
     log.warn(`[webGrantExtractor] profile-blind extraction failed for ${pageUrl}: ${err?.message ?? err}`);
-    return [];
+    return tagResult([], { status: 'failed', failure: outcome.failure ?? classifyExtractionFailure(err), provider: outcome.provider });
+  }
+  if (outcome.failure && !outcome.ok) {
+    log.warn(`[webGrantExtractor] extraction failed (${outcome.failure.class}) for ${pageUrl}: ${outcome.failure.detail ?? ''}`);
+    return tagResult([], { status: 'failed', failure: outcome.failure, provider: outcome.provider });
+  }
+  if (outcome.calls === 0) {
+    // extractPageFactsBlind bailed before asking the model (unparseable page
+    // URL scheme, sanitizer refusal). Not a provider fact — but not a healthy
+    // empty either.
+    return tagResult([], { status: 'failed', failure: { class: 'unknown', detail: 'llm_not_invoked' } });
+  }
+  if (outcome.ok && !(outcome.json && Array.isArray(outcome.json.opportunities))) {
+    return tagResult([], { status: 'failed', failure: { class: 'parse_error', detail: 'provider_answer_missing_opportunities_array' }, provider: outcome.provider });
   }
 
   const classified = (Array.isArray(facts) ? facts : [])
@@ -251,7 +371,15 @@ export async function extractOpportunitiesFromPage(
   // must be page-OWN outbound links, never the hub URL (owner ruling
   // 2026-08-23). This is the ROOT fix for the Coolidge/Live Más class — the
   // enforceSharedListingApplicationTargets boot sweep (#1324) is only the net.
-  return decomposeHubApplyTargets(classified, { pageUrl, linkInventory });
+  const decomposed = decomposeHubApplyTargets(classified, { pageUrl, linkInventory });
+  return tagResult(decomposed, { status: decomposed.length > 0 ? 'ok' : 'empty', provider: outcome.provider });
 }
 
-export default { extractOpportunitiesFromPage, htmlToText, decomposeHubApplyTargets };
+export default {
+  extractOpportunitiesFromPage,
+  htmlToText,
+  decomposeHubApplyTargets,
+  classifyExtractionFailure,
+  extractionFailureOf,
+  EXTRACTION_FAILURE_CLASSES,
+};

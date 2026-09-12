@@ -2752,7 +2752,7 @@ router.post('/email/verify', emailVerifyLimiter, async (req, res) => {
 
   // Auto-trigger discovery crawlers on email login (fire and forget)
   if (activeProfileId) {
-    runProfileDiscoveryLive({ db: req.db, profileId: activeProfileId }).catch(err => {
+    runProfileDiscoveryLive({ db: req.db, profileId: activeProfileId, trigger: 'auth' }).catch(err => {
       console.error('[auth/email] Failed to queue auto-discovery crawlers:', err)
     })
   }
@@ -3035,7 +3035,7 @@ router.post('/phone/verify', async (req, res) => {
 
   // Auto-trigger discovery crawlers on phone login (fire and forget)
   if (activeProfileId) {
-    runProfileDiscoveryLive({ db: req.db, profileId: activeProfileId }).catch(err => {
+    runProfileDiscoveryLive({ db: req.db, profileId: activeProfileId, trigger: 'auth' }).catch(err => {
       console.error('[auth/phone] Failed to queue auto-discovery crawlers:', err)
     })
   }
@@ -3825,7 +3825,7 @@ router.get('/:provider/callback', async (req, res) => {
 
     // Auto-trigger discovery crawlers on OAuth login (fire and forget)
     if (activeProfileId) {
-      runProfileDiscoveryLive({ db: req.db, profileId: activeProfileId }).catch(err => {
+      runProfileDiscoveryLive({ db: req.db, profileId: activeProfileId, trigger: 'auth' }).catch(err => {
         console.error('[auth/%s] Failed to queue auto-discovery crawlers:', provider, err)
       })
     }

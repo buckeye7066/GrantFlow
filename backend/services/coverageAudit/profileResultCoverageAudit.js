@@ -531,18 +531,26 @@ export async function auditAllProfilesResultCoverage(db, { limit = 500, floor = 
   const applyabilityCtx = await loadApplyabilityContext()
 
   const audits = []
+  let auditFailures = 0
   for (const p of profiles) {
     try {
       const resultTarget = resolveTarget ? resolveTarget(p.id, effLedger) : null
       const a = await auditProfileResultCoverage(db, p.id, { floor, resultTarget, applyabilityCtx })
       audits.push({ ...a, display_name: p.display_name ?? null })
     } catch (err) {
+      auditFailures += 1
       log.warn('per-profile coverage audit failed (non-fatal)', { profile: p.id, error: err?.message })
     }
   }
 
   const summary = {
     scanned: audits.length,
+    // Population accounting (REQUIREMENT 8): how many profiles were SELECTED
+    // vs evaluated, and the scan bound — so `scanned` can never be read as
+    // "the fleet" when the LIMIT or a per-profile failure narrowed it.
+    selected: profiles.length,
+    audit_failures: auditFailures,
+    scan_limit: limit,
     with_gap: audits.filter((a) => a.has_gap).length,
     surfacing_regressions: audits.filter((a) => a.surfacing_gap).length,
     institution_gaps: audits.filter((a) => a.institution_gap).length,
@@ -572,6 +580,63 @@ export async function auditAllProfilesResultCoverage(db, { limit = 500, floor = 
     padded_by_geo_stub: audits.filter((a) => (a.geo_stub_count || 0) > 0).length,
   }
   return { audits, summary }
+}
+
+// ── Reading the discovery outcome (sweepheal-1 / discovery-attrib-1) ────────
+// runProfileDiscoveryLive returns `{ run, persisted, thesis, opportunities }`;
+// a skipped profile returns `{ run:{ skipped:true, reason }, persisted:{ skipped:true } }`.
+// These three helpers are the ONLY place the heal loop and the applyable
+// backfill read that shape, so the two can never drift apart again.
+
+/** The inner `run` (tolerates a bare run object from an older caller/mock). */
+export function unwrapDiscoveryOutcome(outcome) {
+  if (!outcome || typeof outcome !== 'object') return null
+  if (outcome.run && typeof outcome.run === 'object') {
+    const run = outcome.run
+    // Carry the persisted-side skip flag onto the run so one predicate reads it.
+    if (outcome.persisted?.skipped === true && run.skipped !== true) return { ...run, skipped: true, reason: run.reason ?? outcome.persisted?.reason ?? null }
+    return run
+  }
+  return outcome
+}
+
+/**
+ * Did this run tell us anything about the profile's ceiling? False for a
+ * skipped run, a run that reports failure, and a run whose open-web lane was
+ * DEAD (no search provider answered / no extractor answered) — "an outage
+ * never burns" (#944 / #1006 rule).
+ */
+export function discoveryRanOk(run) {
+  if (!run || typeof run !== 'object') return false
+  if (run.skipped === true || run.ok === false) return false
+  const lane = run.web_lane
+  if (lane && typeof lane === 'object' && lane.skipped !== true) {
+    const ph = lane.provider_health || {}
+    if (ph.llm === 'unavailable' || ph.search === 'unavailable') return false
+    const attribution = String(lane.primary_attribution ?? run.primary_attribution ?? '')
+    if (attribution === 'provider_unavailable' || attribution.startsWith('extraction_failed:')) return false
+  }
+  return true
+}
+
+/** The evidence a floor verdict is allowed to cite, read from the REAL shape. */
+export function discoveryEvidence(run) {
+  const lane = run?.web_lane && typeof run.web_lane === 'object' ? run.web_lane : null
+  const stage = lane?.stage_ledger && typeof lane.stage_ledger === 'object' ? lane.stage_ledger : null
+  const executed = Array.isArray(lane?.queries) ? lane.queries.length : (Number(lane?.queries_executed ?? lane?.queries) || 0)
+  const rejected = stage
+    ? (Number(stage.reality_rejected) || 0) + (Number(stage.eligibility_rejected) || 0) + (Number(stage.need_match_rejected) || 0) + (Number(stage.apply_target_rejected) || 0)
+    : (Number(lane?.rejected) || 0)
+  return {
+    lanes_queried: Number(run?.sources?.length) || 0,
+    queries_issued: executed,
+    queries_planned: Array.isArray(lane?.queries_planned) ? lane.queries_planned.length : (Number(lane?.queries_planned) || executed),
+    pages_fetched: Number(lane?.fetched) || 0,
+    candidates_extracted: Number(lane?.extracted) || 0,
+    rejected_by_engine: rejected,
+    primary_attribution: lane?.primary_attribution ?? run?.primary_attribution ?? null,
+    web_lane_health: lane?.provider_health ? { search: lane.provider_health.search ?? 'unknown', llm: lane.provider_health.llm ?? 'unknown' } : null,
+  }
 }
 
 // ── Observability: persist the last sweep to system_kv (Agent Observability
@@ -782,11 +847,18 @@ async function runProfileCoverageSweepInner(db, { autoheal, maxHeal, limit, star
         let run = null
         let ranOk = false
         try {
-          run = await runProfileDiscoveryLive({ db, profileId: a.profile_id })
-          // A run that was SKIPPED (deleted profile, no sources selected) or
-          // that reports failure has told us nothing about this profile's
-          // ceiling — it must not spend an attempt.
-          ranOk = Boolean(run) && run.ok !== false && run.skipped !== true
+          // runProfileDiscoveryLive returns { run, persisted, thesis, opportunities }
+          // (or { run:{skipped:true,…}, persisted:{skipped:true} }). The lane
+          // telemetry lives at run.web_lane. Reading a top-level `ok`/`skipped`/
+          // `web` — a shape the function never returned — made ranOk always true
+          // and every evidence field 0 (sweepheal-1 / discovery-attrib-1).
+          const outcome = await runProfileDiscoveryLive({ db, profileId: a.profile_id, trigger: 'heal' })
+          run = unwrapDiscoveryOutcome(outcome)
+          // A run that was SKIPPED (deleted / unconfigured profile, no sources
+          // selected), that reports failure, or whose open-web lane was DEAD
+          // (no search backend / no extractor answered) has told us nothing
+          // about this profile's ceiling — it must not spend an attempt.
+          ranOk = discoveryRanOk(run)
         } catch (err) {
           log.warn('coverage self-heal failed for profile (non-fatal)', { profile: a.profile_id, error: err?.message })
           ranOk = false
@@ -833,14 +905,7 @@ async function runProfileCoverageSweepInner(db, { autoheal, maxHeal, limit, star
             awardable: afterAwardable,
             added,
             fingerprint: floorAssessments.get(a.profile_id)?.fingerprint ?? null,
-            evidence: {
-              lanes_queried: Number(run?.sources?.length) || 0,
-              queries_issued: Number(run?.web?.queries?.length) || 0,
-              pages_fetched: Number(run?.web?.fetched) || 0,
-              candidates_extracted: Number(run?.web?.extracted) || 0,
-              rejected_by_engine: Number(run?.web?.rejected) || 0,
-              added_total: added,
-            },
+            evidence: { ...discoveryEvidence(run), added_total: added },
           })
           // Commit each observed outcome before starting the next expensive
           // crawl. A restart must not erase completed attempts and repeatedly
@@ -916,11 +981,32 @@ async function runProfileCoverageSweepInner(db, { autoheal, maxHeal, limit, star
     }
   }
 
+  // The sweep's own metric envelope (REQUIREMENT 8): a point-in-time census
+  // over the active non-Amy profiles the LIMIT selected, stamped with the code
+  // version that produced it.
+  let metricEnvelope = null
+  let codeVersion = null
+  try {
+    const { buildMetricEnvelope, resolveCodeVersion } = await import('../observability/metricEnvelope.js')
+    codeVersion = resolveCodeVersion()
+    metricEnvelope = buildMetricEnvelope({
+      window: { kind: 'point_in_time', start: startedAt, end: new Date().toISOString(), label: 'nightly profile result-coverage sweep' },
+      population: { kind: 'active_profiles', description: `active, non-Amy profiles (deleted_at IS NULL), newest first, LIMIT ${limit}`, selector: 'auditAllProfilesResultCoverage' },
+      evaluated: summary.scanned,
+      unevaluated: summary.audit_failures ?? 0,
+      codeVersion,
+      freshnessAt: new Date().toISOString(),
+      extra: { scan_limit: limit, selected: summary.selected ?? null, result_target_default: null },
+    })
+  } catch { /* envelope is reporting metadata; never fails the sweep */ }
+
   const result = {
     ok: true,
     status: 'completed',
     started_at: startedAt,
     summary,
+    code_version: codeVersion,
+    metric_envelope: metricEnvelope,
     autoheal: Boolean(autoheal),
     healed_count: healed.length,
     healed,
@@ -1074,13 +1160,15 @@ export async function runApplyableFloorBackfill(db, { audits = null, maxHeal = 5
     let run = null
     let ranOk = false
     try {
-      run = await discovery.runProfileDiscoveryLive({
+      const outcome = await discovery.runProfileDiscoveryLive({
         db,
         profileId: a.profile_id,
         extraSeedPages: directive.seedPages,
         extraQueries: directive.queries,
+        trigger: 'backfill',
       })
-      ranOk = Boolean(run) && run.ok !== false && run.skipped !== true
+      run = unwrapDiscoveryOutcome(outcome)
+      ranOk = discoveryRanOk(run)
     } catch (err) {
       log.warn('applyable-floor archetype discovery failed (non-fatal, not burned)', {
         profile: a.profile_id, error: err?.message,
@@ -1125,14 +1213,7 @@ export async function runApplyableFloorBackfill(db, { audits = null, maxHeal = 5
         awardable: afterApplyable,
         added,
         fingerprint: item.assess.fingerprint,
-        evidence: {
-          lanes_queried: Number(run?.sources?.length) || 0,
-          queries_issued: Number(run?.web?.queries?.length) || 0,
-          pages_fetched: Number(run?.web?.fetched) || 0,
-          candidates_extracted: Number(run?.web?.extracted) || 0,
-          rejected_by_engine: Number(run?.web?.rejected) || 0,
-          added_total: added,
-        },
+        evidence: { ...discoveryEvidence(run), added_total: added },
       })
     }
   }

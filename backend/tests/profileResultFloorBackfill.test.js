@@ -73,7 +73,24 @@ function seed(db, profileId, { awards = 0, locators = 0, name = profileId } = {}
   for (let k = 0; k < locators; k += 1) put('directory', 'REVIEW')
 }
 
-beforeEach(() => { runLiveMock = vi.fn(async () => ({ ok: true })) })
+/**
+ * The REAL return shape of runProfileDiscoveryLive (crawlerOsService.js):
+ * `{ run, persisted, thesis, opportunities }` — lane telemetry lives at
+ * `run.web_lane`, never at a top-level `web`, and there is no top-level `ok`.
+ * The previous mocks returned `{ ok, sources, web }`, a shape production never
+ * produces, which is how the sweep read `run.ok`/`run.web.*` for a month
+ * without a test noticing (sweepheal-1).
+ */
+function liveResult(runOver = {}) {
+  return {
+    run: { run_id: 'r', profile_id: 'p', planned: 1, stored: 0, rejected: 0, sources: [], zero_result: null, ...runOver },
+    persisted: { opportunities: 0, matches: 0, sources: 0, rejected: 0, pipelinePruned: 0 },
+    thesis: {},
+    opportunities: [],
+  }
+}
+
+beforeEach(() => { runLiveMock = vi.fn(async () => liveResult()) })
 
 describe('the result-floor backfill queue', () => {
   it('queues the pointer-padded profile FIRST — the deepest real shortfall, not the smallest total', async () => {
@@ -99,7 +116,7 @@ describe('the result-floor backfill queue', () => {
     const db = makeDb()
     try {
       seed(db, 'p1', { awards: 2, locators: 40 })
-      runLiveMock = vi.fn(async ({ profileId }) => { seed(db, profileId, { awards: 3 }); return { ok: true } })
+      runLiveMock = vi.fn(async ({ profileId }) => { seed(db, profileId, { awards: 3 }); return liveResult() })
       const res = await runProfileCoverageSweep(db, { autoheal: true, maxHeal: 1 })
       const h = res.healed.find((x) => x.profile_id === 'p1')
       expect(h.before).toBe(2)
@@ -123,14 +140,44 @@ describe('the result-floor backfill queue', () => {
     } finally { db.close() }
   })
 
-  it('a SKIPPED run (deleted profile / no sources selected) also spends no attempt', async () => {
+  it('a SKIPPED run (deleted / unconfigured profile) — in the REAL { run, persisted } shape — spends no attempt', async () => {
+    // sweepheal-1 / discovery-attrib-1: runProfileDiscoveryLive returns
+    // `{ run:{ skipped:true, … }, persisted:{ skipped:true }, thesis:null }`;
+    // the old loop read a top-level `skipped` that never existed and burned
+    // an attempt on every skip.
     const db = makeDb()
     try {
       seed(db, 'p1', { awards: 1 })
-      runLiveMock = vi.fn(async () => ({ ok: true, skipped: true, reason: 'no_sources_selected' }))
+      runLiveMock = vi.fn(async () => ({
+        run: { skipped: true, reason: 'profile_unconfigured', profile_id: 'p1', planned: 0, stored: 0, rejected: 0, sources: [], zero_result: null },
+        persisted: { opportunities: 0, matches: 0, sources: 0, rejected: 0, pipelinePruned: 0, skipped: true, reason: 'profile_unconfigured' },
+        thesis: null,
+      }))
       await runProfileCoverageSweep(db, { autoheal: true, maxHeal: 1 })
       const ledger = await readFloorLedger(db)
       expect(ledger.profiles.p1.attempts).toBe(0)
+      expect(ledger.profiles.p1.last_outcome).toBe('transient')
+    } finally { db.close() }
+  })
+
+  it('a run whose open-web lane was DEAD (LLM unavailable) told us nothing about the ceiling — no attempt spent', async () => {
+    const db = makeDb()
+    try {
+      seed(db, 'p1', { awards: 1 })
+      runLiveMock = vi.fn(async () => liveResult({
+        web_lane: {
+          ok: true, queries: ['a', 'b'], pages: 40, fetched: 38, extracted: 0, rejected: 0,
+          provider_health: { search: 'healthy', llm: 'unavailable' },
+          primary_attribution: 'extraction_failed:llm_quota',
+        },
+      }))
+      for (let i = 0; i < RESULT_FLOOR_MAX_ATTEMPTS + 1; i += 1) {
+        await runProfileCoverageSweep(db, { autoheal: true, maxHeal: 1 })
+      }
+      const ledger = await readFloorLedger(db)
+      expect(ledger.profiles.p1.attempts).toBe(0)
+      expect(ledger.profiles.p1.exhausted_at ?? null).toBeNull()
+      expect(ledger.profiles.p1.last_outcome).toBe('transient')
     } finally { db.close() }
   })
 
@@ -139,8 +186,10 @@ describe('the result-floor backfill queue', () => {
     try {
       seed(db, 'niche', { awards: 2 })
       // The crawl runs and searches, but this niche genuinely has nothing more.
-      runLiveMock = vi.fn(async () => ({
-        ok: true, sources: [{}, {}, {}], web: { queries: ['a', 'b'], fetched: 5, extracted: 4, rejected: 4 },
+      // REAL return shape: { run:{ sources, web_lane }, persisted, thesis }.
+      runLiveMock = vi.fn(async () => liveResult({
+        sources: [{}, {}, {}],
+        web_lane: { ok: true, queries: ['a', 'b'], queries_planned: ['a', 'b', 'c'], pages: 6, fetched: 5, extracted: 4, rejected: 4, provider_health: { search: 'healthy', llm: 'healthy' }, primary_attribution: 'gate_rejected:reality' },
       }))
       for (let i = 0; i < RESULT_FLOOR_MAX_ATTEMPTS; i += 1) {
         await runProfileCoverageSweep(db, { autoheal: true, maxHeal: 1 })
@@ -149,7 +198,8 @@ describe('the result-floor backfill queue', () => {
       expect(ledger.profiles.niche.attempts).toBe(RESULT_FLOOR_MAX_ATTEMPTS)
       expect(ledger.profiles.niche.exhausted_at).toBeTruthy()
       expect(ledger.profiles.niche.exhausted_evidence).toMatchObject({
-        target: 20, found: 2, lanes_queried: 3, queries_issued: 2, candidates_extracted: 4, rejected_by_engine: 4,
+        target: 20, found: 2, lanes_queried: 3, queries_issued: 2, pages_fetched: 5, candidates_extracted: 4, rejected_by_engine: 4,
+        primary_attribution: 'gate_rejected:reality',
       })
 
       // …and the NEXT nightly run does not crawl it again. THIS is the
@@ -173,7 +223,7 @@ describe('the result-floor backfill queue', () => {
       runLiveMock = vi.fn(async ({ profileId }) => {
         calls += 1
         if (calls === 2) seed(db, profileId, { awards: 2 })  // productive on pass 2
-        return { ok: true, sources: [{}], web: { queries: ['q'] } }
+        return liveResult({ sources: [{}], web_lane: { ok: true, queries: ['q'], pages: 1, fetched: 1, extracted: 0, rejected: 0, provider_health: { search: 'healthy', llm: 'healthy' } } })
       })
       for (let i = 0; i < 3; i += 1) await runProfileCoverageSweep(db, { autoheal: true, maxHeal: 1 })
       const ledger = await readFloorLedger(db)
