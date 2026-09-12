@@ -4,10 +4,7 @@
 // GET /api/foundations/federal/search timed out at 30s with nothing logged.
 import { afterEach, describe, expect, it } from 'vitest'
 import { __resetAxiosForTests, __setAxiosForTests, requestJson } from '../src/integrations/httpClient.js'
-import {
-  __resetAssistanceCatalogCacheForTests,
-  fetchAssistanceListings,
-} from '../src/integrations/samAssistanceListings.js'
+import { fetchAssistanceListings } from '../src/integrations/samAssistanceListings.js'
 
 const THREE_HOURS_MS = 3 * 60 * 60 * 1000
 
@@ -22,7 +19,6 @@ const quotaSpent = (calls) => async (config) => {
 
 afterEach(() => {
   __resetAxiosForTests()
-  __resetAssistanceCatalogCacheForTests()
 })
 
 describe('requestJson Retry-After cap', () => {
@@ -46,8 +42,7 @@ describe('requestJson Retry-After cap', () => {
     expect(calls).toBe(2)
   })
 
-  it('a spent SAM quota fails the federal catalog search fast instead of hanging', async () => {
-    process.env.SAM_GOV_PUBLIC_API_KEY = 'test-key'
+  it('an upstream 429 with a far Retry-After fails federal search fast instead of hanging', async () => {
     const calls = []
     __setAxiosForTests(quotaSpent(calls))
     const error = await fetchAssistanceListings({ keyword: 'housing' }).catch((e) => e)
