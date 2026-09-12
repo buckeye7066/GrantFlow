@@ -860,10 +860,10 @@ export async function heartbeatInstance(db, instanceId = getInstanceId()) {
     // Lost an insert race (another tick/process created it first) — the row
     // now exists; update it so the heartbeat still lands this tick.
     try {
-      await db
+      const res = await db
         .prepare(`UPDATE agent_control_instances SET last_heartbeat_at = ?, updated_at = ? WHERE instance_id = ?`)
         .run(now, now, String(instanceId))
-      return true
+      return Number(res?.changes ?? res?.rowCount ?? 0) > 0
     } catch {
       return false
     }
@@ -1034,12 +1034,17 @@ export async function acquireLock(db, {
   }
   await ensureSchema(db)
 
-  const holderInstanceId = instanceId ? String(instanceId) : null
+  let holderInstanceId = instanceId ? String(instanceId) : null
   // Keep THIS process's own liveness row fresh before contending for the
   // lock, so a concurrent acquirer (or our own takeover check below) always
   // sees an up-to-date heartbeat rather than whatever staleness happened to
-  // exist since the last periodic tick. Best-effort — never blocks acquire.
-  if (holderInstanceId) await heartbeatInstance(db, holderInstanceId).catch(() => {})
+  // exist since the last periodic tick. If registration fails, retain the
+  // original TTL-only lease: a missing/stale heartbeat must not authorize a
+  // second worker to reclaim a lease this live process just acquired.
+  if (holderInstanceId && !await heartbeatInstance(db, holderInstanceId).catch(() => false)) {
+    lockLog('instance.registration_unavailable', { instance: holderInstanceId, lock: lockName })
+    holderInstanceId = null
+  }
 
   const ownerToken = LOCK_TOKEN()
   const effTtl = Math.max(MIN_LOCK_TTL_MS, Number(ttlMs) || DEFAULT_LOCK_TTL_MS)
