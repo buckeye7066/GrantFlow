@@ -150,6 +150,52 @@ describe('normalizePersistedMatchDecisionIntegrity', () => {
     db.close()
   })
 
+  it('never deletes a proof-less ACCEPT from a linker/recall lane (2026-09-12 tug-of-war), and converges', async () => {
+    const db = makeDb()
+    // Same shape as a real `institution_aid_linkage` / `national_assistance_recall`
+    // row: ACCEPT, a real (non-pointer) opportunity kind, no four_truth_proof —
+    // by design, since these writers never build one (matchExplainPersistence
+    // never attaches a proof; only crawler-os/matchEngine + catalogRescoreSweep do).
+    insert(db, {
+      id: 'institution-accept-no-proof',
+      kind: 'DIRECT_GRANT',
+      score: 41,
+      decision: 'accept',
+      matcherVersion: 'institution-link',
+    })
+    insert(db, {
+      id: 'national-assistance-accept-no-proof',
+      kind: 'PROGRAM',
+      score: 20,
+      decision: 'accept',
+      matcherVersion: 'national-assistance-link',
+    })
+    // A non-linker lane (crawler-os) ACCEPT with no proof must still be removed
+    // — the exemption is scoped to recall-net lanes, not a general amnesty.
+    insert(db, {
+      id: 'crawler-os-accept-no-proof',
+      kind: 'DIRECT_GRANT',
+      score: 55,
+      decision: 'accept',
+      matcherVersion: 'crawler-os',
+    })
+
+    const result = await normalizePersistedMatchDecisionIntegrity(db)
+
+    expect(result.removed_unproven_direct_accepts).toBe(1)
+    expect(match(db, 'profile-1', 'institution-accept-no-proof')?.match_decision).toBe('accept')
+    expect(match(db, 'profile-1', 'national-assistance-accept-no-proof')?.match_decision).toBe('accept')
+    expect(match(db, 'profile-1', 'crawler-os-accept-no-proof')).toBeUndefined()
+
+    // CONVERGENCE GUARD: a second pass over the same DB must repair nothing —
+    // the linker-lane rows must not be re-flagged, re-deleted, or re-inserted.
+    const second = await normalizePersistedMatchDecisionIntegrity(db)
+    expect(second).toMatchObject({ ok: true, repaired: 0 })
+    expect(match(db, 'profile-1', 'institution-accept-no-proof')?.match_decision).toBe('accept')
+    expect(match(db, 'profile-1', 'national-assistance-accept-no-proof')?.match_decision).toBe('accept')
+    db.close()
+  })
+
   it('is profile-scoped and includes the web-llm surfaced lane', async () => {
     const db = makeDb()
     insert(db, {

@@ -417,6 +417,7 @@ describe('forward repair migration 148 (already-147-stamped DBs) + ownership rep
       broken.prepare(`INSERT INTO users (id, primary_phone, created_at) VALUES ('b', NULL, '2026-01-02')`).run()
       broken.prepare(`INSERT INTO profiles (id, user_id, display_name) VALUES ('pb', 'b', 'B')`).run()
       broken.prepare(`INSERT INTO saved_grants (id, user_id, profile_id, opportunity_id) VALUES ('sgx', 'a', 'pb', 'o')`).run() // user a, profile owned by b → split
+      broken.prepare(`INSERT INTO phone_dedupe_map (dup_user_id, canonical_user_id, phone) VALUES ('a', 'b', ?)`).run(phone) // a and b are one person
       const badHealth = await checkPhoneDedupeHealth(asDbShim(broken))
       expect(badHealth.ok).toBe(false)
       expect(badHealth.problems.join(' ')).toMatch(/ux_users_primary_phone/)
@@ -442,6 +443,34 @@ describe('forward repair migration 148 (already-147-stamped DBs) + ownership rep
       expect(summarizeBootHealthLine({ dedupe: badHealth })).not.toBe('schema check: OK')
     })
   }, 20000)  // heavy: runs the full migration chain + health check three times; 5s default flakes under parallel-file load
+
+  it('[prod 2026-09-12] an account acting on a profile it does not own is NOT a split unless both accounts share a dedupe group', async () => {
+    // Prod boot read "two-owner split rows=6212" with phone_dedupe_map EMPTY: every row was
+    // an admin (Hamilton runs, tasks, Anya sessions) or the audit account on a managed profile.
+    const db = fullDb()
+    db.exec('CREATE UNIQUE INDEX IF NOT EXISTS ux_users_primary_phone ON users (primary_phone) WHERE primary_phone IS NOT NULL')
+    db.prepare(`INSERT INTO users (id, primary_phone, created_at, is_admin) VALUES ('admin', NULL, '2026-01-01', 1)`).run()
+    db.prepare(`INSERT INTO users (id, primary_phone, created_at) VALUES ('owner', NULL, '2026-01-02')`).run()
+    db.prepare(`INSERT INTO profiles (id, user_id, display_name) VALUES ('po', 'owner', 'Owner')`).run()
+    db.prepare(`INSERT INTO saved_grants (id, user_id, profile_id, opportunity_id) VALUES ('sg-admin', 'admin', 'po', 'o')`).run()
+    const staffOnly = await checkPhoneDedupeHealth(asDbShim(db))
+    expect(staffOnly.problems).toEqual([])
+    expect(staffOnly.ok).toBe(true)
+
+    // A merged-away dup acting on a THIRD party's profile is still not a split of one person.
+    db.prepare(`INSERT INTO users (id, primary_phone, created_at) VALUES ('dup', NULL, '2026-01-03')`).run()
+    db.prepare(`INSERT INTO users (id, primary_phone, created_at) VALUES ('canon', ?, '2026-01-04')`).run(phone)
+    db.prepare(`INSERT INTO phone_dedupe_map (dup_user_id, canonical_user_id, phone) VALUES ('dup', 'canon', ?)`).run(phone)
+    db.prepare(`INSERT INTO saved_grants (id, user_id, profile_id, opportunity_id) VALUES ('sg-dup-3p', 'dup', 'po', 'o')`).run()
+    expect((await checkPhoneDedupeHealth(asDbShim(db))).ok).toBe(true)
+
+    // The same dup's row on its CANONICAL account's profile is the drift the check exists for.
+    db.prepare(`INSERT INTO profiles (id, user_id, display_name) VALUES ('pc', 'canon', 'Canon')`).run()
+    db.prepare(`INSERT INTO saved_grants (id, user_id, profile_id, opportunity_id) VALUES ('sg-dup-canon', 'dup', 'pc', 'o')`).run()
+    const split = await checkPhoneDedupeHealth(asDbShim(db))
+    expect(split.ok).toBe(false)
+    expect(split.problems.join(' ')).toMatch(/two-owner split rows=1\b/)
+  }, 20000)
 
   it('[r29 MED] applyLikeRunner shares the REAL runner predicate — an absent/renamed-table statement FAILS the harness (no masked error)', () => {
     const raw = new Database(':memory:')
