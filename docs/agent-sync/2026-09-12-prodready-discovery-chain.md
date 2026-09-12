@@ -3,9 +3,11 @@
 Basis: owner's production-readiness assignment (eight failure areas), worked on
 branch `fix/prodready-discovery-chain` from `origin/main 68bf357f`. Every
 number below was measured this session against production (read-only) unless
-marked UNKNOWN. Machine-readable baseline + system_kv dumps + subsystem maps:
-`C:/Users/firer/AppData/Local/Temp/gf-prodready-837e6deb/` (baseline.mjs
-recomputes it; deploy-verify.mjs proves API/web commits).
+marked UNKNOWN. Machine-readable baseline + system_kv dumps + subsystem maps
+live in the session scratch directory `%LOCALAPPDATA%\Temp\gf-prodready-837e6deb\`
+on the owner's workstation (baseline.mjs recomputes it; deploy-verify.mjs
+proves API/web commits); the vault note "GrantFlow prodready BASELINE
+2026-09-12" carries the numbers.
 
 ## Baseline (16:39Z, main 68bf357f on Railway and Vercel dpl_A9weE1Vq…)
 

@@ -50,8 +50,8 @@ function fixtures() {
       fleet_parity: 0,
       qualified_fleet_parity: 0,
       per_profile: [{
-        profile_id: 'profile-gilbert-mccosh',
-        label: 'Gilbert McCosh',
+        profile_id: 'profile-golden-a',
+        label: 'Golden Profile A',
         parity: 0,
         overlap_count: 0,
         web_only_count: 3,
@@ -74,9 +74,9 @@ function fixtures() {
   const queue = {
     updated_at: '2026-09-12T16:42:22.025Z',
     candidates: [
-      { url: 'https://www.needhelppayingbills.com/html/neighbors_in_need_cleveland_te.html', title: 'Caring Place assistance programs Cleveland Tennessee', profile_id: 'profile-gilbert-mccosh', need: 'mental health', domain: 'needhelppayingbills.com', source: 'web_parity_benchmark', status: 'adopted', found_at: '2026-08-01T08:42:54.888Z', resolved_at: '2026-08-01T09:47:39.808Z' },
-      { url: 'https://bradleycountytn.gov/departments/health-department/', title: 'Health Department - Bradley County, TN', profile_id: 'profile-gilbert-mccosh', need: null, domain: 'bradleycountytn.gov', source: 'web_parity_benchmark', status: 'gated_out', found_at: '2026-09-05T08:40:00.000Z', resolved_at: '2026-09-06T09:00:00.000Z' },
-      { url: 'https://www.grants.gov/', title: 'Home | Grants.gov', profile_id: 'profile-gilbert-mccosh', need: null, domain: 'grants.gov', source: 'web_parity_benchmark', status: 'gated_out', found_at: '2026-07-28T14:34:00.715Z', resolved_at: '2026-07-29T04:25:49.106Z' },
+      { url: 'https://www.needhelppayingbills.com/html/neighbors_in_need_cleveland_te.html', title: 'Caring Place assistance programs Cleveland Tennessee', profile_id: 'profile-golden-a', need: 'mental health', domain: 'needhelppayingbills.com', source: 'web_parity_benchmark', status: 'adopted', found_at: '2026-08-01T08:42:54.888Z', resolved_at: '2026-08-01T09:47:39.808Z' },
+      { url: 'https://bradleycountytn.gov/departments/health-department/', title: 'Health Department - Bradley County, TN', profile_id: 'profile-golden-a', need: null, domain: 'bradleycountytn.gov', source: 'web_parity_benchmark', status: 'gated_out', found_at: '2026-09-05T08:40:00.000Z', resolved_at: '2026-09-06T09:00:00.000Z' },
+      { url: 'https://www.grants.gov/', title: 'Home | Grants.gov', profile_id: 'profile-golden-a', need: null, domain: 'grants.gov', source: 'web_parity_benchmark', status: 'gated_out', found_at: '2026-07-28T14:34:00.715Z', resolved_at: '2026-07-29T04:25:49.106Z' },
       { url: 'https://other.example/x', title: 'Other profile row', profile_id: 'someone-else', source: 'web_parity_benchmark', status: 'candidate', found_at: '2026-09-01T00:00:00.000Z' },
     ],
   }
@@ -84,7 +84,7 @@ function fixtures() {
     totals: { runs: 41185, zero_page_runs: 19, stored_total: 363538 },
     recent: [
       { at: '2026-09-12T16:42:41.296Z', profile_id: 'x', ok: true, queries: 28, pages: 48, fetched: 39, extracted: 0, stored: 0 },
-      { at: '2026-09-12T15:58:02.745Z', profile_id: 'profile-gilbert-mccosh', ok: true, queries: 28, pages: 48, fetched: 41, extracted: 0, stored: 0 },
+      { at: '2026-09-12T15:58:02.745Z', profile_id: 'profile-golden-a', ok: true, queries: 28, pages: 48, fetched: 41, extracted: 0, stored: 0 },
       { at: '2026-09-12T14:44:47.164Z', profile_id: 'y', ok: true, queries: 28, pages: 48, fetched: 42, extracted: 0, stored: 0 },
     ],
   }
@@ -94,7 +94,7 @@ function fixtures() {
 describe('web-parity-replay.mjs (offline reproduction)', () => {
   it('collects the union of persisted web-only results and queued candidates keyed by the v4 identity', () => {
     const { benchmark, queue } = fixtures()
-    const rows = collectCandidates(benchmark.latest.per_profile[0], queue.candidates.filter((c) => c.profile_id === 'profile-gilbert-mccosh'))
+    const rows = collectCandidates(benchmark.latest.per_profile[0], queue.candidates.filter((c) => c.profile_id === 'profile-golden-a'))
     expect(rows).toHaveLength(4)
     const fresh = rows.find((r) => r.url.startsWith('https://fresh.example'))
     expect(fresh.canonical_key).toBe('fresh.example/apply')
