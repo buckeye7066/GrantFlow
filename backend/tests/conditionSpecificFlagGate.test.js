@@ -55,6 +55,33 @@ const REEVE = {
 
 const BASE_PROFILE = { id: 'p-demo_stem_student', primary_type: 'individual', state: 'TN' }
 
+describe('the eligibility condition check reads the opportunity description, not only its title (2026-09-12)', () => {
+  // ECF CHOICES names its IDD requirement only in the description. With the
+  // title-and-keywords fallback, both owner-verified enrollees read "condition
+  // not named" and their direct ACCEPT fell to REVIEW in prod.
+  const ECF = {
+    id: 'ecf',
+    title: 'Employment and Community First CHOICES (ECF CHOICES)',
+    sponsor: 'TennCare',
+    description: 'Official TennCare ECF CHOICES program page: employment and independent-community-living supports for Tennesseans with intellectual or developmental disabilities, including Essential Family Supports for family caregivers.',
+  }
+
+  it.each([
+    [['Mentally challenged', 'Diabetic']],
+    [['Epilepsy', 'Cognitive disability (F70)']],
+  ])('an enrollee who names IDD as %j is not missing the condition', (disabilityType) => {
+    const profileNorm = normalizeProfile(BASE_PROFILE, { health_medical: { disability_type: disabilityType } }, null)
+    const result = evaluateEligibility(profileNorm, normalizeOpportunity(ECF))
+    expect(result.missingFields).not.toContain('condition_specific_condition_not_named')
+    expect(result.ineligibilityReasons.join(' ')).not.toMatch(/specific medical condition/)
+  })
+
+  it('a profile with only a mobility impairment is still missing the IDD condition', () => {
+    const profileNorm = normalizeProfile(BASE_PROFILE, { health_medical: { disability_type: ['mobility impairment'] } }, null)
+    expect(evaluateEligibility(profileNorm, normalizeOpportunity(ECF)).missingFields).toContain('condition_specific_condition_not_named')
+  })
+})
+
 describe('a health answer that DENIES disability is not a disability signal (2026-09-12)', () => {
   // Two real profiles state "No disability" in demographics AND in
   // health_medical.disability_type; the health block counted the non-empty
