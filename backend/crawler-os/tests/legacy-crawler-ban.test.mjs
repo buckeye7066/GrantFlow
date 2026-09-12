@@ -163,6 +163,13 @@ const ALLOWED_SHARED_IMPORTS = new Set([
   // placeholder profile re-grow the junk the sweep purges. Pure predicates
   // over its own constants; no I/O.
   'backend/config/placeholderProfileSignals.js',
+  // The ONE applicant vocabulary per profile bucket (2026-09-11). The
+  // four-truth proof's applicant-evidence reader
+  // (crawler-os/applicantTypeEvidence.js) must match eligibility prose with
+  // the SAME tokens services/applicantTypeGate.js matches stated applicant
+  // types with, or the proof and the gate disagree about who may apply. Pure
+  // data; its only import is the already-approved farmIdentity vocabulary.
+  'backend/config/applicantBucketTokens.js',
 ]);
 
 function listFiles(dir) {

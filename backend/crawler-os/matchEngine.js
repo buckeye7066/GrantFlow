@@ -19,6 +19,7 @@ import {
 import { MATCH_DECISION, OPPORTUNITY_KIND } from './contract.js';
 import { PROFILE_SIGNAL_VERSION } from '../config/profileSignalVersion.js';
 import { isGrantsGovSearchEvidence } from './fundingTruthPolicy.js';
+import { applicantTypeEvidence } from './applicantTypeEvidence.js';
 
 export { MATCHER_VERSION };
 export const SCORING_POLICY_VERSION = NEED_FIRST_SCORING_VERSION;
@@ -113,18 +114,17 @@ function eligibilityProseOf(opportunity) {
 
 /**
  * The funder must SAY who may apply, and the canonical engine must have
- * matched the profile against that statement. Evidence is either a stated
- * opportunity-side applicant type or eligibility prose captured from the
- * source page (a blind web candidate carries no applicant_types — its
- * eligibility text is the only place the funder's own words live). The
- * profile's answers are never copied into the opportunity to manufacture it.
+ * matched the profile against that statement: a stated opportunity-side
+ * applicant type, or eligibility prose captured from the source page that
+ * names the applicant bucket the gate matched. Merely having eligibility text
+ * is not evidence; page copy such as "Career Services" passed that bar
+ * (measured 2026-09-11). One rule for both proof builders lives in
+ * ./applicantTypeEvidence.js. The profile's answers are never copied into the
+ * opportunity to manufacture evidence.
  */
 function hasPositiveApplicantTypeEvidence(opportunity, canonical) {
-  const statedApplicantTypes = stripWildcard(uniqueStrings(opportunity?.applicant_types));
-  const eligibilityProse = eligibilityProseOf(opportunity);
   return !isGrantsGovSearchEvidence(opportunity?.evidence?.url) &&
-    (statedApplicantTypes.length > 0 || eligibilityProse.length > 0) &&
-    canonical?.match_explain?.matchedSignals?.includes?.('applicant_type') === true;
+    applicantTypeEvidence({ opportunity, canonical }).evidenced === true;
 }
 
 function hasPositiveRealityEvidence(opportunity, realityPassed) {

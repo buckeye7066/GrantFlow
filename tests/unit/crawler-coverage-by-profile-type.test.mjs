@@ -322,17 +322,31 @@ test('an eligible flag without funder-stated applicant evidence cannot prove the
   assert.equal(proof.all_passed, false)
 
   // Eligibility prose captured from the page counts as the funder's statement
-  // once the canonical engine has matched the applicant type against it.
-  const prose = buildFourTruthProof(
-    { ...opportunity, eligibility_text: 'Open to individuals and families in Tennessee.' },
-    { needs_defaulted: false },
-    { ...canonical, match_explain: { matchedSignals: ['applicant_type'] } },
-    { realityPassed: true },
-  )
+  // once the canonical engine has matched the applicant type against it AND the
+  // prose names the class the engine matched (its applicant_type_gate bucket).
+  const withProse = { ...opportunity, eligibility_text: 'Open to individuals and families in Tennessee.' }
+  const matchedAs = (bucket) => ({
+    ...canonical,
+    match_explain: { matchedSignals: ['applicant_type'], applicant_type_gate: { decision: 'pass', matched_bucket: bucket } },
+  })
+  const prose = buildFourTruthProof(withProse, { needs_defaulted: false }, matchedAs('individual'), { realityPassed: true })
   assert.equal(prose.profile_qualifies.passed, true)
   assert.deepEqual(prose.profile_qualifies.applicant_type_evidence, [])
   assert.equal(prose.profile_qualifies.eligibility_prose_evidence.length, 1)
   assert.equal(prose.all_passed, true)
+
+  // Prose that never names the matched class is page copy, not applicant evidence.
+  const wrongClass = buildFourTruthProof(withProse, { needs_defaulted: false }, matchedAs('org'), { realityPassed: true })
+  assert.equal(wrongClass.profile_qualifies.passed, false)
+
+  // Without the engine's matched bucket there is no class to find in the prose.
+  const noBucket = buildFourTruthProof(
+    withProse,
+    { needs_defaulted: false },
+    { ...canonical, match_explain: { matchedSignals: ['applicant_type'] } },
+    { realityPassed: true },
+  )
+  assert.equal(noBucket.profile_qualifies.passed, false)
 })
 
 test('unknown qualification or type-defaulted needs cannot authorize direct funding', () => {

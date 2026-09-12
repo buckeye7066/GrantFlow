@@ -6,11 +6,15 @@
  * profile need, and the profile qualifies. Pointers/directories are research
  * leads and are governed separately by the surfacing policy.
  *
- * This module is deliberately pure and lives inside Crawler OS so discovery
- * can enforce the contract without crossing the OS package boundary. The
- * backend config facade re-exports these exact functions for every other
- * reader, keeping one authority repo-wide.
+ * This module is deliberately pure (no I/O) and lives inside Crawler OS so
+ * discovery can enforce the contract where it runs. The applicant half of
+ * `profile_qualifies` comes from ./applicantTypeEvidence.js, shared with
+ * crawler-os/matchEngine.buildFourTruthProof. The backend config facade
+ * re-exports these exact functions for every other reader, keeping one
+ * authority repo-wide.
  */
+
+import { applicantTypeEvidence } from './applicantTypeEvidence.js'
 
 const POSITIVE_ELIGIBILITY = new Set(['yes', 'eligible', 'qualified', 'true'])
 const POSITIVE_REALITY = new Set(['VERIFIED', 'ROLLING'])
@@ -147,17 +151,16 @@ export function refreshFourTruthProof(previous, { canonical, opportunity = null,
   const defaulted = typeof needsDefaulted === 'boolean'
     ? needsDefaulted
     : prev.meets_profile_need?.profile_needs_defaulted === true
-  const applicantEvidence = statedApplicantTypes(opportunity)
-  const applicantEvidenceFinal = applicantEvidence.length > 0
-    ? applicantEvidence
+  const statedTypes = statedApplicantTypes(opportunity)
+  const applicantEvidenceFinal = statedTypes.length > 0
+    ? statedTypes
     : uniqueStrings(prev.profile_qualifies?.applicant_type_evidence)
   const prose = eligibilityProse(opportunity)
   const proseFinal = prose.length > 0 ? prose : uniqueStrings(prev.profile_qualifies?.eligibility_prose_evidence)
-  const signals = [
-    ...(canonical?.match_explain?.matchedSignals ?? []),
-    ...(canonical?.match_explain?.matched_signals ?? []),
-  ].map((v) => String(v ?? '').toLowerCase())
-  const applicantMatched = signals.includes('applicant_type')
+  // The funder must SAY who may apply: stated applicant types, or eligibility
+  // prose naming the matched applicant bucket. Any non-empty eligibility text
+  // used to count, and page copy ("Career Services") proved qualification.
+  const applicantEvidence = applicantTypeEvidence({ opportunity, canonical, previous: prev.profile_qualifies })
 
   const proof = {
     direct_funding: prev.direct_funding === true,
@@ -175,9 +178,9 @@ export function refreshFourTruthProof(previous, { canonical, opportunity = null,
     profile_qualifies: {
       passed: POSITIVE_ELIGIBILITY.has(eligibilityKey) &&
         !isGrantsGovSearchEvidence(prev.real?.evidence_url) &&
-        (applicantEvidenceFinal.length > 0 || proseFinal.length > 0) &&
-        applicantMatched,
+        applicantEvidence.evidenced === true,
       eligibility,
+      applicant_evidence_via: applicantEvidence.via,
       applicant_type_evidence: applicantEvidenceFinal,
       eligibility_prose_evidence: proseFinal,
       missing_eligibility_fields: uniqueStrings(canonical?.missingEligibilityFields ?? canonical?.match_explain?.missing_eligibility_fields),

@@ -629,6 +629,10 @@ export async function runCatalogRescoreSweep(db, opts = {}) {
             summary.blocked_by_truth[t] = (summary.blocked_by_truth[t] ?? 0) + 1
           }
           summary.unpublishable += 1
+          // A profile-side truth that fails is a verdict about the row, not an
+          // outage. Withdraw this lane's earlier ACCEPT for the pair, or a proof
+          // that no longer holds stays published.
+          try { await withdrawStaleCatalogAccept() } catch { summary.convergence_errors += 1 }
           continue
         }
 
@@ -658,8 +662,10 @@ export async function runCatalogRescoreSweep(db, opts = {}) {
         )
         if (!hasPositiveFourTruthProof({ match_explain: { four_truth_proof: fourTruthProof } })) {
           // The page is real, but one of the other three truths does not hold.
-          // The integrity net would delete this row, so do not write it.
+          // The integrity net would delete this row, so do not write it, and
+          // withdraw this lane's earlier ACCEPT for the pair.
           summary.awaiting_reality_capture += 1
+          try { await withdrawStaleCatalogAccept() } catch { summary.convergence_errors += 1 }
           continue
         }
 
