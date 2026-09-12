@@ -34,7 +34,9 @@
 // Applicant evidence must be STATED: applicant types, or eligibility prose that
 // names the matched applicant bucket. Any eligibility text used to certify
 // profile_qualifies, and page copy ("Career Services") published direct funding.
-export const PROFILE_SIGNAL_VERSION = '2026.09.12-1'
+// A single named county the profile's declared current residence provably lies
+// outside is "elsewhere" (temporalRelatability), not a neutral unknown.
+export const PROFILE_SIGNAL_VERSION = '2026.09.12-2'
 
 /** Repo-relative files whose content decides what the engine believes about a profile. */
 export const PROFILE_SIGNAL_DERIVATION_FILES = Object.freeze([
@@ -62,6 +64,6 @@ export const PROFILE_SIGNAL_DERIVATION_FILES = Object.freeze([
  * sha256 over the LF-normalized concatenation of the files above, pinned by
  * `scripts/pin-signal-version.mjs`. The test recomputes it.
  */
-export const PROFILE_SIGNAL_DERIVATION_HASH = 'd9603ccb9bfab744a0275162d812cf92b7c69164384c26f927f7948b58b1ba6d'
+export const PROFILE_SIGNAL_DERIVATION_HASH = '2b6a84b2abf881101aaed1eacf154b9407c4f7a2f9cbeb98f13b8656f0b0a45e'
 
 export default { PROFILE_SIGNAL_VERSION, PROFILE_SIGNAL_DERIVATION_FILES, PROFILE_SIGNAL_DERIVATION_HASH }

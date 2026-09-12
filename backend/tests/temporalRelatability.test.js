@@ -186,6 +186,29 @@ describe('temporalRelatability — the row declares WHEN, the timeline says whet
     expect(temporalAnchorEvidence(moved, former, { now: NOW }).verdict).toBe('fit_past')
   })
 
+  it('a single named COUNTY the profile provably does not live in is ELSEWHERE; lists, areas, cities and silence stay neutral', () => {
+    // Verbatim prod row, surfaced as a direct ACCEPT for a Bradley County, TN resident.
+    const rochester = {
+      title: 'Individual Training Grant Program',
+      sponsor: 'RochesterWorks',
+      eligibility_text: 'RochesterWorks can only approve training funds for individuals who live in Monroe County or dislocated workers who were laid off from a Monroe County employer.',
+    }
+    expect(temporalAnchorEvidence(studentSections(), rochester, { now: NOW }).verdict).toBe('elsewhere')
+    expect(temporalAnchorConflict(studentSections(), rochester, { now: NOW })?.classId).toBe('residency')
+    // No declared county: a county in ANOTHER named state is still provable…
+    const noCounty = studentSections({ basic_information: { location: { city: 'Cleveland', state: 'TN' } } })
+    expect(temporalAnchorConflict(noCounty, { title: 'X', description: 'For residents of Monroe County, New York.' }, { now: NOW })?.classId).toBe('residency')
+    // …but an unqualified county is not (Monroe County also exists in Tennessee).
+    expect(temporalAnchorConflict(noCounty, rochester, { now: NOW })).toBeNull()
+    // Lists and widened areas may include the profile's county.
+    expect(temporalAnchorConflict(studentSections(), { title: 'X', description: 'Open to residents of Hamilton County, Bradley County, or Marion County.' }, { now: NOW })).toBeNull()
+    expect(temporalAnchorConflict(studentSections(), { title: 'X', description: 'For residents of Hamilton County and surrounding counties.' }, { now: NOW })).toBeNull()
+    expect(temporalAnchorConflict(studentSections(), { title: 'X', description: 'Serving residents of the Hamilton County area.' }, { now: NOW })).toBeNull()
+    // A different CITY stays neutral; the profile's own county still fits.
+    expect(temporalAnchorConflict(studentSections(), { title: 'X', description: 'For residents of Chattanooga, TN.' }, { now: NOW })).toBeNull()
+    expect(temporalAnchorEvidence(studentSections(), { title: 'X', description: 'For residents of Bradley County.' }, { now: NOW }).verdict).toBe('fit_current')
+  })
+
   it('birthplace and heritage are ORIGIN facts', () => {
     const born = studentSections({ basic_information: { birthplace: 'Chattanooga, TN' } })
     const native = { title: 'Chattanooga Natives Scholarship', description: 'For students born in Chattanooga, TN.' }
