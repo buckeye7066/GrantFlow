@@ -30,7 +30,7 @@ import {
 } from '../config/profileInstitutions.js';
 import { deriveProfileFacts, searchTermsFromFacts } from '../config/profileDerivedFacts.js';
 import { originSearchTerms } from '../config/temporalRelatability.js';
-import { declaredNeedsFrom } from './pipelinePrecision.js';
+import { declaredNeedsFrom, typeDerivedNeeds } from './pipelinePrecision.js';
 import { stampMatchConfidenceProvenance } from './matching/matchConfidenceProvenance.js';
 import { syncOpportunityContractProjection } from './opportunityRepository.js';
 import { grantsGovDetailIdFromUrl } from '../../shared/grantsGovProtocol.js';
@@ -480,6 +480,13 @@ export function profileContextToThesisInput(ctx = {}) {
     profile_route: {
       ...profileRoute,
       needs_source: needsSource,
+      // The canonical need ids a profile's BARE TYPE fields alone echo
+      // (primary_type 'nonprofit' -> 'nonprofit_ministry'), computed with NO
+      // sections so nothing the applicant actually wrote is in it. The OS
+      // reads this list to keep a solitary type-echo from disproving
+      // "nothing declared" (needs_defaulted) — carried on the thesis so
+      // crawler-os never has to import the service-side alias map.
+      type_echo_needs: typeDerivedNeeds({ ...profile, tags: [] }, {}),
       sections_considered: Object.keys(sections).sort(),
       document_count: Array.isArray(ctx.documents) ? ctx.documents.length : 0,
       organization_considered: Boolean(org),

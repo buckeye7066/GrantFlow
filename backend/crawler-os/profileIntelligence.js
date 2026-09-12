@@ -30,10 +30,6 @@ import { FARM_OCCUPATION_FLAG_KEYS, isAgricultureNaics } from '../services/eligi
 // thesis, so the declared need never produced a single query (hyperlocal-3,
 // measured on the faithful Amy intersection path 2026-09-12).
 import { CANONICAL_NEED_CATEGORIES } from '../constants/needCategories.js';
-// Only for recognizing a bare-TYPE artifact (see isTypeOnlyNeedArtifact) —
-// the SAME canonicalization pipelinePrecision.typeDerivedNeeds applies to
-// `primary_type`/`type`/`profile_type` for its own (different) purpose.
-import { normalizeNeedCategory } from '../services/profileNormalizer.js';
 
 const CANONICAL_NEED_IDS = new Set(CANONICAL_NEED_CATEGORIES.map((n) => n.id));
 
@@ -1211,11 +1207,12 @@ function applyNeedImplications(found) {
 function isTypeOnlyNeedArtifact(profile, token) {
   const defaultNeeds = profile?.profile_route?.default_needs;
   if (!Array.isArray(defaultNeeds) || defaultNeeds.length === 0) return false;
-  for (const raw of [profile?.primary_type, profile?.type, profile?.profile_type]) {
-    if (typeof raw !== 'string' || !raw.trim()) continue;
-    if (normalizeNeedCategory(raw) === token) return true;
-  }
-  return false;
+  // The bridge (crawlerOsPersistenceCore.profileContextToThesisInput) carries
+  // the canonical ids the profile's BARE TYPE fields echo as
+  // profile_route.type_echo_needs; the OS never imports the service-side
+  // alias map (legacy-crawler-ban boundary). No list => nothing to exclude.
+  const echo = profile?.profile_route?.type_echo_needs;
+  return Array.isArray(echo) && echo.map(key).includes(token);
 }
 
 function deriveNeeds(profile, blob) {
