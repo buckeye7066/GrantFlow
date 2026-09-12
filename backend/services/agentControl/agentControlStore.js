@@ -24,6 +24,7 @@
  */
 
 import crypto from 'node:crypto'
+import os from 'node:os'
 import {
   ALL_AGENTS,
   CANONICAL_ADMIN_EMAIL_DEFAULT,
@@ -34,6 +35,23 @@ import {
 
 const ID = () => crypto.randomUUID()
 const NOW = () => new Date().toISOString()
+
+// A boot id unique to THIS process. Node caches ES modules per process, so
+// every importer of this file within the same Railway container / test worker
+// sees the identical value — it is the process's identity for lock-holder
+// liveness tracking (see "Locks" section below).
+const INSTANCE_ID = crypto.randomUUID()
+export function getInstanceId() {
+  return INSTANCE_ID
+}
+
+function safeHostname() {
+  try {
+    return os.hostname()
+  } catch {
+    return null
+  }
+}
 
 let schemaCache = new WeakMap()
 
@@ -108,7 +126,20 @@ export async function ensureSchema(db) {
       owner_token TEXT,
       acquired_by TEXT,
       acquired_at ${tsType} DEFAULT ${isPostgres ? 'now()' : 'CURRENT_TIMESTAMP'},
-      expires_at ${tsType}
+      expires_at ${tsType},
+      holder_instance_id TEXT
+    )`,
+    // Lightweight per-process liveness ledger. A lock row records which
+    // instance acquired it (holder_instance_id); this table is the ONLY
+    // source of truth for whether that instance is still alive, independent
+    // of the lock's own TTL — see acquireLock()'s stale-holder takeover.
+    `CREATE TABLE IF NOT EXISTS agent_control_instances (
+      instance_id TEXT PRIMARY KEY,
+      pid INTEGER,
+      hostname TEXT,
+      started_at ${tsType} DEFAULT ${isPostgres ? 'now()' : 'CURRENT_TIMESTAMP'},
+      last_heartbeat_at ${tsType} DEFAULT ${isPostgres ? 'now()' : 'CURRENT_TIMESTAMP'},
+      updated_at ${tsType} DEFAULT ${isPostgres ? 'now()' : 'CURRENT_TIMESTAMP'}
     )`,
     `CREATE TABLE IF NOT EXISTS agent_control_stop_requests (
       id TEXT PRIMARY KEY DEFAULT (${idDefault}),
@@ -156,6 +187,22 @@ export async function ensureSchema(db) {
       await db.exec(alterOwnerToken)
     } else {
       await db.prepare(alterOwnerToken).run()
+    }
+  } catch {
+    // column already exists; ignore.
+  }
+
+  // Defensive column add for the stale-lock-reclaim holder identity. A lock
+  // table created before this fix has no `holder_instance_id`; self-heal it
+  // the same way owner_token was self-healed above.
+  const alterHolderInstanceId = isPostgres
+    ? `ALTER TABLE agent_control_locks ADD COLUMN IF NOT EXISTS holder_instance_id TEXT`
+    : `ALTER TABLE agent_control_locks ADD COLUMN holder_instance_id TEXT`
+  try {
+    if (typeof db.exec === 'function') {
+      await db.exec(alterHolderInstanceId)
+    } else {
+      await db.prepare(alterHolderInstanceId).run()
     }
   } catch {
     // column already exists; ignore.
@@ -711,12 +758,37 @@ export async function listEvents(db, runId, { limit = 200, severity = null, even
 //   - a unique `owner_token` per acquisition so a process releases only the
 //     lock it actually holds (a stale late-release can't free a successor's
 //     lock),
+//   - a `holder_instance_id` (this process's boot id) so a DIFFERENT holder
+//     process's death can be detected and reclaimed WITHOUT waiting for the
+//     lock's own TTL — see "Stale-holder reclaim" below,
 //   - structured `[agent-control][lock]` logging on every acquire / takeover /
 //     contention / release / sweep so contention is observable in prod logs.
 //
 // The acquire path is: sweep expired → INSERT (UNIQUE gives mutual exclusion)
-// → on conflict, atomically take over IFF the existing row is expired → else
-// it's genuinely held, so log contention and (optionally) back off and retry.
+// → on conflict, atomically take over IFF the existing row is expired OR its
+// holder's instance is provably dead → else it's genuinely held, so log
+// contention and (optionally) back off and retry.
+//
+// STALE-HOLDER RECLAIM (2026-09-12). A long-lived lock (e.g. Amy's 15-minute
+// scheduler lease) is renewed by its live holder every ttlMs/3
+// (schedulerLock.js heartbeat), which means a Railway redeploy/restart that
+// kills the holder mid-run can leave `expires_at` pushed minutes into the
+// future by the LAST renewal before death — the new process then reads
+// `acquire.contended` / `lock_held` and cannot start Amy for up to the
+// remaining TTL (measured in prod: up to ~40 minutes). The lock's TTL alone
+// cannot tell "still running" apart from "died right after renewing".
+//
+// `agent_control_instances` is an independent liveness ledger: every process
+// heartbeats its OWN row on a short interval (INSTANCE_HEARTBEAT_INTERVAL_MS),
+// regardless of which locks (if any) it holds. `acquireLock()` may take over a
+// contended lock — bypassing its TTL — the moment the recorded holder's
+// instance heartbeat is older than INSTANCE_STALE_MS, or the instance row does
+// not exist at all (pruned, or never registered). A LIVE holder's heartbeat is
+// always fresh, so mutual exclusion across multiple concurrently-running
+// instances is unaffected — this only shortens recovery after a holder is
+// actually gone. A lock row with no `holder_instance_id` (written before this
+// migration, or by a caller that opts out) falls back to the original
+// TTL-only behavior.
 
 // Hard ceiling fallback when a caller passes no TTL. Real callers pass a TTL
 // derived from the run's max_runtime_minutes; this is just a backstop so a
@@ -724,6 +796,22 @@ export async function listEvents(db, runId, { limit = 200, severity = null, even
 const DEFAULT_LOCK_TTL_MS = 60 * 60 * 1000 // 1h
 const MIN_LOCK_TTL_MS = 60_000             // 1m floor
 const LOCK_TOKEN = () => crypto.randomUUID()
+
+// A holder instance with no heartbeat newer than this is treated as dead for
+// takeover purposes. Chosen well below every real lock TTL (Amy's is 15m) so
+// a dead holder is reclaimed in roughly a minute instead of waiting out the
+// TTL, while comfortably clearing the heartbeat interval below with margin
+// for a slow tick or a transient DB hiccup.
+const INSTANCE_STALE_MS = 90_000 // 90s
+// How often a live process refreshes its own liveness row. Kept well under
+// INSTANCE_STALE_MS (3-4 heartbeats of slack) so a single missed tick can
+// never read as dead.
+const INSTANCE_HEARTBEAT_INTERVAL_MS = 20_000 // 20s
+// Liveness rows older than this are pruned (a boot/redeploy history's worth
+// of dead instances must not accumulate forever). Deliberately much larger
+// than INSTANCE_STALE_MS — anything this old is unambiguously gone, and any
+// lock still pointing at it is already reclaimable via the NOT EXISTS branch.
+const INSTANCE_DEAD_PRUNE_MS = 24 * 60 * 60 * 1000 // 24h
 
 /**
  * Single-line, greppable structured log for lock events (acquire / takeover /
@@ -740,6 +828,116 @@ function lockLog(event, fields = {}) {
       .join(' ')
     console.warn(`[agent-control][lock] ${event}${parts ? ` ${parts}` : ''}`)
   } catch { /* logging must never throw */ }
+}
+
+/**
+ * Upsert this (or a given) instance's liveness row. Update-then-insert so it
+ * works identically on SQLite and Postgres without relying on ON CONFLICT.
+ * Best-effort: a failure here must never block lock acquisition, so callers
+ * treat a `false` return as "heartbeat unavailable this tick", not fatal.
+ */
+export async function heartbeatInstance(db, instanceId = getInstanceId()) {
+  if (!db || !instanceId) return false
+  await ensureSchema(db)
+  const now = NOW()
+  try {
+    const res = await db
+      .prepare(`UPDATE agent_control_instances SET last_heartbeat_at = ?, updated_at = ? WHERE instance_id = ?`)
+      .run(now, now, String(instanceId))
+    if (Number(res?.changes || res?.rowCount || 0) > 0) return true
+  } catch {
+    // fall through and try to (re)create the row below
+  }
+  try {
+    await db
+      .prepare(`
+        INSERT INTO agent_control_instances (instance_id, pid, hostname, started_at, last_heartbeat_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?)
+      `)
+      .run(String(instanceId), Number.isFinite(process.pid) ? process.pid : null, safeHostname(), now, now, now)
+    return true
+  } catch {
+    // Lost an insert race (another tick/process created it first) — the row
+    // now exists; update it so the heartbeat still lands this tick.
+    try {
+      await db
+        .prepare(`UPDATE agent_control_instances SET last_heartbeat_at = ?, updated_at = ? WHERE instance_id = ?`)
+        .run(now, now, String(instanceId))
+      return true
+    } catch {
+      return false
+    }
+  }
+}
+
+/** Read one instance's liveness row (diagnostic / test use). */
+export async function getInstance(db, instanceId) {
+  if (!db || !instanceId) return null
+  try {
+    const r = await db
+      .prepare('SELECT * FROM agent_control_instances WHERE instance_id = ? LIMIT 1')
+      .get(String(instanceId))
+    return r || null
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Delete liveness rows that have not heartbeated in a very long time (default
+ * 24h) so the table cannot grow unbounded across years of redeploys. Anything
+ * this old is unambiguously dead — any lock still referencing it is already
+ * reclaimable through the "no instance row" branch of acquireLock's takeover
+ * predicate, so pruning it changes no behavior, only table size.
+ */
+export async function pruneDeadInstances(db, { olderThanMs = INSTANCE_DEAD_PRUNE_MS, now = NOW() } = {}) {
+  if (!db) return 0
+  await ensureSchema(db)
+  const nowMs = Date.parse(now)
+  if (!Number.isFinite(nowMs)) return 0
+  const cutoff = new Date(nowMs - Math.max(60_000, Number(olderThanMs) || INSTANCE_DEAD_PRUNE_MS)).toISOString()
+  try {
+    const res = await db
+      .prepare(`DELETE FROM agent_control_instances WHERE last_heartbeat_at < ?`)
+      .run(cutoff)
+    const pruned = Number(res?.changes || 0)
+    if (pruned > 0) lockLog('instance.pruned', { count: pruned })
+    return pruned
+  } catch {
+    return 0
+  }
+}
+
+// Autonomous per-process liveness heartbeat. Idempotent per process (never
+// stacks timers), independent of whether/which lock this process currently
+// holds — this is what lets a DIFFERENT process detect this one died even if
+// it wasn't mid-renewal on any particular lock at the moment it was killed.
+let instanceHeartbeatHandle = null
+
+export function startInstanceHeartbeat(db, {
+  intervalMs = INSTANCE_HEARTBEAT_INTERVAL_MS,
+  instanceId = getInstanceId(),
+  logger = console,
+} = {}) {
+  if (!db) return null
+  if (instanceHeartbeatHandle) return instanceHeartbeatHandle // idempotent — never stack timers
+  const period = Math.max(1_000, Number(intervalMs) || INSTANCE_HEARTBEAT_INTERVAL_MS)
+  heartbeatInstance(db, instanceId).catch(() => {})
+  instanceHeartbeatHandle = setInterval(() => {
+    heartbeatInstance(db, instanceId).catch((err) =>
+      logger?.warn?.('[agent-control] instance heartbeat failed:', err?.message || err),
+    )
+  }, period)
+  if (typeof instanceHeartbeatHandle?.unref === 'function') instanceHeartbeatHandle.unref()
+  lockLog('instance.heartbeat_started', { instance: instanceId, intervalMs: period })
+  return instanceHeartbeatHandle
+}
+
+export function stopInstanceHeartbeat() {
+  if (instanceHeartbeatHandle) {
+    clearInterval(instanceHeartbeatHandle)
+    instanceHeartbeatHandle = null
+  }
 }
 
 /**
@@ -776,11 +974,18 @@ export function startLockSweeper(db, { intervalMs = LOCK_SWEEP_INTERVAL_MS, logg
   if (!db) return null
   if (lockSweeperHandle) return lockSweeperHandle // idempotent — never stack timers
   const period = Math.max(MIN_LOCK_TTL_MS, Number(intervalMs) || LOCK_SWEEP_INTERVAL_MS)
-  // Reclaim anything already orphaned at boot, then on a steady cadence.
+  // Reclaim anything already orphaned at boot, then on a steady cadence. Dead
+  // instance rows are pruned on the same tick — hygiene only, never behavior:
+  // a lock still pointing at a pruned instance is already reclaimable via the
+  // "no instance row" branch of acquireLock's takeover predicate.
   sweepExpiredLocks(db).catch(() => {})
+  pruneDeadInstances(db).catch(() => {})
   lockSweeperHandle = setInterval(() => {
     sweepExpiredLocks(db).catch((err) =>
       logger?.warn?.('[agent-control] periodic lock sweep failed:', err?.message || err),
+    )
+    pruneDeadInstances(db).catch((err) =>
+      logger?.warn?.('[agent-control] periodic instance prune failed:', err?.message || err),
     )
   }, period)
   // Never keep the process alive solely for the sweeper.
@@ -797,15 +1002,22 @@ export function stopLockSweeper() {
 }
 
 /**
- * Acquire a lock with a TTL, an owner token, atomic takeover of an expired
- * holder, and bounded retry-with-backoff. Returns a lease descriptor:
+ * Acquire a lock with a TTL, an owner token, atomic takeover of an expired OR
+ * dead-holder lock, and bounded retry-with-backoff. Returns a lease descriptor:
  *
- *   { acquired: true,  ownerToken, lockName, expiresAt, tookOver? }
+ *   { acquired: true,  ownerToken, lockName, expiresAt, tookOver?, reclaimReason? }
  *   { acquired: false, reason: 'held'|'invalid_args', heldBy, expiresAt }
+ *
+ * `reclaimReason` (present only when `tookOver` is true) is `'ttl_expired'`
+ * or `'dead_holder_instance'` — see the "STALE-HOLDER RECLAIM" note above.
  *
  * `retries` is the number of EXTRA attempts after the first (so retries=5 →
  * up to 6 attempts). Backoff is exponential off `backoffMs`, capped at 5s,
  * with a little jitter to de-correlate competing workers.
+ *
+ * `instanceId` (default: this process's boot id) is recorded as the lock's
+ * holder; pass `null` to opt a call site out of instance-based reclaim
+ * entirely (the lock then behaves exactly as before — TTL-only takeover).
  */
 export async function acquireLock(db, {
   lockName,
@@ -814,19 +1026,30 @@ export async function acquireLock(db, {
   ttlMs = DEFAULT_LOCK_TTL_MS,
   retries = 0,
   backoffMs = 250,
+  instanceId = getInstanceId(),
+  staleInstanceMs = INSTANCE_STALE_MS,
 } = {}) {
   if (!db || !lockName || !controlRunId) {
     return { acquired: false, reason: 'invalid_args' }
   }
   await ensureSchema(db)
 
+  const holderInstanceId = instanceId ? String(instanceId) : null
+  // Keep THIS process's own liveness row fresh before contending for the
+  // lock, so a concurrent acquirer (or our own takeover check below) always
+  // sees an up-to-date heartbeat rather than whatever staleness happened to
+  // exist since the last periodic tick. Best-effort — never blocks acquire.
+  if (holderInstanceId) await heartbeatInstance(db, holderInstanceId).catch(() => {})
+
   const ownerToken = LOCK_TOKEN()
   const effTtl = Math.max(MIN_LOCK_TTL_MS, Number(ttlMs) || DEFAULT_LOCK_TTL_MS)
+  const effStaleMs = Math.max(1_000, Number(staleInstanceMs) || INSTANCE_STALE_MS)
   const maxAttempts = Math.max(1, Number(retries) + 1)
 
   for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
     const now = NOW()
     const expiresAt = new Date(Date.now() + effTtl).toISOString()
+    const staleCutoff = new Date(Date.now() - effStaleMs).toISOString()
 
     // 1. Reclaim any expired lock so a crashed/restarted holder never wedges us.
     await sweepExpiredLocks(db, { now })
@@ -836,30 +1059,62 @@ export async function acquireLock(db, {
       await db
         .prepare(`
           INSERT INTO agent_control_locks
-            (id, lock_name, control_run_id, owner_token, acquired_by, acquired_at, expires_at)
-          VALUES (?, ?, ?, ?, ?, ?, ?)
+            (id, lock_name, control_run_id, owner_token, acquired_by, acquired_at, expires_at, holder_instance_id)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         `)
-        .run(ID(), String(lockName), String(controlRunId), ownerToken, acquiredBy || null, now, expiresAt)
-      lockLog('acquire.ok', { lock: lockName, run: controlRunId, token: ownerToken, attempt })
+        .run(ID(), String(lockName), String(controlRunId), ownerToken, acquiredBy || null, now, expiresAt, holderInstanceId)
+      lockLog('acquire.ok', { lock: lockName, run: controlRunId, token: ownerToken, attempt, instance: holderInstanceId })
       return { acquired: true, ownerToken, lockName, expiresAt }
     } catch {
-      // Row already exists — fall through to the expired-takeover path.
+      // Row already exists — fall through to the takeover path.
     }
 
-    // 3. Atomic takeover IFF the existing row is expired. This closes the race
-    //    where the sweep above deleted nothing because another worker had just
-    //    re-inserted, or the holder's deadline lapsed between sweep and insert.
+    // Read the current holder BEFORE attempting takeover, purely so a
+    // successful takeover below can log WHY it was allowed (TTL expiry vs a
+    // dead holder instance) without a second query.
+    const existingHolder = await getLock(db, lockName)
+
+    // 3. Atomic takeover IFF the existing row is expired BY TTL, OR its
+    //    holder's instance is provably dead (no heartbeat newer than
+    //    staleCutoff, or no instance row at all). This closes the race where
+    //    the sweep above deleted nothing because another worker had just
+    //    re-inserted, or the holder's deadline/liveness lapsed between sweep
+    //    and insert. A NULL holder_instance_id (pre-migration/opted-out rows)
+    //    can only be reclaimed via TTL, matching the original behavior.
     try {
       const res = await db
         .prepare(`
           UPDATE agent_control_locks
-             SET control_run_id = ?, owner_token = ?, acquired_by = ?, acquired_at = ?, expires_at = ?
-           WHERE lock_name = ? AND expires_at IS NOT NULL AND expires_at < ?
+             SET control_run_id = ?, owner_token = ?, acquired_by = ?, acquired_at = ?, expires_at = ?, holder_instance_id = ?
+           WHERE lock_name = ?
+             AND (
+               (expires_at IS NOT NULL AND expires_at < ?)
+               OR (
+                 holder_instance_id IS NOT NULL
+                 AND NOT EXISTS (
+                   SELECT 1 FROM agent_control_instances ai
+                    WHERE ai.instance_id = agent_control_locks.holder_instance_id
+                      AND ai.last_heartbeat_at >= ?
+                 )
+               )
+             )
         `)
-        .run(String(controlRunId), ownerToken, acquiredBy || null, now, expiresAt, String(lockName), now)
+        .run(
+          String(controlRunId), ownerToken, acquiredBy || null, now, expiresAt, holderInstanceId,
+          String(lockName), now, staleCutoff,
+        )
       if (Number(res?.changes || 0) > 0) {
-        lockLog('acquire.takeover', { lock: lockName, run: controlRunId, token: ownerToken, attempt })
-        return { acquired: true, ownerToken, lockName, expiresAt, tookOver: true }
+        const ttlExpired = !!(existingHolder?.expires_at && existingHolder.expires_at < now)
+        const reclaimReason = ttlExpired ? 'ttl_expired' : 'dead_holder_instance'
+        lockLog('acquire.takeover', {
+          lock: lockName,
+          run: controlRunId,
+          token: ownerToken,
+          attempt,
+          reason: reclaimReason,
+          dead_instance: reclaimReason === 'dead_holder_instance' ? (existingHolder?.holder_instance_id || 'unknown') : undefined,
+        })
+        return { acquired: true, ownerToken, lockName, expiresAt, tookOver: true, reclaimReason }
       }
     } catch {
       // Treat any takeover failure as "still contended" and let retry/backoff handle it.

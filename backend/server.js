@@ -3403,8 +3403,13 @@ if (process.env.NODE_ENV !== 'test') {
     // idle (acquireLock already sweeps, but only when a run is attempted).
     (async () => {
       try {
-        const { startLockSweeper } = await import('./services/agentControl/agentControlStore.js')
+        const { startLockSweeper, startInstanceHeartbeat } = await import('./services/agentControl/agentControlStore.js')
         startLockSweeper(db, { logger: console })
+        // Per-process liveness heartbeat: lets a LATER process detect that
+        // THIS one died (redeploy/restart) and reclaim any lock it held
+        // without waiting out the lock's own TTL. See agentControlStore.js
+        // "STALE-HOLDER RECLAIM".
+        startInstanceHeartbeat(db, { logger: console })
       } catch (sweepErr) {
         console.warn('[agent-control] lock sweeper failed to start:', sweepErr?.message || sweepErr)
       }
