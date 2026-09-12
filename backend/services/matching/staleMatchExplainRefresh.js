@@ -17,6 +17,7 @@ import {
   fundingTruthProofFrom,
   refreshFourTruthProof,
   failedFourTruths,
+  hasPositiveFourTruthProof,
 } from '../../config/fundingTruthPolicy.js'
 import { isFundingResource } from './fundingSourcePresentation.js'
 
@@ -271,6 +272,34 @@ export async function runStaleMatchExplainRefresh(db, opts = {}) {
       }
     }
 
+    // A SUPPRESSED verdict (one of the guards above refused to apply the fresh
+    // recompute) must never leave behind a WEAKER proof than what is already on
+    // record. `match_decision` stays exactly as stored below (COALESCE keeps
+    // it), so `match_explain_json` must keep matching that decision too.
+    // Persisting the fresh (possibly failing) `refreshedProof` here while the
+    // decision column still reads 'accept' produces exactly the shape
+    // `persisted_match_decision_integrity` deletes on the very next boot-ladder
+    // step: an incomplete/in-flight signal-derivation recompute (or any other
+    // transient disagreement) would then PERMANENTLY DESTROY a row this exact
+    // write-policy exists to protect — proven in prod 2026-09-12: a
+    // catalog-rescore-link ACCEPT for Axiom BioLabs / NSF "Computational and
+    // Data-Enabled Science and Engineering", independently adjudicated CORRECT,
+    // was silently corrupted to a failing proof by this drain (ACCEPT_ONLY
+    // policy nulled the decision write but not the proof write) and deleted
+    // moments later by the integrity net, with no negative verdict ever
+    // actually applied to `match_decision`. Only a determined negative verdict
+    // — one this policy actually agrees to WRITE — may downgrade the proof.
+    let explainToPersist = explain
+    if (verdictToWrite === null && storedDecision === 'accept') {
+      explanationToWrite = null
+      const previousWasPositive = previousProof
+        ? hasPositiveFourTruthProof({ four_truth_proof: previousProof })
+        : false
+      if (previousWasPositive) {
+        explainToPersist = { ...explain, four_truth_proof: previousProof }
+      }
+    }
+
     try {
       const res = await db.prepare(
         `UPDATE profile_opportunity_matches
@@ -283,7 +312,7 @@ export async function runStaleMatchExplainRefresh(db, opts = {}) {
           WHERE id = ?
             AND matcher_version = ?`,
       ).run(
-        JSON.stringify(explain),
+        JSON.stringify(explainToPersist),
         scoreToWrite,
         verdictToWrite,
         explanationToWrite,

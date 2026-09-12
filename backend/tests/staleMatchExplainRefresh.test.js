@@ -276,6 +276,36 @@ describe('four-truth proof survives the drain', () => {
     expect(row.match_explanation).toMatch(/no four-truth proof on record/)
   })
 
+  it('an ACCEPT-ONLY lane (catalog-rescore-link) keeps its PREVIOUS passing proof, not a fresh failing one, when the write-policy refuses to downgrade — and survives the integrity net (regression: Axiom BioLabs NSF class, 2026-09-12)', async () => {
+    const raw = makeDb()
+    seedPair(raw, { matcherVersion: 'catalog-rescore-link', explain: PROVEN })
+    const db = wrap(raw)
+    // Engine still calls the pair ACCEPT, but this recompute finds no matched
+    // need — the exact shape a transient/in-flight signal-derivation
+    // disagreement produces WITHOUT ever writing a negative verdict to
+    // match_decision (ACCEPT_ONLY_VERSIONS refuses the downgrade below).
+    const summary = await runStaleMatchExplainRefresh(db, {
+      pairBudget: 10,
+      writeEnabled: true,
+      deps: { thesisNeedsDefaulted: async () => false, computeMatchDecision: stubProvingEngine({ matchedNeeds: [] }) },
+    })
+    expect(summary.refreshed).toBe(1)
+    const row = raw.prepare('SELECT match_decision, match_explanation, match_explain_json FROM profile_opportunity_matches WHERE id = ?').get('m1')
+    // The write-policy preserves the stored ACCEPT decision...
+    expect(row.match_decision).toBe('accept')
+    // ...so the persisted proof must still be POSITIVE, matching that decision
+    // — never the fresh failing recompute the policy just refused to apply.
+    const explain = JSON.parse(row.match_explain_json)
+    expect(explain.four_truth_proof.all_passed).toBe(true)
+    expect(explain.four_truth_proof).toEqual(PROVEN.four_truth_proof)
+    // The row must SURVIVE the very next integrity sweep in the boot ladder,
+    // not be silently deleted for a proof this drain itself corrupted.
+    const { normalizePersistedMatchDecisionIntegrity } = await import('../services/matching/matchDecisionIntegrity.js')
+    await normalizePersistedMatchDecisionIntegrity(db, { profileId: 'p1' })
+    const survivor = raw.prepare('SELECT id FROM profile_opportunity_matches WHERE id = ?').get('m1')
+    expect(survivor).toBeTruthy()
+  })
+
   it('a linker lane without proof keeps its documented behaviour (ACCEPT written, no proof invented)', async () => {
     const raw = makeDb()
     seedPair(raw, { matcherVersion: 'institution-link', explain: { gate: 'attendance', institution: 'MTSU' } })
