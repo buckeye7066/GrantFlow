@@ -881,23 +881,30 @@ describe('loadGapSeedPagesForProfile', () => {
 describe('markGapCandidateOutcomes', () => {
   it('records what the GATES decided, not what we attempted', async () => {
     // The honesty bar: "we seeded 2 pages" must never be reported as "we added
-    // 2 sources" — the read-green-while-doing-nothing class.
+    // 2 sources" — the read-green-while-doing-nothing class. And its mirror
+    // (2026-09-12): "not adopted" is only `gated_out` when a gate verdict is
+    // ON RECORD — during the dead-LLM fortnight every seed was "gated_out"
+    // without a single gate having seen it.
     const db = makeDb()
     seedQueue(db, [
       { url: 'https://good.org/x', profile_id: 'gilbert', status: 'candidate' },
       { url: 'https://refused.org/x', profile_id: 'gilbert', status: 'candidate' },
+      { url: 'https://unread.org/x', profile_id: 'gilbert', status: 'candidate' },
     ])
     const res = await markGapCandidateOutcomes(db, {
-      offeredUrls: ['https://good.org/x', 'https://refused.org/x'],
+      offeredUrls: ['https://good.org/x', 'https://refused.org/x', 'https://unread.org/x'],
       adoptedUrls: ['https://good.org/x'],
       profileId: 'gilbert',
+      seedOutcomes: [{ url: 'https://refused.org/x', outcome: 'gate_rejected', gate: 'reality', reason: 'not_real_funding_page' }],
     })
     // toMatchObject, not toEqual: the return grew `conditions_covered` when the
     // adapter-wishlist consumer began crediting adopted condition sources.
-    expect(res).toMatchObject({ adopted: 1, gated_out: 1 })
+    expect(res).toMatchObject({ adopted: 1, gated_out: 1, not_evaluated: 1 })
     const q = await readWebParityGapQueue(db)
     expect(q.find((c) => c.url === 'https://good.org/x').status).toBe('adopted')
-    expect(q.find((c) => c.url === 'https://refused.org/x').status).toBe('gated_out')
+    expect(q.find((c) => c.url === 'https://refused.org/x')).toMatchObject({ status: 'gated_out', gate: 'reality' })
+    // No verdict on record → not a verdict. Stays eligible for a later look.
+    expect(q.find((c) => c.url === 'https://unread.org/x').status).toBe('not_evaluated:lane_ledger_unavailable')
   })
 
   it('never touches another profile’s candidates', async () => {
@@ -928,6 +935,6 @@ describe('markGapCandidateOutcomes', () => {
 
   it('is a no-op when nothing was offered', async () => {
     const db = makeDb()
-    expect(await markGapCandidateOutcomes(db, { offeredUrls: [] })).toEqual({ adopted: 0, gated_out: 0 })
+    expect(await markGapCandidateOutcomes(db, { offeredUrls: [] })).toEqual({ adopted: 0, gated_out: 0, not_evaluated: 0 })
   })
 })

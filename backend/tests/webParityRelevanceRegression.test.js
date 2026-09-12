@@ -473,14 +473,23 @@ describe('web parity relevance regression', () => {
     expect(result).toMatchObject({
       appended: 1,
       refreshed: 1,
-      pruned: 1,
+      retained_not_refound: 1,
       scoped_profiles: 1,
-      total: 5,
+      total: 6,
     })
+    expect(result).not.toHaveProperty('pruned')
 
     const queue = await readWebParityGapQueue(db)
     const urls = queue.map((entry) => entry.url)
-    expect(urls).not.toContain('https://www.grants.gov/')
+    // webparity-7 (2026-09-12): a pending candidate the run did not re-find is
+    // RETAINED with a not-refound record — it was never offered to the gates,
+    // so deleting it lost the owner rule's evidence and its disposition.
+    expect(urls).toContain('https://www.grants.gov/')
+    expect(queue.find((entry) => entry.url === 'https://www.grants.gov/')).toMatchObject({
+      status: 'candidate',
+      not_refound_at: newAt,
+      not_refound_runs: 1,
+    })
     expect(urls).toContain('https://terminal.example/adopted')
     expect(urls).toContain('https://condition.example/epilepsy')
     expect(urls).toContain('https://outside.example/pending')
@@ -492,7 +501,9 @@ describe('web parity relevance regression', () => {
       title: 'Refreshed direct program',
       status: 'candidate',
       source: 'web_parity_benchmark',
+      first_found_at: oldAt,
       found_at: newAt,
+      last_refound_at: newAt,
     })
   })
 })

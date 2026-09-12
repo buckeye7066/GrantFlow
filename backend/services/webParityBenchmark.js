@@ -53,13 +53,16 @@
 import { searchWeb as defaultSearchWeb } from './shared/webSearchEngine.js'
 import { buildWebQueries } from '../crawler-os/webQueries.js'
 import { titleIdentityKey } from '../crawler-os/contract.js'
+import { canonicalizeUrl, isTrackingParam } from '../crawler-os/urlCanonical.js'
 import {
   isSearchEngineUrl,
   isPlaceholderUrl,
   isNonActionableUrl,
   extractHostname,
 } from '../config/urlRules.js'
+import { isPointerKind } from '../config/opportunityKindClasses.js'
 import { detectForeignOpportunity } from '../config/opportunityJurisdiction.js'
+import { buildMetricEnvelope } from './observability/metricEnvelope.js'
 import { createLogger } from '../utils/logger.js'
 
 const log = createLogger('services:webParityBenchmark')
@@ -100,7 +103,13 @@ export const STALE_MS = 48 * 60 * 60 * 1000
 // hundred-result profile. It also reserves `fleet_parity` for a complete,
 // denominator-qualified measurement; raw per-profile observations remain in
 // `per_profile`/`scored_profiles_parity` when the sample is too small.
-export const BENCHMARK_SEMANTICS_VERSION = 3
+// v4 (2026-09-12) changes IDENTITY and ELIGIBILITY on both sides: one shared
+// URL normalizer (tracking/locale/session params, default port, www, scheme,
+// fragment, trailing slash — webparity-1), stored POINTER rows no longer count
+// as GrantFlow "found funding" (webparity-2), identity is checked before the
+// funding-signal text heuristic (webparity-9). A v3 run is not a valid
+// regression comparator for a v4 run; Sam's trailing median restarts.
+export const BENCHMARK_SEMANTICS_VERSION = 4
 
 /**
  * Tiny SERP samples move by dozens of points when one result rotates. Require
@@ -124,8 +133,74 @@ export const GAP_QUEUE_CAP = 200
  */
 export const GAP_SEED_LIMIT_PER_RUN = 8
 
+/**
+ * A seed the gates could not EVALUATE (fetch failed, extraction returned
+ * nothing because the LLM route was dead) is not a verdict. It stays eligible
+ * for re-seeding, but bounded: after this many offers without a verdict it is
+ * parked as `not_evaluated:exhausted` (visible, terminal for seeding) so a
+ * permanently unreadable page is not re-fetched nightly forever.
+ */
+export const GAP_SEED_MAX_OFFERS = 3
+
+/** A not-evaluated seed is re-offered only after this cooldown (the LLM route needs time to heal). */
+export const NOT_EVALUATED_RESEED_COOLDOWN_MS = 24 * 60 * 60 * 1000
+
 /** Web-only finds carried per profile in `latest` (evidence + owner report). */
 const WEB_ONLY_TOP_CAP = 20
+
+/**
+ * Bound on the per-result disposition ledger persisted per profile. The web
+ * session is itself bounded to MAX_QUERIES_PER_PROFILE × MAX_RESULTS_PER_QUERY
+ * results, so this covers EVERY web-only result of a full session.
+ */
+const WEB_ONLY_DISPOSITION_CAP = MAX_QUERIES_PER_PROFILE * MAX_RESULTS_PER_QUERY
+
+/**
+ * The closed vocabulary of per-web-only-result dispositions (issue 4, 2026-09-12).
+ * Exactly ONE is persisted per web-only result and mirrored onto the gap-queue
+ * candidate. Order here is documentary; precedence lives in disposeWebOnlyHit.
+ *
+ *   never_generated_capable_query      no planned lane query could have produced the hit
+ *   generated_not_executed_cap         planned, but the lane skipped it (budget) or the hit sits
+ *                                      at a rank / query position the lane structurally never reaches
+ *   provider_failure                   the lane's own search for that query errored / was unavailable
+ *   fetch_failed                       the lane tried the page and could not fetch it
+ *   extraction_failed                  the page was fetched, extraction produced nothing
+ *   canonical_duplicate                GrantFlow already holds the program under another URL
+ *   correctly_rejected_at_gate:<gate>  a recorded gate verdict refused it (reality|eligibility|need|apply_target)
+ *   incorrectly_lost_qualified_source  none of the above: the true recall gap (queued for seeding)
+ *   lane_ledger_unavailable            the lane's per-run ledger is absent, so the miss cannot be attributed
+ */
+export const GATE_NAMES = Object.freeze(['reality', 'eligibility', 'need', 'apply_target'])
+export const WEB_ONLY_DISPOSITIONS = Object.freeze([
+  'never_generated_capable_query',
+  'generated_not_executed_cap',
+  'provider_failure',
+  'fetch_failed',
+  'extraction_failed',
+  'canonical_duplicate',
+  ...GATE_NAMES.map((gate) => `correctly_rejected_at_gate:${gate}`),
+  'incorrectly_lost_qualified_source',
+  'lane_ledger_unavailable',
+])
+
+/**
+ * The discovery lane's breadth (crawler-os/webLane.js reads the same env names
+ * with the same defaults). The benchmark needs them to say which SERP ranks /
+ * query positions the lane can structurally never reach (webparity-6); a lane
+ * ledger that records its own values overrides these.
+ */
+function envInt(raw, fallback) {
+  const n = Number(raw)
+  return Number.isFinite(n) && n > 0 ? Math.floor(n) : fallback
+}
+export function webLaneDefaults(env = process.env) {
+  return {
+    maxQueries: envInt(env.WEB_LANE_MAX_QUERIES, 28),
+    resultsPerQuery: envInt(env.WEB_LANE_RESULTS_PER_QUERY, 8),
+    maxPages: envInt(env.WEB_LANE_MAX_PAGES, 44),
+  }
+}
 
 /**
  * Paywalled grant directories / listicle farms: a hit on these is the SEARCH
@@ -380,15 +455,62 @@ export function isWebParityBenchmarkEnabled() {
 // Pure helpers — identity + filters + parity math
 // ─────────────────────────────────────────────────────────────────────────────
 
-/** Normalized URL identity: protocol/www/hash/trailing-slash insensitive. */
+/**
+ * Query params that never distinguish two real pages: locale selectors and
+ * server session ids. The tracking families (utm_*, gclid, fbclid, mc_*, …)
+ * come from the SHARED `isTrackingParam` in crawler-os/urlCanonical.js — the
+ * same allowlist-to-strip the discovery lane uses for its own SERP dedupe, so
+ * the benchmark's web side and the lane agree on which SERP URLs are one page.
+ * Everything else is PRESERVED: `?id=A` vs `?id=B` are two programs, and
+ * collapsing them would manufacture overlap (a parity gain the owner rules
+ * forbid). That is also why the catalog's `normalizeUrlForId` (which drops
+ * the WHOLE query) is deliberately not used verbatim here: it is the right
+ * last-resort tier for a title-less catalog row, but too coarse to compare a
+ * SERP hit against a stored URL without inventing coverage.
+ */
+const IDENTITY_FREE_PARAMS = new Set([
+  'ref', 'referrer', 'referer',
+  'lang', 'locale', 'hl', 'language',
+  'sessionid', 'session_id', 'phpsessid', 'jsessionid', 'sid', 'cfid', 'cftoken',
+])
+const IDENTITY_FREE_PREFIXES = ['mc_']
+
+function isIdentityFreeParam(name) {
+  const n = String(name || '').toLowerCase()
+  if (!n) return true
+  if (isTrackingParam(n) || IDENTITY_FREE_PARAMS.has(n)) return true
+  return IDENTITY_FREE_PREFIXES.some((prefix) => n.startsWith(prefix))
+}
+
+/**
+ * THE URL identity used on BOTH sides of the benchmark (stored rows, SERP hits,
+ * run-level dedupe, gap-queue keys, outcome matching, the replay script):
+ * scheme, `www.`, default port, fragment, trailing slash, tracking params
+ * (shared allowlist), locale/session params dropped; host lowercased;
+ * remaining identity-bearing params kept in sorted order. Built on the shared
+ * `canonicalizeUrl` so it can never drift from the lane's own dedupe.
+ */
 export function normalizeUrlKey(url) {
-  const s = String(url || '').trim().toLowerCase()
-  if (!/^https?:\/\//.test(s)) return ''
-  const key = s
-    .replace(/^https?:\/\//, '')
-    .replace(/^www\./, '')
-    .replace(/#.*$/, '')
-    .replace(/\/+$/, '')
+  const raw = String(url || '').trim()
+  if (!/^https?:\/\//i.test(raw)) return ''
+  const canon = canonicalizeUrl(raw)
+  if (!canon) return ''
+  let parsed
+  try {
+    parsed = new URL(canon)
+  } catch {
+    return ''
+  }
+  const host = parsed.hostname.toLowerCase().replace(/^www\./, '')
+  // `URL.port` is '' for the scheme's default port already; a non-default port is identity.
+  const port = parsed.port ? `:${parsed.port}` : ''
+  const path = parsed.pathname.replace(/\/+$/, '').toLowerCase()
+  const params = [...parsed.searchParams.entries()]
+    .filter(([name]) => !isIdentityFreeParam(name))
+    .map(([name, value]) => [name.toLowerCase(), String(value).toLowerCase()])
+    .sort(([a, av], [b, bv]) => (a < b ? -1 : a > b ? 1 : av < bv ? -1 : av > bv ? 1 : 0))
+  const query = params.length ? `?${params.map(([name, value]) => `${name}=${value}`).join('&')}` : ''
+  const key = `${host}${port}${path}${query}`
   // SSA publishes the same SSDI/SSI program under a program landing page and
   // an application landing page. Search favors `/applyfordisability`; the
   // canonical source registry uses `/disability`. Treating them as unrelated
@@ -409,17 +531,27 @@ export function normalizeUrlKey(url) {
  */
 export function isRealFundingHit(hit) {
   const url = String(hit?.url || '').trim()
-  if (!/^https?:\/\//i.test(url)) return false
-  if (isSearchEngineUrl(url) || isPlaceholderUrl(url) || isNonActionableUrl(url)) return false
-  const domain = extractHostname(url)
-  if (
-    !domain ||
-    [...AGGREGATOR_NOISE_DOMAINS].some(
-      (noiseDomain) => domain === noiseDomain || domain.endsWith('.' + noiseDomain),
-    )
-  ) return false
+  if (isExcludedNoiseUrl(url)) return false
   const text = `${hit?.title ?? ''} ${hit?.snippet ?? ''} ${url}`
   return FUNDING_SIGNAL_RE.test(text)
+}
+
+/**
+ * The URL-shape exclusions of isRealFundingHit WITHOUT the funding-signal text
+ * heuristic: non-http, search-engine results pages, placeholders, social /
+ * non-actionable hosts, grant-aggregator noise. These are applied on BOTH
+ * sides of the ledger (an aggregator page is not an award anywhere); the text
+ * heuristic is applied only to a purported NEW miss (webparity-9). Pure.
+ */
+export function isExcludedNoiseUrl(url) {
+  const s = String(url || '').trim()
+  if (!/^https?:\/\//i.test(s)) return true
+  if (isSearchEngineUrl(s) || isPlaceholderUrl(s) || isNonActionableUrl(s)) return true
+  const domain = extractHostname(s)
+  if (!domain) return true
+  return [...AGGREGATOR_NOISE_DOMAINS].some(
+    (noiseDomain) => domain === noiseDomain || domain.endsWith('.' + noiseDomain),
+  )
 }
 
 /** parity points (0–100). No measured web denominator is unscored, not 100. */
@@ -430,12 +562,25 @@ export function parityScore(overlapCount, webOnlyCount) {
   return Math.round((o / (o + w)) * 1000) / 10
 }
 
-/** First profile need mentioned in the hit's text (honest attribution; may be null). */
+/**
+ * First profile need the hit's text actually STATES (honest attribution; may
+ * be null). Token-bounded, never a bare substring — `ssi` sat inside
+ * "assistance" and mis-attributed every assistance page to an SSI need, and
+ * that label travelled onto the seed snippet and condition-coverage credit
+ * (webparity-8). Same three rungs as needMatchesHit: whole phrase, semantic
+ * rule, distinctive token.
+ */
 function needForHit(hit, needs = []) {
-  const text = `${hit?.title ?? ''} ${hit?.snippet ?? ''}`.toLowerCase()
+  const text = normalizedHitText({ title: hit?.title, snippet: hit?.snippet, url: '' })
+  const haystack = ` ${text.toLowerCase().replace(/[^a-z0-9]+/g, ' ').replace(/\s+/g, ' ').trim()} `
   for (const n of Array.isArray(needs) ? needs : []) {
-    const h = String(n || '').replace(/_/g, ' ').trim().toLowerCase()
-    if (h && text.includes(h)) return h
+    const need = String(n || '').replace(/[_-]+/g, ' ').trim().toLowerCase()
+    if (!need) continue
+    const phrase = need.replace(/[^a-z0-9]+/g, ' ').replace(/\s+/g, ' ').trim()
+    if (phrase.length >= 3 && haystack.includes(` ${phrase} `)) return need
+    if (NEED_SEMANTIC_RULES.some((rule) => rule.need.test(need) && rule.hit.test(text))) return need
+    const tokens = need.split(/[^a-z0-9]+/).filter((token) => token.length >= 4 && !NEED_TOKEN_STOPWORDS.has(token))
+    if (tokens.some((token) => new RegExp('\\b' + token + '\\b', 'i').test(text))) return need
   }
   return null
 }
@@ -484,63 +629,108 @@ function titleSponsorIdentityMatches(storedRow, hit, hitTitleKey, hitDomain) {
  */
 export function classifyWebResults(webHits, storedMatches, { needs = [], state = null, applicantTypes = [] } = {}) {
   const stored = Array.isArray(storedMatches) ? storedMatches : []
-  const storedUrlKeys = new Set()
   const storedRows = stored.map((m) => {
     const urls = [m.application_url, m.apply_url, m.source_url, m.final_url, m.evidence_url]
     const urlKeys = urls.map(normalizeUrlKey).filter(Boolean)
     const domains = urls.map(extractHostname).filter(Boolean)
     const titleKey = titleIdentityKey(m.title) || ''
-    for (const k of urlKeys) storedUrlKeys.add(k)
-    return { urlKeys: new Set(urlKeys), domains: new Set(domains), titleKey, sponsor: m.sponsor }
+    // A POINTER (directory / referral / school_portal / past_award_intel) is
+    // not "found funding": its contract is to send you somewhere else, and the
+    // locator rule already forbids it an award. It is kept as EVIDENCE (the
+    // catalog has judged the page) but never as coverage (webparity-2).
+    const kindRaw = [m.opportunity_kind, m.result_kind, m.kind].find((value) => value !== null && value !== undefined && String(value).trim() !== '')
+    const pointer = isPointerKind(kindRaw)
+    return {
+      id: m.id ?? null,
+      urlKeys: new Set(urlKeys),
+      domains: new Set(domains),
+      titleKey,
+      sponsor: m.sponsor,
+      pointer,
+      kind: pointer ? String(kindRaw).trim().toLowerCase() : null,
+    }
   })
+  const storedPointerRows = storedRows.filter((row) => row.pointer).length
 
   const overlap = []
   const web_only = []
   const seen = new Set()
   const coveredStored = new Set()
+  const dropped = { noise_url: 0, out_of_state: 0, duplicate: 0, no_funding_signal: 0, not_direct_funding: 0 }
   let webReal = 0
 
   for (const hit of Array.isArray(webHits) ? webHits : []) {
-    if (!isRealFundingHit(hit)) continue
-    // Another state's government portal is not a miss for THIS profile.
-    if (isOutOfStateGovHit(hit.url, state)) continue
+    // URL-shape exclusions apply to BOTH sides: a search-results page, a
+    // placeholder, a social host or an aggregator is not an award anywhere.
+    if (isExcludedNoiseUrl(hit?.url)) { dropped.noise_url += 1; continue }
+    // Another state's government portal is ineligible for THIS profile on
+    // either side — counting it as overlap would admit an ineligible program.
+    if (isOutOfStateGovHit(hit.url, state)) { dropped.out_of_state += 1; continue }
     const urlKey = normalizeUrlKey(hit.url)
-    if (!urlKey || seen.has(urlKey)) continue
+    if (!urlKey) { dropped.noise_url += 1; continue }
+    if (seen.has(urlKey)) { dropped.duplicate += 1; continue }
     seen.add(urlKey)
 
     const titleKey = titleIdentityKey(hit.title) || ''
     const domain = extractHostname(hit.url)
     const item = {
       url: String(hit.url).trim(),
+      canonical_key: urlKey,
       title: String(hit.title || '').trim().slice(0, 200),
       domain,
       need: needForHit(hit, needs),
     }
+    // Provenance the run attaches when it collects the SERP (query text,
+    // 0-based query index, 1-based rank) — the disposition machinery needs it
+    // to say whether the lane could ever have reached this hit (webparity-6).
+    if (Number.isFinite(Number(hit.query_index))) item.query_index = Number(hit.query_index)
+    if (Number.isFinite(Number(hit.rank))) item.rank = Number(hit.rank)
+    if (hit.query) item.query = String(hit.query)
 
+    // Identity FIRST (webparity-9): whether GrantFlow already holds the page
+    // is a fact about the URL/title, not about how the SERP snippet reads.
     const matchingStoredIndexes = []
+    const pointerMatches = []
     storedRows.forEach((row, index) => {
-      if (
-        row.urlKeys.has(urlKey) ||
-        titleSponsorIdentityMatches(row, hit, titleKey, domain)
-      ) matchingStoredIndexes.push(index)
+      const matches = row.urlKeys.has(urlKey) || titleSponsorIdentityMatches(row, hit, titleKey, domain)
+      if (!matches) return
+      if (row.pointer) pointerMatches.push(row)
+      else matchingStoredIndexes.push(index)
     })
-    const covers = storedUrlKeys.has(urlKey) || matchingStoredIndexes.length > 0
+    const covers = matchingStoredIndexes.length > 0
 
     // A confirmed overlap is evidence GrantFlow already covers the web page,
     // even when the search snippet is sparse. Only a purported NEW miss must
-    // prove that it is relevant and actionable for this profile.
-    if (!covers && !isBenchmarkDirectFundingHit(hit, { needs, applicantTypes })) continue
+    // carry a funding signal and prove it is relevant and actionable for this
+    // profile. A hit matching ONLY pointer rows is classified exactly as if
+    // those rows did not exist — admitting a directory can never move parity.
+    if (!covers) {
+      if (!isRealFundingHit(hit)) { dropped.no_funding_signal += 1; continue }
+      if (!isBenchmarkDirectFundingHit(hit, { needs, applicantTypes })) { dropped.not_direct_funding += 1; continue }
+    }
     webReal += 1
 
     if (covers) {
       overlap.push(item)
       for (const index of matchingStoredIndexes) coveredStored.add(index)
     } else {
+      if (pointerMatches.length) {
+        const [first] = pointerMatches
+        item.catalog_pointer = { kind: first.kind, opportunity_id: first.id, matches: pointerMatches.length }
+      }
       web_only.push(item)
     }
   }
 
-  return { overlap, web_only, grantflow_only: storedRows.length - coveredStored.size, web_real: webReal }
+  const storedFundingRows = storedRows.length - storedPointerRows
+  return {
+    overlap,
+    web_only,
+    grantflow_only: Math.max(0, storedFundingRows - coveredStored.size),
+    web_real: webReal,
+    stored_pointer_rows: storedPointerRows,
+    dropped,
+  }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -591,10 +781,37 @@ export async function readWebParityGapQueue(db) {
  * drive through upsertFundingOpportunity — this module never inserts to the
  * catalog itself.
  */
+const NOT_EVALUATED_PREFIX = 'not_evaluated:'
+const NOT_EVALUATED_EXHAUSTED = `${NOT_EVALUATED_PREFIX}exhausted`
+
+function normalizeGapStatus(value) {
+  return String(value || 'candidate').trim().toLowerCase() || 'candidate'
+}
+
+function isNotEvaluatedGapStatus(value) {
+  return normalizeGapStatus(value).startsWith(NOT_EVALUATED_PREFIX)
+}
+
+/**
+ * Terminal = the gates have SPOKEN (adopted / gated_out / dismissed) or the
+ * page has had every bounded chance (`not_evaluated:exhausted`). A plain
+ * `not_evaluated:<class>` is NOT terminal: the page was never judged, only
+ * unreadable at the time, and stays eligible for re-seeding after a cooldown.
+ */
 function isTerminalGapStatus(value) {
-  return new Set(['adopted', 'gated_out', 'dismissed']).has(
-    String(value || '').trim().toLowerCase(),
-  )
+  const status = normalizeGapStatus(value)
+  return status === 'adopted' || status === 'gated_out' || status === 'dismissed' || status === NOT_EVALUATED_EXHAUSTED
+}
+
+/**
+ * Pending = the gates have NOT spoken: a fresh `candidate`, or a bounded
+ * `not_evaluated:<class>` page still eligible for re-seeding. THE read-side
+ * predicate for "how much of the owner rule's backlog is open" (admin status,
+ * seed loader) — never re-derive it from a status string at a call site.
+ */
+export function isPendingGapStatus(value) {
+  const status = normalizeGapStatus(value)
+  return status === 'candidate' || (isNotEvaluatedGapStatus(status) && !isTerminalGapStatus(status))
 }
 
 function gapCandidateKey(candidate) {
@@ -607,16 +824,21 @@ function gapCandidateKey(candidate) {
  * Refresh the benchmark-owned pending queue to the latest scoped run.
  *
  * Terminal decisions and candidates owned by other producers are retained.
- * Pending web-parity candidates that disappeared from the latest run are pruned,
- * preventing generic portals and previously filtered noise from being re-seeded
- * forever. Scoped profile ids make partial/manual runs non-destructive.
+ * A pending web-parity candidate that the latest run did NOT re-find is also
+ * RETAINED (with `not_refound_at` / `not_refound_runs` bookkeeping): it was
+ * never handed to the gates, so deleting it lost the owner rule's evidence
+ * and the disposition (webparity-7 — the SERP rotates nightly and seeding
+ * consumes at most GAP_SEED_LIMIT_PER_RUN per discovery run). "Re-seeded
+ * forever" is prevented by the OUTCOME side instead: every offered candidate
+ * becomes terminal or bounded `not_evaluated`. Scoped profile ids keep
+ * partial/manual runs from touching other profiles' rows; the cap still holds.
  */
 export async function appendGapCandidates(
   db,
   entries = [],
   { now = new Date(), profileIds = null } = {},
 ) {
-  if (!db?.prepare) return { appended: 0, refreshed: 0, pruned: 0, total: 0 }
+  if (!db?.prepare) return { appended: 0, refreshed: 0, retained_not_refound: 0, total: 0 }
 
   const incoming = (Array.isArray(entries) ? entries : [])
     .filter((entry) => entry && entry.url && entry.profile_id)
@@ -629,8 +851,9 @@ export async function appendGapCandidates(
   const currentKeys = new Set(incoming.map(gapCandidateKey).filter(Boolean))
   const previousPending = new Map()
   const byKey = new Map()
+  const at = (now instanceof Date ? now : new Date(now)).toISOString()
 
-  let pruned = 0
+  let retainedNotRefound = 0
   let refreshed = 0
   let appended = 0
 
@@ -643,28 +866,49 @@ export async function appendGapCandidates(
 
     if (sourceName === 'web_parity_benchmark' && !terminal && inScope) {
       previousPending.set(key, candidate)
-      if (currentKeys.has(key)) refreshed += 1
-      else pruned += 1
+      if (currentKeys.has(key)) {
+        refreshed += 1
+        continue // re-created below from the fresh entry, carrying bookkeeping
+      }
+      retainedNotRefound += 1
+      byKey.set(key, {
+        ...candidate,
+        not_refound_at: at,
+        not_refound_runs: (Number(candidate.not_refound_runs) || 0) + 1,
+      })
       continue
     }
     byKey.set(key, candidate)
   }
 
-  const at = (now instanceof Date ? now : new Date(now)).toISOString()
   for (const entry of incoming) {
     const key = gapCandidateKey(entry)
     if (!key || byKey.has(key)) continue
-    if (!previousPending.has(key)) appended += 1
-    byKey.set(key, {
+    const prev = previousPending.get(key) || null
+    if (!prev) appended += 1
+    const row = {
+      ...(prev || {}),
       url: String(entry.url).trim(),
       title: String(entry.title || '').trim().slice(0, 200),
       profile_id: entry.profile_id,
       need: entry.need ?? null,
       domain: entry.domain ?? extractHostname(entry.url) ?? null,
-      source: entry.source ?? 'web_parity_benchmark',
-      status: 'candidate',
+      source: entry.source ?? prev?.source ?? 'web_parity_benchmark',
+      status: prev?.status ?? 'candidate',
+      first_found_at: prev?.first_found_at ?? prev?.found_at ?? at,
       found_at: at,
-    })
+      last_refound_at: at,
+    }
+    if (entry.canonical_key) row.canonical_key = entry.canonical_key
+    else if (!row.canonical_key) row.canonical_key = normalizeUrlKey(entry.url) || null
+    if (entry.disposition) {
+      row.disposition = entry.disposition
+      row.disposition_at = at
+      if (entry.disposition_evidence !== undefined) row.disposition_evidence = entry.disposition_evidence
+    }
+    delete row.not_refound_at
+    delete row.not_refound_runs
+    byKey.set(key, row)
   }
 
   const candidates = [...byKey.values()].slice(-GAP_QUEUE_CAP)
@@ -672,10 +916,44 @@ export async function appendGapCandidates(
   return {
     appended,
     refreshed,
-    pruned,
+    retained_not_refound: retainedNotRefound,
     total: candidates.length,
     scoped_profiles: scope.size,
   }
+}
+
+/**
+ * Stamp the benchmark's per-result disposition onto the matching gap-queue
+ * candidates (profile-scoped, identity-keyed). Only `disposition`,
+ * `disposition_at`, `disposition_evidence` and `canonical_key` are touched —
+ * never `status`: a disposition explains WHY a page is still web-only; the
+ * gates' verdict is recorded by markGapCandidateOutcomes.
+ */
+export async function recordGapCandidateDispositions(db, dispositions = [], { now = new Date() } = {}) {
+  if (!db?.prepare || !Array.isArray(dispositions) || dispositions.length === 0) return { updated: 0 }
+  const at = (now instanceof Date ? now : new Date(now)).toISOString()
+  const byKey = new Map()
+  for (const d of dispositions) {
+    const key = gapCandidateKey(d)
+    if (key && d?.disposition) byKey.set(key, d)
+  }
+  if (byKey.size === 0) return { updated: 0 }
+  const queue = await readWebParityGapQueue(db)
+  let updated = 0
+  const next = queue.map((candidate) => {
+    const d = byKey.get(gapCandidateKey(candidate))
+    if (!d) return candidate
+    updated += 1
+    return {
+      ...candidate,
+      canonical_key: candidate.canonical_key ?? d.canonical_key ?? normalizeUrlKey(candidate.url) ?? null,
+      disposition: d.disposition,
+      disposition_at: at,
+      disposition_evidence: d.evidence ?? d.disposition_evidence ?? null,
+    }
+  })
+  if (updated) await kvSet(db, GAP_QUEUE_KV_KEY, { updated_at: at, candidates: next }, at)
+  return { updated }
 }
 
 /**
@@ -702,15 +980,110 @@ export async function appendGapCandidates(
  *
  * @returns {Promise<Array<{url,title,snippet}>>} bounded, oldest-first
  */
-export async function loadGapSeedPagesForProfile(db, profileId, { limit = GAP_SEED_LIMIT_PER_RUN, pendingOnly = true } = {}) {
+export async function loadGapSeedPagesForProfile(db, profileId, {
+  limit = GAP_SEED_LIMIT_PER_RUN,
+  pendingOnly = true,
+  now = new Date(),
+  reseedCooldownMs = NOT_EVALUATED_RESEED_COOLDOWN_MS,
+} = {}) {
   if (!db?.prepare || !profileId) return []
   const queue = await readWebParityGapQueue(db)
-  return queue
+  const nowMs = (now instanceof Date ? now : new Date(now)).getTime()
+  const forProfile = queue
     .filter((c) => String(c?.profile_id) === String(profileId))
-    .filter((c) => (pendingOnly ? (c?.status ?? 'candidate') === 'candidate' : true))
     .filter((c) => /^https?:\/\//i.test(String(c?.url || '')))
-    .slice(0, Math.max(0, limit))
-    .map((c) => ({ url: c.url, title: c.title ?? null, snippet: c.need ? `need: ${c.need}` : null }))
+  const toSeed = (c) => ({ url: c.url, title: c.title ?? null, snippet: c.need ? `need: ${c.need}` : null })
+  if (!pendingOnly) return forProfile.slice(0, Math.max(0, limit)).map(toSeed)
+
+  // Fresh candidates first (never offered), then not-evaluated pages whose
+  // cooldown has elapsed — an unreadable page gets another LOOK once the LLM
+  // route has had time to heal, but never crowds out a page never yet offered
+  // and never past GAP_SEED_MAX_OFFERS (that is `not_evaluated:exhausted`,
+  // which is terminal for seeding).
+  const fresh = forProfile.filter((c) => normalizeGapStatus(c?.status) === 'candidate')
+  const cooled = forProfile.filter((c) => {
+    if (!isNotEvaluatedGapStatus(c?.status) || !isPendingGapStatus(c?.status)) return false
+    if ((Number(c?.offer_count) || 0) >= GAP_SEED_MAX_OFFERS) return false
+    const offeredMs = Date.parse(c?.offered_at || '')
+    return !Number.isFinite(offeredMs) || nowMs - offeredMs >= reseedCooldownMs
+  })
+  return [...fresh, ...cooled].slice(0, Math.max(0, limit)).map(toSeed)
+}
+
+/**
+ * Map a lane rejection (gate name and/or free-text reason) onto the four
+ * canonical gates. An explicit canonical gate wins; otherwise the reason's
+ * vocabulary decides; the reality gate is the default because the web lane's
+ * `enforceReality` is where most seeds die. Exported for the replay script.
+ */
+export function gateFromReason(gate, reason) {
+  const g = String(gate || '').trim().toLowerCase()
+  if (GATE_NAMES.includes(g)) return g
+  const text = `${g} ${String(reason || '')}`.toLowerCase()
+  if (/apply[_ -]?target|application[_ -]?url|apply[_ -]?url|actionable|no[_ -]?url|missing[_ -]?url/.test(text)) return 'apply_target'
+  if (/eligib|applicant|geo|state|scope|jurisdiction|foreign|stage|ceiling|profession/.test(text)) return 'eligibility'
+  if (/\bneed|relev|topical/.test(text)) return 'need'
+  return 'reality'
+}
+
+const SEED_OUTCOME_GATE_REJECTED = new Set([
+  'gate_rejected', 'rejected', 'reality_rejected', 'eligibility_rejected', 'need_rejected', 'apply_target_rejected',
+  'reality', 'eligibility', 'need', 'apply_target',
+])
+const SEED_OUTCOME_FETCH_FAILED = new Set(['fetch_failed', 'unfetchable', 'fetch_error', 'not_fetched'])
+const SEED_OUTCOME_EXTRACTION_FAILED = new Set(['extraction_failed', 'extracted_nothing', 'no_candidates', 'extractor_empty'])
+const SEED_OUTCOME_ADOPTED = new Set(['adopted', 'stored', 'deduped'])
+
+function seedOutcomeIndex(seedOutcomes) {
+  const index = new Map()
+  for (const entry of Array.isArray(seedOutcomes) ? seedOutcomes : []) {
+    const key = normalizeUrlKey(entry?.url)
+    if (key) index.set(key, entry)
+  }
+  return index
+}
+
+/**
+ * Decide one offered-but-not-adopted seed's status from the evidence the lane
+ * actually recorded. Returns { status, gate?, gate_reason?, evidence }.
+ *
+ *   gated_out                       ONLY on a recorded gate verdict (per-seed ledger)
+ *   not_evaluated:fetch_failed      the page could not be fetched
+ *   not_evaluated:extraction_failed fetched, extractor produced nothing (per-seed,
+ *                                   or run-wide when the lane fetched pages and
+ *                                   extracted ZERO — the dead-LLM signature)
+ *   not_evaluated:outcome_unknown   a ledger entry with an unrecognised outcome
+ *   not_evaluated:lane_ledger_unavailable  no per-seed ledger and no run totals
+ */
+function decideUnadoptedSeedStatus(entry, laneRun) {
+  if (entry) {
+    const outcome = String(entry.outcome || entry.stage || entry.status || '').trim().toLowerCase()
+    if (SEED_OUTCOME_GATE_REJECTED.has(outcome)) {
+      const gate = gateFromReason(entry.gate ?? outcome, entry.reason)
+      return { status: 'gated_out', gate, gate_reason: entry.reason ?? null, evidence: { source: 'seed_ledger', outcome } }
+    }
+    if (SEED_OUTCOME_FETCH_FAILED.has(outcome) || entry.fetched === false) {
+      return { status: `${NOT_EVALUATED_PREFIX}fetch_failed`, gate_reason: entry.reason ?? null, evidence: { source: 'seed_ledger', outcome } }
+    }
+    if (SEED_OUTCOME_EXTRACTION_FAILED.has(outcome) || (entry.fetched === true && Number(entry.extracted) === 0)) {
+      return { status: `${NOT_EVALUATED_PREFIX}extraction_failed`, gate_reason: entry.reason ?? null, evidence: { source: 'seed_ledger', outcome } }
+    }
+    return { status: `${NOT_EVALUATED_PREFIX}outcome_unknown`, gate_reason: entry.reason ?? null, evidence: { source: 'seed_ledger', outcome: outcome || null } }
+  }
+  if (laneRun && typeof laneRun === 'object') {
+    const fetched = Number(laneRun.fetched)
+    const extracted = Number(laneRun.extracted)
+    if (Number.isFinite(fetched) && fetched === 0) {
+      return { status: `${NOT_EVALUATED_PREFIX}fetch_failed`, evidence: { source: 'lane_run_totals', fetched, extracted: Number.isFinite(extracted) ? extracted : null } }
+    }
+    if (Number.isFinite(fetched) && fetched > 0 && Number.isFinite(extracted) && extracted === 0) {
+      return { status: `${NOT_EVALUATED_PREFIX}extraction_failed`, evidence: { source: 'lane_run_totals', fetched, extracted } }
+    }
+    if (laneRun.extraction_available === false) {
+      return { status: `${NOT_EVALUATED_PREFIX}extraction_failed`, evidence: { source: 'lane_run_flag', extraction_available: false } }
+    }
+  }
+  return { status: `${NOT_EVALUATED_PREFIX}lane_ledger_unavailable`, evidence: { source: 'none' } }
 }
 
 /**
@@ -719,37 +1092,81 @@ export async function loadGapSeedPagesForProfile(db, profileId, { limit = GAP_SE
  * show the rule WORKING (adopted) or honestly not (gated_out) instead of an
  * ever-growing pile of unjudged links.
  *
- * `adoptedUrls` are the seeds that became catalog rows this run; every other
- * seed offered this run was seen by the gates and refused. Both are terminal:
- * re-fetching a page the reality gate rejected cannot produce a different
- * answer, and leaving it 'candidate' would rebuild the write-only queue.
+ * `adoptedUrls` are the seeds that became catalog rows this run. An offered
+ * seed that was NOT adopted is `gated_out` ONLY when a gate verdict is on
+ * record (`seedOutcomes`, the lane's per-seed ledger). Without one, "not
+ * adopted" is NOT a verdict: during the two weeks every LLM provider was dead
+ * the lane extracted ZERO candidates from every fetched page, so a seed could
+ * only ever be marked gated_out — a fetch/extraction failure wearing a gate
+ * verdict's costume, indistinguishable from a real rejection and never
+ * retried (webparity-3/4). Those become `not_evaluated:<class>` and stay
+ * eligible for re-seeding (cooldown + GAP_SEED_MAX_OFFERS bound).
+ *
+ * @param {object} db
+ * @param {object} args
+ * @param {string[]} args.offeredUrls   every seed handed to the lane this run
+ * @param {string[]} args.adoptedUrls   seeds that produced/deduped onto a catalog row
+ * @param {string|null} [args.profileId]
+ * @param {Array<{url, outcome, gate?, reason?, fetched?, extracted?}>} [args.seedOutcomes]
+ *        the lane's per-seed ledger (outcome: gate_rejected|fetch_failed|
+ *        extraction_failed|stored|deduped); absent until the lane exports it
+ * @param {{fetched?:number, extracted?:number, extraction_available?:boolean}} [args.laneRun]
+ *        the lane's run totals (run.web_lane) — the run-wide dead-LLM signature
  */
-export async function markGapCandidateOutcomes(db, { offeredUrls = [], adoptedUrls = [], profileId = null, now = new Date() } = {}) {
-  if (!db?.prepare || offeredUrls.length === 0) return { adopted: 0, gated_out: 0 }
+export async function markGapCandidateOutcomes(db, {
+  offeredUrls = [],
+  adoptedUrls = [],
+  profileId = null,
+  now = new Date(),
+  seedOutcomes = null,
+  laneRun = null,
+} = {}) {
+  if (!db?.prepare || offeredUrls.length === 0) return { adopted: 0, gated_out: 0, not_evaluated: 0 }
   const adopted = new Set(adoptedUrls.map(normalizeUrlKey).filter(Boolean))
   const offered = new Set(offeredUrls.map(normalizeUrlKey).filter(Boolean))
+  const outcomes = seedOutcomeIndex(seedOutcomes)
   const at = (now instanceof Date ? now : new Date(now)).toISOString()
 
   const queue = await readWebParityGapQueue(db)
   let adoptedCount = 0
   let gatedCount = 0
+  let notEvaluatedCount = 0
   // Conditions whose gap an ADOPTED source just closed — see creditConditionCoverage.
   const coveredConditions = new Set()
   const next = queue.map((c) => {
     if (profileId !== null && String(c?.profile_id) !== String(profileId)) return c
     const key = normalizeUrlKey(c?.url)
     if (!key || !offered.has(key)) return c
-    if (adopted.has(key)) {
+    const offerCount = (Number(c?.offer_count) || 0) + 1
+    const base = { ...c, offered_at: at, offer_count: offerCount }
+    const ledgerEntry = outcomes.get(key) || null
+    const ledgerOutcome = String(ledgerEntry?.outcome || ledgerEntry?.stage || '').trim().toLowerCase()
+    if (adopted.has(key) || SEED_OUTCOME_ADOPTED.has(ledgerOutcome)) {
       adoptedCount += 1
       if (c?.source === 'condition_source_search' && c?.need) coveredConditions.add(String(c.need))
-      return { ...c, status: 'adopted', resolved_at: at }
+      return { ...base, status: 'adopted', resolved_at: at, gate: null, gate_reason: null }
     }
-    gatedCount += 1
-    return { ...c, status: 'gated_out', resolved_at: at }
+    const decided = decideUnadoptedSeedStatus(ledgerEntry, laneRun)
+    if (decided.status === 'gated_out') {
+      gatedCount += 1
+      return { ...base, status: 'gated_out', gate: decided.gate, gate_reason: decided.gate_reason ?? null, resolved_at: at, outcome_evidence: decided.evidence }
+    }
+    notEvaluatedCount += 1
+    // Bounded: the last permitted offer without a verdict parks the page.
+    const status = offerCount >= GAP_SEED_MAX_OFFERS ? NOT_EVALUATED_EXHAUSTED : decided.status
+    return {
+      ...base,
+      status,
+      not_evaluated_class: decided.status.slice(NOT_EVALUATED_PREFIX.length),
+      gate: null,
+      gate_reason: decided.gate_reason ?? null,
+      outcome_evidence: decided.evidence,
+      ...(status === NOT_EVALUATED_EXHAUSTED ? { resolved_at: at } : {}),
+    }
   })
   await kvSet(db, GAP_QUEUE_KV_KEY, { updated_at: at, candidates: next }, at)
   if (coveredConditions.size) await creditConditionCoverage(db, [...coveredConditions], { now })
-  return { adopted: adoptedCount, gated_out: gatedCount, conditions_covered: coveredConditions.size }
+  return { adopted: adoptedCount, gated_out: gatedCount, not_evaluated: notEvaluatedCount, conditions_covered: coveredConditions.size }
 }
 
 /**
@@ -904,6 +1321,9 @@ async function defaultLoadStoredMatches(db, profileId) {
   const from = `FROM profile_opportunity_matches m
       JOIN funding_opportunities o ON o.id = m.opportunity_id`
   const predicate = where.join('\n       AND ')
+  // opportunity_kind / result_kind travel with the row so the classifier can
+  // tell a POINTER (directory/referral/school_portal/past_award_intel) from
+  // found funding (webparity-2). Absent columns read NULL → not a pointer.
   const sql = `
     SELECT o.id,
            ${selectOpportunityField('title')},
@@ -913,6 +1333,8 @@ async function defaultLoadStoredMatches(db, profileId) {
            ${selectOpportunityField('source_url')},
            ${selectOpportunityField('final_url')},
            ${selectOpportunityField('evidence_url')},
+           ${selectOpportunityField('opportunity_kind')},
+           ${selectOpportunityField('result_kind')},
            m.match_score
       ${from}
      WHERE ${predicate}
@@ -971,6 +1393,375 @@ function searchProvenanceFor(results, queryIndex, thrown = false) {
     provider_mode: meta?.provider_mode ?? null,
     provenance_reason: meta?.reason ?? null,
     result_engines: Array.isArray(searxngMeta?.result_engines) ? searxngMeta.result_engines : [],
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Per-result dispositions (issue 4): WHY is a web-only result still web-only?
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * The profile's last discovery-lane ledger, read through
+ * coverageAudit/webLaneHealth.getLastWebLaneRun(db, profileId) (added by a
+ * concurrent lane). Imported lazily and TOLERANTLY: when the export or the
+ * record is absent the benchmark still runs and every affected web-only
+ * result carries `lane_ledger_unavailable` with the reason — never a guess.
+ */
+async function defaultLoadLaneLedger(db, profileId) {
+  let mod
+  try {
+    mod = await import('./coverageAudit/webLaneHealth.js')
+  } catch (err) {
+    return { available: false, reason: `web_lane_health_module_unavailable:${err?.message || err}` }
+  }
+  if (typeof mod?.getLastWebLaneRun !== 'function') {
+    return { available: false, reason: 'getLastWebLaneRun_not_exported' }
+  }
+  try {
+    const run = await mod.getLastWebLaneRun(db, profileId)
+    if (!run || typeof run !== 'object') return { available: false, reason: 'no_lane_run_for_profile' }
+    return { available: true, run }
+  } catch (err) {
+    return { available: false, reason: `lane_ledger_load_failed:${err?.message || err}` }
+  }
+}
+
+/**
+ * The lane's planned query set for this thesis. Prefers
+ * webQueries.buildWebQueryPlan (added by a concurrent lane); until it exists,
+ * falls back to the lane's own builder at lane breadth with seed 0 — labelled
+ * `inferred`, because the lane rotates its broadening pool by wall clock, so
+ * the fallback is the plan's fixed head plus one rotation, not the whole pool.
+ */
+async function defaultBuildQueryPlan(thesis) {
+  try {
+    const mod = await import('../crawler-os/webQueries.js')
+    if (typeof mod?.buildWebQueryPlan === 'function') {
+      return { ...normalizeQueryPlan(mod.buildWebQueryPlan(thesis)), source: 'buildWebQueryPlan', inferred: false }
+    }
+  } catch { /* fall through to the inferred plan */ }
+  const { maxQueries } = webLaneDefaults()
+  return {
+    queries: buildWebQueries(thesis, { max: maxQueries, seed: 0 }),
+    source: 'buildWebQueries_seed0_fallback',
+    inferred: true,
+  }
+}
+
+function queryKey(q) {
+  return String(q || '').trim().toLowerCase().replace(/\s+/g, ' ')
+}
+
+function normalizeQueryPlan(plan) {
+  if (Array.isArray(plan)) {
+    return { queries: plan.map((q) => (typeof q === 'string' ? q : q?.query ?? q?.text ?? '')).filter(Boolean) }
+  }
+  if (plan && typeof plan === 'object') {
+    const list = Array.isArray(plan.queries) ? plan.queries : (Array.isArray(plan.plan) ? plan.plan : [])
+    return {
+      ...plan,
+      queries: list.map((q) => (typeof q === 'string' ? q : q?.query ?? q?.text ?? '')).filter(Boolean),
+    }
+  }
+  return { queries: [] }
+}
+
+/**
+ * Does the catalog already hold this program under ANOTHER URL? Looks up the
+ * canonical identity's title tier (`t:<title>` or `t:<sponsor>::<title>` —
+ * contract.canonicalOpportunityKey) for the hit's title; a SERP hit has no
+ * structured sponsor so the sponsor-qualified form is matched by suffix.
+ * Tolerant: a catalog without the column answers null (unknown), never false.
+ */
+async function defaultLookupCanonicalDuplicate(db, hit) {
+  if (!db?.prepare) return null
+  const titleKey = titleIdentityKey(hit?.title)
+  if (!titleKey) return null
+  const hitUrlKey = normalizeUrlKey(hit?.url)
+  try {
+    const columns = await tableColumnSet(db, 'funding_opportunities')
+    if (!columns.has('canonical_opportunity_key')) return null
+    const urlColumns = ['application_url', 'apply_url', 'source_url', 'final_url', 'evidence_url'].filter((c) => columns.has(c))
+    const select = ['id', 'canonical_opportunity_key', ...urlColumns].join(', ')
+    const rows = await db.prepare(
+      `SELECT ${select} FROM funding_opportunities
+        WHERE canonical_opportunity_key = ? OR canonical_opportunity_key LIKE ?
+        LIMIT 5`,
+    ).all(`t:${titleKey}`, `t:%::${titleKey}`)
+    for (const row of Array.isArray(rows) ? rows : []) {
+      const urls = urlColumns.map((c) => row[c]).filter(Boolean)
+      const keys = urls.map(normalizeUrlKey).filter(Boolean)
+      // Same URL would have been overlap already; a duplicate is the SAME key under a DIFFERENT url.
+      if (keys.length === 0 || keys.some((k) => k !== hitUrlKey)) {
+        return { opportunity_id: row.id, canonical_key: row.canonical_opportunity_key, url: urls.find((u) => normalizeUrlKey(u) !== hitUrlKey) ?? null }
+      }
+    }
+    return null
+  } catch {
+    return null
+  }
+}
+
+/** Tolerant reader for whatever shape the lane ledger records. */
+function readLaneLedger(laneLedger, laneDefaults) {
+  const available = laneLedger?.available === true && laneLedger.run && typeof laneLedger.run === 'object'
+  const run = available ? laneLedger.run : null
+  const asQueryList = (value) => (Array.isArray(value) ? value : [])
+    .map((q) => (typeof q === 'string' ? q : q?.query ?? q?.text ?? ''))
+    .filter(Boolean)
+  const executed = new Set(asQueryList(run?.queries ?? run?.executed_queries ?? run?.queries_executed).map(queryKey))
+  const skipped = new Set(asQueryList(run?.skipped_budget ?? run?.queries_skipped_budget ?? run?.skipped_queries).map(queryKey))
+  for (const q of Array.isArray(run?.queries) ? run.queries : []) {
+    if (q && typeof q === 'object' && /skipped/i.test(String(q.status || ''))) {
+      skipped.add(queryKey(q.query ?? q.text))
+      executed.delete(queryKey(q.query ?? q.text))
+    }
+  }
+  const provenance = new Map()
+  for (const entry of Array.isArray(run?.search_provenance) ? run.search_provenance : []) {
+    const key = queryKey(entry?.query ?? entry?.text)
+    if (key) provenance.set(key, entry)
+  }
+  const pages = new Map()
+  const pageList = Array.isArray(run?.pages) ? run.pages : (Array.isArray(run?.page_ledger) ? run.page_ledger : (Array.isArray(run?.per_page) ? run.per_page : []))
+  for (const page of pageList) {
+    const key = normalizeUrlKey(page?.url ?? page?.final_url)
+    if (key) pages.set(key, page)
+    const finalKey = normalizeUrlKey(page?.final_url)
+    if (finalKey && !pages.has(finalKey)) pages.set(finalKey, page)
+  }
+  const resultsPerQuery = envInt(run?.results_per_query ?? run?.resultsPerQuery, laneDefaults.resultsPerQuery)
+  const maxPages = envInt(run?.max_pages ?? run?.maxPages, laneDefaults.maxPages)
+  const fetched = Number(run?.fetched)
+  const extracted = Number(run?.extracted)
+  return {
+    available,
+    reason: available ? null : (laneLedger?.reason || 'lane_ledger_unavailable'),
+    executedQueries: executed,
+    skippedBudgetQueries: skipped,
+    hasQueryList: executed.size > 0 || skipped.size > 0,
+    provenance,
+    pages,
+    hasPageLedger: pageList.length > 0,
+    resultsPerQuery,
+    maxPages,
+    // The lane's page queue fills after ~maxPages/resultsPerQuery queries;
+    // a query positioned beyond that head is structurally never fetched.
+    executedHeadQueries: Math.max(1, Math.floor(maxPages / Math.max(1, resultsPerQuery))),
+    fetched: Number.isFinite(fetched) ? fetched : null,
+    extracted: Number.isFinite(extracted) ? extracted : null,
+    extractionDead: Number.isFinite(fetched) && fetched > 0 && Number.isFinite(extracted) && extracted === 0,
+    at: run?.at ?? run?.recorded_at ?? null,
+  }
+}
+
+function pageStatus(page) {
+  const stage = String(page?.stage ?? page?.status ?? page?.outcome ?? '').trim().toLowerCase()
+  if (page?.gate || /reject/.test(stage)) return { kind: 'gate_rejected', gate: gateFromReason(page?.gate ?? stage, page?.reason) }
+  if (page?.fetched === false || SEED_OUTCOME_FETCH_FAILED.has(stage)) return { kind: 'fetch_failed' }
+  if (SEED_OUTCOME_ADOPTED.has(stage) || page?.stored === true || page?.deduped === true) return { kind: 'in_catalog' }
+  if (SEED_OUTCOME_EXTRACTION_FAILED.has(stage) || (page?.fetched === true && Number(page?.extracted) === 0)) return { kind: 'extraction_failed' }
+  if (page?.fetched === true) return { kind: 'fetched_unresolved' }
+  return { kind: 'unknown' }
+}
+
+/**
+ * PURE: assign exactly one disposition to a web-only result from the evidence
+ * available. Precedence (first match wins):
+ *   1. the LANE's own search for the originating query failed         → provider_failure
+ *   2. the originating query is outside the lane's plan                → never_generated_capable_query
+ *   3. planned but skipped for budget, or at a rank / query position
+ *      the lane structurally never reaches (webparity-6)               → generated_not_executed_cap
+ *   4. the lane's per-page ledger names the page                       → fetch_failed | extraction_failed |
+ *                                                                        correctly_rejected_at_gate:<g> | canonical_duplicate
+ *   5. the gap queue records a VERDICT for the page                    → canonical_duplicate (adopted) |
+ *                                                                        correctly_rejected_at_gate:<g> (gated_out WITH a gate)
+ *      a legacy gated_out with NO gate record is NOT a verdict (noted in evidence)
+ *   6. the lane fetched pages and extracted NOTHING this run           → extraction_failed (inferred, run-wide)
+ *      then a queue `not_evaluated:*` class                            → fetch_failed / extraction_failed
+ *   7. the catalog already holds the title under another URL           → canonical_duplicate
+ *   8. the catalog holds the page as a POINTER                         → correctly_rejected_at_gate:apply_target
+ *   9. no lane ledger                                                  → lane_ledger_unavailable
+ *  10. otherwise                                                       → incorrectly_lost_qualified_source
+ *
+ * @param {{url, canonical_key?, query?, query_index?, rank?, catalog_pointer?}} item
+ * @param {{plan?, laneLedger?, laneDefaults?, queueEntry?, catalogDuplicate?}} ctx
+ * @returns {{disposition:string, evidence:object, structural:{rank_beyond_lane_head:boolean, query_beyond_page_budget:boolean|null}}}
+ */
+export function disposeWebOnlyHit(item, ctx = {}) {
+  const laneDefaults = { ...webLaneDefaults(), ...(ctx.laneDefaults || {}) }
+  const ledger = readLaneLedger(ctx.laneLedger, laneDefaults)
+  const plan = ctx.plan && typeof ctx.plan === 'object' ? normalizeQueryPlan(ctx.plan) : null
+  const planKeys = plan ? new Set(plan.queries.map(queryKey)) : null
+  const qKey = queryKey(item?.query)
+  const rank = Number.isFinite(Number(item?.rank)) ? Number(item.rank) : null
+  const queryIndex = Number.isFinite(Number(item?.query_index)) ? Number(item.query_index) : null
+  const urlKey = item?.canonical_key || normalizeUrlKey(item?.url)
+
+  const rankBeyondHead = rank !== null && rank > ledger.resultsPerQuery
+  const queryBeyondBudget = queryIndex !== null ? queryIndex >= ledger.executedHeadQueries : null
+  const structural = { rank_beyond_lane_head: rankBeyondHead, query_beyond_page_budget: queryBeyondBudget }
+  const evidence = {
+    query: item?.query ?? null,
+    query_index: queryIndex,
+    rank,
+    lane_results_per_query: ledger.resultsPerQuery,
+    lane_max_pages: ledger.maxPages,
+    lane_ledger_available: ledger.available,
+    lane_ledger_reason: ledger.reason,
+    plan_source: plan?.source ?? null,
+    plan_inferred: plan?.inferred ?? null,
+    structural,
+  }
+  const done = (disposition, extra = {}) => ({ disposition, evidence: { ...evidence, ...extra }, structural })
+
+  // 1. the lane's own search failed for this query
+  const laneProv = qKey ? ledger.provenance.get(qKey) : null
+  if (laneProv && ['error', 'unavailable', 'not_attempted'].includes(String(laneProv.status || '').toLowerCase())) {
+    return done('provider_failure', { lane_search_status: laneProv.status, lane_search_provider: laneProv.provider ?? null })
+  }
+  // 2. never planned
+  if (planKeys && qKey && !planKeys.has(qKey)) {
+    return done('never_generated_capable_query', { plan_size: planKeys.size })
+  }
+  // 3. planned but not executed / structurally unreachable
+  if (ledger.available && ledger.hasQueryList && qKey && (ledger.skippedBudgetQueries.has(qKey) || !ledger.executedQueries.has(qKey))) {
+    return done('generated_not_executed_cap', { skipped_budget: ledger.skippedBudgetQueries.has(qKey), lane_executed_queries: ledger.executedQueries.size })
+  }
+  if (rankBeyondHead) return done('generated_not_executed_cap', { skipped_budget: false, reason: 'rank_beyond_lane_head' })
+  if (queryBeyondBudget === true && !(ledger.available && ledger.hasQueryList)) {
+    return done('generated_not_executed_cap', { skipped_budget: false, reason: 'query_beyond_page_budget' })
+  }
+  // 4. the per-page ledger names the page
+  const page = urlKey ? ledger.pages.get(urlKey) : null
+  if (page) {
+    const status = pageStatus(page)
+    if (status.kind === 'fetch_failed') return done('fetch_failed', { lane_page: page.reason ?? page.status ?? 'fetch_failed' })
+    if (status.kind === 'gate_rejected') return done(`correctly_rejected_at_gate:${status.gate}`, { gate: status.gate, gate_reason: page.reason ?? null, source: 'lane_page_ledger' })
+    if (status.kind === 'in_catalog') return done('canonical_duplicate', { reason: 'stored_under_other_url', lane_page: page.stage ?? page.status ?? null })
+    if (status.kind === 'extraction_failed') return done('extraction_failed', { source: 'lane_page_ledger' })
+  }
+  // 5. the queue's RECORDED verdict for this page (per-URL evidence outranks
+  //    the run-wide inference below; a legacy gated_out with no gate does not)
+  const queueEntry = ctx.queueEntry && typeof ctx.queueEntry === 'object' ? ctx.queueEntry : null
+  const queueStatus = queueEntry ? normalizeGapStatus(queueEntry.status) : null
+  let legacyGatedOut = false
+  if (queueEntry) {
+    if (queueStatus === 'adopted') {
+      return done('canonical_duplicate', {
+        reason: 'adopted_under_other_url',
+        queue_resolved_at: queueEntry.resolved_at ?? null,
+        catalog_confirmed: Boolean(ctx.catalogDuplicate),
+        ...(ctx.catalogDuplicate ? { catalog: ctx.catalogDuplicate } : {}),
+      })
+    }
+    if (queueStatus === 'gated_out') {
+      const gate = GATE_NAMES.includes(String(queueEntry.gate || '').toLowerCase()) ? String(queueEntry.gate).toLowerCase() : null
+      if (gate) return done(`correctly_rejected_at_gate:${gate}`, { gate, gate_reason: queueEntry.gate_reason ?? null, source: 'gap_queue', queue_resolved_at: queueEntry.resolved_at ?? null })
+      legacyGatedOut = true
+    }
+  }
+  // 6. run-wide dead extraction: the lane fetched pages and extracted NOTHING
+  if (ledger.available && ledger.extractionDead) {
+    return done('extraction_failed', {
+      inferred_from: 'lane_run_totals',
+      fetched: ledger.fetched,
+      extracted: ledger.extracted,
+      lane_run_at: ledger.at,
+      queue_status: queueStatus,
+      ...(legacyGatedOut ? { legacy_gated_out_without_gate_record: true } : {}),
+    })
+  }
+  if (queueEntry) {
+    if (queueStatus && queueStatus.startsWith(NOT_EVALUATED_PREFIX)) {
+      const cls = queueEntry.not_evaluated_class || queueStatus.slice(NOT_EVALUATED_PREFIX.length)
+      if (cls === 'fetch_failed') return done('fetch_failed', { source: 'gap_queue', offered_at: queueEntry.offered_at ?? null })
+      if (cls === 'extraction_failed') return done('extraction_failed', { source: 'gap_queue', offered_at: queueEntry.offered_at ?? null })
+    }
+  }
+  // 7. the catalog already holds the program under another URL
+  if (ctx.catalogDuplicate && typeof ctx.catalogDuplicate === 'object') {
+    return done('canonical_duplicate', { reason: 'catalog_title_identity', catalog: ctx.catalogDuplicate })
+  }
+  // 8. the catalog holds the page as a pointer: no apply target of its own
+  if (item?.catalog_pointer && typeof item.catalog_pointer === 'object') {
+    return done('correctly_rejected_at_gate:apply_target', { gate: 'apply_target', source: 'catalog_pointer_kind', catalog_pointer: item.catalog_pointer })
+  }
+  // 9. no ledger — the miss cannot be attributed
+  if (!ledger.available) {
+    return done('lane_ledger_unavailable', {
+      reason: ledger.reason,
+      queue_status: queueStatus,
+      ...(legacyGatedOut ? { legacy_gated_out_without_gate_record: true } : {}),
+    })
+  }
+  // 10. the true recall gap
+  return done('incorrectly_lost_qualified_source', {
+    queue_status: queueStatus,
+    ...(legacyGatedOut ? { legacy_gated_out_without_gate_record: true } : {}),
+  })
+}
+
+function tallyDispositions(items) {
+  const counts = {}
+  for (const item of Array.isArray(items) ? items : []) {
+    const d = item?.disposition || 'undisposed'
+    counts[d] = (counts[d] || 0) + 1
+  }
+  return counts
+}
+
+/**
+ * Provider health for the run's metric envelope, from the per-query search
+ * provenance of every profile plus each profile's lane-ledger availability.
+ * "All cache at unknown age" is a FLAG: the run measured a replayed SERP whose
+ * age nothing recorded, so it cannot be read as tonight's web.
+ */
+export function buildProviderHealth(perProfile = [], { laneLedgers = [] } = {}) {
+  const entries = (Array.isArray(perProfile) ? perProfile : [])
+    .flatMap((p) => (Array.isArray(p?.search_provenance) ? p.search_provenance : []))
+  const total = entries.length
+  const failed = entries.filter((e) => ['error', 'unavailable', 'not_attempted'].includes(String(e?.status || '').toLowerCase())).length
+  const cached = entries.filter((e) => String(e?.provenance || '').toLowerCase() === 'cache').length
+  const cacheUnknownAge = entries.filter((e) => String(e?.provenance || '').toLowerCase() === 'cache' && e?.cache_age_known !== true).length
+  const providers = {}
+  for (const e of entries) providers[String(e?.provider || 'unknown')] = (providers[String(e?.provider || 'unknown')] || 0) + 1
+  const flags = []
+  let search = 'unknown'
+  if (total > 0) {
+    if (failed === total) search = 'unavailable'
+    else if (failed > 0) search = 'degraded'
+    else search = 'healthy'
+    if (cached === total) {
+      flags.push('search_all_cache')
+      if (search === 'healthy') search = 'degraded'
+    }
+    if (cached > 0 && cacheUnknownAge === cached) flags.push('search_all_cache_unknown_age')
+    else if (cacheUnknownAge > 0) flags.push('search_cache_age_partially_unknown')
+  }
+  const ledgers = Array.isArray(laneLedgers) ? laneLedgers : []
+  const ledgerAvailable = ledgers.filter((l) => l?.available === true).length
+  const laneLedger = ledgers.length === 0 ? 'unknown' : (ledgerAvailable === ledgers.length ? 'available' : (ledgerAvailable === 0 ? 'unavailable' : 'partial'))
+  if (laneLedger === 'unavailable') flags.push('lane_ledger_unavailable')
+  const dead = ledgers.filter((l) => l?.available === true && readLaneLedger(l, webLaneDefaults()).extractionDead).length
+  let extraction = 'unknown'
+  if (ledgerAvailable > 0) extraction = dead === ledgerAvailable ? 'unavailable' : (dead > 0 ? 'degraded' : 'healthy')
+  if (extraction === 'unavailable') flags.push('extraction_unavailable')
+  return {
+    search,
+    extraction,
+    lane_ledger: laneLedger,
+    flags,
+    detail: {
+      queries: total,
+      failed_queries: failed,
+      cache_queries: cached,
+      cache_unknown_age_queries: cacheUnknownAge,
+      providers,
+      lane_ledgers: ledgers.length,
+      lane_ledgers_available: ledgerAvailable,
+      lane_ledger_reasons: [...new Set(ledgers.filter((l) => l?.available !== true).map((l) => l?.reason).filter(Boolean))].slice(0, 4),
+    },
   }
 }
 
@@ -1039,6 +1830,9 @@ export async function runWebParityBenchmark(db, {
   buildThesis = defaultBuildThesis,
   loadStoredMatches = defaultLoadStoredMatches,
   emitTelemetry = defaultEmitTelemetry,
+  loadLaneLedger = defaultLoadLaneLedger,
+  buildQueryPlan = defaultBuildQueryPlan,
+  lookupCanonicalDuplicate = defaultLookupCanonicalDuplicate,
   maxQueriesPerProfile = MAX_QUERIES_PER_PROFILE,
   maxResultsPerQuery = MAX_RESULTS_PER_QUERY,
   persist = true,
@@ -1046,6 +1840,7 @@ export async function runWebParityBenchmark(db, {
 } = {}) {
   if (!isWebParityBenchmarkEnabled()) return { ran: false, reason: 'disabled' }
   if (!db?.prepare) return { ran: false, reason: 'no_db' }
+  const laneDefaults = webLaneDefaults()
 
   // Budget bounds are MANDATORY — a caller can narrow them, never widen them.
   const queryBudget = Math.max(1, Math.min(MAX_QUERIES_PER_PROFILE, Number(maxQueriesPerProfile) || MAX_QUERIES_PER_PROFILE))
@@ -1070,6 +1865,7 @@ export async function runWebParityBenchmark(db, {
   const generatedAt = (now instanceof Date ? now : new Date(now)).toISOString()
   const perProfile = []
   const gapEntries = []
+  const laneLedgers = []
 
   for (const g of golden) {
     const label = g.label || g.profile_id
@@ -1104,11 +1900,15 @@ export async function runWebParityBenchmark(db, {
         results = []
       }
       searchProvenance.push(searchProvenanceFor(results, queryIndex, threw))
-      for (const h of (Array.isArray(results) ? results : []).slice(0, resultBudget)) {
+      const page = (Array.isArray(results) ? results : []).slice(0, resultBudget)
+      for (const [rankIndex, h] of page.entries()) {
         const key = normalizeUrlKey(h?.url)
         if (!key || seenUrls.has(key)) continue
         seenUrls.add(key)
-        hits.push(h)
+        // Provenance for the disposition machinery: which query surfaced the
+        // page and at what rank (webparity-6: ranks past the lane's per-query
+        // head are structurally unreachable by discovery).
+        hits.push({ ...h, query: q, query_index: queryIndex, rank: rankIndex + 1 })
       }
     }
 
@@ -1162,6 +1962,57 @@ export async function runWebParityBenchmark(db, {
     const storedEligibleCount = storedSelection?.eligible_candidate_count ?? null
     const storedExcludedCount = storedSelection?.excluded_candidate_count ?? null
 
+    // ── Dispositions: WHY is each web-only result still web-only? ─────────
+    // Evidence: the lane's last ledger for this profile (tolerant), the lane's
+    // planned query set, the gap queue's recorded verdicts, and the catalog's
+    // canonical identity. Every failure to load evidence degrades to an
+    // honest `lane_ledger_unavailable` / null, never to a guess.
+    let laneLedger = { available: false, reason: 'lane_ledger_not_loaded' }
+    try {
+      laneLedger = (await loadLaneLedger(db, g.profile_id)) || { available: false, reason: 'lane_ledger_loader_returned_nothing' }
+    } catch (err) {
+      laneLedger = { available: false, reason: `lane_ledger_load_failed:${err?.message || err}` }
+    }
+    laneLedgers.push(laneLedger)
+    let plan = null
+    try {
+      plan = normalizeQueryPlan(await buildQueryPlan(thesis))
+      if (plan && !plan.source) plan.source = 'injected'
+    } catch (err) {
+      log.warn('query plan build failed for golden profile (dispositions degrade)', { profile_id: g.profile_id, error: err?.message })
+      plan = null
+    }
+    let queueByKey = new Map()
+    try {
+      const queue = await readWebParityGapQueue(db)
+      queueByKey = new Map(queue
+        .filter((c) => String(c?.profile_id) === String(g.profile_id))
+        .map((c) => [normalizeUrlKey(c?.url), c])
+        .filter(([key]) => key))
+    } catch { queueByKey = new Map() }
+    const webOnlyDisposed = []
+    for (const item of web_only.slice(0, WEB_ONLY_DISPOSITION_CAP)) {
+      let catalogDuplicate = null
+      try {
+        catalogDuplicate = await lookupCanonicalDuplicate(db, item)
+      } catch { catalogDuplicate = null }
+      const decided = disposeWebOnlyHit(item, {
+        plan,
+        laneLedger,
+        laneDefaults,
+        queueEntry: queueByKey.get(item.canonical_key) || null,
+        catalogDuplicate,
+      })
+      webOnlyDisposed.push({ ...item, disposition: decided.disposition, evidence: decided.evidence })
+    }
+    const dispositionCounts = tallyDispositions(webOnlyDisposed)
+    const structurallyUnreachable = {
+      rank_beyond_lane_head: webOnlyDisposed.filter((w) => w.evidence?.structural?.rank_beyond_lane_head === true).length,
+      query_beyond_page_budget: webOnlyDisposed.filter((w) => w.evidence?.structural?.query_beyond_page_budget === true).length,
+      lane_results_per_query: readLaneLedger(laneLedger, laneDefaults).resultsPerQuery,
+      benchmark_results_per_query: resultBudget,
+    }
+
     perProfile.push({
       profile_id: g.profile_id,
       label,
@@ -1172,6 +2023,14 @@ export async function runWebParityBenchmark(db, {
       web_only_count: storedLoadError ? null : web_only.length,
       grantflow_only: storedLoadError ? null : grantflow_only,
       stored_matches: Array.isArray(stored) ? stored.length : 0,
+      stored_pointer_rows: classification.stored_pointer_rows ?? 0,
+      web_dropped: classification.dropped ?? null,
+      // Per-result dispositions (bounded to the session budget) + their tally.
+      web_only: storedLoadError ? [] : webOnlyDisposed,
+      disposition_counts: storedLoadError ? {} : dispositionCounts,
+      structurally_unreachable: structurallyUnreachable,
+      lane_ledger: { available: laneLedger.available === true, reason: laneLedger.available === true ? null : (laneLedger.reason ?? null), at: laneLedger.run?.at ?? null },
+      query_plan: plan ? { source: plan.source ?? null, inferred: plan.inferred ?? null, size: plan.queries.length } : null,
       stored_candidates_total: storedRawCount,
       stored_candidates_eligible: storedEligibleCount,
       stored_candidates_excluded: storedExcludedCount,
@@ -1198,8 +2057,20 @@ export async function runWebParityBenchmark(db, {
     })
 
     if (Number.isFinite(parity)) {
-      for (const w of web_only) {
-        gapEntries.push({ url: w.url, title: w.title, profile_id: g.profile_id, need: w.need, domain: w.domain })
+      for (const w of webOnlyDisposed) {
+        gapEntries.push({
+          url: w.url,
+          title: w.title,
+          profile_id: g.profile_id,
+          need: w.need,
+          domain: w.domain,
+          canonical_key: w.canonical_key,
+          disposition: w.disposition,
+          disposition_evidence: w.evidence,
+        })
+      }
+      for (const w of web_only.slice(WEB_ONLY_DISPOSITION_CAP)) {
+        gapEntries.push({ url: w.url, title: w.title, profile_id: g.profile_id, need: w.need, domain: w.domain, canonical_key: w.canonical_key })
       }
     }
   }
@@ -1221,6 +2092,33 @@ export async function runWebParityBenchmark(db, {
     ? 'insufficient_sample'
     : measurementStatus
 
+  // Fleet-level disposition tally + the metric envelope every owner-facing
+  // benchmark number must carry (window = this run, population = the golden
+  // profiles, provider health incl. SERP-cache provenance, code version).
+  const fleetDispositionCounts = tallyDispositions(perProfile.flatMap((p) => (Array.isArray(p.web_only) ? p.web_only : [])))
+  const providerHealth = buildProviderHealth(perProfile, { laneLedgers })
+  const envelope = buildMetricEnvelope({
+    window: { kind: 'run', start: generatedAt, end: generatedAt, label: 'web-parity benchmark run' },
+    population: {
+      kind: 'golden_profiles',
+      description: `golden_outcome_expectations profiles (N=${perProfile.length})`,
+      selector: GOLDEN_KV_KEY,
+    },
+    evaluated: scored.length,
+    unevaluated: unscored,
+    sampleSize: verifiedDenominator,
+    providerHealth,
+    freshnessAt: generatedAt,
+    extra: {
+      semantics_version: BENCHMARK_SEMANTICS_VERSION,
+      minimum_verified_denominator: MIN_VERIFIED_DENOMINATOR,
+      regression_points: REGRESSION_POINTS,
+      queries_per_profile: queryBudget,
+      results_per_query: resultBudget,
+      disposition_counts: fleetDispositionCounts,
+    },
+  })
+
   const result = {
     ran: true,
     generated_at: generatedAt,
@@ -1236,6 +2134,8 @@ export async function runWebParityBenchmark(db, {
     profiles_total: perProfile.length,
     profiles_scored: scored.length,
     profiles_unscored: unscored,
+    disposition_counts: fleetDispositionCounts,
+    envelope,
     per_profile: perProfile,
     gap_queue: { appended: 0, total: 0 },
   }
@@ -1256,6 +2156,8 @@ export async function runWebParityBenchmark(db, {
         profiles_scored: scored.length,
         profiles_unscored: unscored,
         scored_profiles_parity: scoredProfilesParity,
+        disposition_counts: fleetDispositionCounts,
+        envelope,
         per_profile: perProfile.map((p) => ({
           profile_id: p.profile_id,
           label: p.label,
@@ -1265,6 +2167,8 @@ export async function runWebParityBenchmark(db, {
           overlap_count: p.overlap_count ?? null,
           web_only_count: p.web_only_count ?? null,
           grantflow_only: p.grantflow_only ?? null,
+          stored_pointer_rows: p.stored_pointer_rows ?? 0,
+          disposition_counts: p.disposition_counts ?? {},
         })),
       }
       if (Number.isFinite(fleetParity)) compactRun.fleet_parity = fleetParity
@@ -1282,6 +2186,8 @@ export async function runWebParityBenchmark(db, {
         profiles_scored: scored.length,
         profiles_unscored: unscored,
         scored_profiles_parity: scoredProfilesParity,
+        disposition_counts: fleetDispositionCounts,
+        envelope,
         per_profile: perProfile,
       }
       if (Number.isFinite(fleetParity)) latest.fleet_parity = fleetParity
@@ -1299,9 +2205,25 @@ export async function runWebParityBenchmark(db, {
       result.gap_queue = await appendGapCandidates(db, gapEntries, {
         now,
         // An unscored/provider-outage profile has no current evidence with
-        // which to prune its prior candidates.
+        // which to refresh its prior candidates.
         profileIds: scored.map((profile) => profile.profile_id),
       })
+      // Terminal rows (adopted / gated_out / exhausted) are kept verbatim by
+      // appendGapCandidates; stamp this run's disposition onto EVERY queued
+      // web-only candidate so the queue can tell a real gate rejection from
+      // an extraction failure or an identity loss.
+      const stamped = await recordGapCandidateDispositions(
+        db,
+        gapEntries.filter((entry) => entry.disposition).map((entry) => ({
+          profile_id: entry.profile_id,
+          url: entry.url,
+          canonical_key: entry.canonical_key,
+          disposition: entry.disposition,
+          evidence: entry.disposition_evidence ?? null,
+        })),
+        { now },
+      )
+      result.gap_queue = { ...result.gap_queue, dispositions_recorded: stamped.updated }
     } catch (err) {
       log.warn('gap-queue append failed (non-fatal)', { error: err?.message })
     }
@@ -1336,7 +2258,9 @@ export async function runWebParityBenchmark(db, {
       profiles_scored: scored.length,
       profiles_unscored: unscored,
       scored_profiles_parity: scoredProfilesParity,
-      profiles: perProfile.map((p) => ({ profile_id: p.profile_id, parity: p.parity, web_only: p.web_only_count ?? 0 })),
+      disposition_counts: fleetDispositionCounts,
+      provider_health: providerHealth,
+      profiles: perProfile.map((p) => ({ profile_id: p.profile_id, parity: p.parity, web_only: p.web_only_count ?? 0, disposition_counts: p.disposition_counts ?? {} })),
       gap_queue: result.gap_queue,
     },
   })
@@ -1354,11 +2278,16 @@ export default {
   STALE_MS,
   BENCHMARK_SEMANTICS_VERSION,
   MIN_VERIFIED_DENOMINATOR,
+  GAP_SEED_MAX_OFFERS,
+  NOT_EVALUATED_RESEED_COOLDOWN_MS,
+  WEB_ONLY_DISPOSITIONS,
+  GATE_NAMES,
   computeFleetParitySample,
   REGRESSION_POINTS,
   AGGREGATOR_NOISE_DOMAINS,
   isWebParityBenchmarkEnabled,
   normalizeUrlKey,
+  isExcludedNoiseUrl,
   isRealFundingHit,
   isForeignGovernmentHit,
   isBenchmarkRelevantHit,
@@ -1366,8 +2295,16 @@ export default {
   isBenchmarkDirectFundingHit,
   parityScore,
   classifyWebResults,
+  disposeWebOnlyHit,
+  gateFromReason,
+  buildProviderHealth,
+  webLaneDefaults,
   readWebParityBenchmark,
   readWebParityGapQueue,
   appendGapCandidates,
+  recordGapCandidateDispositions,
+  markGapCandidateOutcomes,
+  loadGapSeedPagesForProfile,
+  isPendingGapStatus,
   runWebParityBenchmark,
 }
