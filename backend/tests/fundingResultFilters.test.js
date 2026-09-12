@@ -116,6 +116,34 @@ describe('lead-gen "scholarship" denylist', () => {
   it('does not flag a real scholarship', () => {
     expect(isLeadGenScholarship({ title: 'Peggy Perry Belcher Scholarship Fund', sponsor: 'MTSU' })).toBeNull()
   })
+
+  // Verbatim prod rows (2026-09-12): the ScholarshipPoints row surfaced as a
+  // direct ACCEPT; its partner rows share the same registration URL.
+  const FUNNEL_URL = 'https://www.campusreel.org/users/chances_tool_registration?partner_name=ScholarshipPoints&reg_source=scholarship'
+  it('flags the CampusReel ScholarshipPoints sweepstakes by name', () => {
+    expect(isLeadGenScholarship({ title: '$10,000 ScholarshipPoints Scholarship for University of West Florida', sponsor: 'ScholarshipPoints' })).toBeTruthy()
+    expect(isLeadGenScholarship({ title: '$10,000 ScholarshipPoints Scholarship for Vista', sponsor: 'CampusReel' })).toBeTruthy()
+  })
+  it('flags a partner-named row by the registration funnel URL, and routes it to not_a_grant', () => {
+    const appily = {
+      title: '$1,000 Appily No Essay Scholarship for University at Buffalo',
+      sponsor: 'Appily',
+      apply_url: 'https://www.campusreel.org/users/chances_tool_registration?partner_name=Appily&reg_source=scholarship',
+      description: 'When you register with CampusReel, you can automatically enroll in the Appily $1,000 no essay scholarship offering with no extra effort.',
+    }
+    expect(isLeadGenScholarship(appily)).toBe('CampusReel registration funnel')
+    expect(classifyFundingResult(appily).bucket).toBe(RESULT_BUCKETS.NOT_A_GRANT)
+    expect(isLeadGenScholarship({ title: 'Appily Easy Money Scholarship', sponsor: 'Appily', apply_url: 'https://mtsu.uloop.com/scholarships' })).toBeNull()
+  })
+  it('the boot-net SQL superset reaches the named funnel rows', () => {
+    const patterns = nonGrantTitleLikePatterns().map((p) => p.replaceAll('%', ''))
+    for (const title of ['$10,000 ScholarshipPoints Scholarship for Vista', 'CampusReel Scholarship for Pomona']) {
+      expect(patterns.some((p) => title.toLowerCase().includes(p)), title).toBe(true)
+    }
+  })
+  it('keeps the funnel URL out of a real row', () => {
+    expect(isLeadGenScholarship({ title: 'HOPE Scholarship', apply_url: 'https://www.tn.gov/collegepays', source_url: FUNNEL_URL.replace('campusreel.org', 'example.org') })).toBeNull()
+  })
 })
 
 describe('site-section / administrative pages (the TennCare nav-page class, 2026-08-22)', () => {
@@ -127,6 +155,8 @@ describe('site-section / administrative pages (the TennCare nav-page class, 2026
     'Reimbursement Information for RHC and FQHC Providers',
     'Member Benefit Table',
     'Programs and Facilities',
+    // TennCare members nav page, matched to 13 profiles (2026-09-12).
+    'Benefits & Services',
   ]
   // The page's REAL programs — the rows the adapter exists to find.
   const REAL_PROGRAM_TITLES = [
@@ -135,6 +165,8 @@ describe('site-section / administrative pages (the TennCare nav-page class, 2026
     'Katie Beckett Program',
     'CHOICES in Long-Term Services and Supports',
     'Family Caregiver Support Program',
+    // The menu label is anchored to the whole title; a program named around it stays.
+    'Veterans Benefits and Services Outreach Program',
   ]
 
   it.each(NAV_JUNK_TITLES)('flags the measured nav-page title: %s', (title) => {

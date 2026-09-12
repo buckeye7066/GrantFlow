@@ -86,10 +86,25 @@ export const LEAD_GEN_SCHOLARSHIP_PATTERNS = Object.freeze([
   { rx: /\bportal sync\b/i, label: 'Portal Sync' },
   { rx: /\bpawsitively smart\b/i, label: 'Pawsitively Smart' },
   { rx: /\byougov\b/i, label: 'YouGov' },
+  // CampusReel's "chances tool": "When you register with CampusReel, you can
+  // automatically enroll in ScholarshipPoints $10,000 scholarship" — one
+  // sweepstakes minted as a row per school (88 active rows, 2026-09-12).
+  { rx: /\bcampus\s?reel\b/i, label: 'CampusReel' },
+  { rx: /\bscholarship\s?points\b/i, label: 'ScholarshipPoints' },
 ])
+
+/**
+ * The registration page a lead-gen funnel sends every "apply" click to. The
+ * same funnel wears partner names (Appily, CollegeXpress, SmarterCollege) in
+ * title and sponsor, so the structural signal is the URL, not the name.
+ */
+const LEAD_GEN_FUNNEL_URL_RX = /campusreel\.org\/users\/chances_tool_registration/i
 
 export function isLeadGenScholarship(row) {
   if (!row || typeof row !== 'object') return null
+  for (const url of [row.apply_url, row.application_url, row.source_url, row.url]) {
+    if (url && LEAD_GEN_FUNNEL_URL_RX.test(String(url))) return 'CampusReel registration funnel'
+  }
   // `||` on the sponsor/funder pair: a row whose `sponsor` column is an empty
   // string (not NULL) would stop `??` from ever reading `funder`, so the
   // identity these registries match against silently lost the funder's name.
@@ -126,6 +141,10 @@ export const SITE_SECTION_PAGE_PATTERNS = Object.freeze([
   // Provider-directed pages: "Information for … Providers" is directed at the
   // program's vendors, never at the member/applicant the profile represents.
   { rx: /\binformation for\b.{0,40}\bproviders\b/i, label: 'provider_directed' },
+  // A bare menu label ("Benefits & Services", TennCare's members nav page,
+  // surfaced to 13 profiles 2026-09-12). Anchored to the WHOLE title: a real
+  // program that merely contains the words keeps its name around them.
+  { rx: /^\s*benefits?\s*(?:&|and)\s*services\s*$/i, label: 'benefits_and_services_menu' },
 ])
 
 export function isSiteSectionPage(row) {
@@ -812,7 +831,15 @@ export function nonGrantTitleLikePatterns() {
     '%portal sync%',
     '%pawsitively smart%',
     '%yougov%',
+    '%campusreel%',
+    '%campus reel%',
+    '%scholarshippoints%',
+    '%scholarship points%',
     // site-section / administrative pages (the TennCare nav-page class)
+    '%benefits & services%',
+    '%benefit & services%',
+    '%benefits and services%',
+    '%benefit and services%',
     '%program integrity%',
     '%public notice%',
     '%state plan%',
