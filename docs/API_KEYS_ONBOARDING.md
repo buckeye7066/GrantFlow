@@ -28,7 +28,8 @@ admin.
 | **NSF Awards** | ✅ yes (science/edu research) | **No** | *(none)* | [NSF Award API](https://resources.research.gov/common/webapi/awardapisearch-v1.htm) |
 | **ProPublica Nonprofit Explorer** | ✅ yes (foundations / grantmakers) | **No** | *(none)* | [projects.propublica.org/nonprofits/api](https://projects.propublica.org/nonprofits/api/) |
 | **Simpler.Grants.gov** | ✅ yes (modern HHS opportunities) | **Yes** (Login.gov) | `SIMPLER_GRANTS_API_KEY` | [simpler.grants.gov/developers](https://simpler.grants.gov/developers) |
-| **SAM.gov Assistance Listings / Opportunities** | ✅ yes (CFDA catalog) | **Yes** (SAM.gov account) | `SAM_GOV_PUBLIC_API_KEY` | [sam.gov/profile/details](https://sam.gov/profile/details) |
+| **SAM.gov Assistance Listings (CFDA search)** | ✅ yes (CFDA catalog) | **No** — keyless SAM.gov site search | *(none)* | `https://sam.gov/api/prod/sgs/v1/search?index=cfda` |
+| **SAM.gov Opportunities / Entity** | ✅ yes (solicitations) | **Yes** (SAM.gov account) | `SAM_GOV_PUBLIC_API_KEY` | [sam.gov/profile/details](https://sam.gov/profile/details) |
 | **api.data.gov** | enrichment only | Yes (self-service) | `API_DATA_GOV_KEY` | [api.data.gov/signup](https://api.data.gov/signup/) |
 
 > ⚠️ **api.data.gov keys do NOT work for SAM.gov.** They are separate GSA systems.
@@ -127,8 +128,12 @@ Docs: [wiki.simpler.grants.gov/product/api](https://wiki.simpler.grants.gov/prod
 5. Copy the revealed key into `SAM_GOV_PUBLIC_API_KEY` (local `.env` **and** Railway).
 6. **Test:**
    ```bash
-   curl "https://api.sam.gov/assistance-listings/v1/search?api_key=<your-key>&keyword=health&limit=1"
+   curl "https://api.sam.gov/opportunities/v2/search?api_key=<your-key>&limit=1&postedFrom=01/01/2026&postedTo=01/31/2026"
    ```
+   Federal assistance listings do not use this key. GrantFlow searches them through
+   SAM.gov's keyless site search (`sam.gov/api/prod/sgs/v1/search?index=cfda`), because the
+   keyed assistance-listings API caps pages at 100, has no keyword search, and allows a
+   personal key 10 requests a day.
 
 Docs: [Assistance Listings API](https://open.gsa.gov/api/assistance-listings-api/) ·
 [Get Opportunities API](https://open.gsa.gov/api/get-opportunities-public-api/) ·
