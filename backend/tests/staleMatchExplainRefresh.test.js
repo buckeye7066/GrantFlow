@@ -7,6 +7,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import Database from 'better-sqlite3'
 import { runStaleMatchExplainRefresh } from '../services/matching/staleMatchExplainRefresh.js'
 import { PROFILE_SIGNAL_VERSION } from '../config/profileSignalVersion.js'
+import { qualifiesForDisplay } from '../config/matchSurfacing.js'
 
 function makeDb() {
   const db = new Database(':memory:')
@@ -208,11 +209,11 @@ const PROVEN = Object.freeze({
   },
 })
 
-function stubProvingEngine({ decision = 'accept', matchedNeeds = ['education'], signals = ['applicant_type', 'geo:state'] } = {}) {
+function stubProvingEngine({ decision = 'accept', eligible = true, matchedNeeds = ['education'], signals = ['applicant_type', 'geo:state'] } = {}) {
   return () => ({
     decision,
     score: 91,
-    eligible: true,
+    eligible,
     matchedNeeds,
     missingEligibilityFields: [],
     explanation: 'engine-refresh',
@@ -276,30 +277,27 @@ describe('four-truth proof survives the drain', () => {
     expect(row.match_explanation).toMatch(/no four-truth proof on record/)
   })
 
-  it('an ACCEPT-ONLY lane (catalog-rescore-link) keeps its PREVIOUS passing proof, not a fresh failing one, when the write-policy refuses to downgrade — and survives the integrity net (regression: Axiom BioLabs NSF class, 2026-09-12)', async () => {
+  it.each(['accept', 'reject'])('retains linker provenance but refuses stale positive proof after a fresh %s with failed truths', async (decision) => {
     const raw = makeDb()
     seedPair(raw, { matcherVersion: 'catalog-rescore-link', explain: PROVEN })
     const db = wrap(raw)
-    // Engine still calls the pair ACCEPT, but this recompute finds no matched
-    // need — the exact shape a transient/in-flight signal-derivation
-    // disagreement produces WITHOUT ever writing a negative verdict to
-    // match_decision (ACCEPT_ONLY_VERSIONS refuses the downgrade below).
     const summary = await runStaleMatchExplainRefresh(db, {
       pairBudget: 10,
       writeEnabled: true,
-      deps: { thesisNeedsDefaulted: async () => false, computeMatchDecision: stubProvingEngine({ matchedNeeds: [] }) },
+      deps: { thesisNeedsDefaulted: async () => false, computeMatchDecision: stubProvingEngine({ decision, eligible: decision !== 'reject', matchedNeeds: [] }) },
     })
     expect(summary.refreshed).toBe(1)
     const row = raw.prepare('SELECT match_decision, match_explanation, match_explain_json FROM profile_opportunity_matches WHERE id = ?').get('m1')
-    // The write-policy preserves the stored ACCEPT decision...
+    // Admission belongs to the linker; current display eligibility belongs to
+    // the refreshed proof, even when the admission column is retained.
     expect(row.match_decision).toBe('accept')
-    // ...so the persisted proof must still be POSITIVE, matching that decision
-    // — never the fresh failing recompute the policy just refused to apply.
     const explain = JSON.parse(row.match_explain_json)
-    expect(explain.four_truth_proof.all_passed).toBe(true)
-    expect(explain.four_truth_proof).toEqual(PROVEN.four_truth_proof)
-    // The row must SURVIVE the very next integrity sweep in the boot ladder,
-    // not be silently deleted for a proof this drain itself corrupted.
+    expect(explain.four_truth_proof.all_passed).toBe(false)
+    expect(explain.four_truth_proof.meets_profile_need.matched_needs).toEqual([])
+    expect(explain.previous_four_truth_proof).toEqual(PROVEN.four_truth_proof)
+    expect(qualifiesForDisplay({ ...row, opportunity_kind: 'SCHOLARSHIP' })).toBe(false)
+    // Retain the row for recovery through its owning linker, without exposing
+    // historical eligibility as if the current evaluation had proved it.
     const { normalizePersistedMatchDecisionIntegrity } = await import('../services/matching/matchDecisionIntegrity.js')
     await normalizePersistedMatchDecisionIntegrity(db, { profileId: 'p1' })
     const survivor = raw.prepare('SELECT id FROM profile_opportunity_matches WHERE id = ?').get('m1')
