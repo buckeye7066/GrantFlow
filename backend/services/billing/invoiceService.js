@@ -29,7 +29,7 @@ import { sendEmail } from '../email.js'
 import { ADMIN_EMAIL } from '../../config/constants.js'
 import { createLogger } from '../../utils/logger.js'
 import { notifyProfile } from '../comms/commsService.js'
-import { suspendProfile, reactivateProfile, cadenceCycleDays } from './accountStatus.js'
+import { suspendProfile, reactivateProfile, cadenceCycleDays, readProfileLifecycleStatus } from './accountStatus.js'
 
 const log = createLogger('invoiceService')
 
@@ -122,6 +122,159 @@ async function isSyntheticProfile(db, profileId) {
     const row = await db.prepare('SELECT created_by FROM profiles WHERE id = ? LIMIT 1').get(String(profileId))
     return String(row?.created_by || '') === 'agent:amy'
   } catch { return false }
+}
+
+/**
+ * A deleted profile is never billed, chased, or suspended. Returns 'live',
+ * 'deleted', or 'unknown'. "Deleted" is profiles.status = 'deleted' (soft
+ * delete) OR no profiles row at all (a hard delete cascades billing_accounts
+ * away, but billing_invoices has no FK, so its invoices outlive the profile).
+ * 'unknown' means the read failed: callers FAIL CLOSED — skip billing work for
+ * that profile this pass and touch nothing, so a transient error neither bills
+ * nor voids.
+ */
+async function profileBillingLifecycle(db, profileId) {
+  const state = await readProfileLifecycleStatus(db, profileId)
+  if (!state) return 'unknown'
+  return !state.exists || state.status === 'deleted' ? 'deleted' : 'live'
+}
+
+/**
+ * Void the open invoices (every OPEN_INVOICE_STATUSES value, 'suspended'
+ * included) of every deleted or vanished profile. Runs at the top of dunning,
+ * BEFORE pro bono reconciliation, so a deleted pro bono profile's invoice is
+ * voided as profile_deleted instead of being re-settled.
+ */
+async function voidOpenInvoicesOfDeletedProfiles(db) {
+  const safeOpenStatusPlaceholders = OPEN_INVOICE_STATUSES.map(() => '?').join(',')
+  const rows = await db.prepare(
+    `SELECT DISTINCT profile_id FROM billing_invoices
+      WHERE status IN (${safeOpenStatusPlaceholders})`,
+  ).all(...OPEN_INVOICE_STATUSES)
+  let voided = 0
+  for (const row of rows || []) {
+    if (!row?.profile_id) continue
+    if (await profileBillingLifecycle(db, row.profile_id) !== 'deleted') continue
+    const r = await voidOpenInvoicesForDeletedProfile(db, { profileId: row.profile_id })
+    voided += r.voided || 0
+  }
+  // Retry Checkout expiry for invoices already voided for profile_deleted whose
+  // link could not be expired earlier (a successful expiry clears the link).
+  const pendingLinks = await db.prepare(
+    `SELECT id, stripe_payment_link FROM billing_invoices
+      WHERE status = 'void' AND settled_reason = 'profile_deleted' AND stripe_payment_link IS NOT NULL`,
+  ).all()
+  const retried = await expireAndClearInvoiceLinks(db, pendingLinks)
+  return { voided, links_retried: (pendingLinks || []).filter((row) => row?.stripe_payment_link).length, links_expired_on_retry: retried.expired }
+}
+
+/**
+ * Void every invoice on a deleted profile that still asks for money, so nothing
+ * dangling is chased. Called by the profile delete route; dunning applies the
+ * same rule to profiles deleted before this existed. Paid / pro bono / void
+ * rows are history and stay untouched. Restoring a profile does not un-void.
+ */
+export async function voidOpenInvoicesForDeletedProfile(db, { profileId, expireLinks = true } = {}) {
+  if (!profileId) return { ok: false, error: 'profile_id_required', voided: 0, links_expired: 0, links_not_expired: 0 }
+  await ensureInvoiceSchema(db)
+  const pid = String(profileId)
+  const safeOpenStatusPlaceholders = OPEN_INVOICE_STATUSES.map(() => '?').join(',')
+  const open = await db.prepare(
+    `SELECT id, stripe_payment_link FROM billing_invoices
+      WHERE profile_id = ? AND status IN (${safeOpenStatusPlaceholders})`,
+  ).all(pid, ...OPEN_INVOICE_STATUSES)
+  const res = await db.prepare(
+    `UPDATE billing_invoices SET status = 'void', settled_reason = 'profile_deleted'
+      WHERE profile_id = ? AND status IN (${safeOpenStatusPlaceholders})`,
+  ).run(pid, ...OPEN_INVOICE_STATUSES)
+  const voided = Number(res?.changes ?? 0) || 0
+  if (!expireLinks) {
+    // HTTP request paths: the local void above is already committed, but the
+    // remote Stripe expiry must never hold the response open. Start it without
+    // awaiting; a link it does not expire stays on the void row and the dunning
+    // sweep's retry picks it up.
+    const pending = (open || []).filter((row) => row?.stripe_payment_link)
+    if (pending.length) {
+      expireAndClearInvoiceLinks(db, pending)
+        .then((r) => log.info('deferred payment link expiry finished', { profile_id: pid, links_expired: r.expired, links_not_expired: r.not_expired }))
+        .catch((err) => log.warn('deferred payment link expiry failed; dunning will retry', { profile_id: pid, error: err?.message }))
+    }
+    log.info('open invoices voided — profile deleted (link expiry deferred)', { profile_id: pid, voided, links_deferred: pending.length })
+    return { ok: true, profile_id: pid, voided, links_expired: 0, links_not_expired: 0, links_expiry_deferred: pending.length }
+  }
+  const links = await expireAndClearInvoiceLinks(db, open)
+  log.info('open invoices voided — profile deleted', { profile_id: pid, voided, links_expired: links.expired, links_not_expired: links.not_expired })
+  return { ok: true, profile_id: pid, voided, links_expired: links.expired, links_not_expired: links.not_expired }
+}
+
+/**
+ * Every writer that marks profiles deleted (the profile and organization
+ * delete routes, profile merge, the dedupe and orphan-maintenance scripts)
+ * calls this so no deleted profile keeps an open invoice or a payable link.
+ * Acts only on profiles whose lifecycle now reads deleted or missing, so a
+ * caller can never void a live profile's billing. Best-effort; never throws.
+ */
+export async function voidInvoicesForDeletedProfiles(db, profileIds = [], { expireLinks = true } = {}) {
+  const ids = [...new Set((profileIds || []).filter(Boolean).map(String))]
+  let voided = 0
+  let failed = 0
+  for (const profileId of ids) {
+    try {
+      if (await profileBillingLifecycle(db, profileId) !== 'deleted') continue
+      const r = await voidOpenInvoicesForDeletedProfile(db, { profileId, expireLinks })
+      voided += r.voided || 0
+    } catch (err) {
+      failed += 1
+      log.warn('void invoices for deleted profile failed', { profile_id: profileId, error: err?.message })
+    }
+  }
+  return { profiles: ids.length, voided, failed }
+}
+
+/**
+ * Best-effort: expire the Stripe Checkout Session behind each voided invoice's
+ * emailed payment link, then clear the link so the invoice leaves the retry
+ * set. A link is cleared only when the session is expired (or already
+ * expired/paid) or can never be expired (not a Checkout URL); any other
+ * failure KEEPS the link, and the dunning sweep retries it every pass. The
+ * session id is not stored; stripeService derives it from the Checkout URL
+ * path. Never throws — a Stripe outage must never fail a delete or a dunning
+ * pass (markInvoicePaid still refuses to turn a void invoice into paid).
+ */
+async function expireAndClearInvoiceLinks(db, rows) {
+  const withLinks = (rows || []).filter((row) => row?.id && row?.stripe_payment_link)
+  let expired = 0
+  let notExpired = 0
+  if (!withLinks.length) return { expired, not_expired: notExpired }
+  let expireFn = null
+  try {
+    const mod = await import('../stripeService.js')
+    expireFn = mod?.expireCheckoutSessionForUrl
+  } catch (err) { log.warn('stripe payment link expiry unavailable', { error: err?.message }) }
+  for (const row of withLinks) {
+    let r
+    try {
+      r = typeof expireFn === 'function'
+        ? await expireFn(String(row.stripe_payment_link))
+        : { ok: false, reason: 'stripe_service_unavailable' }
+    } catch (err) {
+      r = { ok: false, reason: 'stripe_expire_threw', error: err?.message }
+    }
+    if (r?.ok || r?.terminal) {
+      try {
+        await db.prepare(`UPDATE billing_invoices SET stripe_payment_link = NULL WHERE id = ? AND status = 'void'`).run(row.id)
+      } catch (err) { log.warn('could not clear expired payment link', { invoice_id: row.id, error: err?.message }) }
+      if (r?.ok) expired += 1
+      else {
+        notExpired += 1
+        log.warn('payment link cannot be expired (not a Checkout Session); cleared', { invoice_id: row.id, reason: r?.reason || null })
+      }
+    } else {
+      notExpired += 1
+      log.warn('stripe payment link NOT expired for voided invoice; kept for retry', { invoice_id: row.id, reason: r?.reason || 'unknown', session_id: r?.session_id || null })
+    }
+  }
+  return { expired, not_expired: notExpired }
 }
 
 export function isNonRoutableEmail(email) {
@@ -262,6 +415,15 @@ export async function generateInvoiceForAccount(db, accountRow, { now = new Date
     log.info('invoice skipped — synthetic (agent:amy) profile', { profile_id: account.profile_id })
     return null
   }
+  const lifecycle = await profileBillingLifecycle(db, account.profile_id)
+  if (lifecycle === 'deleted') {
+    log.info('invoice skipped — profile deleted', { profile_id: account.profile_id })
+    return null
+  }
+  if (lifecycle === 'unknown') {
+    log.warn('invoice skipped — profile lifecycle unreadable', { profile_id: account.profile_id })
+    return null
+  }
   const cadence = normalizeCadence(accountRow.billing_cadence || account.billing_cadence)
   // billing_anchor_at doubles as the biweekly parity epoch: the every-other-
   // Friday alternation is pinned to the account's persisted anchor (or the
@@ -311,6 +473,28 @@ export async function generateInvoiceForAccount(db, accountRow, { now = new Date
     gross, proBono ? gross : 0, dbBool(db, proBono), proBono ? 'pro_bono' : null, paidAt)
 
   const orgName = await resolveOrgName(db, account.profile_id)
+
+  // Re-check immediately before delivery, after every other lookup: a delete
+  // that landed after the first check — even after its void sweep finished —
+  // must not leave a live invoice or send an email. An unreadable lifecycle
+  // sends nothing; the invoice stays for the next cycle's dunning pass.
+  const lifecycleAtSend = await profileBillingLifecycle(db, account.profile_id)
+  if (lifecycleAtSend === 'deleted') {
+    await db.prepare(`UPDATE billing_invoices SET status = 'void', settled_reason = 'profile_deleted' WHERE id = ?`).run(id)
+    await expireAndClearInvoiceLinks(db, [{ id, stripe_payment_link: paymentLink }])
+    log.info('invoice voided — profile deleted during generation', { profile_id: account.profile_id, invoice_id: id })
+    return null
+  }
+  if (lifecycleAtSend === 'unknown') {
+    // Never leave an issued-but-undelivered invoice (dunning would chase a bill
+    // nobody received, and a pro bono statement would never go out): remove the
+    // row just inserted and expire its link, so the next cycle regenerates and
+    // emails it normally.
+    await db.prepare('DELETE FROM billing_invoices WHERE id = ? AND status = ?').run(id, status)
+    await expireAndClearInvoiceLinks(db, [{ id, stripe_payment_link: paymentLink }])
+    log.warn('invoice withdrawn before delivery — profile lifecycle unreadable; the next cycle regenerates it', { profile_id: account.profile_id, invoice_id: id, period: moment.period_key })
+    return null
+  }
   if (recipient && !isNonRoutableEmail(recipient)) {
     const mail = buildInvoiceEmail({
       orgName, amountCents: due, periodStart: moment.period_start, periodEnd: moment.period_end, cadence,
@@ -321,6 +505,16 @@ export async function generateInvoiceForAccount(db, accountRow, { now = new Date
   }
   log.info(proBono ? 'pro bono statement generated' : 'invoice generated', { profile_id: account.profile_id, period: moment.period_key, amount_due: due, gross, emailed: Boolean(recipient) })
   return { id, profile_id: account.profile_id, period_key: moment.period_key, amount_cents: due, gross_amount_cents: gross, is_pro_bono: proBono }
+}
+
+/**
+ * Did a guarded UPDATE change a row? Real adapters report a row count (SQLite
+ * `changes`, Postgres rowCount as `changes`); 0 means the guard refused the
+ * transition. An adapter that reports no count is treated as applied.
+ */
+function writeApplied(result) {
+  if (!result || typeof result.changes !== 'number') return true
+  return result.changes > 0
 }
 
 /** Boolean bind value for the active dialect (better-sqlite3 rejects JS booleans). */
@@ -344,6 +538,20 @@ export async function settleInvoicesAsProBono(db, { profileId, now = new Date(),
   if (!profileId) return { ok: false, error: 'profile_id_required', settled: 0, reactivated: false }
   await ensureInvoiceSchema(db)
   const pid = String(profileId)
+  // Shared guard for every caller (dunning, POST /admin/pro-bono/reconcile, the
+  // account-update flag flip): a deleted profile's invoices are voided as
+  // profile_deleted, never settled as pro bono; an unreadable lifecycle does
+  // nothing.
+  const lifecycle = await profileBillingLifecycle(db, pid)
+  if (lifecycle === 'deleted') {
+    const v = await voidOpenInvoicesForDeletedProfile(db, { profileId: pid })
+    log.info('pro bono settlement skipped — profile deleted; open invoices voided', { profile_id: pid, voided: v.voided, by: settledBy })
+    return { ok: true, profile_id: pid, settled: 0, reactivated: false, skipped: 'profile_deleted', voided: v.voided }
+  }
+  if (lifecycle === 'unknown') {
+    log.warn('pro bono settlement skipped — profile lifecycle unreadable', { profile_id: pid, by: settledBy })
+    return { ok: false, profile_id: pid, settled: 0, reactivated: false, error: 'lifecycle_unreadable' }
+  }
   const placeholders = OPEN_INVOICE_STATUSES.map(() => '?').join(',')
   const open = await db.prepare(
     `SELECT id, status, amount_cents, gross_amount_cents FROM billing_invoices WHERE profile_id = ? AND status IN (${placeholders})`,
@@ -351,18 +559,25 @@ export async function settleInvoicesAsProBono(db, { profileId, now = new Date(),
   if (!open?.length) return { ok: true, profile_id: pid, settled: 0, reactivated: false }
 
   const nowIso = now.toISOString()
+  const settledRows = []
   for (const inv of open) {
     const gross = Number.isFinite(Number(inv.gross_amount_cents)) && inv.gross_amount_cents !== null
       ? Number(inv.gross_amount_cents)
       : Number(inv.amount_cents) || 0
-    await db.prepare(
+    // Atomic settlement: only an invoice still in the open status we read, on a
+    // profile that is still not deleted, is settled (and has its link cleared).
+    // A void that landed after the read wins and keeps its link for the retry scan.
+    const settleWrite = await db.prepare(
       `UPDATE billing_invoices
           SET status = ?, amount_cents = 0, gross_amount_cents = ?, pro_bono_credit_cents = ?, is_pro_bono = ?,
               settled_reason = ?, paid_at = COALESCE(paid_at, ?), stripe_payment_link = NULL
-        WHERE id = ?`,
-    ).run(PRO_BONO_INVOICE_STATUS, gross, gross, dbBool(db, true), 'pro_bono', nowIso, inv.id)
+        WHERE id = ? AND status = ?
+          AND EXISTS (SELECT 1 FROM profiles p WHERE p.id = billing_invoices.profile_id AND COALESCE(p.status, '') <> 'deleted')`,
+    ).run(PRO_BONO_INVOICE_STATUS, gross, gross, dbBool(db, true), 'pro_bono', nowIso, inv.id, inv.status)
+    if (writeApplied(settleWrite)) settledRows.push(inv)
+    else log.info('pro bono settlement skipped — invoice or profile changed since read', { invoice_id: inv.id, profile_id: pid })
   }
-  const hadSuspension = open.some((inv) => inv.status === 'suspended')
+  const hadSuspension = settledRows.some((inv) => inv.status === 'suspended')
   let reactivated = false
   if (hadSuspension) {
     let prof = null
@@ -372,8 +587,8 @@ export async function settleInvoicesAsProBono(db, { profileId, now = new Date(),
       reactivated = Boolean(r?.ok)
     }
   }
-  log.info('invoices settled as pro bono', { profile_id: pid, settled: open.length, reactivated, by: settledBy })
-  return { ok: true, profile_id: pid, settled: open.length, reactivated }
+  log.info('invoices settled as pro bono', { profile_id: pid, settled: settledRows.length, reactivated, by: settledBy })
+  return { ok: true, profile_id: pid, settled: settledRows.length, reactivated }
 }
 
 /**
@@ -418,6 +633,10 @@ export async function processDunning(db, { now = new Date() } = {}) {
   // override. Otherwise we keep reminding but never lock anyone out.
   const canSuspend = Boolean(process.env.STRIPE_SECRET_KEY)
     || String(process.env.BILLING_ALLOW_SUSPEND_WITHOUT_STRIPE || 'false').toLowerCase() === 'true'
+  // Deleted profiles first, across every open status, and before pro bono
+  // reconciliation could re-settle their invoices.
+  const deletedSweep = await voidOpenInvoicesOfDeletedProfiles(db)
+    .catch((err) => { log.warn('deleted-profile invoice sweep failed', { error: err?.message }); return { voided: 0 } })
   // Re-read the pro bono flag BEFORE chasing anything: an invoice issued before
   // the grant is settled ($0 due) here, so it can never remind or suspend.
   const reconciled = await reconcileProBonoAccounts(db, { now })
@@ -426,7 +645,26 @@ export async function processDunning(db, { now = new Date() } = {}) {
   let reminded = 0
   let suspended = 0
   let voided = 0
+  let voidedDeleted = 0
+  let skippedUnreadable = 0
   for (const inv of open || []) {
+    // A deleted profile is never reminded or suspended: suspending it would
+    // overwrite status 'deleted' and email a "paused" notice to someone who
+    // deleted their account. Void it (same rule the delete route applies).
+    // An unreadable lifecycle fails closed: no reminder, no suspend, no void.
+    const lifecycle = await profileBillingLifecycle(db, inv.profile_id)
+    if (lifecycle === 'unknown') {
+      log.warn('dunning skipped invoice — profile lifecycle unreadable', { invoice_id: inv.id, profile_id: inv.profile_id })
+      skippedUnreadable += 1
+      continue
+    }
+    if (lifecycle === 'deleted') {
+      await db.prepare(`UPDATE billing_invoices SET status = 'void', settled_reason = 'profile_deleted' WHERE id = ?`).run(inv.id)
+      await expireAndClearInvoiceLinks(db, [inv])
+      log.info('invoice voided — profile deleted', { invoice_id: inv.id, profile_id: inv.profile_id })
+      voidedDeleted += 1
+      continue
+    }
     // Retire invoices that can never be paid: synthetic (agent:amy) profiles
     // and non-routable `.invalid` recipients. Voiding stops the daily reminder
     // -> bounce loop; existing bad rows heal on the next dunning pass.
@@ -446,7 +684,18 @@ export async function processDunning(db, { now = new Date() } = {}) {
     const cycleDays = Number(process.env.BILLING_SUSPEND_DAYS) || cadenceCycleDays(inv.cadence)
 
     if (ageDays >= cycleDays && canSuspend) {
-      await db.prepare(`UPDATE billing_invoices SET status = 'suspended', suspended_at = ? WHERE id = ?`).run(now.toISOString(), inv.id)
+      // Atomic transition: only an invoice still in the status we read, on a
+      // profile that is still not deleted, is suspended — a void or delete that
+      // landed after the read wins, and nothing is suspended or sent.
+      const suspendWrite = await db.prepare(
+        `UPDATE billing_invoices SET status = 'suspended', suspended_at = ?
+          WHERE id = ? AND status = ?
+            AND EXISTS (SELECT 1 FROM profiles p WHERE p.id = billing_invoices.profile_id AND COALESCE(p.status, '') <> 'deleted')`,
+      ).run(now.toISOString(), inv.id, inv.status)
+      if (!writeApplied(suspendWrite)) {
+        log.info('dunning suspend skipped — invoice or profile changed since read', { invoice_id: inv.id, profile_id: inv.profile_id })
+        continue
+      }
       // Single suspension path (sets profile status + notifies profile & admin
       // with how to lift). Pass the invoice's payment link when present.
       await suspendProfile(db, {
@@ -457,7 +706,15 @@ export async function processDunning(db, { now = new Date() } = {}) {
       }).catch((err) => log.warn('suspendProfile failed', { error: err?.message }))
       suspended += 1
     } else if (ageDays >= SECOND_NOTICE_DAYS() && inv.status === 'sent') {
-      await db.prepare(`UPDATE billing_invoices SET status = 'second_notice', reminders_sent = reminders_sent + 1, last_reminder_at = ? WHERE id = ?`).run(now.toISOString(), inv.id)
+      const remindWrite = await db.prepare(
+        `UPDATE billing_invoices SET status = 'second_notice', reminders_sent = reminders_sent + 1, last_reminder_at = ?
+          WHERE id = ? AND status = 'sent'
+            AND EXISTS (SELECT 1 FROM profiles p WHERE p.id = billing_invoices.profile_id AND COALESCE(p.status, '') <> 'deleted')`,
+      ).run(now.toISOString(), inv.id)
+      if (!writeApplied(remindWrite)) {
+        log.info('dunning reminder skipped — invoice or profile changed since read', { invoice_id: inv.id, profile_id: inv.profile_id })
+        continue
+      }
       const orgName = await resolveOrgName(db, inv.profile_id)
       if (inv.recipient_email) {
         const mail = buildInvoiceEmail({ orgName, amountCents: inv.amount_cents, periodStart: inv.period_start, periodEnd: inv.period_end, cadence: inv.cadence, dueDate: inv.due_at ? String(inv.due_at).slice(0, 10) : null, paymentLink: inv.stripe_payment_link, secondNotice: true })
@@ -466,7 +723,15 @@ export async function processDunning(db, { now = new Date() } = {}) {
       reminded += 1
     }
   }
-  return { reminded, suspended, voided, pro_bono_settled: reconciled.settled || 0 }
+  return {
+    reminded,
+    suspended,
+    voided,
+    voided_deleted_profile: (deletedSweep.voided || 0) + voidedDeleted,
+    payment_links_expired_on_retry: deletedSweep.links_expired_on_retry || 0,
+    skipped_unreadable_profile: skippedUnreadable,
+    pro_bono_settled: reconciled.settled || 0,
+  }
 }
 
 /** Mark an invoice paid (Stripe webhook or admin) + lift any suspension. */
@@ -478,13 +743,90 @@ export async function markInvoicePaid(db, { invoiceId = null, profileId = null, 
   else if (profileId) inv = await db.prepare(`SELECT * FROM billing_invoices WHERE profile_id = ? AND status IN ('sent','second_notice','suspended') ORDER BY issued_at DESC LIMIT 1`).get(profileId)
   if (!inv) return { ok: false, error: 'invoice_not_found' }
 
-  await db.prepare(`UPDATE billing_invoices SET status = 'paid', paid_at = ? WHERE id = ?`).run(new Date().toISOString(), inv.id)
-  // If the profile was suspended for this invoice, reactivate.
-  if (inv.status === 'suspended') {
-    try { await db.prepare(`UPDATE profiles SET status = 'active' WHERE id = ?`).run(inv.profile_id) } catch { /* status col */ }
+  if (inv.status === 'void') return recordPaymentOnVoidInvoice(db, inv, source)
+
+  // The paid transition refuses a VOID invoice in the UPDATE itself: a delete
+  // that voided the invoice after the read above wins, and the payment takes
+  // the refund path instead of rewriting it to 'paid'.
+  // The write also requires a live profile: a delete that committed before its
+  // invoice cleanup ran must not let a webhook keep the payment silently.
+  const paidWrite = await db.prepare(
+    `UPDATE billing_invoices SET status = 'paid', paid_at = ?
+      WHERE id = ? AND status <> 'void'
+        AND EXISTS (SELECT 1 FROM profiles p WHERE p.id = billing_invoices.profile_id AND COALESCE(p.status, '') <> 'deleted')`,
+  ).run(new Date().toISOString(), inv.id)
+  if (!writeApplied(paidWrite)) {
+    let fresh = await db.prepare('SELECT * FROM billing_invoices WHERE id = ?').get(inv.id)
+    if (fresh?.status === 'void') return recordPaymentOnVoidInvoice(db, fresh, source)
+    if (fresh && await profileBillingLifecycle(db, fresh.profile_id) === 'deleted') {
+      // The profile is gone but its invoice was not voided yet: void it now
+      // (only while it is still open), then take the refund path.
+      const safeOpenStatusPlaceholders = OPEN_INVOICE_STATUSES.map(() => '?').join(',')
+      await db.prepare(
+        `UPDATE billing_invoices SET status = 'void', settled_reason = 'profile_deleted'
+          WHERE id = ? AND status IN (${safeOpenStatusPlaceholders})`,
+      ).run(fresh.id, ...OPEN_INVOICE_STATUSES)
+      fresh = await db.prepare('SELECT * FROM billing_invoices WHERE id = ?').get(inv.id)
+      if (fresh?.status === 'void') return recordPaymentOnVoidInvoice(db, fresh, source)
+    }
+    return { ok: false, error: 'invoice_not_updated', invoice_id: inv.id, profile_id: inv.profile_id }
   }
-  log.info('invoice paid', { invoice_id: inv.id, profile_id: inv.profile_id, source })
-  return { ok: true, invoice_id: inv.id, profile_id: inv.profile_id, reactivated: inv.status === 'suspended' }
+  return finishPaidInvoice(db, inv, source)
+}
+
+/**
+ * A VOID invoice is never turned into 'paid' — a late payment on a deleted
+ * profile's emailed link must not rewrite history or touch the profile. Record
+ * that money arrived (paid_at), keep status 'void', and alert the owner so the
+ * payment can be refunded.
+ */
+async function recordPaymentOnVoidInvoice(db, inv, source) {
+  {
+    try {
+      await db.prepare(`UPDATE billing_invoices SET paid_at = COALESCE(paid_at, ?) WHERE id = ?`).run(new Date().toISOString(), inv.id)
+    } catch (err) { log.warn('could not record payment on voided invoice', { invoice_id: inv.id, error: err?.message }) }
+    log.warn('payment received on a VOIDED invoice — refund needed', { invoice_id: inv.id, profile_id: inv.profile_id, settled_reason: inv.settled_reason || null, source })
+    const admin = ownerCc()
+    if (admin) {
+      try {
+        await sendEmail({
+          to: admin,
+          subject: `[GrantFlow admin] Refund needed: payment received on voided invoice ${inv.id}`,
+          text: [
+            `A payment arrived (${source}) for invoice ${inv.id} on profile ${inv.profile_id}, but that invoice is VOID (reason: ${inv.settled_reason || 'unspecified'}).`,
+            `Invoice amount: ${money(inv.amount_cents)}.`,
+            'The invoice was NOT marked paid and the profile status was NOT changed.',
+            `Refund the payment in the Stripe dashboard (Checkout Session metadata billing_invoice_id = ${inv.id}).`,
+          ].join('\n'),
+        })
+      } catch (err) { log.warn('refund-needed alert email failed', { invoice_id: inv.id, error: err?.message }) }
+    }
+    return {
+      ok: true,
+      invoice_id: inv.id,
+      profile_id: inv.profile_id,
+      reactivated: false,
+      status: 'void',
+      payment_on_void: true,
+      refund_needed: true,
+      settled_reason: inv.settled_reason || null,
+    }
+  }
+}
+
+/** After a confirmed paid write: lift a billing suspension (never a deleted profile). */
+async function finishPaidInvoice(db, inv, source) {
+  // If the profile was suspended for this invoice, reactivate — never a deleted
+  // profile (a late payment must not resurrect it).
+  let reactivated = false
+  if (inv.status === 'suspended') {
+    try {
+      const res = await db.prepare(`UPDATE profiles SET status = 'active' WHERE id = ? AND COALESCE(status, '') <> 'deleted'`).run(inv.profile_id)
+      reactivated = res && typeof res.changes === 'number' ? res.changes > 0 : true
+    } catch { /* status col */ }
+  }
+  log.info('invoice paid', { invoice_id: inv.id, profile_id: inv.profile_id, source, reactivated })
+  return { ok: true, invoice_id: inv.id, profile_id: inv.profile_id, reactivated }
 }
 
 /**
@@ -496,13 +838,19 @@ export async function runBillingCycle(db, { now = new Date(), force = false } = 
   await ensureInvoiceSchema(db)
   let generated = 0
   try {
-    const accounts = await db.prepare('SELECT * FROM billing_accounts').all()
+    // Deleted profiles are never selected (soft delete keeps the profiles row,
+    // so the ON DELETE CASCADE never fires). generateInvoiceForAccount re-checks.
+    const accounts = await db.prepare(
+      `SELECT ba.* FROM billing_accounts ba
+         JOIN profiles p ON p.id = ba.profile_id
+        WHERE COALESCE(p.status, '') <> 'deleted'`,
+    ).all()
     for (const acc of accounts || []) {
       const r = await generateInvoiceForAccount(db, acc, { now }).catch((e) => { log.warn('generate failed', { profile_id: acc.profile_id, error: e?.message }); return null })
       if (r) generated += 1
     }
   } catch (err) { log.warn('runBillingCycle accounts query failed', { error: err?.message }) }
-  const dun = await processDunning(db, { now }).catch(() => ({ reminded: 0, suspended: 0, voided: 0, pro_bono_settled: 0 }))
+  const dun = await processDunning(db, { now }).catch(() => ({ reminded: 0, suspended: 0, voided: 0, voided_deleted_profile: 0, skipped_unreadable_profile: 0, pro_bono_settled: 0 }))
   return { ran: true, generated, ...dun }
 }
 

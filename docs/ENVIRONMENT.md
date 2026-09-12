@@ -194,6 +194,18 @@ truth: `shared/freeWeek.js` (enforced in `backend/utils/tierGating.js` and
     suspension after a full billing cycle (or `BILLING_SUSPEND_DAYS` override)
     and only when a payment path exists (Stripe configured or
     `BILLING_ALLOW_SUSPEND_WITHOUT_STRIPE=true`).
+  - A deleted profile (`profiles.status = 'deleted'`, or no profiles row after a
+    hard delete) is never invoiced, reminded, or suspended. Deleting a profile
+    voids its open invoices (`status = 'void'`, `settled_reason =
+    'profile_deleted'`), and dunning voids any it still finds. Suspend,
+    reactivate, and mark-paid never overwrite a `'deleted'` status; only the
+    lifecycle restore path brings a profile back. Every writer that marks a
+    profile deleted (profile and organization delete routes, profile merge,
+    the dedupe and orphan-maintenance scripts) voids that profile's open
+    invoices and expires the emailed Stripe Checkout links (the session id is
+    read from the stored URL); a link that could not be expired is kept and
+    retried on each dunning pass. A payment on a void invoice is recorded
+    (`paid_at`), never turns it into `paid`, and emails the owner to refund.
   - Cadence is per account (`billing_accounts.billing_cadence`, user-settable
     via `PUT /api/billing/me/:profileId/cadence` and the Billing page):
     `weekly` (every Friday 09:00 ET), `biweekly` (every OTHER Friday 09:00 ET —

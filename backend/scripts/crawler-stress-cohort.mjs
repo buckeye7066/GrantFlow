@@ -603,6 +603,13 @@ async function purgeCohort(db) {
       } catch { /* table may not exist on this dialect */ }
     }
     await db.prepare(`DELETE FROM profiles WHERE id = ? AND created_by = ?`).run(row.id, CREATED_BY)
+    // billing_invoices has no FK: void any open invoice + payable link (best-effort).
+    try {
+      const { voidInvoicesForDeletedProfiles } = await import('../services/billing/invoiceService.js')
+      await voidInvoicesForDeletedProfiles(db, [row.id])
+    } catch (err) {
+      console.warn(`[cohort] billing cleanup failed for ${row.id}: ${err?.message || err}`)
+    }
     console.log(`[cohort] purged ${row.display_name} (${row.id})`)
   }
   console.log(`[cohort] purge done — ${rows.length} profile(s) removed`)

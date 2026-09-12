@@ -42,11 +42,13 @@ async function hardDeleteProfileWithFallback(db, profileId) {
   } catch (err) {
     return { ok: false, deleted: 'none', error: err?.message || String(err) }
   }
+  await voidDeletedProfileBilling(db, id)
   return { ok: true, deleted: 'soft', reason: 'designated_profile' }
   }
 
   try {
     await db.prepare('DELETE FROM profiles WHERE id = ?').run(id)
+    await voidDeletedProfileBilling(db, id)
     return { ok: true, deleted: 'hard' }
   } catch (err) {
     // If FK constraints prevent delete, fall back to a durable soft-delete.
@@ -54,7 +56,19 @@ async function hardDeleteProfileWithFallback(db, profileId) {
       ? 'UPDATE profiles SET status = \'deleted\', updated_at = now() WHERE id = ?'
       : 'UPDATE profiles SET status = \'deleted\', updated_at = CURRENT_TIMESTAMP WHERE id = ?'
     await db.prepare(fallbackSql).run(id)
+    await voidDeletedProfileBilling(db, id)
     return { ok: true, deleted: 'soft', error: err?.message || String(err) }
+  }
+}
+
+// A deleted profile keeps no open invoice or payable Stripe link (the invoice
+// table has no FK). Best-effort: billing cleanup never fails the delete.
+async function voidDeletedProfileBilling(db, profileId) {
+  try {
+    const { voidInvoicesForDeletedProfiles } = await import('../services/billing/invoiceService.js')
+    await voidInvoicesForDeletedProfiles(db, [profileId], { expireLinks: false })
+  } catch (billingErr) {
+    console.warn('[serviceApplication] failed to void invoices for deleted profile:', String(profileId), billingErr?.message || billingErr)
   }
 }
 

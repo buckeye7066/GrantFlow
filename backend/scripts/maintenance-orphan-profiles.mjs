@@ -93,6 +93,7 @@ async function main() {
     return
   }
 
+  const deletedPids = []
   await db.withTransaction(async (tx) => {
     await tx
       .prepare(
@@ -200,8 +201,18 @@ async function main() {
       }
 
       summary.deleted += 1
+      deletedPids.push(pid)
     }
   })
+
+  // Deleted profiles keep no open invoice or payable Stripe link. Runs after
+  // the transaction commits; best-effort.
+  try {
+    const { voidInvoicesForDeletedProfiles } = await import('../services/billing/invoiceService.js')
+    summary.billing = await voidInvoicesForDeletedProfiles(db, deletedPids)
+  } catch (err) {
+    console.warn('[orphan-maint] failed to void invoices for deleted profiles:', err?.message || err)
+  }
 
   console.log(JSON.stringify(summary, null, 2))
 }

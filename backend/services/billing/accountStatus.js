@@ -43,6 +43,42 @@ async function resolveOrgName(db, profileId) {
   } catch { return null }
 }
 
+/**
+ * Read a profile's lifecycle status. Returns { exists, status } or null when the
+ * read itself failed. A soft-deleted profile is profiles.status = 'deleted'
+ * (the canonical signal, see services/profileLifecycle.js).
+ */
+export async function readProfileLifecycleStatus(db, profileId) {
+  try {
+    const row = await db.prepare('SELECT id, status FROM profiles WHERE id = ? LIMIT 1').get(String(profileId))
+    if (!row) return { exists: false, status: null }
+    return { exists: true, status: row.status ?? null }
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Decide whether a guarded status UPDATE actually took effect. A write that
+ * reports rows changed is confirmed. Anything else — zero rows (a delete raced
+ * the write, or the profile does not exist) or an adapter that reports no row
+ * count — is a REFUSAL unless a follow-up read proves the profile now holds the
+ * intended status. Callers send no notices on a refusal.
+ */
+async function confirmStatusWrite(db, profileId, writeResult, intendedStatus) {
+  if (writeResult && typeof writeResult.changes === 'number' && writeResult.changes > 0) return { ok: true }
+  const after = await readProfileLifecycleStatus(db, profileId)
+  if (after?.exists && after.status === intendedStatus) return { ok: true }
+  if (after?.status === 'deleted') return { ok: false, error: 'profile_deleted' }
+  if (after && !after.exists) return { ok: false, error: 'profile_not_found' }
+  return { ok: false, error: 'not_updated' }
+}
+
+// Every status writer carries `AND COALESCE(status, '') <> 'deleted'` in the
+// UPDATE itself, so a deleted profile's status is never overwritten. Without it,
+// dunning's suspend turned 'deleted' into 'suspended' (the deleted-profile 404
+// stopped applying) and a payment turned it into 'active' (resurrecting it).
+
 function howToLiftText({ paymentLink } = {}) {
   return paymentLink
     ? `To restore access, settle the balance here: ${paymentLink} — access resumes automatically once payment is received. Or simply reply to this email and we'll help.`
@@ -56,10 +92,25 @@ function howToLiftText({ paymentLink } = {}) {
  */
 export async function suspendProfile(db, { profileId, reason = 'past_due', suspendedBy = 'system', paymentLink = null, notify = true } = {}) {
   if (!profileId) return { ok: false, error: 'profile_id_required' }
+  const before = await readProfileLifecycleStatus(db, profileId)
+  if (before?.status === 'deleted') {
+    log.info('suspend refused — profile is deleted', { profile_id: profileId, reason, by: suspendedBy })
+    return { ok: false, error: 'profile_deleted', profile_id: String(profileId), status: 'deleted' }
+  }
+  if (before && !before.exists) {
+    log.info('suspend refused — profile not found', { profile_id: profileId, reason, by: suspendedBy })
+    return { ok: false, error: 'profile_not_found', profile_id: String(profileId) }
+  }
+  let write
   try {
-    await db.prepare(`UPDATE profiles SET status = 'suspended', updated_at = CURRENT_TIMESTAMP WHERE id = ?`).run(String(profileId))
+    write = await db.prepare(`UPDATE profiles SET status = 'suspended', updated_at = CURRENT_TIMESTAMP WHERE id = ? AND COALESCE(status, '') <> 'deleted'`).run(String(profileId))
   } catch (err) {
     return { ok: false, error: err?.message || 'suspend_failed' }
+  }
+  const confirmed = await confirmStatusWrite(db, profileId, write, 'suspended')
+  if (!confirmed.ok) {
+    log.info('suspend refused — guarded write did not apply', { profile_id: profileId, reason, by: suspendedBy, error: confirmed.error })
+    return { ok: false, error: confirmed.error, profile_id: String(profileId) }
   }
   const orgName = await resolveOrgName(db, profileId)
   log.info('profile suspended', { profile_id: profileId, reason, by: suspendedBy })
@@ -90,10 +141,27 @@ export async function suspendProfile(db, { profileId, reason = 'past_due', suspe
 /** Reactivate a suspended profile. */
 export async function reactivateProfile(db, { profileId, reactivatedBy = 'admin', notify = true } = {}) {
   if (!profileId) return { ok: false, error: 'profile_id_required' }
+  // Reactivation is not restoration: a deleted profile comes back only through
+  // the lifecycle restore path (services/profileLifecycle.js).
+  const before = await readProfileLifecycleStatus(db, profileId)
+  if (before?.status === 'deleted') {
+    log.info('reactivate refused — profile is deleted', { profile_id: profileId, by: reactivatedBy })
+    return { ok: false, error: 'profile_deleted', profile_id: String(profileId), status: 'deleted' }
+  }
+  if (before && !before.exists) {
+    log.info('reactivate refused — profile not found', { profile_id: profileId, by: reactivatedBy })
+    return { ok: false, error: 'profile_not_found', profile_id: String(profileId) }
+  }
+  let write
   try {
-    await db.prepare(`UPDATE profiles SET status = 'active', updated_at = CURRENT_TIMESTAMP WHERE id = ?`).run(String(profileId))
+    write = await db.prepare(`UPDATE profiles SET status = 'active', updated_at = CURRENT_TIMESTAMP WHERE id = ? AND COALESCE(status, '') <> 'deleted'`).run(String(profileId))
   } catch (err) {
     return { ok: false, error: err?.message || 'reactivate_failed' }
+  }
+  const confirmed = await confirmStatusWrite(db, profileId, write, 'active')
+  if (!confirmed.ok) {
+    log.info('reactivate refused — guarded write did not apply', { profile_id: profileId, by: reactivatedBy, error: confirmed.error })
+    return { ok: false, error: confirmed.error, profile_id: String(profileId) }
   }
   const orgName = await resolveOrgName(db, profileId)
   log.info('profile reactivated', { profile_id: profileId, by: reactivatedBy })

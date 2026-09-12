@@ -120,6 +120,47 @@ export async function createInvoicePaymentLink(_db, { profileId, amountCents, in
   }
 }
 
+/**
+ * The Checkout Session id (cs_live_… / cs_test_…) carried in a hosted Stripe
+ * Checkout URL path, or null. createInvoicePaymentLink stores only the URL, so
+ * this is how a voided invoice's session is found without a schema change.
+ */
+export function checkoutSessionIdFromUrl(url) {
+  let parsed
+  try { parsed = new URL(String(url || '')) } catch { return null }
+  if (!/(^|\.)stripe\.com$/i.test(parsed.hostname)) return null
+  const match = parsed.pathname.match(/\/(cs_(?:live|test)_[A-Za-z0-9]+)/)
+  return match ? match[1] : null
+}
+
+/**
+ * Expire the Checkout Session behind a hosted Checkout URL so an emailed
+ * payment link can no longer be paid (used when an invoice is voided because
+ * its profile was deleted). Best-effort: never throws, never logs the URL.
+ */
+export async function expireCheckoutSessionForUrl(url) {
+  const sessionId = checkoutSessionIdFromUrl(url)
+  // Not a hosted Checkout URL: nothing can ever be expired, so retrying is pointless.
+  if (!sessionId) return { ok: false, reason: 'no_session_id', terminal: true }
+  const stripe = createStripe()
+  if (!stripe) return { ok: false, reason: 'stripe_not_configured', session_id: sessionId }
+  try {
+    const session = await stripe.checkout.sessions.expire(sessionId)
+    return { ok: true, session_id: sessionId, status: session?.status || null }
+  } catch (error) {
+    // Expire only works on an open session. If it is already expired or
+    // complete, the link can no longer be paid through it: treat as done.
+    try {
+      const session = await stripe.checkout.sessions.retrieve(sessionId)
+      if (session?.status && session.status !== 'open') {
+        return { ok: true, session_id: sessionId, status: session.status, already: true }
+      }
+    } catch { /* fall through to the failure below */ }
+    console.warn('[stripeService] expireCheckoutSessionForUrl failed:', sessionId, error?.message)
+    return { ok: false, reason: 'stripe_expire_failed', session_id: sessionId, error: error?.message || null }
+  }
+}
+
 export async function createCheckoutSessionForPrice({
   priceId,
   quantity = 1,
