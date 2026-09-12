@@ -285,6 +285,18 @@ function changesOf(result) {
 }
 
 /**
+ * A profile deleted while a boot sweep was scoring it (an Amy synthetic reaped
+ * mid-boot, an admin delete) fails every further match insert on the same
+ * foreign key. The 2026-09-12 boot logged 25+ identical warnings for one
+ * vanished profile; the recall sweeps now stop scoring that profile instead.
+ * Keyed on the named Postgres constraint only, so no other failure is mistaken
+ * for a vanished profile.
+ */
+function isVanishedProfileInsertError(err) {
+  return /profile_opportunity_matches_profile_id_fkey/i.test(String(err?.message || err || ''))
+}
+
+/**
  * Return the set of column names on the `grants` table for the active dialect.
  * Dialect-agnostic (PRAGMA on SQLite, information_schema on Postgres) and
  * defensive: any probe failure yields an empty set so callers degrade to the
@@ -8718,6 +8730,7 @@ export async function enforceInstitutionAidLinkage(db) {
       if (!ctx) continue
       const eligible = new Set()
       eligibleByProfile.set(profileId, eligible)
+      let profileVanished = false
 
       for (const school of schools) {
         const pattern = institutionSponsorLikePattern(school)
@@ -8786,12 +8799,17 @@ export async function enforceInstitutionAidLinkage(db) {
               if (examples.length < 3) examples.push(`${opp.title} (${school}, ${verdict} ${score})`)
             }
           } catch (err) {
+            if (isVanishedProfileInsertError(err)) {
+              log.warn('institution_aid_linkage: profile vanished mid-sweep; skipping its remaining candidates', { profile: profileId })
+              profileVanished = true
+              break
+            }
             log.warn('institution_aid_linkage: insert failed (non-fatal)', {
               profile: profileId, opportunity: opp.id, error: String(err?.message || err),
             })
           }
         }
-        if (truncated) break
+        if (truncated || profileVanished) break
       }
       if (truncated) break
     }
@@ -9075,6 +9093,14 @@ export async function enforceProfileDiscoveredCatalogLinkage(db) {
           if (examples.length < 3) examples.push(`${opp.title} (${opp.source}, ${verdict} ${score})`)
         }
       } catch (err) {
+        if (isVanishedProfileInsertError(err)) {
+          // One loop spans every profile here, so the vanished profile is
+          // marked gone in the context cache: its remaining candidates take the
+          // orphan-profile path above instead of failing one by one.
+          log.warn('profile_discovered_catalog_linkage: profile vanished mid-sweep; skipping its remaining candidates', { profile: profileId })
+          ctxCache.set(profileId, null)
+          continue
+        }
         log.warn('profile_discovered_catalog_linkage: insert failed (non-fatal)', {
           profile: profileId, opportunity: opp.id, error: String(err?.message || err),
         })
@@ -9408,6 +9434,10 @@ export async function enforceDeclaredFieldOfStudyRecall(db) {
             if (examples.length < 3) examples.push(`${opp.title} (${hit.term} <- ${hit.evidence}, ${verdict} ${score})`)
           }
         } catch (err) {
+          if (isVanishedProfileInsertError(err)) {
+            log.warn('declared_field_of_study_recall: profile vanished mid-sweep; skipping its remaining candidates', { profile: profileId })
+            break
+          }
           log.warn('declared_field_of_study_recall: insert failed (non-fatal)', {
             profile: profileId, opportunity: opp.id, error: String(err?.message || err),
           })
@@ -10368,6 +10398,10 @@ export async function enforceStudentAidInStateRecall(db) {
             if (examples.length < 3) examples.push(`${opp.title} (${stateName}, ${verdict} ${score})`)
           }
         } catch (err) {
+          if (isVanishedProfileInsertError(err)) {
+            log.warn('student_aid_instate_recall: profile vanished mid-sweep; skipping its remaining candidates', { profile: profileId })
+            break
+          }
           log.warn('student_aid_instate_recall: insert failed (non-fatal)', {
             profile: profileId, opportunity: opp.id, error: String(err?.message || err),
           })
@@ -10658,6 +10692,10 @@ export async function enforceCountyCrisisNeedRecall(db) {
             if (examples.length < 3) examples.push(`${opp.title} (${anchor.county} County ${anchor.state}, ACCEPT ${score})`)
           }
         } catch (err) {
+          if (isVanishedProfileInsertError(err)) {
+            log.warn('county_crisis_need_recall: profile vanished mid-sweep; skipping its remaining candidates', { profile: profileId })
+            break
+          }
           log.warn('county_crisis_need_recall: insert failed (non-fatal)', {
             profile: profileId, opportunity: opp.id, error: String(err?.message || err),
           })
@@ -10913,6 +10951,10 @@ export async function enforceNationalAssistanceRecall(db) {
             if (examples.length < 3) examples.push(`${opp.sponsor || opp.title} (${verdict} ${score}, needs ${served.join('/')})`)
           }
         } catch (err) {
+          if (isVanishedProfileInsertError(err)) {
+            log.warn('national_assistance_recall: profile vanished mid-sweep; skipping its remaining candidates', { profile: profileId })
+            break
+          }
           log.warn('national_assistance_recall: insert failed (non-fatal)', {
             profile: profileId, opportunity: opp.id, error: String(err?.message || err),
           })
@@ -11516,6 +11558,10 @@ export async function enforceFunderBehaviorRecall(db) {
             if (examples.length < 3) examples.push(`${opp.sponsor ?? opp.title} (${state}, ${verdict} ${score})`)
           }
         } catch (err) {
+          if (isVanishedProfileInsertError(err)) {
+            log.warn('funder_behavior_recall: profile vanished mid-sweep; skipping its remaining candidates', { profile: profileId })
+            break
+          }
           log.warn('funder_behavior_recall: insert failed (non-fatal)', {
             profile: profileId, opportunity: opp.id, error: String(err?.message || err),
           })
@@ -12094,6 +12140,7 @@ function _parseBoolEnv(value) {
 }
 
 export const __testables = {
+  isVanishedProfileInsertError,
   projectPersistedStep,
   summarizeCatalogRescore,
   PROTECTED_PIPELINE_STATUSES,

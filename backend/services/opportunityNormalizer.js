@@ -265,6 +265,14 @@ export const DISEASE_SPECIFIC_PATTERNS = [
   'autism', 'arthritis', 'brain injury', 'traumatic brain injury',
   'amputee', 'amputation', 'limb loss', 'paralysis', 'spinal cord injury',
   'hearing loss', 'kidney disease', 'dialysis', 'hemophilia',
+  // 2026-09-12 (independent adjudication): TennCare ECF CHOICES and the 1915(c)
+  // HCBS waivers serve people WITH intellectual or developmental disabilities,
+  // and were direct ACCEPTs for profiles stating "No disability" or only
+  // mobility/cancer conditions because this list never named IDD.
+  'intellectual disability', 'intellectual disabilities',
+  'developmental disability', 'developmental disabilities',
+  'intellectual or developmental', 'intellectual and developmental',
+  'intellectual/developmental',
 ]
 
 // ---------------------------------------------------------------------------

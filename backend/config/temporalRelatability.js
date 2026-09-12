@@ -27,7 +27,10 @@
  *                  and the profile DECLARES it is at institution Y, with X
  *                  named nowhere (not even as a target). "Must be admitted to
  *                  TSU" for a student who says she is at MTSU (owner rule
- *                  2026-09-07). A conflict, like stale.
+ *                  2026-09-07). Also: the row requires CURRENT residence in one
+ *                  named county and every declared current residence provably
+ *                  lies outside it ("individuals who live in Monroe County" for
+ *                  a Bradley County, TN resident). A conflict, like stale.
  *   fit_current  — the row's requirement is met by a current tie
  *   fit_past     — the row honors a past tie and the profile has one
  *   fit_origin   — the row honors origin and the profile declares it
@@ -61,6 +64,11 @@ export const REQUIRES = Object.freeze({
 const INSTITUTION_NAME_RX = /((?:[A-Z][\w&.'-]*\s+){0,6}(?:University|College|Institute|Academy|School)(?:\s+of\s+(?:[A-Z][\w&.'-]*\s*){1,3})?)/
 const PLACE_RX = /((?:[A-Z][\w.'-]+\s?){1,4}(?:County|Parish|Borough)?(?:,\s*(?:[A-Z]{2}|[A-Z][a-z]+(?:\s[A-Z][a-z]+)?))?)/
 const NEGATION_RX = /\b(?:not|no|need not|regardless of|open to all|any|without regard to|does not require)\b[^.]{0,30}$/i
+// Case-sensitive on purpose: a list continues with another CAPITALIZED place
+// ("…County, or Marion County"); "Monroe County or dislocated workers" does not.
+const PLACE_LIST_RX = /^\s*(?:,|\/|&|and\b|or\b)\s*(?:the\s+)?[A-Z]/
+const PLACE_WIDENED_RX = /^\s*(?:(?:,|\/|&|and\b|or\b)\s*(?:the\s+)?(?:surrounding|adjacent|neighbou?ring|nearby|contiguous|other|all|any)\b|(?:area|region|metro(?:politan)?|service\s+area)\b)/i
+const CLEAN_COUNTY_RX = /^[a-z][a-z .'-]*$/
 
 /** The anchor registry. `subject` decides how the phrase's object is resolved. */
 export const TEMPORAL_ANCHOR_CLASSES = Object.freeze([
@@ -171,12 +179,19 @@ function resolveSubject(cls, text, matchIndex, matchLength, row) {
   if (cls.subject === 'place') {
     const m = after.match(PLACE_RX)
     if (!m) return null
-    const place = parsePlace(m[1].trim())
+    // PLACE_RX allows '.' inside a word ("St. Louis"), so a sentence-final place
+    // arrives as "Monroe County." — strip the terminal punctuation first.
+    const place = parsePlace(m[1].trim().replace(/[.,;:]+$/, ''))
     if (!place) return null
     // A bare capitalized word that is not a state and carries no county/state
     // qualifier is too weak to be a place claim ("residents of Our Community").
     if (!place.state && !place.county && !place.city) return null
-    return { kind: 'place', value: place, raw: m[1].trim() }
+    // A place inside a list ("Hamilton County, Bradley County, or Marion County")
+    // or widened to its region ("Monroe County and surrounding counties", "the
+    // Monroe County area") may include places it does not name.
+    const rest = after.slice(m.index + m[0].length)
+    const widened = PLACE_LIST_RX.test(rest) || PLACE_WIDENED_RX.test(rest) || /,\s*[A-Za-z .'-]+\s+(?:county|parish|borough)\b/i.test(m[1])
+    return { kind: 'place', value: place, raw: m[1].trim(), ...(widened ? { widened: true } : {}) }
   }
   if (cls.subject === 'heritage') return null // captured by the pattern itself
   return { kind: 'stage', value: null }
@@ -241,6 +256,21 @@ function describeSubject(anchor) {
   return 'a high-school senior'
 }
 
+/**
+ * Current residences that provably lie outside ONE named county: a different
+ * declared county, or a different declared state when the row names one. Every
+ * current residence must decide; one that states neither keeps it neutral.
+ */
+function currentResidencesOutsideCounty(timeline, place) {
+  if (!place?.county || !CLEAN_COUNTY_RX.test(place.county) || /\bcounty\b/.test(place.county)) return []
+  const current = (timeline?.residences ?? []).filter((r) => r.status === FACT_STATUS.CURRENT)
+  if (current.length === 0) return []
+  const outside = current.filter((r) =>
+    (place.state && r.state && place.state !== r.state) || (r.county && r.county !== place.county))
+  if (outside.length !== current.length) return []
+  return outside.map((r) => [r.county ? `${r.county} county` : null, r.state].filter(Boolean).join(', '))
+}
+
 /** Judge one anchor against the timeline. */
 function judgeAnchor(timeline, anchor) {
   const { classId, requires, subject } = anchor
@@ -277,7 +307,18 @@ function judgeAnchor(timeline, anchor) {
       return same ? { fit: 'fit_origin', relationship: FACT_STATUS.ORIGIN } : { fit: 'stale', relationship: null }
     }
     const rel = residenceRelationship(timeline, place)
-    if (!rel) return { fit: 'unknown', relationship: null }
+    if (!rel) {
+      // Residency requires living there NOW. A single named COUNTY that every
+      // declared current residence provably lies outside is a declared
+      // mismatch, like a school the profile says it does not attend. Cities
+      // (a city name can be a neighborhood of another), lists and widened
+      // areas stay neutral.
+      if (requires === REQUIRES.CURRENT && classId === 'residency' && !subject.widened) {
+        const outside = currentResidencesOutsideCounty(timeline, place)
+        if (outside.length > 0) return { fit: 'elsewhere', relationship: null, elsewhere: outside }
+      }
+      return { fit: 'unknown', relationship: null }
+    }
     if (requires === REQUIRES.PAST_OR_CURRENT) return { fit: rel === FACT_STATUS.PAST ? 'fit_past' : 'fit_current', relationship: rel }
     // residency requires NOW. A past-only tie to a NAMED city/county is stale;
     // a bare state whose current residence differs is the geography gate's
@@ -307,7 +348,7 @@ export function temporalAnchorVerdict(timeline, row) {
   if (stale) {
     const cls = TEMPORAL_ANCHOR_CLASSES.find((c) => c.id === stale.classId)
     const was = stale.fit === 'elsewhere'
-      ? `elsewhere: the profile declares it is at ${stale.elsewhere.join(' and ')}`
+      ? `elsewhere: the profile declares it ${stale.subject.kind === 'place' ? 'lives in' : 'is at'} ${stale.elsewhere.join(' and ')}`
       : stale.relationship === FACT_STATUS.PAST ? 'a PAST tie' : 'a different declared fact'
     return {
       verdict: stale.fit,

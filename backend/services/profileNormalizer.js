@@ -961,6 +961,20 @@ export function normalizeProfile(rawProfile, sections = null, signals = null, do
   // that names a matching condition — a bare "Has disability" flag mints no
   // entry here by construction, and negated prose ("No confirmed medical
   // conditions") is filtered by that module's negation guard.
+  // A denial ("No disability", "None", "No known conditions") is an ANSWER, not
+  // a condition. The health block counted any non-empty string, so a profile
+  // whose disability_type is ["No disability"] read as having a disability —
+  // the demographics block below already refuses the same denials.
+  const HEALTH_DENIAL_RX = /^(?:no|none|n\/?a|false|unknown|not disabled|not applicable|no (?:known |confirmed |current )?(?:disabilit(?:y|ies)|(?:medical |chronic |health )?conditions?|illness(?:es)?|diagnos[ie]s))$/
+  const declaresHealthValue = (value) => {
+    if (value === null || value === undefined) return false
+    const parsed = Array.isArray(value) ? value : safeParseArray(value)
+    const parts = parsed.length > 0 ? parsed : [value]
+    return parts.some((p) => {
+      const t = String(p ?? '').trim().toLowerCase()
+      return t.length > 0 && !HEALTH_DENIAL_RX.test(t)
+    })
+  }
   const namedHealthConditions = []
   const collectNamedCondition = (value) => {
     if (Array.isArray(value)) { value.forEach(collectNamedCondition); return }
@@ -986,11 +1000,11 @@ export function normalizeProfile(rawProfile, sections = null, signals = null, do
         Boolean(ha.has_medical_condition) ||
         Boolean(ha.needs_dme) ||
         Boolean(ha.uses_assistive_technology) ||
-        String(ha.conditions ?? '').length > 0 ||
+        declaresHealthValue(ha.conditions) ||
         // common fields: chronic_illness_type, disability_type
-        String(ha.chronic_illness_type ?? '').length > 0 ||
-        String(ha.disability_type ?? '').length > 0 ||
-        safeParseArray(ha.diagnoses).length > 0
+        declaresHealthValue(ha.chronic_illness_type) ||
+        declaresHealthValue(ha.disability_type) ||
+        safeParseArray(ha.diagnoses).some((d) => declaresHealthValue(d))
       collectNamedCondition(ha.conditions)
       collectNamedCondition(ha.chronic_illness_type)
       collectNamedCondition(ha.disability_type)
