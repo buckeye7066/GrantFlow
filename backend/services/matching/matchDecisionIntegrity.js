@@ -1,6 +1,17 @@
 import { REVIEW_SCORE } from '../../config/matchThresholds.js'
-import { SURFACED_MATCHER_VERSIONS_SQL } from '../../config/matchSurfacing.js'
+import { SURFACED_MATCHER_VERSIONS_SQL, LINKER_MATCHER_VERSIONS } from '../../config/matchSurfacing.js'
 import { hasPositiveFourTruthProof } from '../../config/fundingTruthPolicy.js'
+
+/**
+ * Lanes exempt from the "unproven ACCEPT is deleted" rule below. See the
+ * doc comment on `LINKER_MATCHER_VERSIONS` (config/matchSurfacing.js) for the
+ * full 2026-09-12 tug-of-war writeup: these writers never attach a
+ * `four_truth_proof` by design, `qualifiesForDisplay` already refuses to show
+ * their proof-less ACCEPTs as direct funding, and deleting them here caused
+ * the linker sweeps (which run earlier in the same boot, `ON CONFLICT DO
+ * NOTHING`) to re-insert the identical pairs every following boot.
+ */
+const LINKER_LANE_SET = new Set(LINKER_MATCHER_VERSIONS)
 
 /**
  * The opportunity kinds rules 3 and 4 below govern: navigational evidence, not
@@ -90,6 +101,14 @@ function isMissingIntegritySchema(error) {
  * 1. A persisted REJECT is not a surfaced match and is deleted.
  * 2. A row whose canonical evidence says REJECT is also deleted. A later writer
  *    may never relabel hard ineligibility as REVIEW or ACCEPT.
+ * 2b. A non-pointer ACCEPT with no four-truth proof is deleted as stale/corrupt
+ *    evidence — UNLESS its matcher_version is a recall-net lane
+ *    (`LINKER_MATCHER_VERSIONS` in config/matchSurfacing.js: institution-link,
+ *    national-assistance-link, etc.), which never attaches a proof by design
+ *    and is already refused at display time by `qualifiesForDisplay`. Deleting
+ *    those anyway was the 2026-09-12 tug-of-war: the linker sweeps that run
+ *    earlier in the same boot re-insert the identical pair next boot via their
+ *    `ON CONFLICT DO NOTHING` writes, so the "repair" never converged.
  * 3. A resource with an explicit score below REVIEW is profile-irrelevant and
  *    is deleted.
  * 4. Every surviving resource is navigational evidence, not direct funding, and
@@ -130,7 +149,7 @@ export async function normalizePersistedMatchDecisionIntegrity(db, options = {})
     // Parse it in JavaScript rather than relying on dialect-specific JSON SQL.
     const evidenceRows = await connection.prepare(
 `SELECT m.profile_id, m.opportunity_id, m.match_explain_json,
-              m.match_decision, fo.opportunity_kind
+              m.match_decision, m.matcher_version, fo.opportunity_kind
          FROM profile_opportunity_matches m
          JOIN funding_opportunities fo ON fo.id = m.opportunity_id
         WHERE m.matcher_version IN ${SURFACED_MATCHER_VERSIONS_SQL}
@@ -154,7 +173,8 @@ export async function normalizePersistedMatchDecisionIntegrity(db, options = {})
       const pointer = RESOURCE_OPPORTUNITY_KINDS.includes(
         String(row.opportunity_kind ?? '').trim().toUpperCase(),
       )
-      if (!pointer &&
+      const isLinkerLane = LINKER_LANE_SET.has(String(row.matcher_version ?? '').trim())
+      if (!pointer && !isLinkerLane &&
           String(row.match_decision ?? '').trim().toLowerCase() === 'accept' &&
           !hasPositiveFourTruthProof(row)) {
         removedUnprovenDirectAccepts += changes(
