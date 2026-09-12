@@ -50,7 +50,7 @@ process.on('exit', (code) => {
   } catch { /* stdout may already be gone during exit */ }
 })
 
-const HEARTBEAT_INTERVAL_MS = Number(process.env.PROCESS_HEARTBEAT_INTERVAL_MS || 15_000)
+const HEARTBEAT_INTERVAL_MS = 15_000
 if (
   String(process.env.NODE_ENV || '').toLowerCase() !== 'test' &&
   Number.isFinite(HEARTBEAT_INTERVAL_MS) &&
