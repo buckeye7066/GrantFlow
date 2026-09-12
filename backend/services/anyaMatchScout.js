@@ -38,8 +38,26 @@ import {
   isOpportunityLifecycleVisible,
   opportunityLifecycleVisibilitySql,
 } from '../config/matchSurfacing.js'
+import { setActiveJob, clearActiveJob } from '../utils/activeJobTracker.js'
 
 const log = createLogger('service:anya-match-scout')
+
+// A full fleet scan runs the canonical match engine against up to
+// getCandidateLimit() (default 500) candidates for EVERY active profile —
+// measured in prod 2026-09-12: 95 active profiles x up to 500 candidates =
+// up to ~47,500 synchronous computeMatchDecision calls per tick, and this
+// scheduler tick fires every 30 minutes (anyaAutonomousScheduler.js Phase 7).
+// Both scoring passes below (the trust gate and the canonical-decision map)
+// used to run as one uninterrupted synchronous burst per profile with no
+// yield to the event loop in between — long enough, across enough profiles,
+// to starve health checks and other requests for the whole tick. Yielding
+// every YIELD_EVERY candidates spreads the SAME work across many event-loop
+// turns without changing which candidates are scored or in what order.
+const YIELD_EVERY_CANDIDATES = 50
+
+function yieldToEventLoop() {
+  return new Promise((resolve) => setImmediate(resolve))
+}
 
 // ---------------------------------------------------------------------------
 // Config
@@ -417,39 +435,46 @@ export async function runMatchScoutForProfile(db, profileId, options = {}) {
   stats.scanned = candidates.length
 
   // ── 1. Junk + trust gate (same gates Discover Grants uses) ──
+  // Cooperative yield every YIELD_EVERY_CANDIDATES: identical output, but this
+  // loop can no longer monopolize the event loop for the whole candidate set
+  // in one synchronous burst (see YIELD_EVERY_CANDIDATES comment above).
   const trustKept = []
-  for (const opp of candidates) {
+  for (let i = 0; i < candidates.length; i += 1) {
+    const opp = candidates[i]
     // Defense in depth: the SQL loader excludes quarantined rows, and this
     // blocks mock/alternate callers or a lifecycle change racing the scan.
-    if (!isOpportunityLifecycleVisible(opp)) continue
-    if (isJunkOpportunity(opp, {})) continue
-    const trust = assessOpportunityTrust(opp, { allowDirectory: true, allowExpired: false })
-    if (!trust?.display) continue
-    trustKept.push({ opp, trust })
+    if (isOpportunityLifecycleVisible(opp) && !isJunkOpportunity(opp, {})) {
+      const trust = assessOpportunityTrust(opp, { allowDirectory: true, allowExpired: false })
+      if (trust?.display) trustKept.push({ opp, trust })
+    }
+    if (i > 0 && i % YIELD_EVERY_CANDIDATES === 0) await yieldToEventLoop()
   }
 
   // ── 2. Canonical decision + threshold ──
   // Use computeMatchDecision (the SOLE match authority) — not the
   // non-authoritative scoreOpportunity — so the scout never surfaces or notifies
   // a user about an opportunity the engine would REJECT (Mission System 2, RC-9).
-  const scored = trustKept
-    .map(({ opp, trust }) => {
-      const decision = computeMatchDecision(
-        profileContext.profile,
-        opp,
-        { profileSections: profileContext.sections, signals: profileContext.signals },
-      )
-      return {
-        opp,
-        trust,
-        score: decision.score,
-        decision: decision.decision,
-        matcherVersion: decision.matcherVersion,
-        reasons: decision.reasons ?? decision.matched_profile_facts ?? [],
-      }
+  const scoredAll = []
+  for (let i = 0; i < trustKept.length; i += 1) {
+    const { opp, trust } = trustKept[i]
+    const decision = computeMatchDecision(
+      profileContext.profile,
+      opp,
+      { profileSections: profileContext.sections, signals: profileContext.signals },
+    )
+    scoredAll.push({
+      opp,
+      trust,
+      score: decision.score,
+      decision: decision.decision,
+      matcherVersion: decision.matcherVersion,
+      reasons: decision.reasons ?? decision.matched_profile_facts ?? [],
     })
-    // Never surface/notify a REJECT. The threshold remains an additional
-    // surfacing floor on top of the canonical accept/review decision.
+    if (i > 0 && i % YIELD_EVERY_CANDIDATES === 0) await yieldToEventLoop()
+  }
+  // Never surface/notify a REJECT. The threshold remains an additional
+  // surfacing floor on top of the canonical accept/review decision.
+  const scored = scoredAll
     .filter((entry) => entry.decision !== 'REJECT' && entry.score >= threshold)
     .sort((a, b) => b.score - a.score)
 
@@ -574,16 +599,27 @@ export async function runMatchScoutForAllActiveProfiles(db, options = {}) {
     rows = []
   }
 
-  for (const row of rows || []) {
-    overall.profiles_scanned += 1
-    try {
-      const result = await runMatchScoutForProfile(db, row.id, options)
-      if (result.created > 0) overall.profiles_with_suggestions += 1
-      overall.suggestions_created += result.created
-      overall.notifications_created += result.notified
-    } catch (err) {
-      log.warn('per-profile scout failed', { profile_id: row.id, err: err?.message })
+  const total = (rows || []).length
+  const jobName = 'anya-match-scout:all-profiles'
+  try {
+    for (const row of rows || []) {
+      overall.profiles_scanned += 1
+      // Forensic visibility (see utils/activeJobTracker.js): a silent SIGKILL
+      // gives Node no chance to log its own death, so a periodic heartbeat
+      // (backend/start.js) reads this snapshot to show which profile index a
+      // full-fleet sweep had reached when the log stream last had a line.
+      setActiveJob(jobName, `${overall.profiles_scanned}/${total} profiles`)
+      try {
+        const result = await runMatchScoutForProfile(db, row.id, options)
+        if (result.created > 0) overall.profiles_with_suggestions += 1
+        overall.suggestions_created += result.created
+        overall.notifications_created += result.notified
+      } catch (err) {
+        log.warn('per-profile scout failed', { profile_id: row.id, err: err?.message })
+      }
     }
+  } finally {
+    clearActiveJob(jobName)
   }
 
   overall.completed_at = new Date().toISOString()

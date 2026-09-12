@@ -58,6 +58,7 @@
 import { HamiltonAgentAdapter } from '../agentControl/agentAdapters/hamiltonAgentAdapter.js'
 import { isBrowserAutomationEnabled } from './hamiltonAutomationOrchestrator.js'
 import { runWithSchedulerLock } from '../schedulerLock.js'
+import { setActiveJob, clearActiveJob } from '../../utils/activeJobTracker.js'
 
 const DEFAULT_INTERVAL_MS = 5 * 60 * 1000
 const MIN_INTERVAL_MS = 60 * 1000
@@ -116,6 +117,10 @@ async function tick({ db, logger = console } = {}) {
   if (!shouldRunOnSchedule()) return { skipped: true, reason: 'disabled' }
 
   running = true
+  // Forensic visibility (utils/activeJobTracker.js): a periodic heartbeat in
+  // start.js reads this so a silent process kill leaves a trail of which
+  // scheduler tick was running.
+  setActiveJob('hamilton:autopilot-tick')
   try {
     const result = await runWithSchedulerLock(db, {
       lockName: 'hamilton:autopilot',
@@ -270,6 +275,7 @@ async function tick({ db, logger = console } = {}) {
     return { ran: false, error: err?.message || String(err) }
   } finally {
     running = false
+    clearActiveJob('hamilton:autopilot-tick')
   }
 }
 

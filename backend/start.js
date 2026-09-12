@@ -5,6 +5,7 @@ import path from 'node:path'
 import { spawn } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import { captureException, flushObservability, initObservability } from './utils/observability.js'
+import { getActiveJobsSnapshot } from './utils/activeJobTracker.js'
 
 // Prevent unhandled promise rejections from crashing the server process.
 // Background tasks (crawlers, cron jobs, health checks) may fire DB queries that reject
@@ -31,6 +32,49 @@ process.on('uncaughtException', (error) => {
   forceExit.unref?.()
   flushObservability(2000).finally(() => process.exit(1))
 })
+
+// Durable crash visibility (2026-09-12 investigation: an unexplained prod
+// restart at 04:01Z left NO uncaughtException/unhandledRejection/OOM log line
+// anywhere — the container was killed by something that never gave Node a
+// chance to run a handler, e.g. a platform/OOM SIGKILL. Node cannot catch
+// SIGKILL, so the 'exit' handler below only ever fires for a normal
+// process.exit()/signal-handled shutdown — it is not a fix for that case, only
+// a permanent record of every OTHER kind of exit. The periodic heartbeat is
+// the actual forensic instrument for the SIGKILL case: it is the last thing
+// that gets a chance to log before such a kill, so the next silent restart
+// has a "this job had been running N ms, memory was at X MB" trail instead of
+// requiring a from-scratch log reconstruction.
+process.on('exit', (code) => {
+  try {
+    console.error(`[process] exiting: code=${code}`)
+  } catch { /* stdout may already be gone during exit */ }
+})
+
+const HEARTBEAT_INTERVAL_MS = Number(process.env.PROCESS_HEARTBEAT_INTERVAL_MS || 15_000)
+if (
+  String(process.env.NODE_ENV || '').toLowerCase() !== 'test' &&
+  Number.isFinite(HEARTBEAT_INTERVAL_MS) &&
+  HEARTBEAT_INTERVAL_MS > 0
+) {
+  let highWaterRssBytes = 0
+  const heartbeatTimer = setInterval(() => {
+    try {
+      const mem = process.memoryUsage()
+      highWaterRssBytes = Math.max(highWaterRssBytes, mem.rss)
+      const activeJobs = getActiveJobsSnapshot()
+      const toMb = (bytes) => Math.round(bytes / 1048576)
+      console.log('[process] heartbeat', JSON.stringify({
+        rss_mb: toMb(mem.rss),
+        rss_high_water_mb: toMb(highWaterRssBytes),
+        heap_used_mb: toMb(mem.heapUsed),
+        heap_total_mb: toMb(mem.heapTotal),
+        external_mb: toMb(mem.external),
+        active_jobs: activeJobs.length ? activeJobs : undefined,
+      }))
+    } catch { /* the heartbeat must never be able to take the process down */ }
+  }, HEARTBEAT_INTERVAL_MS)
+  heartbeatTimer.unref()
+}
 
 function isTruthy(value) {
   const v = String(value || '').trim().toLowerCase()
