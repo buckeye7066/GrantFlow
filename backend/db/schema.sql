@@ -4043,7 +4043,7 @@ CREATE TABLE IF NOT EXISTS agent_control_runs (
   )),
   status TEXT NOT NULL DEFAULT 'queued' CHECK(status IN (
     'queued','running','pausing','paused','stopping','stopped',
-    'completed','completed_noop','failed','cancelled','partial_stop','stop_failed'
+    'completed','completed_noop','failed','blocked','cancelled','partial_stop','stop_failed'
   )),
   started_by_user_id TEXT,
   started_by_email TEXT,

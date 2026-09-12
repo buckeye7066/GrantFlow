@@ -14,6 +14,7 @@
 import { describe, it, beforeEach } from 'node:test'
 import assert from 'node:assert/strict'
 import Database from 'better-sqlite3'
+import { readFileSync } from 'node:fs'
 import { wrapSqlite } from '../helpers/sqliteTestDb.mjs'
 
 import {
@@ -116,6 +117,17 @@ function makeDb() {
   sqlite.prepare('INSERT INTO users (id, primary_email, is_admin, role) VALUES (?, ?, 1, ?)').run('u_admin', ADMIN_EMAIL, 'admin')
 
   return wrapSqlite(sqlite)
+}
+
+// The same bare sqlite plus Sam's own run table (the real sqlite migration),
+// so the REAL runSam can run with persist:true — the production path, where
+// samAgent.completeRun → escalateSamCritical is reached. sam_findings is
+// deliberately absent (completeRun tolerates that on older DBs).
+const SAM_RUNS_DDL = readFileSync(new URL('../../backend/db/migrations/080_sam_runs.sql', import.meta.url), 'utf8')
+function makeDbWithSamTables() {
+  const db = makeDb()
+  db.exec(SAM_RUNS_DDL)
+  return db
 }
 
 function adminUser() {
@@ -956,5 +968,45 @@ describe('Sam preflight gate — real SamAgentAdapter + injected loopback probe'
     const second = await startRun(db, { runType: 'full_cycle', user: adminUser() })
     assert.ok(second.run?.id)
     await waitForRunTerminal(db, second.run.id)
+  })
+
+  it('PRODUCTION PATH (persist:true): a blocked cycle yields exactly ONE admin notification — the named agent_control_agent_blocked — never a second agent_control_sam_critical for the same Sam run', async () => {
+    // The other gate tests run Sam with persist:false, which never reaches
+    // samAgent's completeRun → escalateSamCritical. Production persists every
+    // Sam run, so until this was pinned a single blocked preflight produced
+    // TWO admin notifications about the same readyz 503 every 6h cycle.
+    const db = makeDbWithSamTables()
+    const mocks = installMockAdapters()
+    const sam = new SamAgentAdapter({
+      // Real runSam, real persistence (sam_runs row + escalation path);
+      // narrowed to the two CRITICAL checks so no server is needed.
+      runSam: (args) => runSam({ ...args, checkIds: CRITICAL_HTTP_CHECKS, emailReport: false }),
+      httpProbe: probeReturning({ '/readyz': { status: 503, body: READYZ_MISSION_GATE_BODY } }),
+      env: PROD,
+    })
+    setAdapter('sam', sam)
+
+    const { run } = await startRun(db, { runType: 'full_cycle', user: adminUser() })
+    const finalRun = await waitForRunTerminal(db, run.id)
+    assert.equal(finalRun.status, 'blocked', finalRun.error_message || '')
+    assert.equal(mocks.robert.startCallsFor(run.id), 0)
+
+    // The Sam run WAS persisted and is linked from the blocked detail.
+    const samRunId = finalRun.summary?.blocked_by?.sam_run_id
+    assert.ok(samRunId, 'blocked_by.sam_run_id must point at the persisted Sam run')
+    const samRow = await db.prepare('SELECT id, status FROM sam_runs WHERE id = ?').get(samRunId)
+    assert.equal(samRow?.status, 'completed')
+
+    // Exactly one control notification for the block, and it is the NAMED one.
+    const blocked = await readNotifications(db, 'agent_control_agent_blocked')
+    assert.equal(blocked.length, 1)
+    assert.ok(blocked[0].message.includes('http.readyz'), blocked[0].message)
+    assert.ok(blocked[0].message.includes('mission_gate_failed'), blocked[0].message)
+    assert.equal((await readNotifications(db, 'agent_control_sam_critical')).length, 0,
+      'Sam must not ALSO escalate the same critical when the preflight gate already blocked and named it')
+    assert.equal((await readNotifications(db, 'agent_control_failed')).length, 0)
+    const all = await readNotifications(db)
+    const forBlock = all.filter((n) => n.type !== 'agent_control_started')
+    assert.equal(forBlock.length, 1, `one admin notification for the block, got: ${forBlock.map((n) => n.type).join(', ')}`)
   })
 })

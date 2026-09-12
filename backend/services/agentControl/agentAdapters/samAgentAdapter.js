@@ -524,6 +524,16 @@ export class SamAgentAdapter extends BaseAgentAdapter {
 
     await signal?.heartbeat?.({ stage, started: true })
 
+    const stopOnCritical = options?.stop_on_critical_sam_finding !== false
+    // sam-preflight-6: with the gate ON, ANY critical finding on the preflight
+    // path becomes a block, and the orchestrator emits exactly one NAMED
+    // agent_control_agent_blocked notification for it. Sam's own per-run
+    // agent_control_sam_critical escalation would be a second admin
+    // notification about the same readyz 503 every cycle, so the adapter owns
+    // the escalation here. Postflight (never blocks) and a disabled gate keep
+    // Sam's charter escalation — nothing else would report those criticals.
+    const escalateAdmin = !(stage === 'preflight' && stopOnCritical)
+
     let result
     try {
       result = await runSam({
@@ -542,6 +552,7 @@ export class SamAgentAdapter extends BaseAgentAdapter {
         // executes Sam's HTTP-class checks instead of fail-skipping them.
         httpProbe,
         operatorNote: directive || undefined,
+        escalateAdmin,
       })
     } catch (err) {
       return {
@@ -559,7 +570,6 @@ export class SamAgentAdapter extends BaseAgentAdapter {
     const productionReady = result?.production_ready !== false
     const samRunId = result?.run_id || null
 
-    const stopOnCritical = options?.stop_on_critical_sam_finding !== false
     const decision = evaluateSamPreflight({
       findings,
       checkResults,

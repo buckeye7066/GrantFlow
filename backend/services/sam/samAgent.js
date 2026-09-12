@@ -221,6 +221,13 @@ export async function runSam(args = {}) {
     // Agent mesh surface (injectable for tests). Best-effort: a mesh failure
     // never fails a Sam run.
     mesh = DEFAULT_MESH,
+    // Charter S3/S6 admin escalation (escalateSamCritical) fires on every
+    // persisted run with critical findings. A caller that OWNS the operator
+    // notification for this run — the Agent Control Center preflight, whose
+    // gate turns any critical into ONE named agent_control_agent_blocked
+    // notification (sam-preflight-6) — passes false so the same readyz 503
+    // is not reported to the admin twice per cycle. Default stays ON.
+    escalateAdmin = true,
   } = args
 
   const mode = isValidMode(requestedMode) ? String(requestedMode).toLowerCase() : DEFAULT_MODE
@@ -437,15 +444,21 @@ export async function runSam(args = {}) {
 
       // Charter §3/§6: push critical findings to the canonical admin. Fires only
       // on critical findings; best-effort, never affects the run result.
-      try {
-        out.escalation = await escalateSamCritical(db, {
-          runId,
-          findingSummary: summary.findings,
-          healthScore: score,
-          productionReady,
-        })
-      } catch (escErr) {
-        console.warn('[sam] admin escalation skipped:', escErr?.message || escErr)
+      if (escalateAdmin === false) {
+        // The caller (agent-control preflight with its gate ON) emits the one
+        // named operator notification for this run's criticals itself.
+        out.escalation = { escalated: false, reason: 'suppressed_by_caller' }
+      } else {
+        try {
+          out.escalation = await escalateSamCritical(db, {
+            runId,
+            findingSummary: summary.findings,
+            healthScore: score,
+            productionReady,
+          })
+        } catch (escErr) {
+          console.warn('[sam] admin escalation skipped:', escErr?.message || escErr)
+        }
       }
 
       // Owner request: email a per-run report (issues found + corrections made)

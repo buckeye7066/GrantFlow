@@ -361,6 +361,20 @@ describe('SamAgentAdapter.start (injected runSam) carries the named decision on 
     expect(res.summary.critical_findings).toBe(1)
     expect(res.summary.critical_finding_details[0].check_id).toBe('http.readyz')
   })
+
+  it('sam-preflight-6: with the gate ON, preflight hands admin escalation to the orchestrator (escalateAdmin:false) so a block yields ONE notification; postflight and gate-off keep Sam own escalation', async () => {
+    const runSam = vi.fn(async () => ({ ok: true, run_id: 'sam-run-5', status: 'completed', health_score: 100, production_ready: true, findings: [], check_results: [] }))
+    const adapter = new SamAgentAdapter({ runSam, httpProbe: async () => ({ status: 200, body: {} }), env: { NODE_ENV: 'production', PORT: '3911' } })
+
+    await adapter.start({ db: null, options: {}, stage: 'preflight' })
+    expect(runSam.mock.calls[0][0].escalateAdmin).toBe(false)
+
+    await adapter.start({ db: null, options: {}, stage: 'postflight' })
+    expect(runSam.mock.calls[1][0].escalateAdmin).toBe(true)
+
+    await adapter.start({ db: null, options: { stop_on_critical_sam_finding: false }, stage: 'preflight' })
+    expect(runSam.mock.calls[2][0].escalateAdmin).toBe(true)
+  })
 })
 
 // ---------------------------------------------------------------------------
