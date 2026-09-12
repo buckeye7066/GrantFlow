@@ -201,16 +201,27 @@ async function twoOwnerTables(dbh) {
   return { profile, stripe }
 }
 
+// A split is two accounts of the SAME phone-dedupe group (a canonical user plus its
+// dups in phone_dedupe_map) owning the two sides of one row. A row written by a
+// different account is not a split: admins and the audit account act on profiles
+// they manage (Hamilton runs, tasks, Anya sessions). Counting those made prod boot
+// report "two-owner split rows=6212" with an EMPTY phone_dedupe_map (2026-09-12).
+const SAME_DEDUPE_GROUP_SQL = (rowUser, ownerUser) => `EXISTS (
+  SELECT 1 FROM phone_dedupe_map ma JOIN phone_dedupe_map mb ON mb.canonical_user_id = ma.canonical_user_id
+  WHERE ${rowUser} IN (ma.dup_user_id, ma.canonical_user_id) AND ${ownerUser} IN (mb.dup_user_id, mb.canonical_user_id))`
+
 async function countTwoOwnerSplits(dbh) {
+  const mapped = Number((await dbh.prepare('SELECT COUNT(*) AS c FROM phone_dedupe_map').get())?.c || 0)
+  if (mapped === 0) return 0
   const { profile, stripe } = await twoOwnerTables(dbh)
   let splits = 0
   for (const t of profile) {
-    const q = `SELECT COUNT(*) AS c FROM ${t} x JOIN profiles p ON p.id = x.profile_id WHERE x.user_id IS NOT NULL AND p.user_id IS NOT NULL AND x.user_id <> p.user_id`
+    const q = `SELECT COUNT(*) AS c FROM ${t} x JOIN profiles p ON p.id = x.profile_id WHERE x.user_id IS NOT NULL AND p.user_id IS NOT NULL AND x.user_id <> p.user_id AND ${SAME_DEDUPE_GROUP_SQL('x.user_id', 'p.user_id')}`
     splits += Number((await dbh.prepare(q).get())?.c || 0)
   }
   for (const t of stripe) {
     if (t === 'stripe_customers') continue
-    const q = `SELECT COUNT(*) AS c FROM ${t} x JOIN stripe_customers s ON s.stripe_customer_id = x.stripe_customer_id WHERE x.user_id IS NOT NULL AND s.user_id IS NOT NULL AND x.user_id <> s.user_id`
+    const q = `SELECT COUNT(*) AS c FROM ${t} x JOIN stripe_customers s ON s.stripe_customer_id = x.stripe_customer_id WHERE x.user_id IS NOT NULL AND s.user_id IS NOT NULL AND x.user_id <> s.user_id AND ${SAME_DEDUPE_GROUP_SQL('x.user_id', 's.user_id')}`
     splits += Number((await dbh.prepare(q).get())?.c || 0)
   }
   return splits
@@ -226,7 +237,7 @@ export async function checkPhoneDedupeHealth(dbh = db) {
   } catch (err) { problems.push(`one-active-code index probe failed: ${err?.message || err}`) }
   try {
     const splits = await countTwoOwnerSplits(dbh)
-    if (splits > 0) problems.push(`two-owner split rows=${splits} (user_id points at a different account than its profile/customer)`)
+    if (splits > 0) problems.push(`two-owner split rows=${splits} (a phone-dedupe group's data is split between its accounts)`)
   } catch (err) { problems.push(`two-owner split probe failed: ${err?.message || err}`) }
   return { ok: problems.length === 0, problems }
 }
