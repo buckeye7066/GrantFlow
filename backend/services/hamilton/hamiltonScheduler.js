@@ -266,6 +266,9 @@ async function tick({ db, logger = console } = {}) {
         no_run: summary.no_run,
         no_run_reasons: summary.no_run_reasons,
         failed: summary.failed,
+        // Thrown tasks by error code (e.g. funding_source_policy_unavailable×5)
+        // — a 503 outage at the head of the queue must be nameable here.
+        failed_reasons: summary.failed_reasons,
         blocked: summary.blocked,
       })
     }

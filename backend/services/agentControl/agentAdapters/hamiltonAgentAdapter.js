@@ -185,6 +185,9 @@ export class HamiltonAgentAdapter extends BaseAgentAdapter {
     // Tasks that returned without an autopilot run ever being created, and why.
     let noRun = 0
     const noRunReasons = new Map()
+    // Thrown tasks, by error code — a 503 policy outage must be nameable in
+    // the tick summary, not just "N failed" (hamilton-submit-6).
+    const failedReasons = new Map()
     let attempted = 0
     let processed = 0
     let failed = 0
@@ -254,7 +257,12 @@ export class HamiltonAgentAdapter extends BaseAgentAdapter {
         processed += 1
         if (r?.task?.status === 'blocked') blocked += 1
       } catch (err) {
-        results.push({ task_id: task.id, ok: false, error: err?.message || String(err) })
+        const errorCode = String(err?.code || 'error')
+        failedReasons.set(errorCode, (failedReasons.get(errorCode) || 0) + 1)
+        results.push({
+          task_id: task.id, ok: false, error: err?.message || String(err), error_code: errorCode,
+          deferred_tasks: Array.isArray(err?.deferred_tasks) ? err.deferred_tasks : undefined,
+        })
         failed += 1
         await signal?.recordEvent?.({
           eventType: 'agent.hamilton.task_failed',
@@ -299,6 +307,10 @@ export class HamiltonAgentAdapter extends BaseAgentAdapter {
       .sort((a, b) => b[1] - a[1])
       .map(([why, n]) => `${why}×${n}`)
       .join(', ')
+    const failedDetail = [...failedReasons.entries()]
+      .sort((a, b) => b[1] - a[1])
+      .map(([why, n]) => `${why}×${n}`)
+      .join(', ')
     const summary = {
       agent: 'hamilton',
       queue_depth: queueDepth,
@@ -311,6 +323,7 @@ export class HamiltonAgentAdapter extends BaseAgentAdapter {
       paused,
       no_run: noRun,
       no_run_reasons: noRunDetail || null,
+      failed_reasons: failedDetail || null,
       ...(isNoop
         ? { noop_reason: emptyQueue ? 'empty_queue' : `no_task_opened_a_run: ${noRunDetail || 'unknown'}` }
         : {}),

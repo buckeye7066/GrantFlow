@@ -127,6 +127,9 @@ const HAMILTON_TYPES = new Set([
   'hamilton_captcha_required',
   'hamilton_bot_protected',
   'hamilton_email_verification_required',
+  // A submit may have reached the portal without a captured confirmation —
+  // the owner must check the funder portal before anything is retried.
+  'hamilton_submission_verification_required',
 ])
 
 function loadSeenSet() {
@@ -183,6 +186,7 @@ function severityForType(type) {
     case 'hamilton_captcha_required':
     case 'hamilton_bot_protected':
     case 'hamilton_email_verification_required':
+    case 'hamilton_submission_verification_required':
     case 'hamilton_admin_missing_info':
     case 'hamilton_admin_login_required':
     case 'hamilton_admin_document_required':

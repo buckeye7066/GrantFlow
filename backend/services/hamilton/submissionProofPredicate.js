@@ -26,6 +26,7 @@
 
 import {
   assessStoredConfirmationProof,
+  isDurableConfirmationReference,
   _internal as confirmationInternal,
 } from './hamiltonConfirmationArtifacts.js'
 import { assessManualSubmissionReceiptProof } from './manualSubmissionReceiptStore.js'
@@ -182,6 +183,9 @@ export async function assessTaskSubmissionProof(db, task, opts = {}) {
     if (
       ref
       && referenceClassifiedAsConfirmation
+      // Read-side twin of the engine's reference shape guard: a DOM slug or
+      // prose word stored as the reference never counts, whatever its flags.
+      && await isDurableConfirmationReference(ref)
     ) {
       // A portal-issued confirmation reference stored on a submitted run is
       // itself a durable, captured portal fact (survives a filesystem wipe).

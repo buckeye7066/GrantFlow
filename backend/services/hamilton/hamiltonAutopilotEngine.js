@@ -3574,6 +3574,10 @@ export async function runAutopilot({
 }
 
 export const _internal = {
+  // The ONE confirmation-reference shape rule (slug/prose/charset/length),
+  // consumed read-side by hamiltonConfirmationArtifacts.isDurableConfirmationReference
+  // so a stored reference is judged by the same bar that admitted it.
+  isPlausibleConfirmationReference,
   isAdmissionsApplicationLink, applicantProvablyEnrolled,
   computeAgeYears,
   ageAffirmationVerdict, eligibilityAffirmationVerdict, deriveEligibilityFacts,

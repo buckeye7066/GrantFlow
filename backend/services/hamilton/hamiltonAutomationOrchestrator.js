@@ -69,7 +69,7 @@ import { loadProfileContext } from '../profileHelpers.js'
 import { runAutopilot, sanitizeListingSnapshotForPersistence } from './hamiltonAutopilotEngine.js'
 import { decomposeListing } from './listingDecomposition.js'
 import { makeListingApplyItem } from './listingApplyRunner.js'
-import { resolveConfirmationCaptureDir, registerConfirmationArtifact } from './hamiltonConfirmationArtifacts.js'
+import { resolveConfirmationCaptureDir, registerConfirmationArtifact, isDurableConfirmationReference } from './hamiltonConfirmationArtifacts.js'
 import { runContactHandoverAfterSubmission } from './hamiltonContactHandover.js'
 import { evaluateAutoSubmitGate, buildPortalAnswersFromTailored } from './tailoredNarrative.js'
 import { isFullAutomationEnabled, isPortalAccountCreationAuthorized } from './hamiltonFullAutomationMode.js'
@@ -692,6 +692,85 @@ async function closeExistingTasksForRefusedSource(db, {
 }
 
 /**
+ * How long an AUTONOMOUS pick that the profile's own settings refuse
+ * (auto-apply off, complete_forms not granted) is parked before the scheduler
+ * re-checks it. Daily: the queue rotates, no run row is minted, and the task
+ * resumes on its own within a day of the setting/authorization changing.
+ */
+const AUTONOMY_DEFERRAL_RECHECK_MS = 24 * 60 * 60_000
+/** Backoff for a funding-source policy OUTAGE (503): short, the evaluator is usually back within minutes. */
+const POLICY_UNAVAILABLE_BACKOFF_MS = 30 * 60_000
+
+/**
+ * The scheduler's own pick predicate (hamiltonAgentAdapter.js SELECT), so a
+ * deferral touches exactly the rows the scheduler could have picked — never a
+ * human hand-off parked with next_retry_at NULL.
+ */
+const SCHEDULER_PICKABLE_TASK_STATUSES = Object.freeze([
+  'queued', 'ready', 'analyzing', 'ready_to_start',
+  'waiting_for_login', 'waiting_for_2fa', 'waiting_for_captcha', 'waiting_for_email_verification', 'waiting_for_window',
+  'waiting_for_missing_info', 'waiting_for_review', 'waiting_for_user', 'waiting_for_admin', 'ready_to_submit',
+  'blocked',
+])
+
+/**
+ * The funding-source policy evaluator is UNAVAILABLE (503) — not a verdict
+ * about the source. The 503 used to be thrown with the task untouched, so its
+ * updated_at never moved and, with the scheduler picking ORDER BY updated_at
+ * ASC LIMIT 5, the same ≤5 tasks headed the queue on every tick for as long as
+ * the outage lasted while everything behind them starved (hamilton-submit-6,
+ * 2026-09-12). Defer the pickable task(s) for this source durably — a short
+ * retryable window with the reason on the task and in its event stream — and
+ * let the caller still throw the 503 for API writers.
+ */
+async function deferExistingTasksForUnavailablePolicy(db, {
+  profileId, opportunityId = null, grantId = null, code, message,
+}) {
+  const deferred = []
+  const retryAt = new Date(Date.now() + POLICY_UNAVAILABLE_BACKOFF_MS).toISOString()
+  const detail = `${message || 'Hamilton\'s funding-source policy check is temporarily unavailable.'} This task was not evaluated (${code || 'funding_source_policy_unavailable'}). Next automatic attempt: ${retryAt}.`
+  try {
+    const placeholders = SCHEDULER_PICKABLE_TASK_STATUSES.map(() => '?').join(', ')
+    const rows = await db
+      .prepare(
+        `SELECT id FROM application_tasks
+          WHERE profile_id = ?
+            AND ((opportunity_id IS NOT NULL AND opportunity_id = ?)
+              OR (grant_id IS NOT NULL AND grant_id = ?))
+            AND status IN (${placeholders})
+            AND (status IN ('queued', 'ready', 'analyzing', 'ready_to_start') OR next_retry_at IS NOT NULL)`,
+      )
+      .all(
+        String(profileId),
+        opportunityId ? String(opportunityId) : null,
+        grantId ? String(grantId) : null,
+        ...SCHEDULER_PICKABLE_TASK_STATUSES,
+      )
+    for (const row of rows || []) {
+      try {
+        await updateApplicationTask(db, row.id, {
+          unlessCancelled: true,
+          status: 'waiting_for_window',
+          nextRetryAt: retryAt,
+          lastAgentMessage: detail,
+        })
+        await appendTaskEvent(db, {
+          taskId: row.id,
+          eventType: 'note',
+          status: 'waiting_for_window',
+          step: 'policy_unavailable',
+          message: detail,
+          actorRole: 'agent',
+          details: { reason: code || 'funding_source_policy_unavailable', next_retry_at: retryAt, autopilot_run: null },
+        })
+        deferred.push(row.id)
+      } catch { /* one undeferrable task must not hide the outage from the caller */ }
+    }
+  } catch { /* table missing on bare DBs — nothing to defer */ }
+  return deferred
+}
+
+/**
  * Process ONE selected source. Designed to be called in a loop by
  * `automateSelected`.
  */
@@ -821,9 +900,15 @@ export async function automateSingleSource(db, {
     profileId: resolvedProfileId, opportunity, grant,
   })
   if (eligibility?.unavailable) {
-    const error = new Error(eligibility.message || 'Hamilton funding policy is temporarily unavailable.')
-    error.code = eligibility.code || 'funding_source_policy_unavailable'
+    const code = eligibility.code || 'funding_source_policy_unavailable'
+    const message = eligibility.message || 'Hamilton funding policy is temporarily unavailable.'
+    const deferredTasks = await deferExistingTasksForUnavailablePolicy(db, {
+      profileId: resolvedProfileId, opportunityId, grantId, code, message,
+    })
+    const error = new Error(message)
+    error.code = code
     error.status = 503
+    error.deferred_tasks = deferredTasks
     throw error
   }
   if (eligibility?.ok === false || (eligibility?.code && eligibility?.ok !== true)) {
@@ -1824,29 +1909,62 @@ async function runPortalPathway(db, {
   })
 
   if (!authorizations.complete_forms) {
+    // hamilton-submit-5 (2026-09-12): this return carried NO reason (the
+    // scheduler logged it as `no_run_created`), reset the task to
+    // ready_to_start with a fresh updated_at so the same task cycled back
+    // every time it reached the head of the queue, and paged the owner with
+    // hamilton_task_started on EVERY pass. Now: the reason is named on the
+    // return and the event; an AUTONOMOUS pick parks as waiting_for_user
+    // (needs you) with a daily re-check so the queue rotates and the task
+    // resumes on its own once complete_forms is granted; a manual launch keeps
+    // ready_to_start (the user is present on the launch screen); the
+    // notification is sent ONCE per task, keyed on its own durable event.
+    const autonomous = options?.autonomous === true
+    const parkedStatus = autonomous ? 'waiting_for_user' : 'ready_to_start'
+    const retryAt = autonomous ? new Date(Date.now() + AUTONOMY_DEFERRAL_RECHECK_MS).toISOString() : null
+    let alreadyAsked = false
+    try {
+      const prior = await db
+        .prepare("SELECT 1 AS x FROM application_task_events WHERE task_id = ? AND step = 'awaiting_authorization' LIMIT 1")
+        .get(String(task.id))
+      alreadyAsked = Boolean(prior)
+    } catch { alreadyAsked = false }
     await updateApplicationTask(db, task.id, {
-      status: 'ready_to_start',
+      status: parkedStatus,
+      currentStep: 'awaiting_authorization',
+      nextRetryAt: retryAt,
       lastAgentMessage:
-        'Hamilton classified this as a portal application. Click "Automate with Hamilton" and authorize Autopilot to run unattended.',
+        'Hamilton classified this as a portal application. Click "Automate with Hamilton" and authorize Autopilot (complete forms) to run it unattended.'
+        + (autonomous ? ' Hamilton re-checks the authorization daily; no autopilot run is opened until then.' : ''),
     })
     await appendTaskEvent(db, {
       taskId: task.id,
       eventType: 'note',
-      status: 'ready_to_start',
-      message: 'Awaiting Autopilot authorization (complete_forms not yet granted).',
+      status: parkedStatus,
+      step: 'awaiting_authorization',
+      message: 'Awaiting Autopilot authorization (complete_forms not yet granted). No autopilot run was opened.',
       actorUserId: userId,
       actorRole: 'agent',
+      details: { reason: 'complete_forms_not_granted', autonomous, next_retry_at: retryAt, notified: !alreadyAsked },
     })
-    await emitHamiltonNotificationToProfileAndAdmins(db, {
-      profileId: task.profile_id,
-      profileUserId: task.user_id,
-      type: 'hamilton_task_started',
-      title: 'Hamilton is ready to start a portal application',
-      message: `Authorize Hamilton Autopilot for "${opportunity?.title || grant?.title || 'this funding source'}" to run unattended.`,
-      severity: 'info',
-      data: { task_id: task.id, portal_url: classification.resolved_url, classification },
-    })
-    return { task: await reload(db, task.id), classification, portal_url: classification.resolved_url }
+    if (!alreadyAsked) {
+      await emitHamiltonNotificationToProfileAndAdmins(db, {
+        profileId: task.profile_id,
+        profileUserId: task.user_id,
+        type: 'hamilton_task_started',
+        title: 'Hamilton is ready to start a portal application',
+        message: `Authorize Hamilton Autopilot for "${opportunity?.title || grant?.title || 'this funding source'}" to run unattended.`,
+        severity: 'info',
+        data: { task_id: task.id, portal_url: classification.resolved_url, classification },
+      })
+    }
+    return {
+      task: await reload(db, task.id),
+      classification,
+      portal_url: classification.resolved_url,
+      autopilot_run: null,
+      reason: 'complete_forms_not_granted',
+    }
   }
 
   // Run Autopilot now (unattended).
@@ -1885,6 +2003,56 @@ async function runAutopilotPathway(db, {
   // Mutable: a resolver application_url_rescued directive redirects the
   // remaining engine attempts to the funder's FOUND application page.
   let url = classification.resolved_url
+
+  // AUTONOMOUS (scheduler) gates run BEFORE any run row exists (hamilton-submit-4,
+  // 2026-09-12). These checks used to run after createAutopilotRun, so every
+  // scheduler pick of a profile whose `hamilton_autopilot` toggle is OFF (the
+  // toggle DEFAULTS OFF — shared/automationPreferences.js) minted a 'deferred'
+  // run row and reset the task to ready_to_start, which the adapter re-picks
+  // with no retry condition: the same tasks cycled every tick, one run row per
+  // cycle, never advancing (prod 2026-09-12: 168 deferred runs). A scheduled
+  // deferral is recorded on the TASK (status + next_retry_at + event) and the
+  // return names the reason; no run row is created for it. The consent
+  // semantics are unchanged: a disabled profile still never runs unattended,
+  // and a user-initiated launch is never gated here.
+  if (options?.autonomous) {
+    const automationPrefs = profile?.automation_preferences || profile?.sections?.automation_preferences || {}
+    if (!isAutomationEnabled(automationPrefs, 'hamilton_autopilot')) {
+      const retryAt = new Date(Date.now() + AUTONOMY_DEFERRAL_RECHECK_MS).toISOString()
+      const parked = await updateApplicationTask(db, task.id, {
+        unlessCancelled: true,
+        status: 'waiting_for_user',
+        currentStep: 'automation_disabled',
+        nextRetryAt: retryAt,
+        lastAgentMessage: 'Hamilton auto-apply is turned off for this profile (Automations → "Hamilton auto-apply"). Turn it on, or launch Hamilton manually, to run this application. Hamilton re-checks the setting daily.',
+      })
+      await appendTaskEvent(db, {
+        taskId: task.id, eventType: 'note', status: 'waiting_for_user', step: 'automation_disabled',
+        message: 'Skipped autonomous run: Hamilton auto-apply is disabled in this profile\'s Automations settings. No autopilot run was opened.',
+        actorUserId: userId, actorRole: 'agent',
+        details: { reason: 'hamilton_autopilot_disabled_for_profile', next_retry_at: retryAt, autopilot_run: null },
+      }).catch(() => {})
+      return { task: parked, classification, autopilot_run: null, deferred: true, reason: 'hamilton_autopilot_disabled' }
+    }
+    const schedule = normalizeSchedule(automationPrefs)
+    if (schedule.enabled && !isWithinWindow(schedule, new Date())) {
+      const nextAt = nextWindowStart(schedule, new Date())
+      const parked = await updateApplicationTask(db, task.id, {
+        unlessCancelled: true,
+        status: 'waiting_for_window',
+        nextRetryAt: nextAt,
+        lastAgentMessage: `Outside the scheduled portal-access window; Hamilton will resume at the next window (${nextAt}).`,
+      })
+      await appendTaskEvent(db, {
+        taskId: task.id, eventType: 'note', status: 'waiting_for_window', step: 'schedule',
+        message: `Deferred to the scheduled portal-access window (${nextAt}). No autopilot run was opened.`,
+        actorUserId: userId, actorRole: 'agent',
+        details: { reason: 'portal_access_window', next_retry_at: nextAt, autopilot_run: null },
+      }).catch(() => {})
+      return { task: parked, classification, autopilot_run: null, deferred: true, reason: 'portal_access_window', next_window_at: nextAt }
+    }
+  }
+
   // Run-loop tripwire: refuse to open the portal (and spend on drafting) a
   // fourth time today when nobody has intervened since the first.
   const loop = await detectAutopilotRunLoop(db, { taskId: task.id })
@@ -2033,58 +2201,9 @@ async function runAutopilotPathway(db, {
   // the owner has a saved login for (profile or admin vault). Lets Hamilton reach
   // any portal the profile actually requires instead of hard-stopping on the
   // static allowlist, without opening her up to arbitrary hosts.
-  // Scheduled portal-access window: on an AUTONOMOUS (unattended) run, only drive
-  // portals during the profile's chosen window(s) so the user is available for any
-  // sign-in / 2FA prompt. Outside the window we defer the task to the next window
-  // start. User-initiated runs (no options.autonomous) are never gated — the user
-  // is already present.
-  if (options?.autonomous) {
-    // Per-profile automation toggle: the user can turn OFF unattended Hamilton
-    // auto-apply for this profile. When off we never drive an autonomous run —
-    // the user can still launch Hamilton by hand (which is not `autonomous`).
-    // Absent preference defaults ON (current behaviour). See
-    // shared/automationPreferences.js.
-    const automationPrefs = profile?.automation_preferences || profile?.sections?.automation_preferences || {}
-    if (!isAutomationEnabled(automationPrefs, 'hamilton_autopilot')) {
-      await updateApplicationTask(db, task.id, {
-        onlyIfStatuses: ['launching_portal'],
-        status: 'ready_to_start',
-        lastAgentMessage: 'Hamilton auto-apply is turned off for this profile. Launch Hamilton manually to run this application.',
-      })
-      await appendTaskEvent(db, {
-        taskId: task.id, eventType: 'note', status: 'ready_to_start', step: 'automation_disabled',
-        message: 'Skipped autonomous run: Hamilton auto-apply is disabled in this profile\'s Automations settings.',
-        actorUserId: userId, actorRole: 'agent',
-      })
-      await updateAutopilotRun(db, run.id, {
-        status: 'deferred',
-        result: { deferred: true, reason: 'hamilton_autopilot_disabled_for_profile' },
-        finishedAt: new Date().toISOString(),
-      })
-      return { task: await reload(db, task.id), classification, autopilot_run: run.id, deferred: true, reason: 'hamilton_autopilot_disabled' }
-    }
-    const schedule = normalizeSchedule(profile?.automation_preferences || profile?.sections?.automation_preferences || {})
-    if (schedule.enabled && !isWithinWindow(schedule, new Date())) {
-      const nextAt = nextWindowStart(schedule, new Date())
-      await updateApplicationTask(db, task.id, {
-        onlyIfStatuses: ['launching_portal'],
-        status: 'waiting_for_window',
-        nextRetryAt: nextAt,
-        lastAgentMessage: `Outside the scheduled portal-access window; Hamilton will resume at the next window (${nextAt}).`,
-      })
-      await appendTaskEvent(db, {
-        taskId: task.id, eventType: 'note', status: 'waiting_for_window', step: 'schedule',
-        message: `Deferred to the scheduled portal-access window (${nextAt}).`,
-        actorUserId: userId, actorRole: 'agent',
-      })
-      await updateAutopilotRun(db, run.id, {
-        status: 'deferred',
-        result: { deferred: true, deferred_to: nextAt, reason: 'portal_access_window' },
-        finishedAt: new Date().toISOString(),
-      })
-      return { task: await reload(db, task.id), classification, autopilot_run: run.id, deferred: true, next_window_at: nextAt }
-    }
-  }
+  // Scheduled portal-access window + per-profile auto-apply toggle: checked
+  // ABOVE, before the run row was created (see the autonomous block at the top
+  // of this function). User-initiated runs are never gated — the user is present.
 
   const credentialedDomains = await listCredentialedDomains(db, task.profile_id).catch(() => new Set())
   const profilePortalHosts = deriveProfilePortalHosts({ profile, opportunity, grant })
@@ -2518,6 +2637,10 @@ async function runAutopilotPathway(db, {
 
   let engineResult = null
   let degradedDirective = null
+  // Set when the identity-proof branch below has already parked the task as a
+  // named ask (waiting_for_missing_info + identity_needed event + notice), so
+  // the generic blocked hand-off cannot overwrite that precise state.
+  let identityHandoffRecorded = false
 
   // Resolve a saved login for this portal host so Hamilton can authenticate
   // herself at the login gate (only when the user authorized saved-credential
@@ -3112,6 +3235,7 @@ async function runAutopilotPathway(db, {
         actorRole: 'agent',
         details: { autopilot_run_id: run.id, missing_identity_kinds: engineResult.missing_identity_kinds },
       }).catch(() => {})
+      identityHandoffRecorded = true
       break
     }
 
@@ -3608,11 +3732,16 @@ async function runAutopilotPathway(db, {
           engineResult.confirmation_received_acknowledgement === true,
         receivedAcknowledgementIsNew:
           engineResult.confirmation_received_acknowledgement_is_new === true,
+        // The portal navigated to the form's OWN declared receipt page (retURL):
+        // the registrar files the retained landing as confirmation proof only
+        // when bytes were actually retained (hamilton-submit-2, 2026-09-12).
+        declaredReceiptUrlLanding: engineResult.confirmation_evidence === 'declared_receipt_url',
         capturedUrl: engineResult.confirmation_url || null,
       })
       engineResult.confirmation_document_id = artifact.screenshot_document_id || artifact.page_document_id || null
       engineResult.confirmation_page_document_id = artifact.page_document_id || null
       engineResult.submission_evidence_classification = artifact.evidence_classification
+      engineResult.submission_confirmed_by = artifact.confirmed_by || null
     } catch (err) {
       registrationError = String(err?.message || err).slice(0, 500)
       engineResult.proof_registration_error = registrationError
@@ -3620,9 +3749,13 @@ async function runAutopilotPathway(db, {
     }
 
     const leaseRecorded = irreversibleSubmissionDecision?.submission_lease_acquired === true
+    // The reference must pass the same shape guard the extractor and the read
+    // side apply — a DOM slug can never be the fact that marks a task submitted.
+    const referenceDurable = Boolean(engineResult.confirmation_reference)
+      && await isDurableConfirmationReference(engineResult.confirmation_reference)
     const hasNewReference = engineResult.confirmation_evidence === 'portal_reference'
       && engineResult.confirmation_reference_is_new === true
-      && Boolean(engineResult.confirmation_reference)
+      && referenceDurable
     const hasNewAcknowledgement = engineResult.confirmation_evidence === 'portal_acknowledgement'
       && engineResult.confirmation_received_acknowledgement === true
       && engineResult.confirmation_received_acknowledgement_is_new === true
@@ -3633,7 +3766,11 @@ async function runAutopilotPathway(db, {
     // retURL — Salesforce web-to-lead and kin) is the portal's designed
     // success signal; with an owner-retrievable capture of that landing it is
     // durable receipt evidence (2026-08-23, the receipt-silent-portal class).
+    // ONE authority decides: registerConfirmationArtifact classified the
+    // retained landing as confirmation proof (hamilton-submit-2). Without a
+    // retained document the landing is attempt evidence and the task parks.
     const hasReceiptUrlLanding = engineResult.confirmation_evidence === 'declared_receipt_url'
+      && engineResult.submission_evidence_classification === 'confirmation_proof'
       && hasOwnerDocument
     const durableReceipt = hasNewReference || ((hasNewAcknowledgement || hasReceiptUrlLanding) && hasOwnerDocument)
 
@@ -3654,38 +3791,48 @@ async function runAutopilotPathway(db, {
         && engineResult.provably_not_submitted === true) {
       const clickDetail = engineResult.blocker_detail
         || 'Submit button could not be clicked (no click ever reached the page — no submission occurred).'
+      // The task is at submit_evidence_pending here (written above), so the
+      // park must land from THAT state. It used `unlessCancelled`, whose guard
+      // EXCLUDES every irreversible-boundary status: the UPDATE matched zero
+      // rows, the task stayed pending, and the next recovery sweep quarantined
+      // it as "may have been submitted" — the opposite of this branch's intent
+      // (hamilton-submit-3, 2026-09-12). A CAS miss means the task moved under
+      // us: fall through to the quarantine below, never to a retryable state.
       const clickFailedTask = await updateApplicationTask(db, task.id, {
-        unlessCancelled: true,
+        onlyIfStatuses: ['submit_evidence_pending'],
         status: 'blocked',
         currentStep: 'submit_click_failed',
         nextRetryAt: null,
         lastAgentMessage: clickDetail,
       })
-      await updateAutopilotRun(db, run.id, {
-        status: 'failed',
-        result: engineResult,
-        blockerKind: 'click_failed',
-        blockerDetail: clickDetail,
-        finishedAt: new Date().toISOString(),
-      })
-      await appendTaskEvent(db, {
-        taskId: task.id,
-        eventType: 'blocked',
-        status: 'blocked',
-        step: 'submit_click_failed',
-        message: clickDetail,
-        actorUserId: userId,
-        actorRole: 'agent',
-        details: { autopilot_run_id: run.id, provably_not_submitted: true },
-      }).catch(() => {})
-      return {
-        task: clickFailedTask,
-        classification,
-        autopilot_run: run.id,
-        autopilot_result: engineResult,
-        blocked: true,
-        blocker_kind: 'click_failed',
+      if (clickFailedTask?.status === 'blocked' && clickFailedTask?.current_step === 'submit_click_failed') {
+        await updateAutopilotRun(db, run.id, {
+          status: 'failed',
+          result: engineResult,
+          blockerKind: 'click_failed',
+          blockerDetail: clickDetail,
+          finishedAt: new Date().toISOString(),
+        })
+        await appendTaskEvent(db, {
+          taskId: task.id,
+          eventType: 'blocked',
+          status: 'blocked',
+          step: 'submit_click_failed',
+          message: clickDetail,
+          actorUserId: userId,
+          actorRole: 'agent',
+          details: { autopilot_run_id: run.id, provably_not_submitted: true, retry_safe: true },
+        }).catch(() => {})
+        return {
+          task: clickFailedTask,
+          classification,
+          autopilot_run: run.id,
+          autopilot_result: engineResult,
+          blocked: true,
+          blocker_kind: 'click_failed',
+        }
       }
+      engineResult.blocker_detail = `${clickDetail} The task changed state while this outcome was being recorded, so it is held for verification instead of being retried.`
     }
 
     if (engineResult.status === 'blocked'
@@ -3831,10 +3978,13 @@ async function runAutopilotPathway(db, {
     const confirmationEvidence = engineResult.confirmation_evidence
       || (engineResult.confirmation_reference ? 'portal_reference' : 'portal_acknowledgement')
     const hasReference = confirmationEvidence === 'portal_reference'
+    const landedOnDeclaredReceipt = confirmationEvidence === 'declared_receipt_url'
     const proofDocumentId = engineResult.confirmation_document_id || null
     const submittedMessage = hasReference
       ? `Hamilton Autopilot submitted the application and the portal confirmed receipt. Confirmation: ${engineResult.confirmation_reference}.`
-      : 'Hamilton Autopilot submitted the application; the portal explicitly acknowledged receipt and GrantFlow retained the confirmation page.'
+      : landedOnDeclaredReceipt
+        ? 'Hamilton Autopilot submitted the application; the portal navigated to its own declared receipt page and GrantFlow retained that landing page as proof.'
+        : 'Hamilton Autopilot submitted the application; the portal explicitly acknowledged receipt and GrantFlow retained the confirmation page.'
     const submittedTask = await updateApplicationTask(db, task.id, {
       onlyIfStatuses: ['submit_evidence_pending'],
       status: 'submitted',
@@ -3913,7 +4063,7 @@ async function runAutopilotPathway(db, {
       profileUserId: task.user_id,
       type: 'hamilton_submitted',
       title: 'Hamilton submitted through portal',
-      message: `Hamilton submitted "${opportunity?.title || grant?.title || 'this application'}" through the funder's portal. ${hasReference ? `Confirmation: ${engineResult.confirmation_reference}.` : 'The portal explicitly acknowledged receipt; retained confirmation evidence is available in Documents.'}`,
+      message: `Hamilton submitted "${opportunity?.title || grant?.title || 'this application'}" through the funder's portal. ${hasReference ? `Confirmation: ${engineResult.confirmation_reference}.` : landedOnDeclaredReceipt ? 'The portal landed on its own declared receipt page; the retained landing page is available in Documents.' : 'The portal explicitly acknowledged receipt; retained confirmation evidence is available in Documents.'}`,
       severity: 'success',
       data: { task_id: task.id, run_id: run.id, confirmation: engineResult.confirmation_reference, confirmation_evidence: confirmationEvidence, confirmation_document_id: proofDocumentId },
     })
@@ -4030,6 +4180,12 @@ async function runAutopilotPathway(db, {
       actorUserId: userId,
       blockerDetail: engineResult.blocker_detail,
     })
+  } else if (engineResult.status === 'blocked' && identityHandoffRecorded) {
+    // Parked above as a NAMED identity ask (waiting_for_missing_info +
+    // identity_needed event + one hamilton_identity_needed notice). The generic
+    // blocked hand-off below used to run anyway and overwrite it with a bare
+    // 'blocked' / "Hamilton Autopilot stopped: identity_proof" + a second
+    // notification — the precise resumable state must survive.
   } else if (engineResult.status === 'blocked') {
     // Automation is king: for authentication blockers (login / 2FA / captcha /
     // SSO) we DON'T dead-end. We defer the task into a waiting_for_* state with

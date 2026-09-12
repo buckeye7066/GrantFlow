@@ -205,6 +205,96 @@ describe('assessTaskSubmissionProof', () => {
     const res = await assessTaskSubmissionProof(db, task)
     expect(res.verified_external).toBe(false)
   })
+
+  // ── hamilton-submit-2 (2026-09-12): the THIRD evidence kind ────────────────
+  // The engine reports `confirmation_evidence: 'declared_receipt_url'` when the
+  // portal navigated to the form's OWN declared receipt page (Salesforce
+  // web-to-lead retURL — the 2026-08-23 U.S. Bank submission). The orchestrator
+  // accepted it as durable and marked the task submitted, but the proof
+  // pipeline only knew portal_reference / portal_acknowledgement, so the one
+  // real portal submission in production read INTERNAL_ONLY forever.
+  it('7) a declared_receipt_url run whose retained landing page is a CONFIRMATION document IS proof', async () => {
+    await insertDoc(db, { id: 'returl-page', type: CONFIRMATION_TYPE, bytes: Buffer.from('<html>thank-you landing</html>') })
+    await insertRun(db, {
+      id: 'r-returl', taskId: 't-returl', status: 'submitted', reference: null,
+      resultJson: JSON.stringify({
+        confirmation_evidence: 'declared_receipt_url',
+        confirmation_reference: null,
+        confirmation_reference_is_new: false,
+        confirmation_received_acknowledgement: false,
+        confirmation_url: 'https://portal.example.org/apply/thank-you.html',
+        confirmation_document_id: 'returl-page',
+      }),
+    })
+    const task = { id: 't-returl', status: 'submitted', output_document_id: 'returl-page' }
+    const res = await assessTaskSubmissionProof(db, task)
+    expect(res.verified_external).toBe(true)
+    expect(res.source).toBe('run_document')
+    expect(res.proof_document_id).toBe('returl-page')
+  })
+
+  it('7a) a declared_receipt_url run whose landing was filed as ATTEMPT evidence stays internal-only (the pre-fix prod shape)', async () => {
+    await insertDoc(db, { id: 'returl-attempt', type: 'hamilton_submission_attempt_evidence', bytes: Buffer.from('png') })
+    await insertRun(db, {
+      id: 'r-returl-a', taskId: 't-returl-a', status: 'submitted', reference: null,
+      resultJson: JSON.stringify({
+        confirmation_evidence: 'declared_receipt_url',
+        confirmation_document_id: 'returl-attempt',
+      }),
+    })
+    const task = { id: 't-returl-a', status: 'submitted', output_document_id: 'returl-attempt' }
+    const res = await assessTaskSubmissionProof(db, task)
+    expect(res.verified_external).toBe(false)
+    expect(res.state).toBe(SUBMISSION_PROOF_STATE.INTERNAL_ONLY)
+    expect(res.unverified_reason).toBe('output_document_is_hamilton_submission_attempt_evidence')
+  })
+
+  it('7b) a declared_receipt_url run with NO retained document is never proof — a landing URL alone is not durable', async () => {
+    await insertRun(db, {
+      id: 'r-returl-b', taskId: 't-returl-b', status: 'submitted', reference: null,
+      screenshot: '/nonexistent/path/confirmation.png',
+      resultJson: JSON.stringify({
+        confirmation_evidence: 'declared_receipt_url',
+        confirmation_url: 'https://portal.example.org/apply/thank-you.html',
+        confirmation_screenshot_path: '/nonexistent/path/confirmation.png',
+      }),
+    })
+    const task = { id: 't-returl-b', status: 'submitted', output_document_id: null }
+    const res = await assessTaskSubmissionProof(db, task)
+    expect(res.verified_external).toBe(false)
+    expect(res.state).toBe(SUBMISSION_PROOF_STATE.INTERNAL_ONLY)
+  })
+
+  // ── read-side slug guard (prod 2026-08-23/24) ──────────────────────────────
+  // The ONLY confirmation_reference values production ever held were three
+  // copies of the scraped DOM id "children-notification-children-notification"
+  // (one on a 'submitted' run). The extractor now refuses that shape; the
+  // read side must refuse it too, so a poisoned legacy row — or any future
+  // writer that bypasses the extractor — can never count as durable proof.
+  it('8) a lowercase-hyphen DOM slug stored as the reference is NEVER proof, even with modern flags and a document', async () => {
+    const SLUG = 'children-notification-children-notification'
+    await insertDoc(db, { id: 'slug-doc', type: CONFIRMATION_TYPE, bytes: Buffer.from('png') })
+    await insertRun(db, {
+      id: 'r-slug', taskId: 't-slug', status: 'submitted', reference: SLUG,
+      resultJson: JSON.stringify({
+        confirmation_evidence: 'portal_reference',
+        confirmation_reference: SLUG,
+        confirmation_reference_is_new: true,
+        confirmation_document_id: 'slug-doc',
+      }),
+    })
+    const task = { id: 't-slug', status: 'submitted', output_document_id: 'slug-doc' }
+    const res = await assessTaskSubmissionProof(db, task)
+    expect(res.verified_external).toBe(false)
+    expect(res.state).toBe(SUBMISSION_PROOF_STATE.INTERNAL_ONLY)
+    // and the same slug on a run with NO document (the reference-only branch)
+    await insertRun(db, {
+      id: 'r-slug-2', taskId: 't-slug-2', status: 'submitted', reference: SLUG,
+      resultJson: JSON.stringify({ confirmation_evidence: 'portal_reference', confirmation_reference_is_new: true }),
+    })
+    const res2 = await assessTaskSubmissionProof(db, { id: 't-slug-2', status: 'submitted', output_document_id: null })
+    expect(res2.verified_external).toBe(false)
+  })
 })
 
 describe('applicationTaskStore attaches submission_proof at the read choke point', () => {
