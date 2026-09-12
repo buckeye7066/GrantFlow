@@ -1,7 +1,48 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { __testing__ } from '../routes/sam.js'
+import { makeInternalHttpProbe, describeInternalHttpProbe } from '../services/sam/samHttpProbe.js'
 
 const { buildHttpProbe, isLoopbackHttpHost } = __testing__
+
+// The Control-Center adapter's probe. When there is no listening server (PORT
+// unset / '0' / non-numeric) it returns null and Sam's two CRITICAL HTTP checks
+// cannot run — describeInternalHttpProbe is what lets the preflight NAME that
+// instead of passing vacuously (sam-preflight-4).
+describe('makeInternalHttpProbe / describeInternalHttpProbe agree on availability', () => {
+  const had = Object.prototype.hasOwnProperty.call(process.env, 'PORT')
+  const prev = process.env.PORT
+  afterEach(() => {
+    if (had) process.env.PORT = prev
+    else delete process.env.PORT
+  })
+
+  it.each([
+    ['unset', undefined, 'port_unset'],
+    ['zero', '0', 'port_invalid'],
+    ['non-numeric', 'abc', 'port_invalid'],
+    ['out of range', '70000', 'port_invalid'],
+  ])('PORT %s → probe null and reason %s', (_label, value, reason) => {
+    if (value === undefined) delete process.env.PORT
+    else process.env.PORT = value
+    expect(makeInternalHttpProbe()).toBeNull()
+    const desc = describeInternalHttpProbe()
+    expect(desc.available).toBe(false)
+    expect(desc.reason).toBe(reason)
+    expect(desc.detail).toMatch(/PORT/)
+  })
+
+  it('a real PORT → probe function and available:true with the loopback host', () => {
+    process.env.PORT = '3911'
+    expect(typeof makeInternalHttpProbe()).toBe('function')
+    expect(describeInternalHttpProbe()).toMatchObject({ available: true, reason: null, port: 3911, host: 'http://127.0.0.1:3911' })
+  })
+
+  it('reads ONLY the env object it is handed (pure)', () => {
+    process.env.PORT = '3911'
+    expect(describeInternalHttpProbe({ env: {} }).reason).toBe('port_unset')
+    expect(describeInternalHttpProbe({ env: { PORT: '4000', ANYA_ADMIN_TOKEN: 'x' } })).toMatchObject({ available: true, port: 4000, admin_token_present: true })
+  })
+})
 
 describe('Sam buildHttpProbe presents admin credentials (no more 401 on internal probes)', () => {
   const realFetch = global.fetch

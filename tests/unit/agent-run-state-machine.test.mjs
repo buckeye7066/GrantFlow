@@ -27,18 +27,23 @@ import {
   listTransitions,
 } from '../../backend/services/agentControl/agentRunStateMachine.js'
 
+// 'blocked' (2026-09-12): Sam's preflight refused to clear the fleet — a
+// terminal status distinct from 'failed' so it neither pollutes last_failure
+// nor double-notifies. Mirrors agentControlTypes.RUN_STATUSES exactly.
+const TERMINAL_STATES = ['stopped', 'completed', 'completed_noop', 'failed', 'blocked', 'cancelled', 'partial_stop', 'stop_failed']
+
 test('every RUN_STATES entry is in the canonical set', () => {
   const expected = new Set([
     'queued', 'running', 'pausing', 'paused',
     'stopping', 'stopped', 'completed', 'completed_noop',
-    'failed', 'cancelled', 'partial_stop', 'stop_failed',
+    'failed', 'blocked', 'cancelled', 'partial_stop', 'stop_failed',
   ])
   assert.equal(RUN_STATES.length, expected.size)
   for (const s of RUN_STATES) assert.ok(expected.has(s), `unexpected state: ${s}`)
 })
 
-test('isTerminal recognises all 7 terminal states', () => {
-  for (const t of ['stopped', 'completed', 'completed_noop', 'failed', 'cancelled', 'partial_stop', 'stop_failed']) {
+test('isTerminal recognises all 8 terminal states', () => {
+  for (const t of TERMINAL_STATES) {
     assert.equal(isTerminal(t), true, `${t} must be terminal`)
     assert.equal(isActive(t), false, `${t} must NOT be active`)
   }
@@ -54,7 +59,7 @@ test('REGRESSION: terminal states have no outgoing transitions (cancelled→stop
   // The exact bug: cancelRun() set 'cancelled', then executeRun() did
   // setRunStatus('stopped') and overwrote it. The state machine MUST
   // reject this on direct-set.
-  for (const terminal of ['stopped', 'completed', 'completed_noop', 'failed', 'cancelled', 'partial_stop', 'stop_failed']) {
+  for (const terminal of TERMINAL_STATES) {
     for (const event of RUN_EVENTS) {
       assert.equal(
         canTransition(terminal, event),
@@ -139,6 +144,17 @@ test('completed_noop reachable from running', () => {
   assert.equal(isTerminal(s), true)
 })
 
+test('blocked (Sam preflight refused the fleet) is terminal, reachable from running/pausing, and never from a terminal state', () => {
+  const s = applyEvent('running', 'block')
+  assert.equal(s, 'blocked')
+  assert.equal(isTerminal(s), true)
+  assert.equal(applyEvent('pausing', 'block'), 'blocked')
+  assert.equal(canTransition('blocked', 'resume'), false)
+  assert.equal(canTransition('blocked', 'graceful_stop'), false)
+  assert.equal(canDirectSet('running', 'blocked').ok, true)
+  assert.equal(canDirectSet('blocked', 'failed').ok, false)
+})
+
 test('applyEvent throws with FORBIDDEN_TRANSITION on illegal input', () => {
   assert.throws(
     () => applyEvent('completed', 'pause'),
@@ -172,7 +188,7 @@ test('canDirectSet rejects unknown target states', () => {
 })
 
 test('canDirectSet allows non-terminal → any terminal state (so genuine completions still work)', () => {
-  for (const terminal of ['stopped', 'completed', 'completed_noop', 'failed', 'cancelled', 'partial_stop', 'stop_failed']) {
+  for (const terminal of TERMINAL_STATES) {
     assert.equal(canDirectSet('running', terminal).ok, true, `running -> ${terminal} must be allowed`)
   }
 })

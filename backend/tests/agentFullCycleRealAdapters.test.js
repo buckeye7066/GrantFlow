@@ -28,7 +28,9 @@ import { resetRegistry } from '../services/agentControl/agentAdapters/agentAdapt
  * ALL_AGENTS) — her loop is covered by the interview-engine + chat tests.
  */
 
-const TERMINAL = new Set(['completed', 'completed_noop', 'failed', 'cancelled', 'emergency_stopped'])
+// 'blocked' is the terminal status a Sam-preflight refusal lands on (2026-09-12);
+// listing it here means a refusal is DIAGNOSED (below) rather than timing out.
+const TERMINAL = new Set(['completed', 'completed_noop', 'failed', 'blocked', 'cancelled', 'stopped', 'emergency_stopped'])
 const OK_STEP_STATUSES = new Set([
   'completed', 'skipped', 'noop', 'completed_noop', 'completed_no_drafts',
 ])
@@ -86,7 +88,13 @@ describe('Agent Control Center — real adapters complete one full cycle error-f
         // Safe, deterministic, no-network full loop:
         run_sam_preflight: true,
         run_sam_postflight: true,
-        stop_on_critical_sam_finding: false, // let the whole cycle run
+        // The preflight gate stays ON (the production default). This harness
+        // boots with PORT='0' (testServer.js), so Sam's two CRITICAL HTTP
+        // checks have no loopback probe: in NODE_ENV=test that must be
+        // RECORDED on the step as skipped_critical_checks — never a silent
+        // green, and never a block (sam-preflight-4). Disabling the gate here
+        // used to hide exactly that vacuous pass.
+        stop_on_critical_sam_finding: true,
         stop_on_agent_failure: false,
         allow_robert_ingest: false,          // observe mode (no live web)
         allow_hamilton_autopilot: false,     // skip browser automation
@@ -103,9 +111,19 @@ describe('Agent Control Center — real adapters complete one full cycle error-f
     expect(finalRun, 'run should exist').toBeTruthy()
     expect(TERMINAL.has(finalRun.status), `run terminal? got ${finalRun.status}`).toBe(true)
     expect(finalRun.status, `run must not fail: ${finalRun.error_message || ''}`).not.toBe('failed')
+    expect(finalRun.status, `preflight must not block the smoke cycle: ${finalRun.error_message || ''}`).not.toBe('blocked')
 
     const steps = await listSteps(db, run.id)
     expect(steps.length).toBeGreaterThanOrEqual(6) // sam pre, robert, yana, john, hamilton, sam post
+
+    // sam-preflight-4: with no loopback probe (PORT='0') the two CRITICAL HTTP
+    // checks are VISIBLY skipped on the preflight step's durable result.
+    const preflight = steps.find((s) => s.step_name === 'sam_preflight')
+    expect(preflight?.status).toBe('completed')
+    const skipped = Array.isArray(preflight?.result?.skipped_critical_checks) ? preflight.result.skipped_critical_checks : []
+    expect(skipped.map((s) => s.check_id).sort()).toEqual(['agent.hamilton.security', 'http.readyz'])
+    for (const s of skipped) expect(s.reason).toBe('http_probe_unavailable')
+    expect(preflight?.result?.critical_findings).toBe(0)
 
     for (const s of steps) {
       expect(

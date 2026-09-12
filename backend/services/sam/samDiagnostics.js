@@ -258,7 +258,7 @@ async function runToolCheck({ check, db, ctx, invokeTool }) {
     }
     return {
       detail: { ok: false, error: String(err?.message || err) },
-      findings: [makeFinding({
+      findings: [{ ...makeFinding({
         severity: check.severityOnFailure ?? SEVERITY.MEDIUM,
         category: check.category,
         title: `Tool invocation failed: ${check.tool}`,
@@ -266,13 +266,38 @@ async function runToolCheck({ check, db, ctx, invokeTool }) {
         evidence: { tool: check.tool, parameters: check.parameters || {} },
         recommended_fix: `Inspect ${check.tool} in anyaToolRegistry.js — the tool itself returned an error.`,
         confidence: 0.85,
-      })],
+      }), event_type: check.id, check_id: check.id }],
     }
   }
 
-  const detail = { ok: Boolean(toolResult?.success ?? toolResult?.ok ?? true), tool: check.tool, raw: summariseToolResult(toolResult) }
+  const detail = {
+    ok: Boolean(toolResult?.success ?? toolResult?.ok ?? true) && toolHealthStatus(toolResult) !== 'unhealthy',
+    tool: check.tool,
+    raw: summariseToolResult(toolResult),
+  }
   const findings = mineToolFindings(check, toolResult)
   return { detail, findings }
+}
+
+// sam-preflight-7: admin.health.check (and any tool that reports a health
+// SNAPSHOT) returns {status:'healthy'|'degraded'|'unhealthy', services} with
+// NO ok/success bit and no findings list — so the check could never fail, even
+// with the database down. Read the snapshot's own vocabulary; anything else is
+// null (not a health snapshot, decide on ok/success as before).
+function toolHealthStatus(toolResult) {
+  const raw = toolResult && typeof toolResult === 'object' ? toolResult.status : null
+  if (typeof raw !== 'string') return null
+  const v = raw.toLowerCase()
+  return v === 'unhealthy' || v === 'degraded' || v === 'healthy' ? v : null
+}
+
+function describeUnhealthyServices(toolResult) {
+  const services = toolResult?.services
+  if (!services || typeof services !== 'object') return ''
+  const bad = Object.entries(services)
+    .filter(([, s]) => s && typeof s === 'object' && typeof s.status === 'string' && !['up', 'ok', 'healthy'].includes(String(s.status).toLowerCase()))
+    .map(([name, s]) => `${name}=${s.status}${s.error ? ` (${String(s.error).slice(0, 120)})` : ''}`)
+  return bad.length ? ` Services: ${bad.join(', ')}.` : ''
 }
 
 // Anya tool results don't share one canonical shape — each tool returns its
@@ -295,17 +320,32 @@ function mineToolFindings(check, toolResult) {
   if (!toolResult || typeof toolResult !== 'object') return []
   const findings = []
 
-  const explicitFailure = toolResult.success === false || toolResult.ok === false
+  const health = toolHealthStatus(toolResult)
+  const explicitFailure = toolResult.success === false || toolResult.ok === false || health === 'unhealthy'
   if (explicitFailure) {
-    findings.push(makeFinding({
+    findings.push({ ...makeFinding({
       severity: check.severityOnFailure ?? SEVERITY.HIGH,
       category: check.category,
       title: `${check.label} reported failure`,
-      description: toolResult.message || toolResult.error || 'Tool returned success=false.',
-      evidence: summariseToolResult(toolResult),
+      description: health === 'unhealthy'
+        ? `${check.tool} reports status=unhealthy.${describeUnhealthyServices(toolResult)}`
+        : (toolResult.message || toolResult.error || 'Tool returned success=false.'),
+      evidence: { ...summariseToolResult(toolResult), status: toolResult.status, services: toolResult.services },
       recommended_fix: `Inspect ${check.tool} for the underlying cause; Sam delegates the fix to that tool's owner.`,
       confidence: 0.85,
-    }))
+    }), event_type: check.id, check_id: check.id })
+  } else if (health === 'degraded') {
+    // Informational: a degraded snapshot is worth a MEDIUM note, never a
+    // preflight blocker (severityOnFailure is deliberately NOT applied).
+    findings.push({ ...makeFinding({
+      severity: SEVERITY.MEDIUM,
+      category: check.category,
+      title: `${check.label} reports degraded health`,
+      description: `${check.tool} reports status=degraded.${describeUnhealthyServices(toolResult)}`,
+      evidence: { status: toolResult.status, services: toolResult.services },
+      recommended_fix: `Inspect the degraded service(s) named by ${check.tool}.`,
+      confidence: 0.8,
+    }), event_type: check.id, check_id: check.id })
   }
 
   const list = pickList(toolResult)
@@ -365,10 +405,39 @@ function mapSeverity(value) {
 // ---------------------------------------------------------------------------
 // HTTP check — uses caller-supplied probe
 // ---------------------------------------------------------------------------
+// Reason recorded on a skipped HTTP-class check when no loopback probe exists.
+// Consumers (samAgentAdapter's preflight decision) key on this exact string to
+// surface the skip as `skipped_critical_checks` instead of a silent green.
+export const HTTP_PROBE_UNAVAILABLE = 'http_probe_unavailable'
+
+// Lift the structured facts a readyz-style body carries so a blocked preflight
+// can NAME them without re-parsing the description excerpt.
+function httpBodyEvidence(body) {
+  if (!body || typeof body !== 'object' || Array.isArray(body)) {
+    return { body_reason: null, release_blockers: null }
+  }
+  const reason = typeof body.reason === 'string' && body.reason ? body.reason : null
+  const blockers = Array.isArray(body.release_blockers)
+    ? body.release_blockers
+      .map((item) => (typeof item === 'string' ? item : item?.code))
+      .filter((code) => typeof code === 'string' && code.length > 0)
+    : null
+  return { body_reason: reason, release_blockers: blockers }
+}
+
 async function runHttpCheck({ check, httpProbe }) {
   if (typeof httpProbe !== 'function') {
+    // sam-preflight-4: a skipped check must be VISIBLE. The result names the
+    // reason and the severity class the check would have carried, so a caller
+    // can tell "checked and healthy" from "never checked" — the two always-on
+    // CRITICAL checks are both HTTP-kind and used to vanish here.
     return {
-      detail: { ok: true, skipped: true, reason: 'no httpProbe provided' },
+      detail: {
+        ok: true,
+        skipped: true,
+        reason: HTTP_PROBE_UNAVAILABLE,
+        severity_on_failure: check.severityOnFailure ?? SEVERITY.HIGH,
+      },
       findings: [],
     }
   }
@@ -378,14 +447,15 @@ async function runHttpCheck({ check, httpProbe }) {
   } catch (err) {
     return {
       detail: { ok: false, error: String(err?.message || err) },
-      findings: [makeFinding({
+      findings: [{ ...makeFinding({
         severity: check.severityOnFailure ?? SEVERITY.HIGH,
         category: check.category,
         title: `HTTP probe threw for ${check.path}`,
         description: err?.message || String(err),
+        evidence: { status: 0, expected: check.expectStatus ?? 200, error: String(err?.message || err) },
         affected_routes: [check.path],
         confidence: 0.9,
-      })],
+      }), event_type: check.id, check_id: check.id }],
     }
   }
 
@@ -403,19 +473,30 @@ async function runHttpCheck({ check, httpProbe }) {
   if (status === expected || acceptable.includes(status)) {
     return { detail: { ok: true, status, expected, acceptable: acceptable.length ? acceptable : undefined }, findings: [] }
   }
+  // sam-preflight-3: HTTP-kind findings carry the check id (event_type +
+  // check_id, exactly as INTERNAL-kind findings do) plus the structured facts
+  // the body states — readyz `reason` and `release_blockers` — so the blocked
+  // preflight status can name them and sam_findings.event_type is no longer
+  // NULL for precisely the findings that block the cycle.
   return {
     detail: { ok: false, status, expected, acceptable: acceptable.length ? acceptable : undefined },
-    findings: [makeFinding({
+    findings: [{ ...makeFinding({
       severity: check.severityOnFailure ?? SEVERITY.HIGH,
       category: check.category,
       title: `${check.path} returned ${status} (expected ${expected})`,
       description: typeof response?.body === 'string'
         ? response.body.slice(0, 500)
         : JSON.stringify(response?.body ?? {}).slice(0, 500),
+      evidence: {
+        status,
+        expected,
+        acceptable: acceptable.length ? acceptable : undefined,
+        ...httpBodyEvidence(response?.body),
+      },
       affected_routes: [check.path],
       recommended_fix: `Inspect the route handler that owns ${check.path}.`,
       confidence: 0.95,
-    })],
+    }), event_type: check.id, check_id: check.id }],
   }
 }
 

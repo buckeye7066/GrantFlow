@@ -34,6 +34,93 @@ const AGENT_LABEL = {
 const POLL_MS = 7_000
 
 /**
+ * The most recent Sam-preflight block, if it is still the standing state of
+ * the system (no success has superseded it). The server persists the NAMED
+ * prerequisite + operator action on run.summary.blocked_by; this only decides
+ * whether that record is current.
+ */
+function standingPreflightBlock(highlights) {
+  const blocked = highlights?.last_blocked
+  if (!blocked || !blocked.summary?.blocked_by) return null
+  const blockedAt = blocked.completed_at || blocked.started_at || blocked.created_at || null
+  const successAt = highlights?.last_success?.completed_at || highlights?.last_success?.started_at || null
+  if (blockedAt && successAt && new Date(successAt).getTime() >= new Date(blockedAt).getTime()) return null
+  return { run: blocked, at: blockedAt, by: blocked.summary.blocked_by }
+}
+
+/**
+ * Renders WHY Sam refused to clear the fleet and WHAT to do about it. Every
+ * field comes from the durable run summary (blocked_by.blocked_detail) — the
+ * critical findings (check id + title), the unmet prerequisites (code, detail,
+ * operator action) and the CRITICAL checks that could not run at all.
+ */
+function PreflightBlockedPanel({ block }) {
+  if (!block) return null
+  const detail = block.by.blocked_detail || {}
+  const criticals = Array.isArray(detail.critical_findings) ? detail.critical_findings : []
+  const prerequisites = Array.isArray(detail.prerequisites) ? detail.prerequisites : []
+  const skipped = Array.isArray(detail.skipped_critical_checks) ? detail.skipped_critical_checks : []
+  const samRunId = detail.sam_run_id || block.by.sam_run_id || null
+  return (
+    <div className="rounded border border-amber-300 bg-amber-50 p-3 text-sm text-amber-950 dark:border-amber-900/40 dark:bg-amber-900/10 dark:text-amber-100">
+      <div className="font-semibold flex items-center gap-2 flex-wrap">
+        <ShieldCheck className="h-4 w-4 text-amber-700" />
+        Last cycle blocked by Sam preflight
+        <span className="font-normal text-xs text-amber-800 dark:text-amber-300">
+          {block.at ? String(block.at).slice(0, 19).replace('T', ' ') : ''}
+          {block.run?.id ? ` · run ${String(block.run.id).slice(0, 8)}` : ''}
+          {samRunId ? ` · sam run ${samRunId}` : ''}
+        </span>
+      </div>
+      <p className="mt-1 text-xs text-amber-900 dark:text-amber-200">
+        The fleet did not run because the release gate is red. Nothing failed; the prerequisites below are unmet.
+      </p>
+      {criticals.length > 0 ? (
+        <div className="mt-2">
+          <div className="text-xs font-semibold uppercase tracking-wide text-amber-800 dark:text-amber-300">Critical findings</div>
+          <ul className="mt-1 space-y-0.5">
+            {criticals.map((c, idx) => (
+              <li key={`${c.check_id || 'check'}-${idx}`} className="text-xs">
+                <span className="font-mono">{c.check_id || 'unknown check'}</span>
+                {' — '}
+                <span>{c.title}</span>
+                {c.readyz_reason ? <span className="text-amber-800 dark:text-amber-300">{` (reason: ${c.readyz_reason})`}</span> : null}
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
+      {skipped.length > 0 ? (
+        <div className="mt-2 text-xs">
+          <span className="font-semibold uppercase tracking-wide text-amber-800 dark:text-amber-300">Critical checks not executed: </span>
+          <span className="font-mono">{skipped.map((s) => s.check_id).join(', ')}</span>
+          <span>{` (${skipped[0]?.reason || 'http_probe_unavailable'})`}</span>
+        </div>
+      ) : null}
+      {prerequisites.length > 0 ? (
+        <div className="mt-2">
+          <div className="text-xs font-semibold uppercase tracking-wide text-amber-800 dark:text-amber-300">Unmet prerequisites and operator action</div>
+          <ol className="mt-1 space-y-1.5">
+            {prerequisites.map((p, idx) => (
+              <li key={`${p.code}-${idx}`} className="text-xs">
+                <div><span className="font-mono font-semibold">{p.code}</span>{p.detail ? <span> — {p.detail}</span> : null}</div>
+                {p.operator_action ? (
+                  <div className="mt-0.5 pl-3 border-l-2 border-amber-300 text-amber-900 dark:text-amber-100">
+                    <span className="font-semibold">Action: </span>{p.operator_action}
+                  </div>
+                ) : null}
+              </li>
+            ))}
+          </ol>
+        </div>
+      ) : (
+        <div className="mt-2 text-xs">{block.by.blocked_reason}</div>
+      )}
+    </div>
+  )
+}
+
+/**
  * AgentControlCenter
  *
  * Operator-only block at the top of Mission Control. The server derives the
@@ -185,6 +272,7 @@ export default function AgentControlCenter() {
   }
 
   const runStatus = activeRun?.status || null
+  const preflightBlock = standingPreflightBlock(status?.highlights)
   const isPausing = runStatus === 'pausing'
   const isPaused = runStatus === 'paused'
   const isStopping = runStatus === 'stopping'
@@ -327,6 +415,9 @@ export default function AgentControlCenter() {
         {/* Owner control for autonomous adversarial code repair (+ direct-to-main) */}
         <AdversarialRepairToggle />
 
+        {/* Why the last cycle did not run — named prerequisite + operator action */}
+        {!activeRun && preflightBlock ? <PreflightBlockedPanel block={preflightBlock} /> : null}
+
         {/* Run details + events */}
         {activeRun ? (
           <>
@@ -344,6 +435,12 @@ export default function AgentControlCenter() {
               <div className="text-emerald-700 dark:text-emerald-300">
                 Last success: {status.highlights.last_success?.completed_at?.slice(0, 19) || '—'}
               </div>
+              {status.highlights.last_blocked ? (
+                <div className={preflightBlock ? 'text-amber-800 dark:text-amber-300' : 'text-slate-500 dark:text-slate-400'}>
+                  Last preflight block: {status.highlights.last_blocked.completed_at?.slice(0, 19) || '—'}
+                  {preflightBlock ? ' (standing — see above)' : ' (superseded by a later success)'}
+                </div>
+              ) : null}
               <div className={status.highlights.last_failure_is_stale
                 ? 'text-slate-500 dark:text-slate-400'
                 : 'text-rose-700 dark:text-rose-300'}>

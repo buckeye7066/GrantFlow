@@ -38,6 +38,9 @@ export const RUN_STATES = Object.freeze([
   'completed',
   'completed_noop',
   'failed',
+  // Sam preflight refused to clear the fleet — terminal, distinct from failed
+  // (see agentControlTypes.RUN_STATUSES).
+  'blocked',
   'cancelled',
   'partial_stop',
   'stop_failed',
@@ -58,6 +61,7 @@ export const RUN_EVENTS = Object.freeze([
   'mark_partial_stop',
   'mark_stop_failed',
   'step_failed',
+  'block',
   'complete',
   'complete_noop',
 ])
@@ -72,6 +76,7 @@ const TERMINAL = new Set([
   'completed',
   'completed_noop',
   'failed',
+  'blocked',
   'cancelled',
   'partial_stop',
   'stop_failed',
@@ -108,6 +113,7 @@ const TRANSITIONS = Object.freeze({
     emergency_stop: 'stopped',
     cancel: 'cancelled',
     step_failed: 'failed',
+    block: 'blocked',
     complete: 'completed',
     complete_noop: 'completed_noop',
     mark_partial_stop: 'partial_stop',
@@ -120,6 +126,7 @@ const TRANSITIONS = Object.freeze({
     emergency_stop: 'stopped',
     cancel: 'cancelled',
     step_failed: 'failed',
+    block: 'blocked',
     complete: 'completed',
   },
   paused: {
@@ -142,6 +149,7 @@ const TRANSITIONS = Object.freeze({
   completed: {},
   completed_noop: {},
   failed: {},
+  blocked: {},
   cancelled: {},
   partial_stop: {},
   stop_failed: {},

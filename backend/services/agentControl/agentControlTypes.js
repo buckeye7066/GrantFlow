@@ -72,6 +72,13 @@ export const RUN_STATUSES = Object.freeze([
   // honestly instead of a hollow "completed".
   'completed_noop',
   'failed',
+  // Sam preflight refused to clear the fleet (a critical finding, or in
+  // production a preflight that could not execute its critical checks). This
+  // is the system saying "not yet", not the run failing: it is its own
+  // terminal status so it neither pollutes last_failure nor fires notifyFailed
+  // on top of the agent_blocked notification. The run's error_message and
+  // summary.blocked_by NAME the unmet prerequisite and the operator action.
+  'blocked',
   'cancelled',
   'partial_stop',
   'stop_failed',

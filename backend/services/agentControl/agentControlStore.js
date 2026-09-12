@@ -413,7 +413,7 @@ export async function setRunStatus(db, runId, status, extra = {}) {
     fields.push('started_at = COALESCE(started_at, ?)')
     args.push(now)
   }
-  if (['completed', 'completed_noop', 'failed', 'cancelled', 'stopped', 'partial_stop', 'stop_failed'].includes(status)) {
+  if (['completed', 'completed_noop', 'failed', 'blocked', 'cancelled', 'stopped', 'partial_stop', 'stop_failed'].includes(status)) {
     fields.push('completed_at = COALESCE(completed_at, ?)')
     args.push(now)
   }
@@ -528,11 +528,17 @@ export async function getRunHighlights(db) {
     last_failure_is_stale: false,
     last_failure_age_hours: null,
     last_failure_superseded_by_success: false,
+    // Latest Sam-preflight block (terminal 'blocked'); its summary.blocked_by
+    // names the unmet prerequisite + operator action for the UI.
+    last_blocked: null,
   }
   if (!db) return empty
   try {
     const last = await db
       .prepare(`SELECT * FROM agent_control_runs ORDER BY COALESCE(started_at, created_at) DESC LIMIT 1`)
+      .get()
+    const last_blocked = await db
+      .prepare(`SELECT * FROM agent_control_runs WHERE status = 'blocked' ORDER BY COALESCE(completed_at, started_at, created_at) DESC LIMIT 1`)
       .get()
     const last_full_cycle = await db
       .prepare(`SELECT * FROM agent_control_runs WHERE run_type IN ('full_cycle','scheduled_cycle') ORDER BY COALESCE(started_at, created_at) DESC LIMIT 1`)
@@ -573,6 +579,7 @@ export async function getRunHighlights(db) {
       last_failure_is_stale: isStale,
       last_failure_age_hours: ageHours,
       last_failure_superseded_by_success: supersededBySuccess,
+      last_blocked: row(last_blocked),
     }
   } catch {
     return empty

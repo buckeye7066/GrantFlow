@@ -114,7 +114,24 @@ describe('Sam HTTP check acceptableStatuses (profile-scoped guard endpoints)', (
     for (const status of [404, 500]) {
       const httpProbe = vi.fn(async () => ({ status, body: { error: 'boom' } }))
       const { findings } = await runDiagnostics({ db: null, ctx: null, checkIds: SECURITY_CHECK, httpProbe })
-      expect(findings.filter((f) => new RegExp(`returned ${status}`).test(f.title || '')).length).toBeGreaterThanOrEqual(1)
+      const failed = findings.filter((f) => new RegExp(`returned ${status}`).test(f.title || ''))
+      expect(failed.length).toBeGreaterThanOrEqual(1)
+      // sam-preflight-3: the HTTP finding names its check so a preflight block
+      // can be attributed without string-matching the title.
+      expect(failed[0].event_type).toBe('agent.hamilton.security')
+      expect(failed[0].check_id).toBe('agent.hamilton.security')
+      expect(failed[0].evidence).toMatchObject({ status, expected: 200, acceptable: [400] })
     }
+  })
+
+  it('with NO probe the check is visibly skipped (reason http_probe_unavailable, severity_on_failure critical) — never a silent green', async () => {
+    const { findings, results } = await runDiagnostics({ db: null, ctx: null, checkIds: SECURITY_CHECK, httpProbe: null })
+    expect(findings).toHaveLength(0)
+    expect(results[0]).toMatchObject({
+      check_id: 'agent.hamilton.security',
+      skipped: true,
+      reason: 'http_probe_unavailable',
+      severity_on_failure: 'critical',
+    })
   })
 })
