@@ -163,6 +163,56 @@ export const SURFACED_MATCHER_VERSIONS = Object.freeze([
  */
 export const SURFACED_MATCHER_VERSIONS_SQL = `(${SURFACED_MATCHER_VERSIONS.map((v) => `'${v}'`).join(',')})`
 
+/**
+ * matcher_version LANES that are RECALL NETS, not the primary canonical
+ * engine (2026-09-12, the boot-invariant tug-of-war). Each writer authorizes
+ * the canonical engine to LOOK at a pair it would otherwise never see
+ * (attendance, declared field of study, in-state student aid, county crisis
+ * need, a vetted national assistance funder, demonstrated funder giving, an
+ * open-web LLM find, or a catalog-wide rescore) and persists whatever the
+ * engine decided — but, unlike `crawler-os` / `crawler-os-xmatch` /
+ * `canonical-rescore-link`, none of these writers attach a `four_truth_proof`
+ * (`services/matching/matchExplainPersistence.buildPersistedMatchExplain`
+ * never builds one; only `crawler-os/matchEngine.buildFourTruthProof` and
+ * `catalogRescoreSweep.js` do). `qualifiesForDisplay` above already refuses a
+ * non-pointer ACCEPT without `hasPositiveFourTruthProof` — so a proof-less
+ * ACCEPT from one of these lanes was ALREADY invisible as direct funding
+ * before `matchDecisionIntegrity` ever runs.
+ *
+ * `services/matching/matchDecisionIntegrity.js`'s `removedUnprovenDirectAccepts`
+ * rule did not know this and deleted every one of these ACCEPTs on the SAME
+ * boot the linker sweep inserted it (`institution_aid_linkage`,
+ * `enforceNationalAssistanceRecall`, etc. all run BEFORE
+ * `enforcePersistedMatchDecisionIntegrity` in the ladder). Because each
+ * writer's INSERT is `ON CONFLICT (profile_id, opportunity_id) DO NOTHING`,
+ * deleting the row made the pair look unlinked again, so the NEXT boot's
+ * candidate query re-inserted it — the CLAUDE.md "repair count that never
+ * trends to zero" tug-of-war signature. Measured in prod 2026-09-12:
+ * `national_assistance_recall` inserted ~191 rows on two different boots, and
+ * `persisted_match_decision_integrity` repaired 570/745/551/440 rows across
+ * consecutive boots with `engine_version_matcher_lane` reporting the SAME
+ * 400+ "ACCEPTs carry no four-truth proof" every single boot — an
+ * ACKNOWLEDGED, TOLERATED debt (`acceptsAwaitingProof`), not one
+ * `matchDecisionIntegrity` was meant to erase.
+ *
+ * `services/matching/staleMatchExplainRefresh.js` already classifies these
+ * same lanes as "linker-authored" for its own never-downgrade write policy
+ * (its local `LINKER_VERSIONS`); this export is the shared source so the two
+ * cannot drift apart again the way `national-assistance-link` had (present
+ * here, absent there — a known, out-of-scope gap left for a follow-up).
+ */
+export const LINKER_MATCHER_VERSIONS = Object.freeze([
+  'web-llm',
+  'institution-link',
+  'profile-discovery-link',
+  'field-of-study-link',
+  'student-aid-instate-link',
+  'county-crisis-need-link',
+  'catalog-rescore-link',
+  'funder-behavior-link',
+  'national-assistance-link',
+])
+
 const TRUE_LIFECYCLE_VALUES = new Set([true, 1, '1', 'true', 'yes', 'y'])
 const FALSE_LIFECYCLE_VALUES = new Set([false, 0, '0', 'false', 'no', 'n'])
 
@@ -306,6 +356,7 @@ export function qualifiesForDisplay(row, _minScore) {
 export default {
   SURFACED_MATCHER_VERSIONS,
   SURFACED_MATCHER_VERSIONS_SQL,
+  LINKER_MATCHER_VERSIONS,
   DIRECTORY_MIN_SCORE,
   opportunityLifecycleVisibility,
   isOpportunityLifecycleVisible,
