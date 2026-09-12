@@ -2453,7 +2453,8 @@ async function writeProfileTombstone(db, profileId, deletedBy, reason) {
 // Best-effort: billing cleanup must never fail the delete itself.
 async function voidDeletedProfileInvoices(db, profileId) {
   try {
-    await voidOpenInvoicesForDeletedProfile(db, { profileId: String(profileId) })
+    // Local void is awaited; remote Stripe expiry is started without blocking the response.
+    await voidOpenInvoicesForDeletedProfile(db, { profileId: String(profileId), expireLinks: false })
   } catch (billingErr) {
     console.warn('[profiles] failed to void open invoices for deleted profile:', String(profileId), billingErr?.message || billingErr)
   }

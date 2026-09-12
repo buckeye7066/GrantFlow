@@ -174,7 +174,7 @@ async function voidOpenInvoicesOfDeletedProfiles(db) {
  * same rule to profiles deleted before this existed. Paid / pro bono / void
  * rows are history and stay untouched. Restoring a profile does not un-void.
  */
-export async function voidOpenInvoicesForDeletedProfile(db, { profileId } = {}) {
+export async function voidOpenInvoicesForDeletedProfile(db, { profileId, expireLinks = true } = {}) {
   if (!profileId) return { ok: false, error: 'profile_id_required', voided: 0, links_expired: 0, links_not_expired: 0 }
   await ensureInvoiceSchema(db)
   const pid = String(profileId)
@@ -188,6 +188,20 @@ export async function voidOpenInvoicesForDeletedProfile(db, { profileId } = {}) 
       WHERE profile_id = ? AND status IN (${safeOpenStatusPlaceholders})`,
   ).run(pid, ...OPEN_INVOICE_STATUSES)
   const voided = Number(res?.changes ?? 0) || 0
+  if (!expireLinks) {
+    // HTTP request paths: the local void above is already committed, but the
+    // remote Stripe expiry must never hold the response open. Start it without
+    // awaiting; a link it does not expire stays on the void row and the dunning
+    // sweep's retry picks it up.
+    const pending = (open || []).filter((row) => row?.stripe_payment_link)
+    if (pending.length) {
+      expireAndClearInvoiceLinks(db, pending)
+        .then((r) => log.info('deferred payment link expiry finished', { profile_id: pid, links_expired: r.expired, links_not_expired: r.not_expired }))
+        .catch((err) => log.warn('deferred payment link expiry failed; dunning will retry', { profile_id: pid, error: err?.message }))
+    }
+    log.info('open invoices voided — profile deleted (link expiry deferred)', { profile_id: pid, voided, links_deferred: pending.length })
+    return { ok: true, profile_id: pid, voided, links_expired: 0, links_not_expired: 0, links_expiry_deferred: pending.length }
+  }
   const links = await expireAndClearInvoiceLinks(db, open)
   log.info('open invoices voided — profile deleted', { profile_id: pid, voided, links_expired: links.expired, links_not_expired: links.not_expired })
   return { ok: true, profile_id: pid, voided, links_expired: links.expired, links_not_expired: links.not_expired }
@@ -200,14 +214,14 @@ export async function voidOpenInvoicesForDeletedProfile(db, { profileId } = {}) 
  * Acts only on profiles whose lifecycle now reads deleted or missing, so a
  * caller can never void a live profile's billing. Best-effort; never throws.
  */
-export async function voidInvoicesForDeletedProfiles(db, profileIds = []) {
+export async function voidInvoicesForDeletedProfiles(db, profileIds = [], { expireLinks = true } = {}) {
   const ids = [...new Set((profileIds || []).filter(Boolean).map(String))]
   let voided = 0
   let failed = 0
   for (const profileId of ids) {
     try {
       if (await profileBillingLifecycle(db, profileId) !== 'deleted') continue
-      const r = await voidOpenInvoicesForDeletedProfile(db, { profileId })
+      const r = await voidOpenInvoicesForDeletedProfile(db, { profileId, expireLinks })
       voided += r.voided || 0
     } catch (err) {
       failed += 1
@@ -734,10 +748,27 @@ export async function markInvoicePaid(db, { invoiceId = null, profileId = null, 
   // The paid transition refuses a VOID invoice in the UPDATE itself: a delete
   // that voided the invoice after the read above wins, and the payment takes
   // the refund path instead of rewriting it to 'paid'.
-  const paidWrite = await db.prepare(`UPDATE billing_invoices SET status = 'paid', paid_at = ? WHERE id = ? AND status <> 'void'`).run(new Date().toISOString(), inv.id)
+  // The write also requires a live profile: a delete that committed before its
+  // invoice cleanup ran must not let a webhook keep the payment silently.
+  const paidWrite = await db.prepare(
+    `UPDATE billing_invoices SET status = 'paid', paid_at = ?
+      WHERE id = ? AND status <> 'void'
+        AND EXISTS (SELECT 1 FROM profiles p WHERE p.id = billing_invoices.profile_id AND COALESCE(p.status, '') <> 'deleted')`,
+  ).run(new Date().toISOString(), inv.id)
   if (!writeApplied(paidWrite)) {
-    const fresh = await db.prepare('SELECT * FROM billing_invoices WHERE id = ?').get(inv.id)
+    let fresh = await db.prepare('SELECT * FROM billing_invoices WHERE id = ?').get(inv.id)
     if (fresh?.status === 'void') return recordPaymentOnVoidInvoice(db, fresh, source)
+    if (fresh && await profileBillingLifecycle(db, fresh.profile_id) === 'deleted') {
+      // The profile is gone but its invoice was not voided yet: void it now
+      // (only while it is still open), then take the refund path.
+      const safeOpenStatusPlaceholders = OPEN_INVOICE_STATUSES.map(() => '?').join(',')
+      await db.prepare(
+        `UPDATE billing_invoices SET status = 'void', settled_reason = 'profile_deleted'
+          WHERE id = ? AND status IN (${safeOpenStatusPlaceholders})`,
+      ).run(fresh.id, ...OPEN_INVOICE_STATUSES)
+      fresh = await db.prepare('SELECT * FROM billing_invoices WHERE id = ?').get(inv.id)
+      if (fresh?.status === 'void') return recordPaymentOnVoidInvoice(db, fresh, source)
+    }
     return { ok: false, error: 'invoice_not_updated', invoice_id: inv.id, profile_id: inv.profile_id }
   }
   return finishPaidInvoice(db, inv, source)

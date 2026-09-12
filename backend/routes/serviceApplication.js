@@ -66,7 +66,7 @@ async function hardDeleteProfileWithFallback(db, profileId) {
 async function voidDeletedProfileBilling(db, profileId) {
   try {
     const { voidInvoicesForDeletedProfiles } = await import('../services/billing/invoiceService.js')
-    await voidInvoicesForDeletedProfiles(db, [profileId])
+    await voidInvoicesForDeletedProfiles(db, [profileId], { expireLinks: false })
   } catch (billingErr) {
     console.warn('[serviceApplication] failed to void invoices for deleted profile:', String(profileId), billingErr?.message || billingErr)
   }

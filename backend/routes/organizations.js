@@ -354,7 +354,7 @@ router.delete('/:id', ensureAuth, mutationRateLimiter, async (req, res) => {
     // billing cleanup never fails the delete.
     try {
       const { voidInvoicesForDeletedProfiles } = await import('../services/billing/invoiceService.js');
-      await voidInvoicesForDeletedProfiles(req.db, (linkedProfiles || []).map((p) => p.id));
+      await voidInvoicesForDeletedProfiles(req.db, (linkedProfiles || []).map((p) => p.id), { expireLinks: false });
     } catch (billingErr) {
       console.warn('[organizations] failed to void invoices for deleted profiles:', billingErr?.message || billingErr);
     }

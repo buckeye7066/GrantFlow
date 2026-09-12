@@ -293,7 +293,10 @@ describe('deleted profiles are never billed', () => {
       const gone = await markInvoicePaid(db, { invoiceId: 'del-p-gone', source: 'stripe' })
       expect(gone.ok).toBe(true)
       expect(gone.reactivated).toBe(false)
-      expect(invoice('del-p-gone').status).toBe('paid')
+      // A payment on a deleted profile's open invoice is refused: voided, recorded, refund path.
+      expect(gone).toEqual(expect.objectContaining({ status: 'void', payment_on_void: true }))
+      expect(invoice('del-p-gone').status).toBe('void')
+      expect(invoice('del-p-gone').paid_at).toBeTruthy()
       expect(profileStatus('del-paid-gone')).toBe('deleted')
 
       await seedProfile('del-paid-live', { status: 'suspended' })
@@ -375,8 +378,11 @@ describe('deleted profiles are never billed', () => {
       expect(res.status).toBe(204)
       expect(invoice('del-stripe-a').status).toBe('void')
       expect(invoice('del-stripe-b').status).toBe('void')
-      const expiredUrls = vi.mocked(expireCheckoutSessionForUrl).mock.calls.map((c) => c[0])
-      expect(expiredUrls).toEqual(expect.arrayContaining([linkA, linkB]))
+      // Expiry runs in the background after the response.
+      await vi.waitFor(() => {
+        const expiredUrls = vi.mocked(expireCheckoutSessionForUrl).mock.calls.map((c) => c[0])
+        expect(expiredUrls).toEqual(expect.arrayContaining([linkA, linkB]))
+      })
     })
 
     it('dunning\'s deleted-profile sweep expires the Stripe link of an invoice it voids', async () => {
@@ -470,8 +476,11 @@ describe('deleted profiles are never billed', () => {
         expect(invoice(id).status).toBe('void')
         expect(invoice(id).settled_reason).toBe('profile_deleted')
       }
-      expect(vi.mocked(expireCheckoutSessionForUrl).mock.calls.map((c) => c[0])).toContain(link)
-      expect(invoice('del-org-inv1').stripe_payment_link).toBeNull()
+      // Expiry runs in the background after the response.
+      await vi.waitFor(() => {
+        expect(vi.mocked(expireCheckoutSessionForUrl).mock.calls.map((c) => c[0])).toContain(link)
+        expect(invoice('del-org-inv1').stripe_payment_link).toBeNull()
+      })
     })
 
     it('a profile merge voids the merged-away profile\'s open invoices after the transaction commits', async () => {
@@ -497,6 +506,9 @@ describe('deleted profiles are never billed', () => {
       const res = await request(app).delete(`/api/profiles/${id}`).set(TEST_ADMIN_AUTH_HEADER)
       expect(res.status).toBe(204)
       expect(invoice('del-retry-inv').status).toBe('void')
+      // The background expiry attempt (which fails) runs after the response.
+      await vi.waitFor(() => expect(vi.mocked(expireCheckoutSessionForUrl).mock.calls.filter((c) => c[0] === link)).toHaveLength(1))
+      await new Promise((resolve) => setTimeout(resolve, 25))
       expect(invoice('del-retry-inv').stripe_payment_link).toBe(link)
 
       const dun = await processDunning(db, { now: NOW })
@@ -638,6 +650,45 @@ describe('deleted profiles are never billed', () => {
       expect(invoice('del-hard-admin-inv').status).toBe('void')
       expect(invoice('del-hard-admin-inv').settled_reason).toBe('profile_deleted')
       expect(vi.mocked(expireCheckoutSessionForUrl).mock.calls.map((c) => c[0])).toContain(link)
+    })
+
+    it('final round: a payment for a profile deleted before its invoice was voided is refused, voided, recorded and flagged for refund', async () => {
+      process.env.BILLING_OWNER_CC = 'owner-alerts@example.com'
+      try {
+        await seedProfile('del-paid-deleted-first')
+        seedInvoice({ id: 'del-paid-deleted-first-inv', profileId: 'del-paid-deleted-first', status: 'sent', issuedAt: daysAgo(3) })
+        markDeleted('del-paid-deleted-first')
+
+        const r = await markInvoicePaid(db, { invoiceId: 'del-paid-deleted-first-inv', source: 'stripe_webhook' })
+
+        expect(r).toEqual(expect.objectContaining({ ok: true, status: 'void', payment_on_void: true, refund_needed: true, reactivated: false }))
+        const inv = invoice('del-paid-deleted-first-inv')
+        expect(inv.status).toBe('void')
+        expect(inv.settled_reason).toBe('profile_deleted')
+        expect(inv.paid_at).toBeTruthy()
+        expect(profileStatus('del-paid-deleted-first')).toBe('deleted')
+        const alert = vi.mocked(sendEmail).mock.calls.map((c) => c[0]).find((m) => m?.to === 'owner-alerts@example.com')
+        expect(alert?.subject).toMatch(/refund/i)
+      } finally {
+        delete process.env.BILLING_OWNER_CC
+      }
+    })
+
+    it('final round: the delete route does not wait on Stripe — it answers promptly with the invoice already void and its link kept for the retry scan', async () => {
+      const id = 'del-designated-slow-stripe'
+      const link = 'https://checkout.stripe.com/c/pay/cs_test_SlowStripe1#fid'
+      await seedProfile(id)
+      seedInvoice({ id: 'del-slow-inv', profileId: id, status: 'sent', issuedAt: daysAgo(2), link })
+      vi.mocked(expireCheckoutSessionForUrl).mockImplementationOnce(() => new Promise(() => {}))
+
+      const started = Date.now()
+      const res = await request(app).delete(`/api/profiles/${id}`).set(TEST_ADMIN_AUTH_HEADER)
+
+      expect(res.status).toBe(204)
+      expect(Date.now() - started).toBeLessThan(5000)
+      expect(invoice('del-slow-inv').status).toBe('void')
+      expect(invoice('del-slow-inv').settled_reason).toBe('profile_deleted')
+      expect(invoice('del-slow-inv').stripe_payment_link).toBe(link)
     })
 
     it('a zero-row guarded status write is a refusal: missing profiles and an unreadable follow-up read get no notices', async () => {
