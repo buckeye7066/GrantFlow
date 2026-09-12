@@ -60,12 +60,19 @@ export function hasRequiredTeachingReceipt(meta) {
  *
  * @returns {Promise<{ profileId: string, metadata: object, tags: string[] }>}
  */
-export async function createAmyProfile(db, scenario, { runId, ttlHours, now = new Date() } = {}) {
+export async function createAmyProfile(db, scenario, { runId, ttlHours, now = new Date(), metadataExtra = null } = {}) {
   if (!db) throw new Error('createAmyProfile: db is required')
   if (!scenario?.scenario_id) throw new Error('createAmyProfile: scenario.scenario_id is required')
 
   const profileId = randomUUID()
-  const metadata = buildAmyMetadata({ runId, scenarioId: scenario.scenario_id, ttlHours, now })
+  // `metadataExtra` (amy-cohort-9): additive provenance the caller wants on the
+  // authoritative block — a probe's cell + cell key and the cohort target — so
+  // an orphan adopted by a later run can recover the exact cell it was built
+  // for. The contract keys from buildAmyMetadata always win.
+  const metadata = {
+    ...(metadataExtra && typeof metadataExtra === 'object' ? metadataExtra : {}),
+    ...buildAmyMetadata({ runId, scenarioId: scenario.scenario_id, ttlHours, now }),
+  }
   const tags = buildAmyTags({ runId, scenarioId: scenario.scenario_id })
   const nowIso = (now instanceof Date ? now : new Date(now)).toISOString()
 

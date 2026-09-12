@@ -954,6 +954,70 @@ export const CATEGORY_CATALOG = Object.freeze({
 export const CATEGORY_IDS = Object.freeze(Object.keys(CATEGORY_CATALOG))
 
 /**
+ * The round-robin ring `planVariantCounts` walks: every category once, or —
+ * when fleet gap-scoreboard weights are given — repeated `weight` times per
+ * cycle (floored at 1, capped at 8). Exported so a caller can size a rotation
+ * against the SAME ring the planner will walk.
+ */
+export function catalogRing(categories = CATEGORY_IDS, weights = null) {
+  const ids = Array.isArray(categories) && categories.length > 0 ? categories.filter((c) => CATEGORY_CATALOG[c]) : CATEGORY_IDS
+  if (!weights || typeof weights !== 'object') return [...ids]
+  const ring = []
+  for (const c of ids) {
+    const w = Math.max(1, Math.min(8, Math.round(Number(weights[c]) || 1)))
+    for (let k = 0; k < w; k++) ring.push(c)
+  }
+  return ring
+}
+
+/** Days since the epoch for a UTC calendar date. */
+function dayNumberOf(year, month, day) {
+  return Math.floor(Date.UTC(Number(year), Number(month) - 1, Number(day)) / 86_400_000)
+}
+
+/** Small deterministic string hash (FNV-1a, 32-bit) for run ids without a date. */
+function hashRunId(runId) {
+  let h = 0x811c9dc5
+  const str = String(runId ?? '')
+  for (let i = 0; i < str.length; i++) {
+    h ^= str.charCodeAt(i)
+    h = Math.imul(h, 0x01000193) >>> 0
+  }
+  return h
+}
+
+/**
+ * amy-cohort-2 — the catalog floor ROTATES (prod 2026-09-12).
+ *
+ * `planVariantCounts` filled the ring from index 0 on every run, so a 50-night
+ * with a 6-slot catalog floor built the SAME six categories (business,
+ * nonprofit, school_district, college_university, high_school_student,
+ * college_student) every night and 30 of 36 archetypes never got regression
+ * coverage — while the planner header promised breadth "over nights by
+ * rotating which categories the thin floor covers".
+ *
+ * The offset is a pure function of the run: the UTC calendar day embedded in
+ * the run id (`amy-YYYY-MM-DDT…`, minted by amyMetadata.newRunId) advances the
+ * ring by exactly `slots` per day, so N consecutive nights walk the whole ring
+ * contiguously (36 categories / 6 slots = every category once in 6 nights).
+ * A run id without a date (tests, ad-hoc CLI runs) falls back to a hash of the
+ * id so the choice is still deterministic and still "by run". A ring no longer
+ * than the slot count has nothing to rotate and returns 0.
+ *
+ * @param {{ runId?:string, slots?:number, ringLength?:number }} args
+ * @returns {number} start offset into the ring, in [0, ringLength)
+ */
+export function catalogRotationForRun({ runId = '', slots = 0, ringLength = 0 } = {}) {
+  const ring = Math.max(0, Math.trunc(Number(ringLength) || 0))
+  const step = Math.max(0, Math.trunc(Number(slots) || 0))
+  if (ring <= 1 || step <= 0 || ring <= step) return 0
+  const m = /(\d{4})-(\d{2})-(\d{2})/.exec(String(runId ?? ''))
+  const period = m ? dayNumberOf(m[1], m[2], m[3]) : hashRunId(runId)
+  // ((period * step) mod ring), computed without overflow for large periods.
+  return ((period % ring) * (step % ring)) % ring
+}
+
+/**
  * Compute how many variants to make per category.
  *  - targetCount (when set): distribute EXACTLY that many profiles across the
  *    categories round-robin (e.g. 100/day spread evenly over 27 categories).
@@ -967,23 +1031,19 @@ export const CATEGORY_IDS = Object.freeze(Object.keys(CATEGORY_CATALOG))
  *
  * @returns {Record<string, number>} category id → variant count
  */
-export function planVariantCounts({ categories = CATEGORY_IDS, perCategory = 1, targetCount = null, weights = null } = {}) {
+export function planVariantCounts({ categories = CATEGORY_IDS, perCategory = 1, targetCount = null, weights = null, rotation = 0 } = {}) {
   const ids = Array.isArray(categories) && categories.length > 0 ? categories.filter((c) => CATEGORY_CATALOG[c]) : CATEGORY_IDS
   const counts = {}
   for (const c of ids) counts[c] = 0
 
   if (Number.isFinite(Number(targetCount)) && Number(targetCount) > 0) {
     const total = Math.max(1, Math.min(5000, Math.floor(Number(targetCount))))
-    let ring = ids
-    if (weights && typeof weights === 'object') {
-      ring = []
-      for (const c of ids) {
-        const w = Math.max(1, Math.min(8, Math.round(Number(weights[c]) || 1)))
-        for (let k = 0; k < w; k++) ring.push(c)
-      }
-    }
+    const ring = catalogRing(ids, weights)
+    // `rotation` is the start offset into the ring (amy-cohort-2). 0 is the
+    // historical fixed floor; generateScenarios derives a per-run offset.
+    const start = ring.length > 0 ? ((Math.max(0, Math.trunc(Number(rotation) || 0)) % ring.length) + ring.length) % ring.length : 0
     for (let i = 0; i < total; i++) {
-      const c = ring[i % ring.length]
+      const c = ring[(start + i) % ring.length]
       counts[c] += 1
     }
   } else {
@@ -1006,12 +1066,23 @@ export function planVariantCounts({ categories = CATEGORY_IDS, perCategory = 1, 
  * @param {Record<string,number>} [opts.categoryWeights] - fleet gap-scoreboard
  *        weights (coverageGapScoreboard.weightCategoriesByGaps): categories on
  *        gap-heavy lanes get proportionally more of the targetCount.
+ * @param {number} [opts.catalogRotation] - explicit start offset into the
+ *        category ring (amy-cohort-2). Omit to derive it from the run id
+ *        (`catalogRotationForRun`); pass 0 to reproduce the legacy fixed floor
+ *        (needed to rebuild cohorts planned before rotation existed).
  * @returns {Array<object>} scenarios with { scenario_id, category, label,
  *          primary_type, kind, display_name, sections, expected }.
  */
-export function generateScenarios({ runId, categories = CATEGORY_IDS, perCategory = 1, targetCount = null, categoryWeights = null } = {}) {
+export function generateScenarios({ runId, categories = CATEGORY_IDS, perCategory = 1, targetCount = null, categoryWeights = null, catalogRotation = null } = {}) {
   const ids = Array.isArray(categories) && categories.length > 0 ? categories.filter((c) => CATEGORY_CATALOG[c]) : CATEGORY_IDS
-  const counts = planVariantCounts({ categories: ids, perCategory, targetCount, weights: categoryWeights })
+  const rotation = Number.isInteger(catalogRotation)
+    ? catalogRotation
+    : catalogRotationForRun({
+        runId,
+        slots: Number(targetCount) > 0 ? Math.max(1, Math.min(5000, Math.floor(Number(targetCount)))) : 0,
+        ringLength: catalogRing(ids, categoryWeights).length,
+      })
+  const counts = planVariantCounts({ categories: ids, perCategory, targetCount, weights: categoryWeights, rotation })
   const scenarios = []
 
   for (const category of ids) {
@@ -1063,4 +1134,4 @@ export function generateScenarios({ runId, categories = CATEGORY_IDS, perCategor
   return scenarios
 }
 
-export default { CATEGORY_CATALOG, CATEGORY_IDS, generateScenarios, planVariantCounts }
+export default { CATEGORY_CATALOG, CATEGORY_IDS, generateScenarios, planVariantCounts, catalogRing, catalogRotationForRun }

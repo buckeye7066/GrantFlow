@@ -235,13 +235,24 @@ describe('the coverage ledger measures BREADTH honestly', () => {
   const cell = { entity: 'veteran', identity: 'none', need: 'housing', state: 'WV' }
 
   it('an errored or skipped probe counts as ASKED but never as clean', () => {
+    // amy-cohort-4 (2026-09-12): the probe verdict is the flywheel's verdict.
+    // A measured row carries the discovery gate evaluateDiscovery stamps on a
+    // healthy lane; CLEAN additionally needs every ACCEPT oracle-checked.
+    const measured = { evaluable: true, recall_measurable: true, reason: null, class: null }
+    const oracle = { status: 'checked', complete: true, accepted_claims: 1, checked_accepts: 1, unknown_accepts: 0, known_conflicts: 0 }
     expect(classifyProbeOutcome({ status: 'error' })).toBe(PROBE_OUTCOME.UNKNOWN)
     expect(classifyProbeOutcome({ status: 'skipped' })).toBe(PROBE_OUTCOME.UNKNOWN)
-    expect(classifyProbeOutcome({ status: 'zero' })).toBe(PROBE_OUTCOME.GAP)
-    expect(classifyProbeOutcome({ status: 'ok', findings: [] })).toBe(PROBE_OUTCOME.CLEAN)
+    expect(classifyProbeOutcome({ status: 'zero', discovery_gate: measured })).toBe(PROBE_OUTCOME.GAP)
+    expect(classifyProbeOutcome({ status: 'ok', findings: [], accepted: 1, opportunity_oracle: oracle, discovery_gate: measured })).toBe(PROBE_OUTCOME.CLEAN)
+    // No stage evidence at all, or an unchecked oracle, is UNKNOWN — exactly
+    // what the cohort receipt calls unevaluable. Coverage credit never exceeds
+    // receipt credit.
+    expect(classifyProbeOutcome({ status: 'ok', findings: [] })).toBe(PROBE_OUTCOME.UNKNOWN)
+    expect(classifyProbeOutcome({ status: 'ok', findings: [], accepted: 1, discovery_gate: measured })).toBe(PROBE_OUTCOME.UNKNOWN)
+    expect(classifyProbeOutcome({ status: 'ok', findings: [], accepted: 1, opportunity_oracle: oracle, discovery_gate: { evaluable: false, recall_measurable: false, reason: 'extraction_failed', class: 'discovery_blocked:extraction_failed' } })).toBe(PROBE_OUTCOME.UNKNOWN)
     // An `ok` run that still carried a finding is a GAP: results came back and
-    // they were wrong or incomplete.
-    expect(classifyProbeOutcome({ status: 'ok', findings: [{ type: 'amount_recall_miss' }] })).toBe(PROBE_OUTCOME.GAP)
+    // they were wrong or incomplete (its ACCEPTs oracle-checked, like the receipt requires).
+    expect(classifyProbeOutcome({ status: 'ok', findings: [{ type: 'amount_recall_miss' }], accepted: 1, opportunity_oracle: oracle, discovery_gate: measured })).toBe(PROBE_OUTCOME.GAP)
 
     const { ledger } = foldProbeCoverage(null, {
       probes: [{ cell, outcome: PROBE_OUTCOME.UNKNOWN }],

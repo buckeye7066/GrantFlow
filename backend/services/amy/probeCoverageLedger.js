@@ -36,6 +36,7 @@
 
 import { createLogger } from '../../utils/logger.js'
 import { AXES, cellKey, cellPairs, enumerateReachablePairs } from './probeSpace.js'
+import { evaluationOutcome } from './discoveryGate.js'
 
 const log = createLogger('amy:probeCoverage')
 
@@ -58,19 +59,25 @@ export const PROBE_OUTCOME = Object.freeze({
 /**
  * Classify one evaluation into a probe outcome.
  *
- * `ok` with no findings is the only CLEAN result. `zero`/`weak` are gaps. A
- * `skipped`/`error` probe is UNKNOWN: it exercised the space (breadth) but
- * proved nothing about coverage, and must never be counted as a clean night.
- * An `ok` status that still carried findings (a false positive, a recall miss,
- * an amount miss) is a GAP — the profile got results, and they were wrong or
- * incomplete, which is precisely the hole the owner asked Amy to find.
+ * amy-cohort-4: this is the SAME verdict the flywheel receipt records
+ * (`discoveryGate.evaluationOutcome`), so coverage credit can never exceed
+ * receipt credit. Before, `ok` + zero findings read as CLEAN here even when the
+ * bounded opportunity oracle was unknown/missing, or when the open-web lane
+ * never ran — while the receipt refused to call the identical row clean.
+ *
+ *   clean  → CLEAN   every planned stage ran healthily, zero findings, every
+ *                    ACCEPT oracle-checked
+ *   issue  → GAP     results came back through a measurable lane and were
+ *                    wrong or incomplete — the hole the owner asked Amy to find
+ *   else   → UNKNOWN errored / skipped / discovery_blocked:* / oracle unknown /
+ *                    no stage evidence: the space was ASKED (breadth) but the
+ *                    probe proved nothing, and must never read as a clean night
  */
 export function classifyProbeOutcome(evaluation) {
-  const status = String(evaluation?.status ?? '')
-  if (status === 'skipped' || status === 'error') return PROBE_OUTCOME.UNKNOWN
-  if (status === 'zero' || status === 'weak') return PROBE_OUTCOME.GAP
-  const findings = Array.isArray(evaluation?.findings) ? evaluation.findings : []
-  return findings.length > 0 ? PROBE_OUTCOME.GAP : PROBE_OUTCOME.CLEAN
+  const { outcome } = evaluationOutcome(evaluation)
+  if (outcome === 'clean') return PROBE_OUTCOME.CLEAN
+  if (outcome === 'issue') return PROBE_OUTCOME.GAP
+  return PROBE_OUTCOME.UNKNOWN
 }
 
 function toIso(at) {

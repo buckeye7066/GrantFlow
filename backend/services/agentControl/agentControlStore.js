@@ -1013,7 +1013,15 @@ export function stopLockSweeper() {
  * dead-holder lock, and bounded retry-with-backoff. Returns a lease descriptor:
  *
  *   { acquired: true,  ownerToken, lockName, expiresAt, tookOver?, reclaimReason? }
- *   { acquired: false, reason: 'held'|'invalid_args', heldBy, expiresAt }
+ *   { acquired: false, reason: 'held'|'invalid_args', heldBy, acquiredBy, holderInstanceId, acquiredAt, expiresAt }
+ *
+ * The not-acquired descriptor NAMES THE HOLDER (amy-cohort-8): `heldBy` is the
+ * holder's control_run_id (for scheduler locks a minted
+ * `scheduler:<name>:<ts>:<uuid>` that identifies nothing), so `acquiredBy`
+ * (e.g. `amy:scheduler` / `amy:admin`) and `holderInstanceId` (the holder
+ * process's boot id) travel with it — the '[scheduler-lock] skipped; lock held'
+ * log, amyRunner's `lock_held` summary and /status could not otherwise say WHO
+ * holds the lock.
  *
  * `reclaimReason` (present only when `tookOver` is true) is `'ttl_expired'`
  * or `'dead_holder_instance'` — see the "STALE-HOLDER RECLAIM" note above.
@@ -1139,6 +1147,8 @@ export async function acquireLock(db, {
       run: controlRunId,
       attempt,
       held_by: holder?.control_run_id || 'unknown',
+      acquired_by: holder?.acquired_by || 'unknown',
+      holder_instance: holder?.holder_instance_id || 'unknown',
       expires_at: holder?.expires_at || 'n/a',
     })
 
@@ -1150,13 +1160,31 @@ export async function acquireLock(db, {
   }
 
   const holder = await getLock(db, lockName)
-  lockLog('acquire.failed', { lock: lockName, run: controlRunId, held_by: holder?.control_run_id || 'unknown' })
+  lockLog('acquire.failed', {
+    lock: lockName,
+    run: controlRunId,
+    held_by: holder?.control_run_id || 'unknown',
+    acquired_by: holder?.acquired_by || 'unknown',
+    holder_instance: holder?.holder_instance_id || 'unknown',
+  })
   return {
     acquired: false,
     reason: 'held',
     heldBy: holder?.control_run_id || null,
+    acquiredBy: holder?.acquired_by || null,
+    holderInstanceId: holder?.holder_instance_id || null,
+    acquiredAt: holder?.acquired_at || null,
     expiresAt: holder?.expires_at || null,
   }
+}
+
+/** One human-readable phrase naming a refused lease's holder (amy-cohort-8). */
+export function describeLockHolder(lease = {}) {
+  const parts = [`held by ${lease?.heldBy || 'unknown'}`]
+  if (lease?.acquiredBy) parts.push(`acquired_by ${lease.acquiredBy}`)
+  if (lease?.holderInstanceId) parts.push(`instance ${lease.holderInstanceId}`)
+  if (lease?.expiresAt) parts.push(`expires ${lease.expiresAt}`)
+  return parts.join(', ')
 }
 
 /**
@@ -1232,7 +1260,7 @@ export async function withLock(db, opts = {}, fn) {
   if (typeof fn !== 'function') throw new Error('withLock: fn required')
   const lease = await acquireLock(db, opts)
   if (!lease.acquired) {
-    const e = new Error(`withLock: could not acquire "${opts?.lockName}" (held by ${lease.heldBy || 'unknown'})`)
+    const e = new Error(`withLock: could not acquire "${opts?.lockName}" (${describeLockHolder(lease)})`)
     e.code = 'LOCK_NOT_ACQUIRED'
     e.lease = lease
     throw e

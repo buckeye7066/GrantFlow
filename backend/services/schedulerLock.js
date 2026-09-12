@@ -120,12 +120,18 @@ export async function runWithSchedulerLock(db, {
       )
     } catch (error) {
       if (error?.code === 'LOCK_NOT_ACQUIRED') {
-        logger?.info?.('[scheduler-lock] skipped; lock held', {
-          lockName,
-          heldBy: error?.lease?.heldBy || null,
-          expiresAt: error?.lease?.expiresAt || null,
-        })
-        return { skipped: true, reason: 'lock_held', lockName }
+        // amy-cohort-8: name the holder, not just the minted control_run_id,
+        // so the skip log / amyRunner summary / status can say WHO holds it.
+        const lease = error?.lease || {}
+        const holder = {
+          heldBy: lease.heldBy || null,
+          acquiredBy: lease.acquiredBy || null,
+          holderInstanceId: lease.holderInstanceId || null,
+          acquiredAt: lease.acquiredAt || null,
+          expiresAt: lease.expiresAt || null,
+        }
+        logger?.info?.('[scheduler-lock] skipped; lock held', { lockName, ...holder })
+        return { skipped: true, reason: 'lock_held', lockName, ...holder }
       }
       reportBackgroundError(error, { lockName })
       throw error

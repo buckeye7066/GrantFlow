@@ -17,13 +17,18 @@ const checkedOracle = (accepted = 1) => ({
   status: 'checked', complete: true, accepted_claims: accepted, checked_accepts: accepted,
   unknown_accepts: 0, known_conflicts: 0, exception_classes: {}, qualification_proven: false,
 })
+// amy-cohort-1/4 (2026-09-12): a member is clean ONLY when every planned stage
+// ran with healthy providers. Fixtures carry the discovery gate evaluateDiscovery
+// stamps on a healthy open-web lane; a row with NO stage evidence is
+// `discovery_blocked:stages_unknown`, never clean (pinned below).
+const MEASURED_GATE = { evaluable: true, recall_measurable: true, reason: null, class: null }
 const clean = (i) => ({
   scenario_id: `s${i}`, cohort_member_id: `s${i}`, label: `Clean ${i}`, category: 'student',
-  status: 'ok', accepted: 1, opportunity_oracle: checkedOracle(), findings: [],
+  status: 'ok', accepted: 1, opportunity_oracle: checkedOracle(), findings: [], discovery_gate: MEASURED_GATE,
 })
 const gappy = (i, type = 'hyperlocal_recall_miss') => ({
   scenario_id: `g${i}`, cohort_member_id: `g${i}`, label: `Gappy ${i}`, category: 'veteran', status: 'ok',
-  accepted: 1, opportunity_oracle: checkedOracle(),
+  accepted: 1, opportunity_oracle: checkedOracle(), discovery_gate: MEASURED_GATE,
   findings: [{ type, message: 'gap' }],
 })
 const errored = (i) => ({ scenario_id: `e${i}`, cohort_member_id: `e${i}`, label: `Err ${i}`, category: 'nonprofit', status: 'error', findings: [{ type: 'crawler_exception' }] })
@@ -55,6 +60,15 @@ describe('isCleanEvaluation', () => {
     expect(isCleanEvaluation({ status: 'skipped', findings: [] })).toBe(false)
     expect(isCleanEvaluation(null)).toBe(false)
     expect(isCleanEvaluation({ ...clean(2), opportunity_oracle: { ...checkedOracle(), status: 'unknown', unknown_accepts: 1 } })).toBe(false)
+    // amy-cohort-1: zero evaluation stages (no discovery gate, no search
+    // evidence) is never clean, and the receipt names the class.
+    const { discovery_gate: _gate, ...noStages } = clean(3)
+    expect(isCleanEvaluation(noStages)).toBe(false)
+    const receipt = buildRunCohortReceipt({ runId: 'r', target: 1, expectedMembers: ['s3'], evaluations: [{ ...noStages, cohort_run_id: 'r' }] })
+    expect(receipt.outcomes).toMatchObject({ clean: 0, issue: 0, unevaluable: 1 })
+    expect(receipt.exception_classes['discovery_blocked:stages_unknown']).toBe(1)
+    // A blocked lane (dead extractor / skipped web lane) is unevaluable, not an issue.
+    expect(isCleanEvaluation({ ...clean(4), discovery_gate: { evaluable: false, recall_measurable: false, reason: 'extraction_failed', class: 'discovery_blocked:extraction_failed' } })).toBe(false)
     expect(isCleanEvaluation({ ...clean(3), opportunity_oracle: null })).toBe(false)
   })
 })
@@ -150,7 +164,7 @@ describe('buildCohortUpdate (pure fold)', () => {
     const r = buildCohortUpdate(null, {
       dayKey: '2026-07-07', target: 1, runId: 'run-e',
       evaluations: [{
-        scenario_id: 'hs1', label: 'High School Student', category: 'high_school_student', status: 'ok',
+        scenario_id: 'hs1', label: 'High School Student', category: 'high_school_student', status: 'ok', discovery_gate: MEASURED_GATE,
         findings: [
           {
             type: 'institution_recall_miss',
@@ -170,7 +184,7 @@ describe('buildCohortUpdate (pure fold)', () => {
     const long = buildCohortUpdate(null, {
       dayKey: '2026-07-07', target: 1,
       evaluations: [{
-        scenario_id: 'x', label: 'X', category: 'veteran', status: 'ok',
+        scenario_id: 'x', label: 'X', category: 'veteran', status: 'ok', discovery_gate: MEASURED_GATE,
         findings: [{ type: 'weak_match', excerpt: 'y'.repeat(5000) }],
       }],
     })
@@ -290,7 +304,7 @@ describe('recordFlywheelCohort (store + one-shot goal notification)', () => {
     const store = await getFlywheelCohort(db)
     expect(store.goal_notified_at).toBeTruthy()
     expect(Object.keys(store.days).length).toBe(1)
-    expect(store.goal_notified_receipt_version).toBe(1)
+    expect(store.goal_notified_receipt_version).toBe(2)
     expect(store.goal_notified_run_id).toBe('run-1')
   })
 
@@ -316,7 +330,7 @@ describe('recordFlywheelCohort (store + one-shot goal notification)', () => {
     expect(result.notified).toBe(true)
     expect(sent).toHaveLength(1)
     const store = await getFlywheelCohort(db)
-    expect(store.goal_notified_receipt_version).toBe(1)
+    expect(store.goal_notified_receipt_version).toBe(2)
     expect(store.goal_notified_run_id).toBe('receipt-v1')
   })
 

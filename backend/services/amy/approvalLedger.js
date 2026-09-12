@@ -56,11 +56,60 @@
 
 import { createLogger } from '../../utils/logger.js'
 import { healthyRecallCoverage, recallAttribution } from './searchAttribution.js'
+import { discoveryGateFor } from './discoveryGate.js'
+import { ADVERSARIAL_CATEGORY_PREFIX } from './intersectionScenario.js'
 
 const log = createLogger('amy:approvalLedger')
 
 /** system_kv key holding the durable per-item approval ledger. */
 export const KV_KEY = 'amy_approval_ledger'
+
+/**
+ * amy-cohort-3 — ONE class key for every adversarial-probe recall item.
+ *
+ * Probe recall items used to be keyed per intersection cell
+ * (`hyperlocal_recall_miss:probe:<entity>+<identity>+<need>`). The planner
+ * deliberately picks the LEAST-covered cells, so a probe category was almost
+ * never re-run, the hold-open rule below could never see healthy coverage of
+ * its subjects, and every night's probe gaps became permanent open entries:
+ * prod 2026-09-12 carried 101 open query_breadth items, 90 of them probe
+ * cells, 38 rendered as code changes against webQueries.js. Probe recall items
+ * are now keyed `${finding_type}:${PROBE_ITEM_CATEGORY}`, carry the cells they
+ * were measured on in `evidence.cells`, and age as ONE class.
+ */
+export const PROBE_ITEM_CATEGORY = `${ADVERSARIAL_CATEGORY_PREFIX}:*`
+
+/** True for the per-cell category an intersection scenario carries (`probe:<entity>+<identity>+<need>`). */
+export function isProbeCategory(category) {
+  const c = String(category ?? '')
+  return c !== PROBE_ITEM_CATEGORY && c.startsWith(`${ADVERSARIAL_CATEGORY_PREFIX}:`)
+}
+
+/** True for an approval item / ledger entry keyed on the probe class. */
+export function isProbeClassItem(item) {
+  return String(item?.category ?? '') === PROBE_ITEM_CATEGORY
+}
+
+/**
+ * Evaluations whose recall detectors were actually MEASURABLE this run: the
+ * web lane executed with healthy search and extraction not provably dead
+ * (discoveryGate). A dead-extractor or skipped-lane night can neither open a
+ * query-builder claim nor close one — its rows are not coverage evidence.
+ * Legacy rows without a gate fall back to their search_evidence status.
+ */
+function measurableEvaluations(evaluations = []) {
+  return (Array.isArray(evaluations) ? evaluations : []).filter((e) => discoveryGateFor(e).recall_measurable)
+}
+
+/**
+ * Did a healthy adversarial probe of this class run this run? The class item
+ * is re-tested by ANY probe whose recall detector for the finding type was
+ * evaluated (recall_coverage carries the type) under a measurable lane.
+ */
+function healthyProbeClassCoverage(entry, measurable = []) {
+  const type = entry?.finding_type || String(entry?.id ?? '').split(':')[0]
+  return measurable.some((e) => isProbeCategory(e?.category) && Array.isArray(e?.recall_coverage?.[type]))
+}
 
 /** How long a RESOLVED entry is retained (days) before it is dropped. */
 export const RESOLVED_RETENTION_DAYS = 30
@@ -268,11 +317,17 @@ export function foldApprovalLedger(prev, { items = [], evaluations = null, runId
   const dayKey = etDayKey(new Date(nowIso))
   const base = prev && typeof prev === 'object' ? prev : {}
   const prevEntries = base.entries && typeof base.entries === 'object' ? base.entries : {}
+  // Only rows whose recall detectors were measurable can prove coverage.
+  const measurable = measurableEvaluations(evaluations || [])
   const list = (Array.isArray(items) ? items : []).map(item => {
     if (item.lever !== 'query_breadth') return item
+    // amy-cohort-3: the probe CLASS item carries only the subjects measured
+    // THIS run. Probes never revisit a cell on purpose, so unioning every
+    // prior night's counties would grow an untestable list forever.
+    if (isProbeClassItem(item)) return item
     const previous = prevEntries[item.id]?.resolved_at ? null : prevEntries[item.id]
     const outstanding = (previous?.evidence?.subjects || []).filter(subject =>
-      !healthyRecallCoverage({ ...previous, evidence: { subjects: [subject] } }, evaluations || []))
+      !healthyRecallCoverage({ ...previous, evidence: { subjects: [subject] } }, measurable))
     const currentSubjects = item.evidence?.subjects || []
     const subjects = [...new Set([...currentSubjects, ...outstanding])]
     const incomplete = Boolean((previous && !previous.evidence?.subjects?.length) || previous?.evidence?.subject_history_incomplete || item.evidence?.subject_history_incomplete || subjects.length > 200)
@@ -286,11 +341,27 @@ export function foldApprovalLedger(prev, { items = [], evaluations = null, runId
   // repair. Keep its original key and clock, and expose the held item too.
   for (const entry of Object.values(prevEntries)) {
     if (entry.resolved_at || entry.lever !== 'query_breadth' || list.some(i => i.id === entry.id)) continue
+    if (isProbeClassItem(entry)) {
+      // amy-cohort-3: the probe class is held open ONLY while no healthy probe
+      // of the class has re-run. Once a healthy probe night measured the class
+      // and the finding did not reproduce, the entry closes below
+      // (stopped_reproducing) and reopens honestly if it comes back.
+      if (healthyProbeClassCoverage(entry, measurable)) continue
+      list.push({
+        ...(entry.latest_item || entry),
+        evidence: { ...entry.evidence },
+        attribution: { ...recallAttribution([]), status: 'inconclusive', reason: 'No adversarial probe of this class ran with healthy search and live extraction this run; the previous coverage gap remains open until a healthy probe night measures it.' },
+        code_brief: undefined,
+        target_file: null,
+      })
+      continue
+    }
     const categoryEvals = (evaluations || []).filter(e => e.category === entry.category)
+    const measurableCategoryEvals = measurable.filter(e => e.category === entry.category)
     const uncertain = recallAttribution(categoryEvals)
-    if (!healthyRecallCoverage(entry, categoryEvals)) {
+    if (!healthyRecallCoverage(entry, measurableCategoryEvals)) {
       const subjects = (entry.evidence?.subjects || []).filter(subject =>
-        !healthyRecallCoverage({ ...entry, evidence: { subjects: [subject] } }, categoryEvals))
+        !healthyRecallCoverage({ ...entry, evidence: { subjects: [subject] } }, measurableCategoryEvals))
       list.push({ ...(entry.latest_item || entry), evidence: { ...entry.evidence, subjects }, attribution: { ...uncertain, status: 'inconclusive', reason: 'The previous coverage gap remains open until healthy search demonstrates coverage of its missing subjects.' }, code_brief: undefined, target_file: null })
     }
   }
@@ -504,9 +575,12 @@ export async function recordApprovalQueue(db, { items = [], evaluations = null, 
 
 export default {
   KV_KEY,
+  PROBE_ITEM_CATEGORY,
   ACTIONABILITY,
   LEVER_REGISTRY,
   RESOLUTION,
+  isProbeCategory,
+  isProbeClassItem,
   foldApprovalLedger,
   decorateApprovalQueue,
   leverActionability,
