@@ -36,7 +36,9 @@
 // profile_qualifies, and page copy ("Career Services") published direct funding.
 // A single named county the profile's declared current residence provably lies
 // outside is "elsewhere" (temporalRelatability), not a neutral unknown.
-export const PROFILE_SIGNAL_VERSION = '2026.09.12-2'
+// An intellectual/developmental disability program is condition-specific, and a
+// profile's IDD diagnosis (F70–F79, "mentally challenged") names that condition.
+export const PROFILE_SIGNAL_VERSION = '2026.09.12-3'
 
 /** Repo-relative files whose content decides what the engine believes about a profile. */
 export const PROFILE_SIGNAL_DERIVATION_FILES = Object.freeze([
@@ -64,6 +66,6 @@ export const PROFILE_SIGNAL_DERIVATION_FILES = Object.freeze([
  * sha256 over the LF-normalized concatenation of the files above, pinned by
  * `scripts/pin-signal-version.mjs`. The test recomputes it.
  */
-export const PROFILE_SIGNAL_DERIVATION_HASH = '2b6a84b2abf881101aaed1eacf154b9407c4f7a2f9cbeb98f13b8656f0b0a45e'
+export const PROFILE_SIGNAL_DERIVATION_HASH = '66c84873ab4ba809317f74293b5b7b310822cddd047abb6540a13267a362165d'
 
 export default { PROFILE_SIGNAL_VERSION, PROFILE_SIGNAL_DERIVATION_FILES, PROFILE_SIGNAL_DERIVATION_HASH }
