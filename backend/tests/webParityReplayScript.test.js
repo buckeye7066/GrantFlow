@@ -96,7 +96,7 @@ describe('web-parity-replay.mjs (offline reproduction)', () => {
     const { benchmark, queue } = fixtures()
     const rows = collectCandidates(benchmark.latest.per_profile[0], queue.candidates.filter((c) => c.profile_id === 'profile-golden-a'))
     expect(rows).toHaveLength(4)
-    const fresh = rows.find((r) => r.url.startsWith('https://fresh.example'))
+    const fresh = rows.find((r) => new URL(r.url).hostname === 'fresh.example')
     expect(fresh.canonical_key).toBe('fresh.example/apply')
     expect(fresh.legacy_key).toBe(legacyUrlKey(fresh.url))
     expect(fresh.legacy_key).not.toBe(fresh.canonical_key)

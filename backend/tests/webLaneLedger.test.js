@@ -227,9 +227,12 @@ describe('stage ledger — gate rejections, duplicates and admissions are counte
       { url: 'https://nourl.org/grant', title: 'nourl', snippet: '' },
     ])
     const extractOpportunities = vi.fn(async ({ pageUrl }) => {
-      if (pageUrl.includes('real.org')) return [realOpp()]
-      if (pageUrl.includes('dup.org')) return [realOpp({ apply_url: 'https://nyf.org/grant/apply' })] // same canonical identity
-      if (pageUrl.includes('expired.org')) return [realOpp({ title: 'Old Youth Grant', deadline: '2020-01-01', apply_url: 'https://expired.org/apply' })]
+      // Match on the parsed hostname, never a URL substring (CodeQL
+      // js/incomplete-url-substring-sanitization guards the whole tree).
+      const host = new URL(pageUrl).hostname
+      if (host === 'real.org') return [realOpp()]
+      if (host === 'dup.org') return [realOpp({ apply_url: 'https://nyf.org/grant/apply' })] // same canonical identity
+      if (host === 'expired.org') return [realOpp({ title: 'Old Youth Grant', deadline: '2020-01-01', apply_url: 'https://expired.org/apply' })]
       return [realOpp({ title: 'Info Only Youth Program', apply_url: null, info_url: 'https://nourl.org/grant', deadline: 'rolling' })]
     })
     const fetcher = fakeFetcher({
