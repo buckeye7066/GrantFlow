@@ -41,7 +41,7 @@ describe('free AI provider routing', () => {
           id: 'community-endpoint',
           base_url: 'https://free.example.test/v1/',
           model: 'community-model',
-          api_key_env: 'COMMUNITY_TOKEN',
+          api_key_env: 'FREE_AI_ROUTE_COMMUNITY_API_KEY',
         },
         {
           id: 'unsafe',
@@ -61,7 +61,7 @@ describe('free AI provider routing', () => {
         id: 'community-endpoint',
         baseURL: 'https://free.example.test/v1',
         model: 'community-model',
-        apiKeyEnv: 'COMMUNITY_TOKEN',
+        apiKeyEnv: 'FREE_AI_ROUTE_COMMUNITY_API_KEY',
       },
       {
         id: 'free-compatible',

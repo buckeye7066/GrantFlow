@@ -39,6 +39,15 @@ function parseJsonLoose(text) {
   return first >= 0 && last > first ? safeParseJSON(raw.slice(first, last + 1), null) : null
 }
 
+/** Allow only credentials dedicated to free/self-hosted routes. */
+function isAllowedCredentialRef(name) {
+  return typeof name === 'string' && (
+    name === FREE_ROUTE_ENV_KEYS.genericApiKey ||
+    name === FREE_ROUTE_ENV_KEYS.ollamaApiKey ||
+    /^FREE_AI_ROUTE_[A-Z][A-Z0-9_]*_API_KEY$/.test(name)
+  )
+}
+
 function normalizeRoute(entry, index) {
   if (!entry || typeof entry !== 'object') return null
   const baseURL = String(entry.base_url ?? entry.baseURL ?? '').trim().replace(/\/+$/, '')
@@ -50,11 +59,12 @@ function normalizeRoute(entry, index) {
   const rawId = String(entry.id || `route-${index + 1}`).trim().toLowerCase()
   const id = rawId.replace(/[^a-z0-9._-]+/g, '-').replace(/^-+|-+$/g, '') || `route-${index + 1}`
   const apiKeyEnv = String(entry.api_key_env ?? entry.apiKeyEnv ?? '').trim()
+  if (apiKeyEnv && !isAllowedCredentialRef(apiKeyEnv)) return null
   return {
     id,
     baseURL,
     model,
-    apiKeyEnv: /^[A-Z][A-Z0-9_]*$/.test(apiKeyEnv) ? apiKeyEnv : null,
+    apiKeyEnv: apiKeyEnv || null,
   }
 }
 
@@ -119,8 +129,18 @@ export function isProviderCreditExhaustion(error) {
     /insufficient[_ -]?quota|credit(?:s)? (?:balance )?(?:exhausted|depleted|expired|is too low)|billing|payment required|spend limit|quota exceeded|rate limit/i.test(message)
 }
 
-function clientFor(route, env = currentFreeAiEnv()) {
-  const apiKey = route.apiKeyEnv ? String(env?.[route.apiKeyEnv] || '').trim() : ''
+// Route configuration is admin-editable, so it must not select arbitrary
+// process secrets as bearer tokens. Custom credentials use the dedicated
+// FREE_AI_ROUTE_<NAME>_API_KEY namespace; existing generic/Ollama keys remain
+// supported. Validate again for unnormalized callers before reading any value.
+// Read the current process value for each client. Custom key provisioning and
+// rotation remain deployment-managed; this does not add admin runtime writes.
+function clientFor(route, env = process.env) {
+  const apiKeyEnv = route.apiKeyEnv
+  if (apiKeyEnv && !isAllowedCredentialRef(apiKeyEnv)) {
+    throw Object.assign(new Error('free route credential reference is not permitted'), { status: 403 })
+  }
+  const apiKey = apiKeyEnv ? String(env?.[apiKeyEnv] || '').trim() : ''
   return {
     client: new OpenAI({
       apiKey: apiKey || 'grantflow-local-no-key',
@@ -219,8 +239,9 @@ async function invokeRoutes({
       return { ...common, json }
     } catch (error) {
       if (signal?.aborted) break
-      errors.push(safeError(error))
-      log.warn(`Free AI route ${route.id} failed; trying the next configured route`)
+      const failure = safeError(error)
+      errors.push(failure)
+      log.warn(`Free AI route ${route.id} failed; trying the next configured route`, failure)
     }
   }
   return { ok: false, freeRouteErrors: errors }
