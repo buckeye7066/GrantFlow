@@ -230,7 +230,8 @@ export async function findOfficialUrlForOpportunity({ title, sponsor } = {}, dep
     return { url: null, searched: true, hits: hits.length }
   } catch (err) {
     signal?.throwIfAborted()
-    // Never throws — the rescue sweep treats searched:false as a provider
+    // Ordinary provider failures stay non-throwing; caller cancellation above rejects.
+    // The rescue sweep treats searched:false as a provider
     // failure (candidate is preserved for a later attempt).
     const message = String(err?.message || err)
     log.warn('findOfficialUrlForOpportunity failed (non-fatal)', { error: message })

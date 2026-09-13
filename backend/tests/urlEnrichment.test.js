@@ -5,10 +5,10 @@
  * Honesty contract under test: the finder only ever returns a URL that came
  * back from a real search for the candidate's own title+sponsor, passed the
  * token-overlap plausibility check, and answered a liveness probe — and it
- * never throws (provider failures surface as searched:false).
+ * surfaces provider failures as searched:false while caller cancellation rejects.
  */
 
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import {
   significantTitleTokens,
   isPlausibleOfficialHit,
