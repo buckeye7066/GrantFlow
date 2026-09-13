@@ -119,11 +119,20 @@ export function isProviderCreditExhaustion(error) {
     /insufficient[_ -]?quota|credit(?:s)? (?:balance )?(?:exhausted|depleted|expired|is too low)|billing|payment required|spend limit|quota exceeded|rate limit/i.test(message)
 }
 
-// api_key_env can name any valid environment variable, not just the fixed
-// option inventory above. Read it at client creation so key rotations apply
-// without a restart; never copy the value into route metadata or diagnostics.
+// Route configuration is admin-editable, so it must not select arbitrary
+// process secrets as bearer tokens. Custom credentials use the dedicated
+// FREE_AI_ROUTE_<NAME>_API_KEY namespace; existing generic/Ollama keys remain
+// supported. Validate at SDK construction even for unnormalized callers, then
+// resolve the allowed key at call time so rotations do not need a restart.
 function clientFor(route, env = process.env) {
-  const apiKey = route.apiKeyEnv ? String(env?.[route.apiKeyEnv] || '').trim() : ''
+  const apiKeyEnv = route.apiKeyEnv
+  const allowed = apiKeyEnv === FREE_ROUTE_ENV_KEYS.genericApiKey ||
+    apiKeyEnv === FREE_ROUTE_ENV_KEYS.ollamaApiKey ||
+    /^FREE_AI_ROUTE_[A-Z][A-Z0-9_]*_API_KEY$/.test(apiKeyEnv || '')
+  if (apiKeyEnv && !allowed) {
+    throw Object.assign(new Error('free route credential reference is not permitted'), { status: 403 })
+  }
+  const apiKey = apiKeyEnv ? String(env?.[apiKeyEnv] || '').trim() : ''
   return {
     client: new OpenAI({
       apiKey: apiKey || 'grantflow-local-no-key',
