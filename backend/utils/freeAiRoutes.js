@@ -119,7 +119,10 @@ export function isProviderCreditExhaustion(error) {
     /insufficient[_ -]?quota|credit(?:s)? (?:balance )?(?:exhausted|depleted|expired|is too low)|billing|payment required|spend limit|quota exceeded|rate limit/i.test(message)
 }
 
-function clientFor(route, env = currentFreeAiEnv()) {
+// api_key_env can name any valid environment variable, not just the fixed
+// option inventory above. Read it at client creation so key rotations apply
+// without a restart; never copy the value into route metadata or diagnostics.
+function clientFor(route, env = process.env) {
   const apiKey = route.apiKeyEnv ? String(env?.[route.apiKeyEnv] || '').trim() : ''
   return {
     client: new OpenAI({
@@ -219,8 +222,9 @@ async function invokeRoutes({
       return { ...common, json }
     } catch (error) {
       if (signal?.aborted) break
-      errors.push(safeError(error))
-      log.warn(`Free AI route ${route.id} failed; trying the next configured route`)
+      const failure = safeError(error)
+      errors.push(failure)
+      log.warn(`Free AI route ${route.id} failed; trying the next configured route`, failure)
     }
   }
   return { ok: false, freeRouteErrors: errors }
