@@ -32,8 +32,14 @@ jobs:
       - name: Run Claude Code
         id: claude
         uses: anthropics/claude-code-action@d75b94d5ad426cb8546e6628b6f5f19b84e5cce1 # v1.0.216
+        # Use the existing owner subscription secret first. API-key auth is
+        # selected only when the subscription secret is absent, never alongside it.
+        env:
+          ANTHROPIC_API_KEY: ''
+          ANTHROPIC_AUTH_TOKEN: ''
         with:
-          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          anthropic_api_key: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN == '' && secrets.ANTHROPIC_API_KEY || '' }}
           github_token: ${{ secrets.GITHUB_TOKEN }}
           allowed_bots: "Copilot,copilot-swe-agent[bot]"
           allowed_non_write_users: "Copilot,copilot-swe-agent[bot]"
