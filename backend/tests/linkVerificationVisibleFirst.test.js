@@ -117,3 +117,33 @@ describe('link verification — visible catalog takes the bounded slot first', (
     }
   })
 })
+
+describe('link verification cancellation fencing', () => {
+  it('does not probe or mutate when the worker lease is already aborted', async () => {
+    const db = makeDb()
+    const controller = new AbortController(); controller.abort()
+    const fetchSpy = vi.fn()
+    try {
+      insertRow(db, { id: 'abort-before', url: 'https://8.8.8.8/fixture', lastVerifiedAt: daysAgo(40) })
+      const before = lastVerified(db, 'abort-before')
+      await expect(runLinkVerification(db, { limit: 1, fetchImpl: fetchSpy, signal: controller.signal })).rejects.toThrow()
+      expect(fetchSpy).not.toHaveBeenCalled()
+      expect(lastVerified(db, 'abort-before')).toEqual(before)
+    } finally { db.close() }
+  })
+  it('does not publish a probe result after losing the worker lease', async () => {
+    const db = makeDb()
+    const controller = new AbortController()
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => {
+      controller.abort()
+      return { status: 200, url: 'https://8.8.8.8/fixture' }
+    })
+    try {
+      insertRow(db, { id: 'abort-after', url: 'https://8.8.8.8/fixture', lastVerifiedAt: daysAgo(40) })
+      const before = lastVerified(db, 'abort-after')
+      await expect(runLinkVerification(db, { limit: 1, fetchImpl: globalThis.fetch, signal: controller.signal })).rejects.toThrow()
+      expect(fetchSpy).toHaveBeenCalled()
+      expect(lastVerified(db, 'abort-after')).toEqual(before)
+    } finally { fetchSpy.mockRestore(); db.close() }
+  })
+})

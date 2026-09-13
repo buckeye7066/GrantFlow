@@ -4001,7 +4001,7 @@ if (process.env.NODE_ENV !== 'test') {
       Math.min(configuredIntervalMs, 3 * 60 * 60 * 1000),
     )
     const limit = Math.max(300, Number(process.env.LINK_VERIFICATION_BATCH) || 300)
-    const runOnce = async () => {
+    const runOnce = async (lease = {}) => {
       try {
         // The boot invariant sweep is post-listen and may still be mutating
         // pipeline rows when this 30-second timer fires. Wait for it before
@@ -4012,7 +4012,9 @@ if (process.env.NODE_ENV !== 'test') {
         const stats = await runLinkVerification(dbInstance, {
           limit,
           verifiedBy: `recurring-verifier:pid=${process.pid}`,
+          signal: lease.signal,
         })
+        lease.signal?.throwIfAborted()
         console.log('[link-verify] completed:', stats)
           const { repairBrokenDirectBatch } = await import('./services/linkBacklogRepairService.js')
           const lifecycle = await repairBrokenDirectBatch(dbInstance, {
@@ -4044,9 +4046,12 @@ if (process.env.NODE_ENV !== 'test') {
     // Run once at startup after a 30s delay, then on the configured interval.
     const lockedRunOnce = () => runWithSchedulerLock(dbInstance, {
       lockName: 'link-verification',
-      ttlMs: Math.max(30 * 60 * 1000, Math.min(intervalMs, 2 * 60 * 60 * 1000)),
+      ttlMs: 5 * 60 * 1000,
+      heartbeat: true,
       logger: console,
-    }, runOnce)
+    }, runOnce).catch((error) => {
+      console.warn('[link-verify] scheduler run failed:', error?.code || 'verification_failed')
+    })
     setTimeout(lockedRunOnce, 30_000)
     setInterval(lockedRunOnce, intervalMs)
   }
@@ -4143,7 +4148,14 @@ if (process.env.NODE_ENV !== 'test') {
         let ok = 0
         let broken = 0
         for (let i = 0; i < chunks; i += 1) {
-          const s = await runLinkVerification(dbInstance, { limit, verifiedBy: 'weekly-report' })
+          const s = await runWithSchedulerLock(dbInstance, {
+            lockName: 'link-verification', ttlMs: 5 * 60 * 1000, heartbeat: true,
+            acquiredBy: 'weekly-report', logger: console,
+          }, (lease = {}) => runLinkVerification(dbInstance, { limit, verifiedBy: 'weekly-report', signal: lease.signal }))
+          if (s?.skipped) {
+            console.info('[weekly-verify-report] deferred; shared verifier is active')
+            return // Do not email or mark a contended run complete; the next tick retries.
+          }
           checked += s.checked
           ok += s.ok || 0
           broken += s.broken || 0

@@ -531,13 +531,15 @@ export async function quarantineUnverifiedDirectOpportunities(db) {
 
 export async function runLinkVerification(
   db,
-  { limit = 100, verifiedBy = 'recurring-verifier', fetchImpl } = {},
+  { limit = 100, verifiedBy = 'recurring-verifier', fetchImpl, signal } = {},
 ) {
+  signal?.throwIfAborted()
   // Normalize visibility before selecting work so a visible stale success is
   // selected back as retryable/unverified and can be restored by this same run.
   // Selecting first left the in-memory row at status=ok, which made the restore
   // guard preserve its new quarantine even after the fresh probe succeeded.
   const quarantine = await quarantineUnverifiedDirectOpportunities(db)
+  signal?.throwIfAborted()
   if (!quarantine?.ok) {
     console.warn('[link-verify] quarantine pass failed:', quarantine?.reason || 'unknown')
   }
@@ -666,12 +668,15 @@ export async function runLinkVerification(
   }
 
   for (let i = 0; i < rows.length; i += BATCH_SIZE) {
+    signal?.throwIfAborted()
     const batch = rows.slice(i, i + BATCH_SIZE)
     await Promise.all(
       batch.map(async (row) => {
+        signal?.throwIfAborted()
         const url = row.application_url || row.source_url
         const startMs = Date.now()
         const result = await checkUrl(url, { fetchImpl })
+        signal?.throwIfAborted()
         const durationMs = Date.now() - startMs
         const now = new Date().toISOString()
         const persisted = await update.run(
@@ -729,13 +734,14 @@ export async function runLinkVerification(
         }
       }),
     )
-    if (i + BATCH_SIZE < rows.length) await sleep(BATCH_DELAY_MS)
+    if (i + BATCH_SIZE < rows.length) await sleep(BATCH_DELAY_MS, undefined, { signal })
   }
 
   // Expire direct opportunities that have not been successfully verified in
   // STALE_AFTER_DAYS — either their last verification confirmed broken, or
   // they have been sitting un-checked since discovery for longer than the
   // staleness window. Directories are pointers and remain visible.
+  signal?.throwIfAborted()
   const staleCutoff = new Date(
     Date.now() - STALE_AFTER_DAYS * 24 * 60 * 60 * 1000,
   ).toISOString()
@@ -762,6 +768,7 @@ export async function runLinkVerification(
   // direct row to suspicious/skipped/unverified. Re-apply the exact mission
   // visibility invariant after all verdicts are persisted so /readyz never
   // observes a non-successful direct row left visible by this run.
+  signal?.throwIfAborted()
   const postProbeQuarantine = await quarantineUnverifiedDirectOpportunities(db)
   if (postProbeQuarantine?.ok) {
     stats.quarantined += Number(postProbeQuarantine.quarantined || 0)
