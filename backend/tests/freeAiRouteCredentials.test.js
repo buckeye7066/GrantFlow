@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 const state = vi.hoisted(() => ({ configs: [], outcomes: [], warn: vi.fn() }))
 
 // Exercise the default client-construction path, not clientFactory injection:
-// injected clients hid the fact that arbitrary api_key_env names were ignored.
+// injected clients hid the fact that scoped api_key_env names were ignored.
 vi.mock('openai', () => ({
   default: class OpenAI {
     constructor(config) {
@@ -23,7 +23,7 @@ vi.mock('../utils/logger.js', () => ({
 
 import { invokeFreeJsonRoutes, resolveFreeAiRoutes } from '../utils/freeAiRoutes.js'
 
-function routesFor(key = 'CUSTOM_ROUTE_TOKEN') {
+function routesFor(key = 'FREE_AI_ROUTE_CUSTOM_API_KEY') {
   return resolveFreeAiRoutes([{
     id: 'primary',
     base_url: 'https://free.example.test/v1',
@@ -44,17 +44,17 @@ afterEach(() => {
 
 describe('free route credentials through the default SDK client', () => {
   it('reads the custom environment variable named by api_key_env', async () => {
-    vi.stubEnv('CUSTOM_ROUTE_TOKEN', 'fixture-custom-credential')
+    vi.stubEnv('FREE_AI_ROUTE_CUSTOM_API_KEY', 'fixture-custom-credential')
     const result = await invokeFreeJsonRoutes({ routes: routesFor(), prompt: 'fixture' })
     expect(result.ok).toBe(true)
     expect(state.configs[0].apiKey).toBe('fixture-custom-credential')
   })
 
   it('observes credential rotation without reloading the module', async () => {
-    vi.stubEnv('CUSTOM_ROUTE_TOKEN', 'fixture-first')
+    vi.stubEnv('FREE_AI_ROUTE_CUSTOM_API_KEY', 'fixture-first')
     const routes = routesFor()
     await invokeFreeJsonRoutes({ routes, prompt: 'fixture' })
-    vi.stubEnv('CUSTOM_ROUTE_TOKEN', 'fixture-rotated')
+    vi.stubEnv('FREE_AI_ROUTE_CUSTOM_API_KEY', 'fixture-rotated')
     await invokeFreeJsonRoutes({ routes, prompt: 'fixture' })
     expect(state.configs.map(config => config.apiKey)).toEqual(['fixture-first', 'fixture-rotated'])
   })
@@ -74,7 +74,7 @@ describe('free route credentials through the default SDK client', () => {
   })
 
   it('never exposes credential values in route metadata or returned results', async () => {
-    vi.stubEnv('CUSTOM_ROUTE_TOKEN', 'fixture-never-public')
+    vi.stubEnv('FREE_AI_ROUTE_CUSTOM_API_KEY', 'fixture-never-public')
     const routes = routesFor()
     const result = await invokeFreeJsonRoutes({ routes, prompt: 'fixture' })
     expect(JSON.stringify([routes, result, state.warn.mock.calls])).not.toContain('fixture-never-public')
@@ -123,5 +123,51 @@ describe('safe free-route failure diagnostics', () => {
       { status: 401, message: 'free route rejected the request', credit_exhausted: false },
     ])
     expect(JSON.stringify(result.freeRouteErrors)).not.toContain('primary')
+  })
+})
+
+
+describe('free route credential isolation', () => {
+  it.each(['DATABASE_URL', 'AUTH_JWT_SECRET', 'OPENAI_API_KEY', 'ANTHROPIC_API_KEY', 'ADMIN_TOKEN', 'FREE_AI_ROUTES'])(
+    'rejects unrelated process variable %s before SDK construction', async key => {
+      vi.stubEnv(key, 'fixture-unrelated-secret')
+      const result = await invokeFreeJsonRoutes({ routes: routesFor(key), prompt: 'fixture' })
+      expect(result.ok).toBe(false)
+      expect(state.configs).toHaveLength(0)
+      expect(result.freeRouteErrors).toEqual([
+        { status: 403, message: 'free route rejected the request', credit_exhausted: false },
+      ])
+      expect(JSON.stringify([result, state.warn.mock.calls])).not.toContain('fixture-unrelated-secret')
+    },
+  )
+
+  it('guards directly supplied routes even without normalization', async () => {
+    vi.stubEnv('AUTH_JWT_SECRET', 'fixture-direct-secret')
+    const result = await invokeFreeJsonRoutes({
+      routes: [{ id: 'direct', baseURL: 'https://free.example.test/v1', model: 'fixture', apiKeyEnv: 'AUTH_JWT_SECRET' }],
+      prompt: 'fixture',
+    })
+    expect(result.ok).toBe(false)
+    expect(state.configs).toHaveLength(0)
+    expect(JSON.stringify([result, state.warn.mock.calls])).not.toContain('fixture-direct-secret')
+  })
+
+  it('continues to an authorized route after rejecting an unrelated credential', async () => {
+    vi.stubEnv('DATABASE_URL', 'fixture-database-secret')
+    vi.stubEnv('FREE_AI_API_KEY', 'fixture-free-key')
+    const result = await invokeFreeJsonRoutes({
+      routes: [...routesFor('DATABASE_URL'), ...routesFor('FREE_AI_API_KEY')], prompt: 'fixture',
+    })
+    expect(result.ok).toBe(true)
+    expect(state.configs).toHaveLength(1)
+    expect(state.configs[0].apiKey).toBe('fixture-free-key')
+    expect(JSON.stringify([state.configs, result, state.warn.mock.calls])).not.toContain('fixture-database-secret')
+  })
+
+  it('preserves the existing Ollama credential', async () => {
+    vi.stubEnv('OLLAMA_API_KEY', 'fixture-ollama-key')
+    const result = await invokeFreeJsonRoutes({ routes: routesFor('OLLAMA_API_KEY'), prompt: 'fixture' })
+    expect(result.ok).toBe(true)
+    expect(state.configs[0].apiKey).toBe('fixture-ollama-key')
   })
 })
