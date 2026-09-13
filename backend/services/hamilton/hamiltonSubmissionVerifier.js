@@ -64,6 +64,23 @@ const MAX_PAGES_PER_TASK = 2
 const NAV_TIMEOUT_MS = 25_000
 
 const RECHECK_STEP = 'submission_verification_recheck'
+/**
+ * A verdict of 'skipped' is NOT a check (hamilton-submit-8, 2026-09-12): it
+ * used to be appended under RECHECK_STEP, so three skips that never opened a
+ * portal exhausted the task ("a human must check") with zero probes performed,
+ * and the unevidenced-close sweep could then cancel it. Skips are recorded
+ * under their own step, never count toward VERIFICATION_MAX_ATTEMPTS, and a
+ * DETERMINISTIC skip (nothing about the task will make it probeable) marks the
+ * task unprobeable ONCE so it neither re-skips every tick nor occupies a probe
+ * slot ahead of tasks that can be checked.
+ */
+const SKIP_STEP = 'submission_verification_skipped'
+export const UNPROBEABLE_STEP = 'submission_verification_unprobeable'
+const DETERMINISTIC_SKIP_REASONS = Object.freeze({
+  no_probe_url: 'the task carries no portal or application URL to re-open',
+  portal_terms_forbid_automation: 'the portal\'s terms forbid automated access, so Hamilton never re-opens it',
+  unsafe_browser_target: 'the recorded URL is not a public HTTPS target Hamilton may open',
+})
 
 function firstUrlOf(...candidates) {
   const seen = new Set()
@@ -254,6 +271,11 @@ export async function verifyOneParkedSubmission(db, task, deps = {}) {
     return { taskId, outcome: 'still_unverified', reason: 'proof_registration_failed' }
   }
   const proofDocumentId = artifact?.screenshot_document_id || artifact?.page_document_id || null
+  if (artifact?.evidence_classification !== 'confirmation_proof') {
+    // The write-side authority did not classify what we found as proof (e.g.
+    // a reference that fails the shape guard). Ambiguity stays parked.
+    return { taskId, outcome: 'still_unverified', reason: 'evidence_not_classified_as_proof' }
+  }
   if (!proofDocumentId && !evidence.reference_is_new) {
     // An acknowledgement with NO retrievable capture is not durable proof.
     return { taskId, outcome: 'still_unverified', reason: 'no_durable_proof_retained' }
@@ -272,6 +294,24 @@ export async function verifyOneParkedSubmission(db, task, deps = {}) {
       confirmationScreenshotPath: evidence.capture.screenshot_path || null,
       result: {
         ...runResult,
+        // The SAME evidence keys the live submit writes (hamilton-submit-1,
+        // 2026-09-12). The read side (assessStoredConfirmationProof /
+        // submissionProofPredicate) classifies proof from these keys; spreading
+        // only the OLD attempt-evidence result over the promotion left every
+        // verifier-confirmed task reading INTERNAL_ONLY forever.
+        confirmation_evidence: artifact?.confirmed_by
+          || (qualifiedReference ? 'portal_reference' : 'portal_acknowledgement'),
+        confirmation_reference: qualifiedReference,
+        confirmation_reference_is_new: Boolean(qualifiedReference),
+        confirmation_received_acknowledgement: evidence.received_acknowledgement === true,
+        confirmation_received_acknowledgement_is_new: evidence.received_acknowledgement === true,
+        confirmation_url: evidence.url || null,
+        confirmation_screenshot_path: evidence.capture.screenshot_path || null,
+        confirmation_page_html_path: evidence.capture.page_html_path || null,
+        confirmation_page_text: evidence.capture.page_text ? String(evidence.capture.page_text).slice(0, 4000) : null,
+        confirmation_document_id: proofDocumentId,
+        confirmation_page_document_id: artifact?.page_document_id || null,
+        submission_evidence_classification: artifact?.evidence_classification || 'attempt_evidence',
         post_submit_verification: {
           verified_at: new Date().toISOString(),
           url: evidence.url,
@@ -339,7 +379,7 @@ export async function verifyOneParkedSubmission(db, task, deps = {}) {
  * @returns {{ checked, confirmed, still_unverified, skipped, exhausted }}
  */
 export async function runSubmissionVerificationSweep(db, { limit = 3, now = Date.now(), _openPage = null } = {}) {
-  const out = { checked: 0, confirmed: 0, still_unverified: 0, skipped: 0, exhausted: 0 }
+  const out = { checked: 0, confirmed: 0, still_unverified: 0, skipped: 0, unprobeable: 0, exhausted: 0 }
   if (!db || typeof db.prepare !== 'function') return out
   await ensureApplicationTaskSchema(db).catch(() => {})
 
@@ -349,16 +389,44 @@ export async function runSubmissionVerificationSweep(db, { limit = 3, now = Date
     // `ORDER BY updated_at ASC`, the three oldest parked tasks (all at 3/3)
     // filled every slot on every tick and the younger ones were never
     // re-checked at all — the cap starved the queue it was meant to bound.
+    // The same starvation one level down (2026-09-12): a task re-checked
+    // within VERIFICATION_MIN_SPACING_MS still occupied a slot as "skipped",
+    // so the spacing rule is ALSO a SQL predicate now, and a task marked
+    // unprobeable (deterministic skip, see SKIP_STEP) never takes a slot.
+    // Dialect note: SQLite stores CURRENT_TIMESTAMP as 'YYYY-MM-DD HH:MM:SS'
+    // while back-dated fixtures write ISO strings — datetime() normalizes
+    // both; Postgres compares timestamptz to the ISO cutoff directly.
+    // Dialect-selected LITERAL predicate: two compile-time strings holding only
+    // a bound-parameter placeholder — no user input ever reaches this fragment
+    // (the cutoff is bound as `spacingCutoffIso` below), which is why the
+    // safe-sql gate accepts it under the `Safe` naming convention.
+    const recentEventSafeSql = db?.dialect === 'postgres'
+      ? 'e2.created_at > CAST(? AS timestamptz)'
+      : 'datetime(e2.created_at) > datetime(?)'
+    const spacingCutoffIso = new Date(now - VERIFICATION_MIN_SPACING_MS).toISOString()
     rows = await db.prepare(
       `SELECT * FROM application_tasks
         WHERE status = 'submission_verification_required'
           AND cancelled_at IS NULL
+          AND COALESCE(current_step, '') <> ?
           AND (SELECT COUNT(*) FROM application_task_events e
                 WHERE e.task_id = application_tasks.id AND e.step = ?) < ?
+          AND NOT EXISTS (SELECT 1 FROM application_task_events e2
+                WHERE e2.task_id = application_tasks.id AND e2.step = ? AND ${recentEventSafeSql})
         ORDER BY updated_at ASC
         LIMIT ?`,
-    ).all(RECHECK_STEP, VERIFICATION_MAX_ATTEMPTS, Math.max(1, Math.min(10, Number(limit) || 3)))
+    ).all(
+      UNPROBEABLE_STEP, RECHECK_STEP, VERIFICATION_MAX_ATTEMPTS, RECHECK_STEP, spacingCutoffIso,
+      Math.max(1, Math.min(10, Number(limit) || 3)),
+    )
     if (!Array.isArray(rows)) rows = []
+    const unprobeableRow = await db.prepare(
+      `SELECT COUNT(*) AS n FROM application_tasks
+        WHERE status = 'submission_verification_required'
+          AND cancelled_at IS NULL
+          AND COALESCE(current_step, '') = ?`,
+    ).get(UNPROBEABLE_STEP)
+    out.unprobeable = Number(unprobeableRow?.n) || 0
     const exhaustedRow = await db.prepare(
       `SELECT COUNT(*) AS n FROM application_tasks
         WHERE status = 'submission_verification_required'
@@ -380,8 +448,35 @@ export async function runSubmissionVerificationSweep(db, { limit = 3, now = Date
       out.confirmed += 1
       continue
     }
-    if (verdict.outcome === 'skipped') { out.skipped += 1 }
-    else { out.still_unverified += 1 }
+    if (verdict.outcome === 'skipped') {
+      // A skip is not a check: it never spends a RECHECK attempt. A
+      // deterministic skip is recorded ONCE (durable, owner-visible) and the
+      // task is marked unprobeable so it leaves the sweep's candidate set; a
+      // human has to reconcile it. A task that changed state mid-verification
+      // has already left the parked set — nothing to record.
+      out.skipped += 1
+      const why = DETERMINISTIC_SKIP_REASONS[verdict.reason]
+      if (why) {
+        out.unprobeable += 1
+        const message = `Post-submit verification cannot re-open this portal automatically: ${why}. No re-check attempt was spent. A human must check the funder portal and reconcile the retained evidence before this task can move.`
+        await updateApplicationTask(db, task.id, {
+          onlyIfStatuses: ['submission_verification_required'],
+          currentStep: UNPROBEABLE_STEP,
+          lastAgentMessage: message,
+        }).catch(() => {})
+        await appendTaskEvent(db, {
+          taskId: task.id,
+          eventType: 'note',
+          status: 'submission_verification_required',
+          step: SKIP_STEP,
+          message,
+          actorRole: 'agent',
+          details: { reason: verdict.reason, probe_performed: false, counted_toward_attempts: false },
+        }).catch(() => {})
+      }
+      continue
+    }
+    out.still_unverified += 1
     // Record the attempt DURABLY so the cap holds across restarts and the
     // owner can see the re-checks happened. The final attempt says plainly
     // that a human has to look.
@@ -403,4 +498,7 @@ export async function runSubmissionVerificationSweep(db, { limit = 3, now = Date
   return out
 }
 
-export default { runSubmissionVerificationSweep, verifyOneParkedSubmission, VERIFICATION_MAX_ATTEMPTS, VERIFICATION_MIN_SPACING_MS }
+export default {
+  runSubmissionVerificationSweep, verifyOneParkedSubmission,
+  VERIFICATION_MAX_ATTEMPTS, VERIFICATION_MIN_SPACING_MS, UNPROBEABLE_STEP,
+}

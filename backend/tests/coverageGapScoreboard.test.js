@@ -572,4 +572,24 @@ describe('sam check coverage.gapScoreboard', () => {
       expect(res.summary).toMatch(/unparseable/i)
     } finally { db.close() }
   })
+
+  it('REQUIREMENT 8: states it is POINT-IN-TIME over N profiles and can never close the 7-day live-crawl window', async () => {
+    const db = kvDb()
+    try {
+      put(db, { generated_at: hoursAgo(1), scan_limit: 100, profiles_scanned: 24, profiles_skipped: 2, gaps: [], adapter_wishlist: [] }, hoursAgo(1))
+      const res = await check.run({ db })
+      expect(res.ok).toBe(true)
+      expect(res.summary).toMatch(/point-in-time/i)
+      expect(res.summary).toMatch(/24 (scanned )?profile/)
+      expect(res.summary).toMatch(/source-plan|planner/i)
+      expect(res.summary).toMatch(/cannot close|does not close/i)
+      expect(res.evidence.metric_envelope).toMatchObject({
+        measurement_window: { kind: 'point_in_time' },
+        evaluated_population: { kind: 'active_profiles' },
+        evaluated_count: 24,
+        unevaluated_count: 2,
+      })
+      expect(res.evidence.can_close_live_gap_window).toMatchObject({ ok: false, reason: expect.stringMatching(/different_population|point_in_time_cannot_close_window/) })
+    } finally { db.close() }
+  })
 })

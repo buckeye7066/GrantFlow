@@ -40,9 +40,10 @@ import { runProfileDiscoveryLive } from '../crawlerOsService.js'
 import { createLogger } from '../../utils/logger.js'
 import { DEFAULT_MIN_SCORE, TOPICAL_EVIDENCE_STRONG_BAR } from '../../config/matchThresholds.js'
 import { newRunId, clampTtlHours } from './amyMetadata.js'
-import { generateScenarios, CATEGORY_IDS } from './syntheticProfileCatalog.js'
+import { generateScenarios, CATEGORY_IDS, catalogRing, catalogRotationForRun } from './syntheticProfileCatalog.js'
 import { planGapSeekingProbes, resolveCohortSplit } from './gapSeekingPlanner.js'
-import { buildIntersectionScenarios } from './intersectionScenario.js'
+import { buildIntersectionScenarios, probeCellFromMetadata, ADVERSARIAL_CATEGORY_PREFIX } from './intersectionScenario.js'
+import { evaluationOutcome } from './discoveryGate.js'
 import {
   readProbeCoverage,
   recordProbeCoverage,
@@ -72,7 +73,7 @@ import { buildArchetypeMetrics, buildArchetypeLearningUpdate, saveArchetypeLearn
 import { runAmyAnyaSamPipeline } from './amyPipeline.js'
 import { saveAmyReport } from './amyReportStore.js'
 import { recordApprovalQueue, decorateApprovalQueue } from './approvalLedger.js'
-import { recordFlywheelCohort } from './flywheelCohort.js'
+import { recordFlywheelCohort, buildRunCohortReceipt } from './flywheelCohort.js'
 import { buildFleetGapScoreboard, weightCategoriesByGaps, deriveAmyGapActions } from '../coverageGapScoreboard.js'
 import { insertActivityEvent } from '../agentTelemetry/agentTelemetryStore.js'
 import { boundedAmyPreflight } from './amyPreflight.js'
@@ -477,12 +478,21 @@ export async function runAmyTraining(options = {}) {
   const catalogTarget = Number(targetCount) > 0
     ? Math.max(0, Number(targetCount) - probeScenarios.length)
     : targetCount
+  // amy-cohort-2: the thin catalog floor ROTATES by run/day so its six slots
+  // walk every category over consecutive nights instead of replaying the same
+  // six. Resolved here (not left implicit) so the report can name the offset.
+  const catalogRotation = catalogRotationForRun({
+    runId,
+    slots: Number(catalogTarget) > 0 ? Math.max(1, Math.min(5000, Math.trunc(Number(catalogTarget)))) : 0,
+    ringLength: catalogRing(categories, categoryWeights).length,
+  })
   const catalogScenarios = generateScenarios({
     runId,
     categories,
     perCategory,
     targetCount: catalogTarget,
     categoryWeights,
+    catalogRotation,
   })
   const scenarios = [...catalogScenarios, ...probeScenarios]
   // Resolve the run's requested target once and persist the exact planned
@@ -507,7 +517,19 @@ export async function runAmyTraining(options = {}) {
     throwIfAmyRunAborted(signal)
     let profileId = null
     try {
-      const created = await createAmyProfile(db, scenario, { runId, ttlHours: ttl, now: clock() })
+      const created = await createAmyProfile(db, scenario, {
+        runId,
+        ttlHours: ttl,
+        now: clock(),
+        // amy-cohort-9: the probe's cell travels on the profile itself, so an
+        // orphan adopted by a later run can fold into coverage under the exact
+        // cell it was built for and the cohort can be rebuilt from the rows.
+        metadataExtra: {
+          cohort_target: requestedCohortTarget,
+          cohort_member_id: scenario.scenario_id,
+          ...(scenario.probe_cell ? { probe_cell: scenario.probe_cell, probe_cell_key: scenario.probe_cell_key ?? null } : {}),
+        },
+      })
       throwIfAmyRunAborted(signal)
       profileId = created.profileId
       createdProfileIds.push(profileId)
@@ -574,7 +596,17 @@ export async function runAmyTraining(options = {}) {
   // Recovery evaluations teach and clean up old runs, but are not members of
   // this run's declared cohort. An orphan may reuse a planned scenario id;
   // mixing it into the receipt made a valid 50-member run appear duplicated.
+  //
+  // amy-cohort-7: orphan evaluations live in their OWN list. They used to be
+  // pushed into `evaluations` after the planned snapshot, so summary.scenarios,
+  // the handoff's by_status, the approval queue, archetype learning and the
+  // lever validations all mixed foreign-run profiles into the 50-member cohort
+  // while the flywheel receipt counted only the planned 50 (prod 2026-09-12:
+  // summary 53 vs receipt 50). They are reported under
+  // combined.adopted_orphans and folded into probe coverage under their own
+  // recovered cell; nothing else reads them.
   const plannedCohortEvaluations = evaluations.slice()
+  const orphanEvaluations = []
   const adoptedOrphans = { scanned: 0, adopted: [], skipped: [], limit: amyOrphanAdoptLimit() }
   if (!keepProfiles) {
     let survivors = []
@@ -587,30 +619,42 @@ export async function runAmyTraining(options = {}) {
       if (meta.synthetic !== true || meta.allow_sam_cleanup !== true) { adoptedOrphans.skipped.push({ id: row.id, reason: 'not_cleanable' }); continue }
       if (hasRequiredTeachingReceipt(meta)) { adoptedOrphans.skipped.push({ id: row.id, reason: 'already_taught' }); continue }
       if (adoptedOrphans.adopted.length >= adoptedOrphans.limit) { adoptedOrphans.skipped.push({ id: row.id, reason: 'limit' }); continue }
+      // amy-cohort-9: recover the probe cell the dead run persisted on the
+      // profile so the orphan is evaluated under its real category and folds
+      // into coverage under the exact cell it was built for.
+      const recovered = probeCellFromMetadata(meta)
       const scenario = {
         scenario_id: meta.scenario_id || `orphan:${row.id}`,
-        category: row.primary_type || 'unknown',
+        category: recovered
+          ? `${ADVERSARIAL_CATEGORY_PREFIX}:${recovered.cell.entity}+${recovered.cell.identity}+${recovered.cell.need}`
+          : (row.primary_type || 'unknown'),
         label: row.display_name || meta.scenario_id || row.id,
         primary_type: row.primary_type || null,
         adopted_from_run: meta.amy_run_id || null,
+        ...(recovered ? { probe_cell: recovered.cell, probe_cell_key: recovered.cell_key } : {}),
       }
       scenarioByProfile.set(row.id, scenario)
       const stampBefore = await readLastDiscoveryAt(db, row.id)
       try {
         const result = await runDiscovery({ db, profileId: row.id, dryRun: dryRunDiscovery, floor: sliderFloor, fetcher, signal })
         throwIfAmyRunAborted(signal)
-        evaluations.push(evaluateDiscovery(scenario, row.id, result, { runId }))
+        orphanEvaluations.push(evaluateDiscovery(scenario, row.id, result, { runId }))
         if ((result && !result?.run?.skipped) || await discoveryStampAdvanced(db, row.id, stampBefore)) {
           await markProfileCrawled(db, row.id, { now: clock(), floor: sliderFloor })
           crawledProfileIds.push(row.id)
-          adoptedOrphans.adopted.push({ id: row.id, from_run: meta.amy_run_id || null, scenario_id: scenario.scenario_id })
+          adoptedOrphans.adopted.push({
+            id: row.id,
+            from_run: meta.amy_run_id || null,
+            scenario_id: scenario.scenario_id,
+            ...(scenario.probe_cell_key ? { probe_cell_key: scenario.probe_cell_key } : {}),
+          })
         } else {
           adoptedOrphans.skipped.push({ id: row.id, reason: `discovery_skipped:${result?.run?.reason || 'unknown'}` })
         }
       } catch (err) {
         throwIfAmyRunAborted(signal)
         logger.warn('discovery threw for adopted synthetic profile', { profile_id: row.id, from_run: meta.amy_run_id, error: err?.message })
-        evaluations.push(evaluateDiscovery(scenario, row.id, null, { error: err?.message, runId }))
+        orphanEvaluations.push(evaluateDiscovery(scenario, row.id, null, { error: err?.message, runId }))
         adoptedOrphans.skipped.push({ id: row.id, reason: `discovery_error:${err?.message || 'unknown'}` })
       }
     }
@@ -1055,6 +1099,10 @@ export async function runAmyTraining(options = {}) {
       split,
       // What was RESERVED vs what was actually BUILT vs where the slack went.
       catalog_built: catalogScenarios.length,
+      // amy-cohort-2: which catalog categories this night's floor covered and
+      // the rotation offset that chose them (0 = the legacy fixed floor).
+      catalog_rotation: catalogRotation,
+      catalog_categories: catalogScenarios.map((sc) => sc.category),
       planned: probePlan.cells.length,
       built: probeScenarios.length,
       uncovered_pairs_before: probePlan.uncovered_before,
@@ -1221,6 +1269,21 @@ export async function runAmyTraining(options = {}) {
     }
   }
 
+  // The report carries the SAME metric envelope as the cohort receipt
+  // (window = this run, population = the planned synthetic cohort, evaluated /
+  // unevaluated, provider health, code version, freshness) so its headline can
+  // never be compared against another window or population without saying so.
+  // When the flywheel fold did not run (dry run / store failure) the envelope is
+  // computed from the pure receipt over the same planned evaluations.
+  combined.metric_envelope = combined.flywheel_cohort?.receipt?.metric_envelope
+    ?? buildRunCohortReceipt({
+      runId,
+      target: requestedCohortTarget,
+      expectedMembers: expectedCohortMembers,
+      evaluations: plannedCohortEvaluations,
+      at: completedAtDate.toISOString(),
+    }).metric_envelope
+
   // ── PROBE COVERAGE + CONVERGENCE (2026-08-02) ───────────────────────────
   //
   // Fold what this run ACTUALLY asked into the durable coverage ledger, then
@@ -1241,12 +1304,18 @@ export async function runAmyTraining(options = {}) {
   if (db && !dryRunDiscovery) {
     throwIfAmyRunAborted(signal)
     try {
+      // Adopted orphan probes fold too (amy-cohort-9): their cell was recovered
+      // from amy_metadata, they were ASKED by this run, and the ledger must not
+      // lose a probe a dead run paid for. Counted apart so the planned cohort's
+      // breadth and the recovered breadth never blur.
       const probes = []
-      for (const ev of evaluations) {
+      let adoptedOrphanProbes = 0
+      for (const ev of [...evaluations, ...orphanEvaluations]) {
         throwIfAmyRunAborted(signal)
         const scn = scenarioByProfile.get(ev.profile_id) || scenarioById.get(ev.scenario_id)
         const cell = scn?.probe_cell
         if (!cell) continue
+        if (scn?.adopted_from_run) adoptedOrphanProbes += 1
         probes.push({ cell, outcome: classifyProbeOutcome(ev) })
       }
       const folded = await recordProbeCoverage(db, { probes, runId, at: completedAtDate.toISOString() })
@@ -1254,6 +1323,7 @@ export async function runAmyTraining(options = {}) {
         persisted: folded.persisted,
         duplicate: folded.duplicate,
         probes_folded: probes.length,
+        adopted_orphan_probes: adoptedOrphanProbes,
         new_pairs: folded.new_pairs.length,
         ...folded.summary,
       }
@@ -1302,7 +1372,27 @@ export async function runAmyTraining(options = {}) {
   // Adopted orphans carry a FOREIGN run id, so the run-scoped pass above skips
   // them (`run_mismatch`). Reap them by id with the same crawled + taught
   // invariants; they were crawled and taught by THIS run.
-  combined.adopted_orphans = adoptedOrphans
+  combined.adopted_orphans = {
+    ...adoptedOrphans,
+    // amy-cohort-7: the orphans' own summary + compact per-profile rows. They
+    // are NOT in summary / handoff / approval queue / learning / the receipt.
+    summary: summarizeEvaluations(orphanEvaluations),
+    evaluations: orphanEvaluations.map((ev) => {
+      const scn = scenarioByProfile.get(ev.profile_id) || null
+      const verdict = evaluationOutcome(ev)
+      return {
+        profile_id: ev.profile_id ?? null,
+        scenario_id: ev.scenario_id ?? null,
+        category: ev.category ?? null,
+        adopted_from_run: scn?.adopted_from_run ?? null,
+        probe_cell_key: scn?.probe_cell_key ?? null,
+        status: ev.status ?? null,
+        outcome: verdict.outcome,
+        class: verdict.class,
+        finding_types: [...new Set((Array.isArray(ev.findings) ? ev.findings : []).map((f) => String(f?.type || 'unknown')))],
+      }
+    }),
+  }
   if (!keepProfiles && adoptedOrphans.adopted.length > 0) {
     throwIfAmyRunAborted(signal)
     combined.adopted_orphans.cleanup = await cleanupAmyProfiles(db, {

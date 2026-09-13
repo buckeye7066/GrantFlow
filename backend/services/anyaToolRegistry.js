@@ -6075,18 +6075,36 @@ registerTool({
       }
     }
     const { runProfileDiscoveryLive } = await import('./crawlerOsService.js')
+    const { unwrapDiscoveryOutcome, discoveryRanOk } = await import('./coverageAudit/profileResultCoverageAudit.js')
     const started = Date.now()
-    const result = await runProfileDiscoveryLive({ db: context.db, profileId, timeBudgetMs: 25_000, deadlineMs: Date.now() + 28_000 })
-    const stored = Number(result?.stored ?? result?.count ?? result?.inserted ?? result?.total_found ?? 0) || 0
+    const outcome = await runProfileDiscoveryLive({ db: context.db, profileId, timeBudgetMs: 25_000, deadlineMs: Date.now() + 28_000, trigger: 'anya' })
+    // outcome is `{ run, persisted, thesis, opportunities }` (a skipped profile
+    // returns `{ run:{skipped:true,...}, persisted:{skipped:true,...} }`) — read
+    // it through the SAME helpers the coverage heal loop uses (see
+    // profileResultCoverageAudit.js) so this tool cannot drift back to a
+    // top-level `result.stored`/`result.matches` shape the envelope never had.
+    const run = unwrapDiscoveryOutcome(outcome)
+    const ranOk = discoveryRanOk(run)
+    const skipped = run?.skipped === true ? (run?.reason ?? true) : null
+    const stored = Number(run?.stored) || 0
+    const matches = Number(outcome?.persisted?.matches) || stored
+    const sourcesUsed = Array.isArray(run?.sources)
+      ? run.sources.filter((s) => s?.source_id && s?.outcome && s.outcome !== 'skipped').map((s) => s.source_id)
+      : []
+    if (run?.web_lane && run.web_lane.skipped !== true && run.web_lane.ok !== false) sourcesUsed.push('web_search')
     return {
-      ok: result?.success !== false && !result?.skipped,
+      ok: ranOk,
       profile_id: profileId,
-      skipped: result?.skipped ?? null,
+      skipped,
       stored,
-      matches: Number(result?.matches ?? result?.count ?? stored) || stored,
-      sources_used: Array.isArray(result?.sources_used) ? result.sources_used : Array.isArray(result?.sources) ? result.sources : [],
+      matches,
+      sources_used: sourcesUsed,
       elapsed_ms: Date.now() - started,
-      guidance: 'Tell the user what was found in plain words and suggest opening Discover to review; do not restate raw counts as a promise of eligibility.',
+      guidance: skipped
+        ? 'Discovery did not run for this profile this time — tell the user honestly why (see skipped) instead of reporting counts.'
+        : (stored > 0 || matches > 0)
+          ? 'Tell the user what was found in plain words and suggest opening Discover to review; do not restate raw counts as a promise of eligibility.'
+          : 'Discovery ran but found nothing new this time; tell the user honestly and suggest checking back later or reviewing their profile details for accuracy.',
     }
   },
 })

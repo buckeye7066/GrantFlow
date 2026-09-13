@@ -14,6 +14,7 @@
 import { describe, it, beforeEach } from 'node:test'
 import assert from 'node:assert/strict'
 import Database from 'better-sqlite3'
+import { readFileSync } from 'node:fs'
 import { wrapSqlite } from '../helpers/sqliteTestDb.mjs'
 
 import {
@@ -42,6 +43,8 @@ import {
 } from '../../backend/services/agentControl/agentControlStore.js'
 import { setAdapter, resetRegistry } from '../../backend/services/agentControl/agentAdapters/agentAdapterRegistry.js'
 import { BaseAgentAdapter } from '../../backend/services/agentControl/agentAdapters/baseAgentAdapter.js'
+import { SamAgentAdapter } from '../../backend/services/agentControl/agentAdapters/samAgentAdapter.js'
+import { runSam } from '../../backend/services/sam/samAgent.js'
 import { _resetAdminAccountCache } from '../../backend/services/hamilton/hamiltonAdminAccount.js'
 import { _resetNotificationsSchemaCache } from '../../backend/services/agentControl/agentControlNotifications.js'
 
@@ -116,6 +119,17 @@ function makeDb() {
   return wrapSqlite(sqlite)
 }
 
+// The same bare sqlite plus Sam's own run table (the real sqlite migration),
+// so the REAL runSam can run with persist:true — the production path, where
+// samAgent.completeRun → escalateSamCritical is reached. sam_findings is
+// deliberately absent (completeRun tolerates that on older DBs).
+const SAM_RUNS_DDL = readFileSync(new URL('../../backend/db/migrations/080_sam_runs.sql', import.meta.url), 'utf8')
+function makeDbWithSamTables() {
+  const db = makeDb()
+  db.exec(SAM_RUNS_DDL)
+  return db
+}
+
 function adminUser() {
   return {
     userId: 'u_admin',
@@ -137,6 +151,20 @@ async function readNotifications(db, type = null) {
       : await db.prepare('SELECT * FROM notifications ORDER BY created_at').all()
     return rows.map((r) => ({ ...r, data: r.data ? JSON.parse(r.data) : {} }))
   } catch { return [] }
+}
+
+// Poll for a terminal run status instead of sleeping a fixed interval — the
+// real-Sam preflight suite below runs real diagnostics and is host-speed
+// dependent. 'blocked' is the dedicated terminal status for a preflight block.
+const RUN_TERMINAL = new Set(['completed', 'completed_noop', 'failed', 'blocked', 'cancelled', 'stopped', 'partial_stop', 'stop_failed'])
+async function waitForRunTerminal(db, runId, timeoutMs = 15_000) {
+  const deadline = Date.now() + timeoutMs
+  let run = await getRun(db, runId)
+  while (!RUN_TERMINAL.has(String(run?.status)) && Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, 25))
+    run = await getRun(db, runId)
+  }
+  return run
 }
 
 function installMockAdapters(behaviours = {}) {
@@ -269,13 +297,30 @@ describe('Agent Control Center — full_cycle ordering', () => {
       user: adminUser(),
       options: { stop_on_critical_sam_finding: true },
     })
-    await new Promise((r) => setTimeout(r, 80))
+    const finalRun = await waitForRunTerminal(db, run.id)
     const steps = await listSteps(db, run.id)
     const samStep = steps.find((s) => s.step_name === 'sam_preflight')
     assert.equal(samStep.status, 'blocked')
+    // sam-preflight-2: the blocked reason is persisted on the step, not lost.
+    assert.equal(samStep.error_message, 'critical findings')
     const robertStep = steps.find((s) => s.step_name === 'robert_main')
-    // Robert should never have started
-    assert.notEqual(robertStep.status, 'completed')
+    // Robert should never have started; the queued remainder is terminalised
+    // honestly instead of sitting 'queued' inside a finished run.
+    assert.equal(robertStep.status, 'skipped')
+    assert.equal(robertStep.error_message, 'sam_preflight_blocked')
+    // sam-preflight-6: a preflight block is its OWN terminal status — not a
+    // 'failed' run that pollutes last_failure and fires notifyFailed too.
+    assert.equal(finalRun.status, 'blocked')
+    assert.match(finalRun.error_message, /^Sam preflight blocked: critical findings/)
+    assert.equal(finalRun.summary?.blocked_by?.agent, 'sam')
+    assert.equal(finalRun.summary?.blocked_by?.step, 'sam_preflight')
+    assert.equal(finalRun.summary?.blocked_by?.blocked_reason, 'critical findings')
+    // Exactly ONE control notification for the block.
+    assert.equal((await readNotifications(db, 'agent_control_agent_blocked')).length, 1)
+    assert.equal((await readNotifications(db, 'agent_control_failed')).length, 0)
+    const events = await listEvents(db, run.id, { limit: 100 })
+    assert.ok(events.some((e) => e.event_type === 'control.run.blocked'), 'control.run.blocked event emitted')
+    assert.ok(events.some((e) => e.event_type === 'control.step.blocked'), 'control.step.blocked event emitted')
   })
 
   it('failed agent does NOT stop cycle by default; stops when stop_on_agent_failure=true', async () => {
@@ -717,5 +762,251 @@ describe('Agent Control Center — executeRun is idempotent on re-entry', () => 
     const before = mocks.sam.startCallCount
     await executeRun({ db, runId: run.id })
     assert.equal(mocks.sam.startCallCount, before, 'sam adapter should not start twice')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Sam preflight gate through the REAL SamAgentAdapter (prodready issue 5).
+//
+// Production (2026-09-12): 45 of 104 sam_preflight steps in 30 days ended
+// 'blocked' and every durable record said only "Sam preflight reported 1
+// critical finding(s)". The single critical finding was '/readyz returned 503'
+// with body {reason:'mission_gate_failed', release_blockers:[...]} — i.e. an
+// INTENTIONAL release-gate block whose status named nothing.
+//
+// These tests execute the real adapter code path: SamAgentAdapter.start →
+// the real runSam (narrowed to the two CRITICAL HTTP checks and not persisted,
+// so a bare sqlite suffices) → the real runDiagnostics/runHttpCheck against an
+// injected loopback probe → the real evaluateSamPreflight decision → the
+// orchestrator's blocked persistence. The gate is never weakened: a valid
+// system passes, every invalid state blocks for its NAMED reason.
+// ---------------------------------------------------------------------------
+const READYZ_MISSION_GATE_BODY = {
+  ok: false,
+  status: 'not_ready',
+  reason: 'mission_gate_failed',
+  release_blockers: ['release_catalog_verified_pct_below_target', 'visible_direct_link_requirement_failed'],
+}
+const CRITICAL_HTTP_CHECKS = ['http.readyz', 'agent.hamilton.security']
+
+function probeReturning(map) {
+  return async ({ path }) => {
+    for (const [suffix, response] of Object.entries(map)) {
+      if (path === suffix || path.endsWith(suffix)) return response
+    }
+    return { status: 200, body: { ok: true } }
+  }
+}
+
+function installRealSamWithProbe({ httpProbe, env }) {
+  const mocks = installMockAdapters()
+  const sam = new SamAgentAdapter({
+    // Real runSam, narrowed to the two always-on CRITICAL checks so the run
+    // is deterministic and needs no server; persist:false keeps the bare
+    // sqlite harness sufficient (no sam_runs table) and suppresses the
+    // per-run email. Everything else — adapter, diagnostics, probe handling,
+    // the block decision — is the production code.
+    runSam: (args) => runSam({ ...args, checkIds: CRITICAL_HTTP_CHECKS, persist: false, emailReport: false }),
+    httpProbe,
+    env,
+  })
+  setAdapter('sam', sam)
+  return { ...mocks, sam }
+}
+
+describe('Sam preflight gate — real SamAgentAdapter + injected loopback probe', () => {
+  const PROD = { NODE_ENV: 'production', PORT: '3911', ADMIN_TOKEN: 'test-admin-token' }
+
+  it('VALID: readyz 200 + mission 200 + hamilton security 200 → preflight passes and the next agent runs', async () => {
+    const db = makeDb()
+    const mocks = installRealSamWithProbe({
+      httpProbe: probeReturning({ '/readyz': { status: 200, body: { ok: true } } }),
+      env: PROD,
+    })
+    const { run } = await startRun(db, { runType: 'full_cycle', user: adminUser() })
+    const finalRun = await waitForRunTerminal(db, run.id)
+    assert.equal(finalRun.status, 'completed', `run should complete: ${finalRun.error_message || ''}`)
+    const steps = await listSteps(db, run.id)
+    const samStep = steps.find((s) => s.step_name === 'sam_preflight')
+    assert.equal(samStep.status, 'completed')
+    assert.equal(samStep.error_message ?? null, null)
+    assert.equal(samStep.result?.critical_findings, 0)
+    assert.deepEqual(samStep.result?.skipped_critical_checks, [])
+    assert.equal(steps.find((s) => s.step_name === 'robert_main').status, 'completed')
+    assert.equal(mocks.robert.startCallsFor(run.id), 1)
+    assert.equal((await readNotifications(db, 'agent_control_agent_blocked')).length, 0)
+  })
+
+  it('INVALID readyz 503 mission_gate_failed → run BLOCKED naming http.readyz, the readyz reason, BOTH release_blockers codes and operator actions', async () => {
+    const db = makeDb()
+    const mocks = installRealSamWithProbe({
+      httpProbe: probeReturning({ '/readyz': { status: 503, body: READYZ_MISSION_GATE_BODY } }),
+      env: PROD,
+    })
+    const { run } = await startRun(db, { runType: 'full_cycle', user: adminUser() })
+    const finalRun = await waitForRunTerminal(db, run.id)
+
+    // Run row: terminal 'blocked' (not 'failed'), error_message names everything.
+    assert.equal(finalRun.status, 'blocked')
+    for (const needle of [
+      'Sam preflight blocked',
+      'http.readyz',
+      '/readyz returned 503 (expected 200)',
+      'mission_gate_failed',
+      'release_catalog_verified_pct_below_target',
+      'visible_direct_link_requirement_failed',
+      'POST /api/admin/verify-links',
+    ]) {
+      assert.ok(String(finalRun.error_message).includes(needle), `run.error_message should name ${needle}: ${finalRun.error_message}`)
+    }
+    const blockedBy = finalRun.summary?.blocked_by
+    assert.equal(blockedBy?.agent, 'sam')
+    assert.equal(blockedBy?.step, 'sam_preflight')
+    assert.deepEqual(
+      blockedBy?.blocked_detail?.prerequisites?.map((p) => p.code),
+      ['release_catalog_verified_pct_below_target', 'visible_direct_link_requirement_failed'],
+    )
+    for (const p of blockedBy.blocked_detail.prerequisites) {
+      assert.ok(p.operator_action.includes('POST /api/admin/verify-links'), `operator_action for ${p.code} must be concrete`)
+    }
+    assert.equal(blockedBy.blocked_detail.critical_findings[0].check_id, 'http.readyz')
+
+    // Step row: status blocked, error_message = the same named reason,
+    // result_json carries the structured detail.
+    const steps = await listSteps(db, run.id)
+    const samStep = steps.find((s) => s.step_name === 'sam_preflight')
+    assert.equal(samStep.status, 'blocked')
+    assert.ok(String(samStep.error_message).includes('http.readyz'), `step.error_message names the check: ${samStep.error_message}`)
+    assert.ok(String(samStep.error_message).includes('mission_gate_failed'))
+    assert.equal(samStep.result?.blocked_detail?.critical_findings?.[0]?.check_id, 'http.readyz')
+    assert.deepEqual(samStep.result?.blocked_detail?.critical_findings?.[0]?.affected_routes, ['/readyz'])
+    assert.equal(samStep.result?.blocked_reason, blockedBy.blocked_reason)
+
+    // Downstream agents never ran; their queued steps were terminalised.
+    assert.equal(mocks.robert.startCallsFor(run.id), 0)
+    assert.equal(steps.find((s) => s.step_name === 'robert_main').status, 'skipped')
+
+    // control.step.blocked event carries the structured detail.
+    const events = await listEvents(db, run.id, { limit: 200 })
+    const stepBlocked = events.find((e) => e.event_type === 'control.step.blocked')
+    assert.ok(stepBlocked, 'control.step.blocked emitted')
+    assert.deepEqual(
+      stepBlocked.data?.blocked_detail?.prerequisites?.map((p) => p.code),
+      ['release_catalog_verified_pct_below_target', 'visible_direct_link_requirement_failed'],
+    )
+    assert.ok(events.some((e) => e.event_type === 'control.run.blocked'), 'control.run.blocked emitted')
+
+    // Exactly ONE agent-control notification for the block, and it names the check.
+    const blockedNotes = await readNotifications(db, 'agent_control_agent_blocked')
+    assert.equal(blockedNotes.length, 1)
+    assert.ok(blockedNotes[0].message.includes('http.readyz'))
+    assert.equal((await readNotifications(db, 'agent_control_failed')).length, 0)
+  })
+
+  it('INVALID hamilton security 401 → BLOCKED naming probe_unauthenticated (ADMIN_TOKEN), not an anonymous critical', async () => {
+    const db = makeDb()
+    installRealSamWithProbe({
+      httpProbe: probeReturning({ '/payment-authorizations': { status: 401, body: { error: 'not_authenticated' } } }),
+      env: PROD,
+    })
+    const { run } = await startRun(db, { runType: 'full_cycle', user: adminUser() })
+    const finalRun = await waitForRunTerminal(db, run.id)
+    assert.equal(finalRun.status, 'blocked')
+    assert.ok(String(finalRun.error_message).includes('agent.hamilton.security'), finalRun.error_message)
+    assert.ok(String(finalRun.error_message).includes('probe_unauthenticated'), finalRun.error_message)
+    assert.ok(String(finalRun.error_message).includes('ADMIN_TOKEN'), finalRun.error_message)
+    const prereqs = finalRun.summary?.blocked_by?.blocked_detail?.prerequisites || []
+    assert.deepEqual(prereqs.map((p) => p.code), ['probe_unauthenticated'])
+  })
+
+  it('INVALID probe unavailable in production → BLOCKED with http_probe_unavailable (never a vacuous pass)', async () => {
+    const db = makeDb()
+    const mocks = installRealSamWithProbe({ httpProbe: null, env: { NODE_ENV: 'production' } })
+    const { run } = await startRun(db, { runType: 'full_cycle', user: adminUser() })
+    const finalRun = await waitForRunTerminal(db, run.id)
+    assert.equal(finalRun.status, 'blocked')
+    assert.ok(String(finalRun.error_message).includes('http_probe_unavailable'), finalRun.error_message)
+    assert.ok(String(finalRun.error_message).includes('PORT'), finalRun.error_message)
+    const detail = finalRun.summary?.blocked_by?.blocked_detail
+    assert.deepEqual(detail?.prerequisites?.map((p) => p.code), ['http_probe_unavailable'])
+    assert.deepEqual(
+      (detail?.skipped_critical_checks || []).map((s) => s.check_id).sort(),
+      ['agent.hamilton.security', 'http.readyz'],
+    )
+    for (const s of detail.skipped_critical_checks) assert.equal(s.reason, 'http_probe_unavailable')
+    assert.equal(mocks.robert.startCallsFor(run.id), 0)
+  })
+
+  it('probe unavailable in test/smoke → preflight COMPLETES with skipped_critical_checks recorded on the step', async () => {
+    const db = makeDb()
+    const mocks = installRealSamWithProbe({ httpProbe: null, env: { NODE_ENV: 'test', PORT: '0' } })
+    const { run } = await startRun(db, { runType: 'full_cycle', user: adminUser() })
+    const finalRun = await waitForRunTerminal(db, run.id)
+    assert.equal(finalRun.status, 'completed', finalRun.error_message || '')
+    const steps = await listSteps(db, run.id)
+    const samStep = steps.find((s) => s.step_name === 'sam_preflight')
+    assert.equal(samStep.status, 'completed')
+    assert.deepEqual(
+      (samStep.result?.skipped_critical_checks || []).map((s) => s.check_id).sort(),
+      ['agent.hamilton.security', 'http.readyz'],
+    )
+    for (const s of samStep.result.skipped_critical_checks) assert.equal(s.reason, 'http_probe_unavailable')
+    assert.equal(mocks.robert.startCallsFor(run.id), 1)
+  })
+
+  it('a blocked run is terminal: lifecycle commands are refused and the full_cycle lock is free for the next run', async () => {
+    const db = makeDb()
+    installRealSamWithProbe({
+      httpProbe: probeReturning({ '/readyz': { status: 503, body: READYZ_MISSION_GATE_BODY } }),
+      env: PROD,
+    })
+    const { run } = await startRun(db, { runType: 'full_cycle', user: adminUser() })
+    const finalRun = await waitForRunTerminal(db, run.id)
+    assert.equal(finalRun.status, 'blocked')
+    await assert.rejects(() => pauseRun(db, run.id, { user: adminUser() }))
+    // The lock was released on the blocked path: a fresh full_cycle can start.
+    const second = await startRun(db, { runType: 'full_cycle', user: adminUser() })
+    assert.ok(second.run?.id)
+    await waitForRunTerminal(db, second.run.id)
+  })
+
+  it('PRODUCTION PATH (persist:true): a blocked cycle yields exactly ONE admin notification — the named agent_control_agent_blocked — never a second agent_control_sam_critical for the same Sam run', async () => {
+    // The other gate tests run Sam with persist:false, which never reaches
+    // samAgent's completeRun → escalateSamCritical. Production persists every
+    // Sam run, so until this was pinned a single blocked preflight produced
+    // TWO admin notifications about the same readyz 503 every 6h cycle.
+    const db = makeDbWithSamTables()
+    const mocks = installMockAdapters()
+    const sam = new SamAgentAdapter({
+      // Real runSam, real persistence (sam_runs row + escalation path);
+      // narrowed to the two CRITICAL checks so no server is needed.
+      runSam: (args) => runSam({ ...args, checkIds: CRITICAL_HTTP_CHECKS, emailReport: false }),
+      httpProbe: probeReturning({ '/readyz': { status: 503, body: READYZ_MISSION_GATE_BODY } }),
+      env: PROD,
+    })
+    setAdapter('sam', sam)
+
+    const { run } = await startRun(db, { runType: 'full_cycle', user: adminUser() })
+    const finalRun = await waitForRunTerminal(db, run.id)
+    assert.equal(finalRun.status, 'blocked', finalRun.error_message || '')
+    assert.equal(mocks.robert.startCallsFor(run.id), 0)
+
+    // The Sam run WAS persisted and is linked from the blocked detail.
+    const samRunId = finalRun.summary?.blocked_by?.sam_run_id
+    assert.ok(samRunId, 'blocked_by.sam_run_id must point at the persisted Sam run')
+    const samRow = await db.prepare('SELECT id, status FROM sam_runs WHERE id = ?').get(samRunId)
+    assert.equal(samRow?.status, 'completed')
+
+    // Exactly one control notification for the block, and it is the NAMED one.
+    const blocked = await readNotifications(db, 'agent_control_agent_blocked')
+    assert.equal(blocked.length, 1)
+    assert.ok(blocked[0].message.includes('http.readyz'), blocked[0].message)
+    assert.ok(blocked[0].message.includes('mission_gate_failed'), blocked[0].message)
+    assert.equal((await readNotifications(db, 'agent_control_sam_critical')).length, 0,
+      'Sam must not ALSO escalate the same critical when the preflight gate already blocked and named it')
+    assert.equal((await readNotifications(db, 'agent_control_failed')).length, 0)
+    const all = await readNotifications(db)
+    const forBlock = all.filter((n) => n.type !== 'agent_control_started')
+    assert.equal(forBlock.length, 1, `one admin notification for the block, got: ${forBlock.map((n) => n.type).join(', ')}`)
   })
 })

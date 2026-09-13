@@ -33,6 +33,142 @@ const AGENT_LABEL = {
 
 const POLL_MS = 7_000
 
+function runTimestamp(run) {
+  return run?.completed_at || run?.started_at || run?.created_at || null
+}
+
+// Local, non-shared relative-time formatter — mirrors the same-shaped helper
+// in NotificationBell.jsx (this codebase does not have a shared one).
+function formatRelativeTime(dateStr) {
+  if (!dateStr) return ''
+  const now = new Date()
+  const date = new Date(dateStr)
+  if (Number.isNaN(date.getTime())) return ''
+  const diffMs = now - date
+  const diffMin = Math.floor(diffMs / 60000)
+  if (diffMin < 1) return 'just now'
+  if (diffMin < 60) return `${diffMin}m ago`
+  const diffHours = Math.floor(diffMin / 60)
+  if (diffHours < 24) return `${diffHours}h ago`
+  const diffDays = Math.floor(diffHours / 24)
+  return `${diffDays}d ago`
+}
+
+/**
+ * The most recent Sam-preflight block, if it is still the STANDING state of
+ * the system. A block is standing only when it IS the most recent terminal
+ * run of any kind — not merely when no SUCCESS has superseded it. Comparing
+ * against `last_success` alone missed the case where a later run failed, was
+ * cancelled, or was stopped: that run is neither a success nor another block,
+ * so the old block kept reading as standing even though something newer had
+ * already happened. `highlights.last_terminal` is the single most recent run
+ * carrying ANY terminal status, so an id mismatch against it proves something
+ * newer occurred (see `getRunHighlights` in agentControlStore.js).
+ */
+function standingPreflightBlock(highlights) {
+  const blocked = highlights?.last_blocked
+  if (!blocked || !blocked.summary?.blocked_by) return null
+  const latestTerminal = highlights?.last_terminal
+  if (latestTerminal && latestTerminal.id && blocked.id && latestTerminal.id !== blocked.id) {
+    // A different terminal run exists. getRunHighlights orders by completion
+    // time DESC and returns exactly one row, so a different id can only mean
+    // that OTHER run is the newer (or simultaneous) one — the block is
+    // superseded regardless of what that run's own status was.
+    return null
+  }
+  const blockedAt = runTimestamp(blocked)
+  return { run: blocked, at: blockedAt, by: blocked.summary.blocked_by }
+}
+
+/**
+ * Renders WHY Sam refused to clear the fleet and WHAT to do about it. Every
+ * field comes from the durable run summary (blocked_by.blocked_detail) — the
+ * critical findings (check id + title), the unmet prerequisites (code, detail,
+ * operator action) and the CRITICAL checks that could not run at all.
+ */
+function PreflightBlockedPanel({ block }) {
+  if (!block) return null
+  const detail = block.by.blocked_detail || {}
+  const criticals = Array.isArray(detail.critical_findings) ? detail.critical_findings : []
+  const prerequisites = Array.isArray(detail.prerequisites) ? detail.prerequisites : []
+  const skipped = Array.isArray(detail.skipped_critical_checks) ? detail.skipped_critical_checks : []
+  const samRunId = detail.sam_run_id || block.by.sam_run_id || null
+  return (
+    <div className="rounded border border-amber-300 bg-amber-50 p-3 text-sm text-amber-950 dark:border-amber-900/40 dark:bg-amber-900/10 dark:text-amber-100">
+      <div className="font-semibold flex items-center gap-2 flex-wrap">
+        <ShieldCheck className="h-4 w-4 text-amber-700" />
+        Last cycle blocked by Sam preflight
+        <span className="font-normal text-xs text-amber-800 dark:text-amber-300">
+          {block.at ? String(block.at).slice(0, 19).replace('T', ' ') : ''}
+          {block.run?.id ? ` · run ${String(block.run.id).slice(0, 8)}` : ''}
+          {samRunId ? ` · sam run ${samRunId}` : ''}
+        </span>
+      </div>
+      <p className="mt-1 text-xs text-amber-900 dark:text-amber-200">
+        The fleet did not run because the release gate is red. Nothing failed; the prerequisites below are unmet.
+      </p>
+      {criticals.length > 0 ? (
+        <div className="mt-2">
+          <div className="text-xs font-semibold uppercase tracking-wide text-amber-800 dark:text-amber-300">Critical findings</div>
+          <ul className="mt-1 space-y-0.5">
+            {criticals.map((c, idx) => (
+              <li key={`${c.check_id || 'check'}-${idx}`} className="text-xs">
+                <span className="font-mono">{c.check_id || 'unknown check'}</span>
+                {' — '}
+                <span>{c.title}</span>
+                {c.readyz_reason ? <span className="text-amber-800 dark:text-amber-300">{` (reason: ${c.readyz_reason})`}</span> : null}
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
+      {skipped.length > 0 ? (
+        <div className="mt-2 text-xs">
+          <span className="font-semibold uppercase tracking-wide text-amber-800 dark:text-amber-300">Critical checks not executed: </span>
+          <span className="font-mono">{skipped.map((s) => s.check_id).join(', ')}</span>
+          <span>{` (${skipped[0]?.reason || 'http_probe_unavailable'})`}</span>
+        </div>
+      ) : null}
+      {prerequisites.length > 0 ? (
+        <div className="mt-2">
+          <div className="text-xs font-semibold uppercase tracking-wide text-amber-800 dark:text-amber-300">Unmet prerequisites and operator action</div>
+          <ol className="mt-1 space-y-1.5">
+            {prerequisites.map((p, idx) => (
+              <li key={`${p.code}-${idx}`} className="text-xs">
+                <div><span className="font-mono font-semibold">{p.code}</span>{p.detail ? <span> — {p.detail}</span> : null}</div>
+                {p.operator_action ? (
+                  <div className="mt-0.5 pl-3 border-l-2 border-amber-300 text-amber-900 dark:text-amber-100">
+                    <span className="font-semibold">Action: </span>{p.operator_action}
+                  </div>
+                ) : null}
+              </li>
+            ))}
+          </ol>
+        </div>
+      ) : (
+        <div className="mt-2 text-xs">{block.by.blocked_reason}</div>
+      )}
+    </div>
+  )
+}
+
+/**
+ * Collapsed replacement for PreflightBlockedPanel once a later terminal run
+ * (success, failure, cancel, or stop) has superseded the block. The operator
+ * still sees THAT a block happened and when, without the stale prerequisite
+ * detail contradicting the run status shown elsewhere on the card.
+ */
+function SupersededPreflightBlockLine({ blockedRun, latestTerminal }) {
+  if (!blockedRun) return null
+  const blockedAgo = formatRelativeTime(runTimestamp(blockedRun))
+  const latestStatus = latestTerminal?.status || 'unknown'
+  return (
+    <div className="rounded border border-slate-200 bg-slate-50 p-2 text-xs text-slate-600 dark:border-slate-700 dark:bg-slate-800/40 dark:text-slate-300">
+      Last preflight block was {blockedAgo || 'earlier'}; the latest run since then {latestStatus}.
+    </div>
+  )
+}
+
 /**
  * AgentControlCenter
  *
@@ -185,6 +321,7 @@ export default function AgentControlCenter() {
   }
 
   const runStatus = activeRun?.status || null
+  const preflightBlock = standingPreflightBlock(status?.highlights)
   const isPausing = runStatus === 'pausing'
   const isPaused = runStatus === 'paused'
   const isStopping = runStatus === 'stopping'
@@ -327,6 +464,20 @@ export default function AgentControlCenter() {
         {/* Owner control for autonomous adversarial code repair (+ direct-to-main) */}
         <AdversarialRepairToggle />
 
+        {/* Why the last cycle did not run — named prerequisite + operator action.
+            Only shown when the block IS the most recent terminal run; once a
+            later run (success, failure, cancel, stop) has happened, this
+            collapses to a one-line "was superseded" note instead of staying
+            up as a stale standing-blocked banner. */}
+        {!activeRun && preflightBlock ? (
+          <PreflightBlockedPanel block={preflightBlock} />
+        ) : !activeRun && status?.highlights?.last_blocked?.summary?.blocked_by ? (
+          <SupersededPreflightBlockLine
+            blockedRun={status.highlights.last_blocked}
+            latestTerminal={status.highlights.last_terminal}
+          />
+        ) : null}
+
         {/* Run details + events */}
         {activeRun ? (
           <>
@@ -344,6 +495,12 @@ export default function AgentControlCenter() {
               <div className="text-emerald-700 dark:text-emerald-300">
                 Last success: {status.highlights.last_success?.completed_at?.slice(0, 19) || '—'}
               </div>
+              {status.highlights.last_blocked ? (
+                <div className={preflightBlock ? 'text-amber-800 dark:text-amber-300' : 'text-slate-500 dark:text-slate-400'}>
+                  Last preflight block: {status.highlights.last_blocked.completed_at?.slice(0, 19) || '—'}
+                  {preflightBlock ? ' (standing — see above)' : ' (superseded by a later run — see above)'}
+                </div>
+              ) : null}
               <div className={status.highlights.last_failure_is_stale
                 ? 'text-slate-500 dark:text-slate-400'
                 : 'text-rose-700 dark:text-rose-300'}>

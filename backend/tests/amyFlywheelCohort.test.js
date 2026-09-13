@@ -17,13 +17,18 @@ const checkedOracle = (accepted = 1) => ({
   status: 'checked', complete: true, accepted_claims: accepted, checked_accepts: accepted,
   unknown_accepts: 0, known_conflicts: 0, exception_classes: {}, qualification_proven: false,
 })
+// amy-cohort-1/4 (2026-09-12): a member is clean ONLY when every planned stage
+// ran with healthy providers. Fixtures carry the discovery gate evaluateDiscovery
+// stamps on a healthy open-web lane; a row with NO stage evidence is
+// `discovery_blocked:stages_unknown`, never clean (pinned below).
+const MEASURED_GATE = { evaluable: true, recall_measurable: true, reason: null, class: null }
 const clean = (i) => ({
   scenario_id: `s${i}`, cohort_member_id: `s${i}`, label: `Clean ${i}`, category: 'student',
-  status: 'ok', accepted: 1, opportunity_oracle: checkedOracle(), findings: [],
+  status: 'ok', accepted: 1, opportunity_oracle: checkedOracle(), findings: [], discovery_gate: MEASURED_GATE,
 })
 const gappy = (i, type = 'hyperlocal_recall_miss') => ({
   scenario_id: `g${i}`, cohort_member_id: `g${i}`, label: `Gappy ${i}`, category: 'veteran', status: 'ok',
-  accepted: 1, opportunity_oracle: checkedOracle(),
+  accepted: 1, opportunity_oracle: checkedOracle(), discovery_gate: MEASURED_GATE,
   findings: [{ type, message: 'gap' }],
 })
 const errored = (i) => ({ scenario_id: `e${i}`, cohort_member_id: `e${i}`, label: `Err ${i}`, category: 'nonprofit', status: 'error', findings: [{ type: 'crawler_exception' }] })
@@ -55,6 +60,15 @@ describe('isCleanEvaluation', () => {
     expect(isCleanEvaluation({ status: 'skipped', findings: [] })).toBe(false)
     expect(isCleanEvaluation(null)).toBe(false)
     expect(isCleanEvaluation({ ...clean(2), opportunity_oracle: { ...checkedOracle(), status: 'unknown', unknown_accepts: 1 } })).toBe(false)
+    // amy-cohort-1: zero evaluation stages (no discovery gate, no search
+    // evidence) is never clean, and the receipt names the class.
+    const { discovery_gate: _gate, ...noStages } = clean(3)
+    expect(isCleanEvaluation(noStages)).toBe(false)
+    const receipt = buildRunCohortReceipt({ runId: 'r', target: 1, expectedMembers: ['s3'], evaluations: [{ ...noStages, cohort_run_id: 'r' }] })
+    expect(receipt.outcomes).toMatchObject({ clean: 0, issue: 0, unevaluable: 1 })
+    expect(receipt.exception_classes['discovery_blocked:stages_unknown']).toBe(1)
+    // A blocked lane (dead extractor / skipped web lane) is unevaluable, not an issue.
+    expect(isCleanEvaluation({ ...clean(4), discovery_gate: { evaluable: false, recall_measurable: false, reason: 'extraction_failed', class: 'discovery_blocked:extraction_failed' } })).toBe(false)
     expect(isCleanEvaluation({ ...clean(3), opportunity_oracle: null })).toBe(false)
   })
 })
@@ -150,7 +164,7 @@ describe('buildCohortUpdate (pure fold)', () => {
     const r = buildCohortUpdate(null, {
       dayKey: '2026-07-07', target: 1, runId: 'run-e',
       evaluations: [{
-        scenario_id: 'hs1', label: 'High School Student', category: 'high_school_student', status: 'ok',
+        scenario_id: 'hs1', label: 'High School Student', category: 'high_school_student', status: 'ok', discovery_gate: MEASURED_GATE,
         findings: [
           {
             type: 'institution_recall_miss',
@@ -170,7 +184,7 @@ describe('buildCohortUpdate (pure fold)', () => {
     const long = buildCohortUpdate(null, {
       dayKey: '2026-07-07', target: 1,
       evaluations: [{
-        scenario_id: 'x', label: 'X', category: 'veteran', status: 'ok',
+        scenario_id: 'x', label: 'X', category: 'veteran', status: 'ok', discovery_gate: MEASURED_GATE,
         findings: [{ type: 'weak_match', excerpt: 'y'.repeat(5000) }],
       }],
     })
@@ -261,6 +275,61 @@ describe('buildCohortUpdate (pure fold)', () => {
     expect(keys.includes('2026-06-30')).toBe(true)
     expect(keys.includes('2026-06-01')).toBe(false)
   })
+
+  // HIGH fix (2026-09-12): per-member baselines made the persisted store grow
+  // ~one uncompacted, baseline-laden receipt PER RETAINED DAY (~0.3-0.5 MB/day)
+  // because `compactReceipt` only fires when a NEW receipt folds into an
+  // EXISTING day — a day's FINAL receipt, frozen once the calendar rolls over,
+  // was never revisited. Simulates RETENTION_DAYS (21) consecutive daily
+  // folds, one run/day, 50 planned members each, with realistic-size
+  // `member_baseline` payloads (capped generated/executed queries + extracted/
+  // admission titles, matching amyReport.js's own BASELINE_MAX_* caps).
+  it('the persisted store stays under a documented byte budget across RETENTION_DAYS of daily folds (amy-cohort-5 fix)', () => {
+    const bigBaseline = (seed) => {
+      const strings = (n, len) => Array.from({ length: n }, (_, i) => `${seed}-${i}-${'x'.repeat(len)}`)
+      return {
+        generated_queries: strings(30, 40).map((q) => ({ query: q, tier: 'CORE' })),
+        executed_queries: strings(30, 40).map((q, i) => ({
+          query_index: i, query: q, tier: 'CORE', provider: 'searxng', provenance: 'live', status: 'ok', result_count: 8,
+        })),
+        provider_health: { search: 'healthy', llm: 'healthy' },
+        extracted_candidates: { count: 20, titles: strings(20, 60) },
+        canonical_candidates: { stored: 6, deduped: 2, rejected: 4, run_stored: 6 },
+        qualification_decisions: {
+          accept: 1, review: 2, reject: 3, top_reject_reasons: {}, candidates_reached_engine: 6, verdict_source: 'pipeline_decision_tally',
+        },
+        admission_decisions: { recommendations: 10, titles: strings(10, 60) },
+        final_class: 'clean',
+      }
+    }
+    const dayMembers = (dayIndex) => Array.from({ length: 50 }, (_, i) => ({
+      ...clean(`${dayIndex}-${i}`),
+      member_baseline: bigBaseline(`${dayIndex}-${i}`),
+    }))
+
+    let store = null
+    for (let d = 1; d <= cohortModule.RETENTION_DAYS; d += 1) {
+      const key = `2026-05-${String(d).padStart(2, '0')}`
+      store = buildCohortUpdate(store, { dayKey: key, target: 50, evaluations: dayMembers(d) }).store
+    }
+
+    const keys = Object.keys(store.days)
+    expect(keys.length).toBe(cohortModule.RETENTION_DAYS)
+    // Every day EXCEPT the last-folded one is frozen and must be compacted —
+    // no baselines survive on a day that will never fold again.
+    for (const key of keys.slice(0, -1)) {
+      const receipts = store.days[key].run_receipts
+      expect(receipts.some((r) => r.members.some((m) => m.baseline))).toBe(false)
+    }
+    // The LATEST day's LATEST receipt is the one place baselines may still
+    // live, and it stays inside the per-receipt budget.
+    const latestKey = keys[keys.length - 1]
+    const latestReceipts = store.days[latestKey].run_receipts
+    expect(latestReceipts[latestReceipts.length - 1].members.some((m) => m.baseline)).toBe(true)
+
+    const totalBytes = Buffer.byteLength(JSON.stringify(store), 'utf8')
+    expect(totalBytes).toBeLessThan(cohortModule.FLYWHEEL_STORE_BUDGET_BYTES)
+  })
 })
 
 describe('recordFlywheelCohort (store + one-shot goal notification)', () => {
@@ -290,7 +359,7 @@ describe('recordFlywheelCohort (store + one-shot goal notification)', () => {
     const store = await getFlywheelCohort(db)
     expect(store.goal_notified_at).toBeTruthy()
     expect(Object.keys(store.days).length).toBe(1)
-    expect(store.goal_notified_receipt_version).toBe(1)
+    expect(store.goal_notified_receipt_version).toBe(2)
     expect(store.goal_notified_run_id).toBe('run-1')
   })
 
@@ -316,7 +385,7 @@ describe('recordFlywheelCohort (store + one-shot goal notification)', () => {
     expect(result.notified).toBe(true)
     expect(sent).toHaveLength(1)
     const store = await getFlywheelCohort(db)
-    expect(store.goal_notified_receipt_version).toBe(1)
+    expect(store.goal_notified_receipt_version).toBe(2)
     expect(store.goal_notified_run_id).toBe('receipt-v1')
   })
 

@@ -27,12 +27,72 @@ const PROBE_TIMEOUT_MS = Number(process.env.SAM_HTTP_PROBE_TIMEOUT_MS) || 8000
 // listener), there is nothing to probe: return null so Sam honestly fail-skips
 // its HTTP-class checks (classified INFO by isRuntimeUnavailableError) instead
 // of waiting out a timeout on every check.
-function resolveLoopbackPort() {
-  const raw = process.env.PORT
+function resolveLoopbackPort(env = process.env) {
+  const raw = env?.PORT
   if (raw === undefined || raw === null || raw === '') return null
   const n = Number(raw)
   if (!Number.isInteger(n) || n <= 0 || n > 65535) return null
   return n
+}
+
+/**
+ * Explain whether the loopback probe CAN run and, if not, WHY — so a caller
+ * that skips its HTTP-class checks can name the unmet prerequisite instead of
+ * passing vacuously. Pure: reads only the env object it is handed.
+ *
+ * Production fact behind this (2026-09-12): Sam's two always-on CRITICAL
+ * checks (http.readyz, agent.hamilton.security) are both HTTP-kind. With
+ * PORT unset/'0' makeInternalHttpProbe() returns null and BOTH silently skip
+ * with zero findings — a preflight that checked nothing read as green.
+ *
+ * @returns {{ available: boolean, reason: null|'fetch_unavailable'|'port_unset'|'port_invalid',
+ *             detail: string|null, port: number|null, host: string|null, admin_token_present: boolean }}
+ */
+export function describeInternalHttpProbe({ env = process.env, host = null } = {}) {
+  const adminTokenPresent = Boolean(env?.ADMIN_TOKEN || env?.ANYA_ADMIN_TOKEN)
+  if (typeof fetch !== 'function') {
+    return {
+      available: false,
+      reason: 'fetch_unavailable',
+      detail: 'global fetch is not available in this runtime',
+      port: null,
+      host: null,
+      admin_token_present: adminTokenPresent,
+    }
+  }
+  if (host) {
+    return { available: true, reason: null, detail: null, port: null, host, admin_token_present: adminTokenPresent }
+  }
+  const raw = env?.PORT
+  if (raw === undefined || raw === null || raw === '') {
+    return {
+      available: false,
+      reason: 'port_unset',
+      detail: 'PORT unset: loopback probe cannot run',
+      port: null,
+      host: null,
+      admin_token_present: adminTokenPresent,
+    }
+  }
+  const port = resolveLoopbackPort(env)
+  if (!port) {
+    return {
+      available: false,
+      reason: 'port_invalid',
+      detail: `PORT=${JSON.stringify(String(raw))} is not a listening port: loopback probe cannot run`,
+      port: null,
+      host: null,
+      admin_token_present: adminTokenPresent,
+    }
+  }
+  return {
+    available: true,
+    reason: null,
+    detail: null,
+    port,
+    host: `http://127.0.0.1:${port}`,
+    admin_token_present: adminTokenPresent,
+  }
 }
 
 /**
@@ -78,4 +138,4 @@ export function makeInternalHttpProbe(opts = {}) {
   }
 }
 
-export default { makeInternalHttpProbe }
+export default { makeInternalHttpProbe, describeInternalHttpProbe }

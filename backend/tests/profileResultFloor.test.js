@@ -43,7 +43,7 @@ import {
 } from '../services/coverageAudit/profileResultCoverageAudit.js'
 import { classifyGaps, GAP_CLASSES } from '../services/coverageAudit/liveCrawlGapLearning.js'
 import { POINTER_KINDS } from '../config/opportunityKindClasses.js'
-import { buildWebQueries } from '../crawler-os/webQueries.js'
+import { buildWebQueries, hasPersistentQueryShortfall } from '../crawler-os/webQueries.js'
 import { enforceProfileResultFloor } from '../startup/enforceInvariants.js'
 import {
   readFloorLedger,
@@ -222,6 +222,69 @@ describe('the backfill converges and a transient failure never burns a chance', 
     expect(sentence).toContain('Found 3 of a requested 10')
   })
 
+  // ─── 2026-09-12: heal-queue starvation during an extended web-lane outage ──
+
+  it('a MET floor is recognized even under a TRANSIENT outcome — a dead web lane cannot mask a census that already clears the target', () => {
+    // THE DEFECT THIS PINS: applyFloorAttempt used to check `outcome ===
+    // TRANSIENT` BEFORE checking whether the census already met the target, so
+    // a profile whose registry lanes had already reached its target stayed
+    // recorded as short (and endlessly re-queued) for as long as the web lane
+    // stayed dead. A met floor is met regardless of the web lane's health.
+    let entry = { attempts: 2, fingerprint: fp }
+    entry = applyFloorAttempt(entry, { outcome: FLOOR_OUTCOME.TRANSIENT, target: 10, awardable: 12, at: 't' })
+    expect(entry.attempts).toBe(0)
+    expect(entry.exhausted_at).toBeFalsy()
+    expect(entry.last_outcome).toBe(FLOOR_OUTCOME.ADDED)
+  })
+
+  it('a TRANSIENT outcome below target still spends nothing (unchanged) — the met-floor check does not widen TRANSIENT into a free pass', () => {
+    let entry = { attempts: 1, fingerprint: fp }
+    entry = applyFloorAttempt(entry, { outcome: FLOOR_OUTCOME.TRANSIENT, target: 10, awardable: 2, at: 't' })
+    expect(entry.attempts).toBe(1)
+    expect(entry.exhausted_at).toBeFalsy()
+  })
+
+  it('a TRANSIENT outcome with NO census at all (a crawl that threw before any recount) still spends nothing', () => {
+    // `Number(null)` is 0 and IS finite — the exact trap this module's own
+    // comments warn about elsewhere. A missing `awardable` must never be read
+    // as "0 awardable, floor definitely not met" in a way that changes
+    // behaviour; it must simply fall through untouched.
+    let entry = { attempts: 1, fingerprint: fp }
+    entry = applyFloorAttempt(entry, { outcome: FLOOR_OUTCOME.TRANSIENT, target: 10, at: 't' })
+    expect(entry.attempts).toBe(1)
+    expect(entry.exhausted_at).toBeFalsy()
+  })
+
+  it('records a web-lane-degraded attempt on the ledger entry (webLaneDegraded) — a real spend, not a free transient', () => {
+    let entry = { attempts: 0, fingerprint: fp }
+    entry = applyFloorAttempt(entry, {
+      outcome: FLOOR_OUTCOME.NO_NEW_RESULTS, target: 10, awardable: 3, added: 0, at: 't1', fingerprint: fp,
+      webLaneDegraded: true,
+    })
+    expect(entry.attempts).toBe(1)
+    expect(entry.web_lane_dead).toBe(true)
+    expect(entry.last_web_lane_outage_at).toBe('t1')
+    expect(entry.web_lane_degraded_attempts).toBe(1)
+  })
+
+  it('names the web-lane outage in the exhaustion verdict when some passes were degraded — never a clean "exhausted"', () => {
+    let entry = null
+    let last = null
+    for (let i = 0; i < RESULT_FLOOR_MAX_ATTEMPTS; i += 1) {
+      last = new Date(Date.now() - (RESULT_FLOOR_MAX_ATTEMPTS - i) * 3600000).toISOString()
+      entry = applyFloorAttempt(entry, {
+        outcome: FLOOR_OUTCOME.NO_NEW_RESULTS, target: 10, awardable: 3, added: 0, at: last, fingerprint: fp,
+        // 2 of the 3 passes ran with a dead web lane.
+        webLaneDegraded: i < 2,
+        evidence: { lanes_queried: 5, queries_issued: 4, candidates_extracted: 6, rejected_by_engine: 6, added_total: 0 },
+      })
+    }
+    expect(entry.exhausted_at).toBe(last)
+    expect(entry.exhausted_evidence.web_lane_degraded_attempts).toBe(2)
+    const sentence = describeExhaustion(entry)
+    expect(sentence).toContain('2 of 3 pass(es) ran without the web lane')
+  })
+
   it('re-opens an exhausted profile when the catalog has materially grown', () => {
     const entry = { attempts: 3, exhausted_at: new Date().toISOString(), fingerprint: fp }
     const grown = buildFloorFingerprint({ target: 10, activeCatalogCount: 4000 })
@@ -264,12 +327,18 @@ describe('the backfill converges and a transient failure never burns a chance', 
 // ───────────────────── 4. THE SHORTFALL HAS A CONSUMER ──────────────────────
 
 describe('a shortfall reaches the crawler (never a write-only queue)', () => {
-  it('classifies a below-target profile into BOTH its own class and the one the query builder consumes', () => {
+  it('classifies a below-target profile into its OWN class, and the query builder consumes that class directly', () => {
     const classes = classifyGaps({ below_result_target: true, low_results: false })
     expect(classes).toContain('result_floor_shortfall')
-    // `low_results` is the class crawler-os/webQueries.js already reads. Emitting
-    // only the new class would have rebuilt the write-only-queue defect.
-    expect(classes).toContain('low_results')
+    // webq-10 / livegap-3 (2026-09-12): the `low_results` alias this test used to
+    // demand double-counted every floor shortfall in Sam's 7-day metric
+    // (result_floor_shortfall ×1,696 AND low_results ×1,696 were the SAME
+    // events). `low_results` is the audit's OWN <3-actionable alarm and is
+    // emitted only when the audit says so. The write-only-queue defect stays
+    // closed because crawler-os/webQueries.js reads result_floor_shortfall
+    // itself (hasPersistentQueryShortfall + its forced-query branch).
+    expect(classes).not.toContain('low_results')
+    expect(hasPersistentQueryShortfall({ learned_gaps: { classes } })).toBe(true)
     expect(GAP_CLASSES).toContain('result_floor_shortfall')
   })
 

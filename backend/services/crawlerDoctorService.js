@@ -16,7 +16,7 @@
 
 import { getDb } from '../db/index.js'
 import { buildThesisForProfile } from './crawlerOsService.js'
-import { buildWebQueries } from '../crawler-os/webQueries.js'
+import { buildWebQueries, buildWebQueryPlan, normalizeQueryKey } from '../crawler-os/webQueries.js'
 import { auditProfileResultCoverage } from './coverageAudit/profileResultCoverageAudit.js'
 import { qualifiesForDisplay, SURFACED_MATCHER_VERSIONS } from '../config/matchSurfacing.js'
 import { isPointerKind } from '../config/opportunityKindClasses.js'
@@ -111,6 +111,66 @@ function explainMatchRow(row, floor) {
   }
 }
 
+// The live web lane's query budget, resolved exactly the way webLane resolves
+// it (opts.maxQueries is not available to a diagnostic; env else 28; a
+// non-positive or non-numeric value falls back). Kept as a literal on purpose:
+// webLane owns the env contract and the doctor must never pull the lane in.
+const DEFAULT_WEB_LANE_MAX_QUERIES = 28
+function resolveLiveQueryBudget() {
+  const n = Number(process.env.WEB_LANE_MAX_QUERIES)
+  return Number.isFinite(n) && n > 0 ? Math.floor(n) : DEFAULT_WEB_LANE_MAX_QUERIES
+}
+
+/**
+ * buildDoctorQueryDiagnostics — the queries the NEXT web-lane crawl will run
+ * and what the audit's gap classes would ADD to them.
+ *
+ * ONE budget (webq-9): `next_queries` is planned at the live lane budget, and
+ * `suggested_expansions` is the steered plan at the SAME budget minus the
+ * UNCAPPED baseline universe, so a baseline query the cap merely hid is never
+ * reported as gap-driven. Steering also PROMOTES ordinary pool queries into
+ * the budget (the low_results branch forces "<need> grant funding <word>",
+ * which the pool already holds) — those are reported separately as
+ * `steering_promoted`, because "this crawl will now run it" is a real delta
+ * even though the query is not new. `next_query_plan` carries the planner's
+ * provenance (anchor / core / breadth, family, gap_class, need) per position.
+ *
+ * @param {object} thesis
+ * @param {string[]} [gapClasses]  audit gap classes ('hyperlocal_gap:Bradley' is
+ *   reduced to its class)
+ */
+export function buildDoctorQueryDiagnostics(thesis, gapClasses = []) {
+  const queryBudget = resolveLiveQueryBudget()
+  const plan = buildWebQueryPlan(thesis, { max: queryBudget, seed: 0 })
+  const classes = [...new Set(
+    (Array.isArray(gapClasses) ? gapClasses : []).map((g) => String(g ?? '').split(':')[0].trim()).filter(Boolean),
+  )]
+  let suggestedExpansions = []
+  let steeringPromoted = []
+  if (classes.length > 0) {
+    const steeredThesis = {
+      ...thesis,
+      learned_gaps: {
+        ...(thesis?.learned_gaps ?? {}),
+        classes: [...new Set([...(thesis?.learned_gaps?.classes ?? []), ...classes])],
+        missing_schools: thesis?.learned_gaps?.missing_schools ?? [],
+      },
+    }
+    const steered = buildWebQueries(steeredThesis, { max: queryBudget, seed: 0 })
+    const baselineUniverse = new Set(buildWebQueries(thesis, { max: 10000, seed: 0 }).map(normalizeQueryKey))
+    const planned = new Set(plan.queries.map(normalizeQueryKey))
+    suggestedExpansions = steered.filter((q) => !baselineUniverse.has(normalizeQueryKey(q)))
+    steeringPromoted = steered.filter((q) => baselineUniverse.has(normalizeQueryKey(q)) && !planned.has(normalizeQueryKey(q)))
+  }
+  return {
+    query_budget: queryBudget,
+    next_queries: plan.queries,
+    next_query_plan: plan.entries,
+    suggested_expansions: suggestedExpansions,
+    steering_promoted: steeringPromoted,
+  }
+}
+
 /**
  * buildCrawlerDoctorReport — the full per-profile diagnostic.
  *
@@ -138,10 +198,6 @@ export async function buildCrawlerDoctorReport(db = getDb(), profileId, opts = {
     }
   }
   if (!thesis) return { error: 'profile_not_found', profile_id: profileId }
-
-  // The queries the NEXT web-lane crawl will run (seed 0 = the deterministic
-  // base set; live runs rotate the EXTRA pool on top of the same CORE).
-  const nextQueries = buildWebQueries(thesis, { max: 26, seed: 0 })
 
   // Stored matches with provenance + amount visibility, best first.
   const versions = SURFACED_MATCHER_VERSIONS.map(() => '?').join(', ')
@@ -186,17 +242,11 @@ export async function buildCrawlerDoctorReport(db = getDb(), profileId, opts = {
     ? coverage.gaps.map((g) => String(g).split(':')[0])
     : []
 
-  // Suggested next expansions: what buildWebQueries ADDS when steered by the
-  // audit's gap classes (diff vs the base set) — the literal closed-loop delta.
-  let suggestedExpansions = []
-  if (gapClasses.length > 0) {
-    const steered = buildWebQueries(
-      { ...thesis, learned_gaps: { classes: [...new Set([...(thesis.learned_gaps?.classes ?? []), ...gapClasses])], missing_schools: thesis.learned_gaps?.missing_schools ?? [] } },
-      { max: 32, seed: 0 },
-    )
-    const base = new Set(nextQueries.map((q) => q.toLowerCase()))
-    suggestedExpansions = steered.filter((q) => !base.has(q.toLowerCase()))
-  }
+  // The queries the NEXT web-lane crawl will run (seed 0 = the deterministic
+  // base set at the LIVE budget; live runs rotate the breadth pool on top of
+  // the same anchors/core) and what the audit's gap classes would ADD —
+  // the literal closed-loop delta, at one budget (webq-9).
+  const queryDiagnostics = buildDoctorQueryDiagnostics(thesis, gapClasses)
 
   const floor = Number.isFinite(opts.floor) ? opts.floor : DEFAULT_MIN_SCORE
   const matches = rows.map((r) => explainMatchRow(r, floor))
@@ -214,7 +264,9 @@ export async function buildCrawlerDoctorReport(db = getDb(), profileId, opts = {
       schools: thesis.schools ?? [],
       learned_gaps: thesis.learned_gaps ?? null,
     },
-    next_queries: nextQueries,
+    query_budget: queryDiagnostics.query_budget,
+    next_queries: queryDiagnostics.next_queries,
+    next_query_plan: queryDiagnostics.next_query_plan,
     matches,
     matches_error: matchesError,
     summary: {
@@ -229,8 +281,9 @@ export async function buildCrawlerDoctorReport(db = getDb(), profileId, opts = {
     coverage: coverage
       ? { healthy: coverage.healthy ?? null, gaps: coverage.gaps ?? [], surfaced: coverage.surfaced ?? null, surfaced_actionable: coverage.surfaced_actionable ?? null }
       : null,
-    suggested_expansions: suggestedExpansions,
+    suggested_expansions: queryDiagnostics.suggested_expansions,
+    steering_promoted: queryDiagnostics.steering_promoted,
   }
 }
 
-export default { buildCrawlerDoctorReport }
+export default { buildCrawlerDoctorReport, buildDoctorQueryDiagnostics }

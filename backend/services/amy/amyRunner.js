@@ -226,11 +226,19 @@ export function launchAmyRun({ db, logger = console, source = 'admin', opts = {}
         },
       )
       if (result?.skipped) {
-        // Another instance/run already holds the lock — not an error.
-        logger?.info?.('amy.run.skipped_lock_held', { run_id: runId, source })
+        // Another instance/run already holds the lock — not an error. Name the
+        // holder (amy-cohort-8) so /status can say admin vs scheduler and which
+        // instance, instead of a bare 'lock_held'.
+        const holder = {
+          ...(result.heldBy ? { held_by: result.heldBy } : {}),
+          ...(result.acquiredBy ? { acquired_by: result.acquiredBy } : {}),
+          ...(result.holderInstanceId ? { holder_instance_id: result.holderInstanceId } : {}),
+          ...(result.expiresAt ? { lock_expires_at: result.expiresAt } : {}),
+        }
+        logger?.info?.('amy.run.skipped_lock_held', { run_id: runId, source, ...holder })
         state.ok = true
         state.phase = 'skipped'
-        state.summary = { skipped: true, reason: 'lock_held' }
+        state.summary = { skipped: true, reason: result.reason || 'lock_held', ...holder }
         return result
       }
       state.ok = true

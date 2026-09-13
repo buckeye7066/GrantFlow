@@ -1404,9 +1404,14 @@ describe('Amy orphans from dead runs (owner 2026-09-05: "not crawled, gleaned fr
       expect(out.combined.adopted_orphans.adopted.map((a) => a.id)).toEqual([orphan])
       expect(out.combined.adopted_orphans.adopted[0].from_run).toBe('amy-dead')
       expect(out.combined.adopted_orphans.skipped).toEqual([{ id: taught, reason: 'already_taught' }])
-      // Crawled by THIS run and evaluated with the cohort.
+      // Crawled by THIS run and evaluated — but REPORTED SEPARATELY (amy-cohort-7):
+      // the planned cohort's headline numbers never mix in a foreign run's profile.
       expect(crawledIds).toContain(orphan)
-      expect(out.summary.scenarios).toBe(3)
+      expect(out.summary.scenarios).toBe(2)
+      expect(out.combined.amy.handoff.amy_summary.scenarios_total).toBe(2)
+      expect(out.combined.adopted_orphans.summary.scenarios).toBe(1)
+      expect(out.combined.adopted_orphans.evaluations).toHaveLength(1)
+      expect(out.combined.adopted_orphans.evaluations[0].profile_id).toBe(orphan)
       // Recovery keeps its teaching evidence without duplicating a planned
       // scenario in the exact-run cohort receipt.
       const receipt = out.combined.flywheel_cohort.receipt
@@ -1423,6 +1428,162 @@ describe('Amy orphans from dead runs (owner 2026-09-05: "not crawled, gleaned fr
       expect(db.prepare('SELECT id FROM profiles WHERE id = ?').get(orphan)).toBeFalsy()
       // The taught survivor is untouched by adoption (the expired sweep owns it).
       expect(db.prepare('SELECT id FROM profiles WHERE id = ?').get(taught)).toBeTruthy()
+    } finally {
+      db.close()
+    }
+  })
+})
+
+// ── amy-cohort-9 + the CLEAN/UNEVALUATED harness (lane C, 2026-09-12) ─────────
+// PROD FACT: run amy-2026-09-12T11-31-58-550Z-dfd2cbce had 50 planned members,
+// every LLM provider dead (web lane fetched ~40 pages/profile, extracted 0),
+// search healthy from cache. The flywheel counted 0 clean / 50 issues, all
+// hyperlocal_recall_miss, all attributed to webQueries.js. That is a provider
+// outage read as a code defect. This harness pins the corrected semantics
+// end-to-end through runAmyTraining.
+describe('Amy cohort semantics through runAmyTraining (dead extractor vs healthy stub)', () => {
+  const HOUR = 60 * 60 * 1000
+  const QUERIES = Array.from({ length: 28 }, (_, i) => `q${i}`)
+  const provenance = (status = 'ok') => QUERIES.map((_, query_index) => ({ query_index, provider: 'searxng', provenance: 'live', status, provider_mode: 'default', result_count: 8 }))
+  const lane = ({ extracted, stored }) => ({
+    ok: true, queries: QUERIES, pages: 48, seeded: 0, fetched: 40, extracted, stored, deduped: 0, rejected: 0,
+    search_provenance: provenance('ok'), search_provider_counts: { searxng: 28 }, search_cache_hits: 0,
+    search_unknown_provenance_count: 0, search_degraded_queries: 0, search_unavailable_queries: 0,
+  })
+  const basicInfo = (db, profileId) => {
+    const row = db.prepare('SELECT data FROM profile_sections WHERE profile_id = ? AND section_key = ?').get(profileId, 'basic_information')
+    return row?.data ? JSON.parse(row.data) : {}
+  }
+  const rec = (title, i) => ({ opportunity_id: `opp-${i}`, id: `opp-${i}`, title, sponsor: 'State Agency', kind: 'PROGRAM', decision: 'ACCEPT', match_decision: 'ACCEPT', match_score: 88, amount_max: 5000, description: 'grant' })
+  const thesisFor = (info, county) => ({ applicant_types: ['nonprofit'], needs: ['funding'], location: { state: info.state || 'OH', county }, is_student: false })
+
+  function deadExtractorDiscovery(db) {
+    return async ({ profileId }) => {
+      const info = basicInfo(db, profileId)
+      const county = info.county || 'Franklin'
+      return {
+        run: { run_id: `crawl-${profileId}`, stored: 4, sources: [{ source_id: 'grants_gov', outcome: 'OK' }],
+          recommendations: [rec(`${info.state || 'OH'} Statewide Technology Grant`, 1), rec('National Nonprofit Equipment Fund', 2)],
+          web_lane: lane({ extracted: 0, stored: 0 }) },
+        persisted: { opportunities: 4 },
+        thesis: thesisFor(info, county),
+      }
+    }
+  }
+
+  function healthyDiscovery(db, { zeroFor = new Set() } = {}) {
+    return async ({ profileId }) => {
+      const info = basicInfo(db, profileId)
+      const county = info.county || 'Franklin'
+      if (zeroFor.has(profileId)) {
+        // A GENUINE zero result: the lane ran healthily and extraction produced
+        // candidates, but nothing was stored — an ISSUE, not a blocked lane.
+        return {
+          run: { run_id: `crawl-${profileId}`, stored: 0, sources: [], recommendations: [], web_lane: lane({ extracted: 3, stored: 0 }), zero_result: { zero_result_reason: 'no_sources_matched' } },
+          persisted: { opportunities: 0 },
+          thesis: thesisFor(info, county),
+        }
+      }
+      return {
+        run: { run_id: `crawl-${profileId}`, stored: 6, sources: [{ source_id: 'grants_gov', outcome: 'OK' }],
+          recommendations: [rec(`${county} County Community Foundation Grant`, 1), rec(`${info.state || 'OH'} Statewide Program`, 2)],
+          web_lane: lane({ extracted: 9, stored: 6 }) },
+        persisted: { opportunities: 6 },
+        thesis: thesisFor(info, county),
+      }
+    }
+  }
+
+  it('DEAD EXTRACTOR: 50 planned members -> 50 unevaluable (discovery_blocked:extraction_failed), 0 clean, 0 code_change items, envelope names the outage', async () => {
+    const db = createDb()
+    try {
+      const out = await runAmyTraining({
+        db, targetCount: 50, dryRunDiscovery: false, gapLearning: false, improve: false,
+        runDiscovery: deadExtractorDiscovery(db), clock: () => new Date('2026-09-12T12:00:00Z'),
+      })
+      expect(out.combined.cohort_request.planned_members).toBe(50)
+      const receipt = out.combined.flywheel_cohort.receipt
+      expect(receipt.outcomes).toMatchObject({ clean: 0, issue: 0, unevaluable: 50, missing: 0, duplicate: 0, errored: 0, skipped: 0 })
+      expect(receipt.exception_classes['discovery_blocked:extraction_failed']).toBe(50)
+      expect(receipt.finding_types.hyperlocal_recall_miss).toBeUndefined()
+      expect(receipt.members.every((m) => m.class === 'discovery_blocked:extraction_failed')).toBe(true)
+      expect(receipt.members.every((m) => m.baseline?.provider_health?.llm === 'unavailable')).toBe(true)
+      expect(out.combined.approval_queue.filter((i) => i.actionability === 'code_change')).toHaveLength(0)
+      expect(out.combined.approval_queue.filter((i) => i.lever === 'query_breadth')).toHaveLength(0)
+      expect(out.combined.metric_envelope).toMatchObject({ measurement_window: { kind: 'run' }, evaluated_count: 0, unevaluated_count: 50 })
+      expect(out.combined.metric_envelope.provider_health.llm).toBe('unavailable')
+      expect(out.combined.probe_coverage.probes_folded).toBe(out.combined.gap_probes.built)
+      // Coverage credit never exceeds receipt credit: every probe folded as UNKNOWN.
+      const ledger = JSON.parse(db.prepare('SELECT value FROM system_kv WHERE key = ?').get('amy_probe_coverage').value)
+      expect(Object.values(ledger.cells).every((c) => c.last_status === 'unknown')).toBe(true)
+      // The stored report stays well under the size budget and names the catalog slots.
+      const stored = await readLatestAmyReport(db)
+      expect(Buffer.byteLength(JSON.stringify(stored), 'utf8')).toBeLessThan(1_500_000)
+      expect(stored.gap_probes.catalog_categories).toHaveLength(out.combined.gap_probes.catalog_built)
+    } finally {
+      db.close()
+    }
+  })
+
+  it('HEALTHY STUB with county-named candidates -> clean members; one deliberate zero-result member stays an issue', async () => {
+    const db = createDb()
+    try {
+      let firstProfile = null
+      const inner = healthyDiscovery(db)
+      const out = await runAmyTraining({
+        db, targetCount: 20, dryRunDiscovery: false, gapLearning: false, improve: false,
+        runDiscovery: async (args) => {
+          if (!firstProfile) firstProfile = args.profileId
+          if (args.profileId === firstProfile) return healthyDiscovery(db, { zeroFor: new Set([firstProfile]) })(args)
+          return inner(args)
+        },
+        clock: () => new Date('2026-09-12T12:00:00Z'),
+      })
+      const receipt = out.combined.flywheel_cohort.receipt
+      expect(receipt.outcomes).toMatchObject({ clean: 19, issue: 1, unevaluable: 0 })
+      expect(receipt.all_clean).toBe(false)
+      expect(receipt.members.filter((m) => m.outcome === 'clean').every((m) => m.class === 'clean' && m.baseline?.final_class === 'clean')).toBe(true)
+      expect(out.combined.metric_envelope).toMatchObject({ evaluated_count: 20, unevaluated_count: 0 })
+      expect(out.combined.metric_envelope.provider_health).toMatchObject({ search: 'healthy', llm: 'healthy' })
+    } finally {
+      db.close()
+    }
+  })
+
+  it('amy-cohort-9: a probe profile persists probe_cell_key + probe_cell in amy_metadata, and an adopted orphan probe folds into coverage', async () => {
+    const db = createDb()
+    try {
+      // Night one dies before teaching: its probe profiles stay behind, untaught.
+      const night1 = await runAmyTraining({
+        db, targetCount: 8, dryRunDiscovery: false, gapLearning: false, improve: false, keepProfiles: true,
+        runDiscovery: healthyDiscovery(db), clock: () => new Date(Date.now() - 3 * HOUR),
+      })
+      expect(night1.combined.gap_probes.built).toBeGreaterThan(0)
+      // "Died before teaching": the in-memory mesh teaches fine, so strip the
+      // teaching receipt the way a process kill leaves the rows — crawled,
+      // never taught — which is exactly what the adoption path looks for.
+      for (const row of await listAmyProfiles(db)) {
+        const meta = { ...row.metadata }
+        for (const key of ['taught_at', 'last_taught_at', 'learning_agents', 'teaching', 'last_taught_run_id']) delete meta[key]
+        db.prepare('UPDATE profile_sections SET data = ? WHERE profile_id = ? AND section_key = ?').run(JSON.stringify(meta), row.id, 'amy_metadata')
+      }
+      const survivors = await listAmyProfiles(db)
+      const probeRows = survivors.filter((r) => String(r.metadata?.scenario_id || '').startsWith('probe-'))
+      expect(probeRows.length).toBe(night1.combined.gap_probes.built)
+      for (const row of probeRows) {
+        expect(row.metadata.probe_cell_key).toMatch(/^entity=.*\|identity=.*\|need=.*\|state=/)
+        expect(row.metadata.probe_cell).toMatchObject({ entity: expect.any(String), identity: expect.any(String), need: expect.any(String), state: expect.any(String) })
+        expect(row.metadata.cohort_target).toBe(8)
+      }
+      // Night two adopts them; their cells must fold into coverage even though
+      // the adopted scenario is synthesized from metadata, not from a plan.
+      const night2 = await runAmyTraining({
+        db, targetCount: 2, categories: CATEGORY_IDS.slice(0, 2), adversarial: false, dryRunDiscovery: false, gapLearning: false, improve: false,
+        runDiscovery: healthyDiscovery(db), clock: () => new Date(),
+      })
+      expect(night2.combined.adopted_orphans.adopted.length).toBe(survivors.length)
+      expect(night2.combined.probe_coverage.probes_folded).toBe(probeRows.length)
+      expect(night2.combined.probe_coverage.adopted_orphan_probes).toBe(probeRows.length)
     } finally {
       db.close()
     }

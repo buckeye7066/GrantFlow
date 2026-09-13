@@ -30,8 +30,9 @@ import { isVerifiedDirectFundingRecommendation } from './fundingTruthPolicy.js';
 import { upsertSource, upsertOpportunity, upsertMatch, recordRejection } from './storage.js';
 import { OPPORTUNITY_KIND, TRUST_TIER, MATCH_DECISION, canonicalOpportunityKey } from './contract.js';
 import {
-  buildWebQueries,
+  buildWebQueryPlan,
   hasPersistentQueryShortfall,
+  normalizeQueryKey,
   PERSISTENT_QUERY_ANCHOR_COUNT,
 } from './webQueries.js';
 // Pure URL canonicalizer (tracking-param strip) — from the SHARED urlCanonical
@@ -86,7 +87,7 @@ function cleanState(value) {
 // array is flattened into pages. Acceptance must distinguish a real provider
 // response from cache, degradation, an unavailable backend, or missing
 // metadata; result count alone cannot prove any of those facts.
-function searchProvenanceFor(results, queryIndex, threw = false) {
+function searchProvenanceFor(results, queryIndex, threw = false, query = null) {
   const meta = results?.searchMeta && typeof results.searchMeta === 'object'
     ? results.searchMeta
     : null;
@@ -95,6 +96,7 @@ function searchProvenanceFor(results, queryIndex, threw = false) {
     Number.isFinite(Number(meta.cache_age_ms));
   return {
     query_index: queryIndex,
+    query,
     result_count: resultCount,
     provider: String(meta?.provider || 'unknown'),
     provenance: String(meta?.provenance || 'unknown'),
@@ -205,6 +207,161 @@ function targetDedupKey(url) {
   } catch {
     return canon;
   }
+}
+
+// ── Stage ledger (REQUIREMENT E, 2026-09-12) ─────────────────────────────────
+// The lane used to report only totals (pages/fetched/extracted/stored) and the
+// PLANNED query list, so a dead LLM key, a dead search backend, a gate that
+// rejected everything and an honestly empty web all read as the same
+// `ok:true extracted:0`. Every stage now has ONE counter with an exact name,
+// tallied in this file and nowhere else; the choke point
+// (crawlerOsService → recordWebLaneRun → learnFromCrawlGaps) persists it.
+
+/** The exact counter vocabulary. Order is the pipeline order. */
+export const STAGE_COUNTERS = Object.freeze([
+  'query_generated', 'query_skipped_duplicate', 'query_skipped_budget',
+  'provider_attempted', 'provider_degraded', 'provider_unavailable',
+  'response_received', 'candidates_extracted', 'extraction_failed',
+  'canonical_duplicates', 'reality_rejected', 'eligibility_rejected',
+  'need_match_rejected', 'apply_target_rejected', 'qualified_admitted',
+]);
+
+/** Extraction failure classes (mirrors services/webGrantExtractor.js). */
+export const EXTRACTION_FAILURE_CLASSES = Object.freeze([
+  'llm_unavailable', 'llm_quota', 'llm_timeout', 'parse_error', 'page_too_short', 'unknown',
+]);
+const LLM_FAILURE_CLASSES = new Set(['llm_unavailable', 'llm_quota', 'llm_timeout', 'parse_error', 'unknown']);
+
+function emptyStageLedger() {
+  const out = {};
+  for (const k of STAGE_COUNTERS) out[k] = 0;
+  // Accounting helpers (not in the public vocabulary, but needed so every
+  // extracted candidate lands in exactly one bucket):
+  //   catalog_refused  upsertOpportunity refused a reality-passed row
+  //   review_held      primary verdict REVIEW for a reason that is not an
+  //                    apply-target / need / eligibility hold (pointer, band)
+  out.catalog_refused = 0;
+  out.review_held = 0;
+  out.extraction_failed_by_class = {};
+  return out;
+}
+
+function emptyProviderHealth() {
+  return { search: 'unknown', llm: 'unknown', detail: {} };
+}
+
+/** Classify an extractor THROW the same way webGrantExtractor classifies a result. */
+function classifyThrownExtractionError(err) {
+  const msg = String(err?.message ?? err ?? '');
+  if (err?.name === 'AbortError' || /timeout|timed out|abort/i.test(msg)) return 'llm_timeout';
+  if (/quota|credit|billing|insufficient|rate[_ ]?limit|\b429\b|\b402\b/i.test(msg)) return 'llm_quota';
+  return 'unknown';
+}
+
+/** Read the extractor's non-enumerable failure tag (null when healthy / untagged). */
+function extractionFailureClassOf(list) {
+  const f = list && typeof list === 'object' ? list.extraction_failure : null;
+  const cls = f && typeof f === 'object' ? String(f.class || '') : '';
+  return EXTRACTION_FAILURE_CLASSES.includes(cls) ? cls : (cls ? 'unknown' : null);
+}
+
+function newPageLedgerEntry({ url, canonicalKey, query, seeded }) {
+  return {
+    url,
+    canonical_key: canonicalKey,
+    query,
+    seeded: Boolean(seeded),
+    fetched: false,
+    fetch_status: null,
+    final_url: null,
+    extracted: 0,
+    extraction_failure: null,
+    reality_rejected: 0,
+    reality_reason: null,
+    gate_rejected: { eligibility: 0, need: 0, apply_target: 0 },
+    canonical_duplicate: 0,
+    catalog_refused: 0,
+    review_held: 0,
+    admitted: 0,
+    stored: 0,
+    deduped: 0,
+  };
+}
+
+/**
+ * Classify the PRIMARY profile's verdict on one candidate into exactly one
+ * stage bucket. Reads only what computeMatchDecision already recorded.
+ */
+function classifyPrimaryVerdict(decision, opportunity = null) {
+  const d = String(decision?.decision ?? '').toLowerCase();
+  const explain = decision?.match_explain ?? {};
+  const warnings = Array.isArray(explain.warnings) ? explain.warnings.map((w) => String(w ?? '')) : [];
+  const proof = explain.four_truth_proof ?? null;
+  if (d === MATCH_DECISION.ACCEPT) return 'qualified_admitted';
+  if (d === MATCH_DECISION.REJECT) {
+    if (explain.eligibility_fit === false || explain.eligibility_fit === 'no') return 'eligibility_rejected';
+    if (explain.need_first_policy?.need_first_hard_mismatch === true) return 'need_match_rejected';
+    if (proof && proof.meets_profile_need && proof.meets_profile_need.passed === false && (!proof.profile_qualifies || proof.profile_qualifies.passed !== false)) return 'need_match_rejected';
+    return 'eligibility_rejected';
+  }
+  // REVIEW: which hold? The apply-target gate is STRUCTURAL (a non-pointer
+  // with no apply URL can never be an apply-now ACCEPT, whatever the other
+  // legs say), so it is judged from the row itself — the engine only writes
+  // its warning when the hold flipped an ACCEPT, and a four-truth hold that
+  // fired first would otherwise hide it.
+  const kind = String(opportunity?.kind ?? '').toUpperCase();
+  const isPointer = kind === OPPORTUNITY_KIND.DIRECTORY || kind === OPPORTUNITY_KIND.PAST_AWARD_INTEL;
+  const hasApplyUrl = Boolean(opportunity?.apply_url ?? opportunity?.application_url);
+  if (opportunity && !isPointer && !hasApplyUrl) return 'apply_target_rejected';
+  if (warnings.some((w) => /no direct application URL/i.test(w))) return 'apply_target_rejected';
+  const held = warnings.find((w) => /four-truth gate held at REVIEW/i.test(w)) || '';
+  if (held) {
+    if (/profile_qualifies/.test(held)) return 'eligibility_rejected';
+    if (/meets_profile_need/.test(held)) return 'need_match_rejected';
+  }
+  return 'review_held';
+}
+
+function summarizeProviderHealth(result, llmStats) {
+  const s = result.stage_ledger;
+  const attempted = s.provider_attempted;
+  let search = 'unknown';
+  if (attempted > 0) {
+    if (s.provider_unavailable >= attempted) search = 'unavailable';
+    else if (s.provider_degraded > 0 || s.provider_unavailable > 0) search = 'degraded';
+    else search = 'healthy';
+  }
+  let llm = 'unknown';
+  if (result.fetched > 0) {
+    if (llmStats.ok_pages > 0) llm = 'healthy';
+    else if (llmStats.llm_failed_pages > 0) llm = 'unavailable';
+  }
+  const detail = {
+    search: {
+      attempted,
+      degraded: s.provider_degraded,
+      unavailable: s.provider_unavailable,
+      cache_hits: result.search_cache_hits,
+      unknown_provenance: result.search_unknown_provenance_count,
+      provider_counts: { ...result.search_provider_counts },
+    },
+    llm: {
+      pages_fetched: result.fetched,
+      ok_pages: llmStats.ok_pages,
+      failed_pages: s.extraction_failed,
+      failed_by_class: { ...s.extraction_failed_by_class },
+    },
+  };
+  return { search, llm, detail };
+}
+
+function dominantFailureClass(byClass) {
+  let best = null;
+  let bestN = 0;
+  for (const [k, n] of Object.entries(byClass || {})) {
+    if (Number(n) > bestN) { best = k; bestN = Number(n); }
+  }
+  return best;
 }
 
 /**
@@ -348,8 +505,14 @@ export async function runWebDiscoveryLane(deps, opts = {}) {
   const { store, fetcher, searchWeb, extractOpportunities, blindShadow } = deps;
   const result = {
     ok: false,
+    // EXECUTED queries (webq-1). The plan is `queries_planned` / `query_ledger`.
+    // Until 2026-09-12 this held the PLANNED list, so telemetry said 28
+    // searches ran when the 44-page cap stopped execution after ~6.
     queries: [],
+    queries_planned: [],
+    queries_executed: 0,
     pages: 0,
+    pages_deduped: 0,
     seeded: 0,
     fetched: 0,
     extracted: 0,
@@ -366,6 +529,16 @@ export async function runWebDiscoveryLane(deps, opts = {}) {
     search_unknown_provenance_count: 0,
     search_degraded_queries: 0,
     search_unavailable_queries: 0,
+    // ── REQUIREMENT E ledgers ──
+    query_ledger: { planned: [], executed: [], skipped_budget: [], skipped_duplicate: [], plan_dropped: { by_cap: [], duplicates: [] } },
+    stage_ledger: emptyStageLedger(),
+    page_ledger: [],
+    page_ledger_truncated: 0,
+    seed_outcomes: [],
+    provider_health: emptyProviderHealth(),
+    extraction_available: null,
+    primary_attribution: null,
+    reason: null,
   };
   if (!store || !fetcher?.fetch || typeof searchWeb !== 'function' || typeof extractOpportunities !== 'function') {
     result.reason = 'web_lane_deps_missing';
@@ -508,24 +681,66 @@ export async function runWebDiscoveryLane(deps, opts = {}) {
   // placed FIRST and are exempt from `maxPages` (which exists to bound how much
   // of an unbounded SERP we chase, a question already settled for a known URL);
   // the caller bounds the seed list itself.
+  // Page dedupe keys on the CANONICAL FETCH IDENTITY (discovery-attrib-4):
+  // `targetDedupKey` = the shared canonicalizer (tracking params stripped) +
+  // fragment dropped. Two SERPs returning `…/grant` and `…/grant?utm_source=x#top`
+  // are ONE server fetch; keying on the raw string fetched + LLM-extracted the
+  // alias twice and burned a maxPages slot on it. The raw URL is still what we
+  // fetch; only the identity is canonical.
   const seen = new Set();
   const pages = [];
+  const ledgerByPage = new Map();
+  const pageKeyOf = (url) => targetDedupKey(url);
+  const enqueuePage = (page) => {
+    const key = pageKeyOf(page.url);
+    if (seen.has(key)) { result.pages_deduped += 1; return false; }
+    seen.add(key);
+    pages.push(page);
+    ledgerByPage.set(page, newPageLedgerEntry({ url: page.url, canonicalKey: key, query: page.query, seeded: page.seeded }));
+    return true;
+  };
   for (const s of Array.isArray(opts.seedPages) ? opts.seedPages : []) {
     const url = String(s?.url || '').trim();
-    if (!/^https?:\/\//i.test(url) || seen.has(url)) continue;
-    seen.add(url);
-    pages.push({ url, query: s.query ?? 'seed:web_parity_gap', title: s.title, snippet: s.snippet, seeded: true });
+    if (!/^https?:\/\//i.test(url)) continue;
+    enqueuePage({ url, query: s.query ?? 'seed:web_parity_gap', title: s.title, snippet: s.snippet, seeded: true });
   }
   result.seeded = pages.length;
+  result.results_per_query = resultsPerQuery;
+  result.max_pages = maxPages;
+  result.max_queries = maxQueries;
 
-  const builtQueries = buildWebQueries(thesis, { max: maxQueries, seed });
+  // THE PLAN — every entry carries its tier/family/gap_class so the ledger can
+  // say which KIND of query executed and which kind the page budget starved.
+  const plan = buildWebQueryPlan(thesis, { max: maxQueries, seed });
+  const builtQueries = plan.queries;
+  const planEntryByKey = new Map();
+  for (const e of Array.isArray(plan.entries) ? plan.entries : []) planEntryByKey.set(normalizeQueryKey(e.query), e);
+  result.query_ledger.plan_dropped = {
+    by_cap: (Array.isArray(plan.dropped_by_budget) ? plan.dropped_by_budget : []).map((d) => ({ query: d.query, tier: d.tier ?? null, family: d.family ?? null })),
+    duplicates: (Array.isArray(plan.dropped_duplicates) ? plan.dropped_duplicates : []).map((d) => ({ query: d.query, duplicate_of: d.duplicate_of ?? null })),
+  };
   // EXTRA QUERIES (opts.extraQueries): the applyable-floor archetype directive's
   // query patterns (initiative agent #3). They run ALONGSIDE the profile's own
-  // web queries — additive and deduped. They lower no bar: every hit is fetched,
-  // extracted, reality-gated and scored exactly like a built query's hit.
-  const extra = (Array.isArray(opts.extraQueries) ? opts.extraQueries : [])
-    .map((q) => String(q || '').trim())
-    .filter(Boolean);
+  // web queries — additive and deduped ON THE NORMALIZED KEY (webq-7: an exact-
+  // string Set let "HOUSING GRANTS …" and "housing grants …" both execute and
+  // spend two of the ~6 executed slots). They lower no bar: every hit is
+  // fetched, extracted, reality-gated and scored exactly like a built query's hit.
+  const builtByKey = new Map();
+  for (const q of builtQueries) builtByKey.set(normalizeQueryKey(q), q);
+  const extra = [];
+  const extraByKey = new Map();
+  for (const raw of Array.isArray(opts.extraQueries) ? opts.extraQueries : []) {
+    const q = String(raw || '').trim();
+    if (!q) continue;
+    const key = normalizeQueryKey(q);
+    const dupOf = builtByKey.get(key) ?? extraByKey.get(key) ?? null;
+    if (dupOf) {
+      result.query_ledger.skipped_duplicate.push({ query: q, duplicate_of: dupOf, source: 'extra_query' });
+      continue;
+    }
+    extraByKey.set(key, q);
+    extra.push(q);
+  }
   let queries = builtQueries;
   if (extra.length) {
     // The applyable-floor caller can supply six directive queries. Six full
@@ -535,7 +750,7 @@ export async function runWebDiscoveryLane(deps, opts = {}) {
     // resuming the directives. Query/page/provider budgets and every downstream
     // gate stay unchanged. Unlearned runs retain their prior exact ordering.
     const builtEarlyCount = PERSISTENT_QUERY_ANCHOR_COUNT + 1;
-    const ordered = hasPersistentQueryShortfall(thesis)
+    queries = hasPersistentQueryShortfall(thesis)
       ? [
           ...extra.slice(0, PERSISTENT_QUERY_ANCHOR_COUNT),
           ...builtQueries.slice(0, builtEarlyCount),
@@ -543,31 +758,61 @@ export async function runWebDiscoveryLane(deps, opts = {}) {
           ...builtQueries.slice(builtEarlyCount),
         ]
       : [...extra, ...builtQueries];
-    queries = [...new Set(ordered)];
   }
-  result.queries = queries;
+  const tierOf = (q) => {
+    const e = planEntryByKey.get(normalizeQueryKey(q));
+    if (e) return { tier: e.tier ?? 'core', family: e.family ?? null, gap_class: e.gap_class ?? null };
+    return { tier: 'directive', family: 'archetype_directive', gap_class: null };
+  };
+  result.queries_planned = queries;
+  result.query_ledger.planned = queries.map((q) => ({ query: q, ...tierOf(q) }));
+  result.stage_ledger.query_generated = queries.length;
+  result.stage_ledger.query_skipped_duplicate =
+    result.query_ledger.skipped_duplicate.length + result.query_ledger.plan_dropped.duplicates.length;
+
+  let executedCount = 0;
   for (const [queryIndex, q] of queries.entries()) {
     if (pages.length - result.seeded >= maxPages) break;
+    executedCount += 1;
     let hits = [];
     let threw = false;
     try { hits = await searchWeb(q, { count: resultsPerQuery }); }
     catch { threw = true; hits = []; }
-    const provenance = searchProvenanceFor(hits, queryIndex, threw);
+    const provenance = searchProvenanceFor(hits, queryIndex, threw, q);
     result.search_provenance.push(provenance);
     result.search_provider_counts[provenance.provider] =
       (result.search_provider_counts[provenance.provider] || 0) + 1;
     if (provenance.provenance === 'cache' || provenance.provider === 'cache') result.search_cache_hits += 1;
     if (provenance.provenance === 'unknown' || provenance.provider === 'unknown') result.search_unknown_provenance_count += 1;
-    if (String(provenance.status).includes('degrad')) result.search_degraded_queries += 1;
-    if (['error', 'unavailable', 'not_attempted'].includes(provenance.status)) result.search_unavailable_queries += 1;
+    const degraded = String(provenance.status).includes('degrad');
+    const unavailable = ['error', 'unavailable', 'not_attempted'].includes(provenance.status);
+    if (degraded) result.search_degraded_queries += 1;
+    if (unavailable) result.search_unavailable_queries += 1;
+    result.stage_ledger.provider_attempted += 1;
+    if (degraded) result.stage_ledger.provider_degraded += 1;
+    if (unavailable) result.stage_ledger.provider_unavailable += 1;
+    let newPages = 0;
     for (const h of Array.isArray(hits) ? hits : []) {
       const url = String(h?.url || '').trim();
-      if (!url || seen.has(url)) continue;
-      seen.add(url);
-      pages.push({ url, query: q, title: h.title, snippet: h.snippet });
+      if (!url) continue;
+      if (enqueuePage({ url, query: q, title: h.title, snippet: h.snippet })) newPages += 1;
       if (pages.length - result.seeded >= maxPages) break;
     }
+    result.queries.push(q);
+    result.query_ledger.executed.push({
+      query: q,
+      ...tierOf(q),
+      provider: provenance.provider,
+      status: provenance.status,
+      result_count: provenance.result_count,
+      new_pages: newPages,
+    });
   }
+  result.queries_executed = executedCount;
+  for (const q of queries.slice(executedCount)) {
+    result.query_ledger.skipped_budget.push({ query: q, ...tierOf(q) });
+  }
+  result.stage_ledger.query_skipped_budget = result.query_ledger.skipped_budget.length;
   result.pages = pages.length;
 
   // 2) Fetch each page → LLM-extract → gate → normalize → store → match.
@@ -579,12 +824,21 @@ export async function runWebDiscoveryLane(deps, opts = {}) {
   // sources" — the same read-green-while-doing-nothing class as the sweep that
   // marked rows attempted and found zero amounts.
   const seededAdopted = new Set();
+  // Pages the extractor answered HEALTHILY on (ok or an honest empty) vs pages
+  // whose extraction failed with an LLM-class reason — the provider_health.llm
+  // verdict is derived from these, never from `extracted === 0` alone.
+  const llmStats = { ok_pages: 0, llm_failed_pages: 0 };
+  const primaryProfileId = thesis.profile_id ?? matchProfiles[0]?.profile_id ?? null;
   for (const page of pages) {
+    const entry = ledgerByPage.get(page);
     let resp;
     try { resp = await fetcher.fetch(page.url, { method: 'GET' }); }
-    catch { resp = { ok: false }; }
+    catch (err) { resp = { ok: false, error: String(err?.message ?? err) }; }
+    if (entry) entry.fetch_status = resp?.status ?? (resp?.ok ? 200 : (resp?.error ? `error:${String(resp.error).slice(0, 80)}` : 'failed'));
     if (!resp?.ok || resp.body == null) continue;
     result.fetched += 1;
+    result.stage_ledger.response_received += 1;
+    if (entry) { entry.fetched = true; entry.final_url = resp.finalUrl ?? null; }
 
     const evidence = { url: resp.finalUrl ?? page.url, content_hash: resp.contentHash ?? null, fetched_at: resp.fetchedAt ?? null };
     // Remember this source page's own URL so target verification never re-fetches
@@ -592,9 +846,27 @@ export async function runWebDiscoveryLane(deps, opts = {}) {
     // the SAME normalized way targets are so an alias/fragment variant still hits.
     if (fetchedSourceKeys) { fetchedSourceKeys.add(targetDedupKey(page.url)); fetchedSourceKeys.add(targetDedupKey(evidence.url)); }
 
+    // EXTRACTION — a failure is CLASSIFIED, never swallowed into []. The
+    // extractor tags its array with a non-enumerable `extraction_failure`
+    // (services/webGrantExtractor.js); a throw is classified here.
     let extracted = [];
-    try { extracted = await extractOpportunities({ pageUrl: evidence.url, html: resp.body }); }
-    catch { extracted = []; }
+    let failureClass = null;
+    try {
+      extracted = await extractOpportunities({ pageUrl: evidence.url, html: resp.body });
+      failureClass = extractionFailureClassOf(extracted);
+    } catch (err) {
+      extracted = [];
+      failureClass = classifyThrownExtractionError(err);
+    }
+    if (failureClass) {
+      result.stage_ledger.extraction_failed += 1;
+      result.stage_ledger.extraction_failed_by_class[failureClass] =
+        (result.stage_ledger.extraction_failed_by_class[failureClass] || 0) + 1;
+      if (LLM_FAILURE_CLASSES.has(failureClass)) llmStats.llm_failed_pages += 1;
+      if (entry) entry.extraction_failure = failureClass;
+    } else {
+      llmStats.ok_pages += 1;
+    }
 
     // Count the current (profile-conditioned) path's candidates for THIS page so
     // the blind shadow can report a per-page delta. Shadow-only bookkeeping: it is
@@ -604,23 +876,47 @@ export async function runWebDiscoveryLane(deps, opts = {}) {
       const cand = toCandidate(ex, evidence, thesis, page);
       if (!cand) continue;
       result.extracted += 1;
+      result.stage_ledger.candidates_extracted += 1;
+      if (entry) entry.extracted += 1;
       if (shadow) pageCurrentCandidates += 1;
 
       const verdict = enforceReality(cand, { thesis, source: WEB_SOURCE, evidence });
       if (!verdict.ok) {
         result.rejected += 1;
+        result.stage_ledger.reality_rejected += 1;
+        if (entry) { entry.reality_rejected += 1; if (!entry.reality_reason) entry.reality_reason = verdict.reason ?? null; }
         if (runId) recordRejection(store, runId, { source_id: WEB_SOURCE.source_id, reason: verdict.reason, detail: verdict.verdict_reasons?.join('; '), title: cand.title, url: cand.apply_url ?? cand.info_url });
         continue;
       }
 
       const opp = normalize(cand, verdict, { source: WEB_SOURCE, evidence });
       const key = canonicalOpportunityKey(opp);
-      if (storedKeys.has(key)) { result.deduped += 1; continue; }
+      if (storedKeys.has(key)) {
+        result.deduped += 1;
+        result.stage_ledger.canonical_duplicates += 1;
+        if (entry) entry.canonical_duplicate += 1;
+        continue;
+      }
 
       const res = upsertOpportunity(store, opp);
       const canonicalId = res.canonical_id ?? opp.id;
-      if (!res.stored && !res.deduped) { result.rejected += 1; continue; }
-      if (res.deduped) result.deduped += 1; else result.stored += 1;
+      if (!res.stored && !res.deduped) {
+        result.rejected += 1;
+        result.stage_ledger.catalog_refused += 1;
+        if (entry) entry.catalog_refused += 1;
+        continue;
+      }
+      if (res.deduped) {
+        result.deduped += 1;
+        // A durable dedupe (the row already exists in the run store from another
+        // source/page) is a canonical duplicate too; the candidate still gets
+        // matched below so the primary verdict is counted once.
+        result.stage_ledger.canonical_duplicates += 1;
+        if (entry) { entry.canonical_duplicate += 1; entry.deduped += 1; }
+      } else {
+        result.stored += 1;
+        if (entry) entry.stored += 1;
+      }
       storedKeys.add(key);
       // `deduped` counts as adopted: the source IS in the catalog and reachable
       // for this profile, which is what the rule promises. Re-offering it next
@@ -629,6 +925,7 @@ export async function runWebDiscoveryLane(deps, opts = {}) {
 
       // Per-profile matching — decision comes ONLY from the canonical engine.
       const matchOpp = canonicalId !== opp.id ? { ...opp, id: canonicalId } : opp;
+      let primaryCounted = false;
       for (const mp of matchProfiles) {
         // Full profile context when the thesis carries it (primary profile) —
         // see pipeline.js: context-less cross-match stubs fall under the
@@ -650,6 +947,22 @@ export async function runWebDiscoveryLane(deps, opts = {}) {
         // Provenance for the crawler doctor: the exact query that surfaced the
         // page this opportunity was extracted from.
         upsertMatch(store, { ...decision, source_query: page.query, discovered_via: 'web_search' });
+        // Stage attribution for the PRIMARY (discovering) profile only — one
+        // bucket per candidate, read straight off the engine's recorded verdict.
+        // A durable-deduped row is already counted under canonical_duplicates,
+        // so its verdict is not double-booked into an admission/rejection bucket.
+        if (!primaryCounted && !res.deduped && (primaryProfileId === null || mp.profile_id === primaryProfileId)) {
+          primaryCounted = true;
+          const bucket = classifyPrimaryVerdict(decision, matchOpp);
+          result.stage_ledger[bucket] = (result.stage_ledger[bucket] || 0) + 1;
+          if (entry) {
+            if (bucket === 'qualified_admitted') entry.admitted += 1;
+            else if (bucket === 'eligibility_rejected') entry.gate_rejected.eligibility += 1;
+            else if (bucket === 'need_match_rejected') entry.gate_rejected.need += 1;
+            else if (bucket === 'apply_target_rejected') entry.gate_rejected.apply_target += 1;
+            else entry.review_held += 1;
+          }
+        }
         const truthProof = decision.match_explain?.four_truth_proof ?? null;
         if (isVerifiedDirectFundingRecommendation(matchOpp, decision) &&
             mp.profile_id === thesis.profile_id) {
@@ -809,6 +1122,51 @@ export async function runWebDiscoveryLane(deps, opts = {}) {
   result.seeded_adopted = seededAdopted.size;
   result.recommendations.sort((a, b) => b.match_score - a.match_score);
   result.research_leads.sort((a, b) => b.match_score - a.match_score);
+
+  // ── Ledgers (REQUIREMENT E) ──────────────────────────────────────────────
+  // Page ledger: one bounded row per queued page (seeds first). Bounded to
+  // maxPages entries; the overflow (seeds are exempt from maxPages) is counted.
+  const allEntries = pages.map((p) => ledgerByPage.get(p)).filter(Boolean);
+  result.page_ledger = allEntries.slice(0, maxPages);
+  result.page_ledger_truncated = Math.max(0, allEntries.length - result.page_ledger.length);
+  // Per-seed outcome ledger: the GATES' verdict on each seeded URL, in the
+  // vocabulary webParityBenchmark.markGapCandidateOutcomes reads (adopted /
+  // <gate>_rejected / fetch_failed / extraction_failed / no_candidates). A seed
+  // that was fetched but produced nothing is NEVER a gate verdict.
+  result.seed_outcomes = allEntries.filter((e) => e.seeded).map((e) => {
+    let outcome = 'no_candidates';
+    let gate = null;
+    let reason = null;
+    if (!e.fetched) { outcome = 'fetch_failed'; reason = e.fetch_status != null ? String(e.fetch_status) : null; }
+    else if (seededAdopted.has(e.url)) { outcome = 'adopted'; }
+    else if (e.extraction_failure) { outcome = 'extraction_failed'; reason = e.extraction_failure; }
+    else if (e.extracted === 0) { outcome = 'no_candidates'; }
+    else {
+      const gates = [
+        ['reality', e.reality_rejected], ['eligibility', e.gate_rejected.eligibility],
+        ['need', e.gate_rejected.need], ['apply_target', e.gate_rejected.apply_target],
+      ].filter(([, n]) => n > 0).sort((a, b) => b[1] - a[1]);
+      if (gates.length) {
+        gate = gates[0][0];
+        outcome = `${gate}_rejected`;
+        reason = gate === 'reality' ? (e.reality_reason ?? null) : null;
+      } else if (e.canonical_duplicate > 0) { outcome = 'deduped'; }
+      else if (e.catalog_refused > 0) { outcome = 'catalog_refused'; }
+      else { outcome = 'review_held'; }
+    }
+    return { url: e.url, outcome, gate, reason, fetched: e.fetched, extracted: e.extracted, stored: e.stored, deduped: e.deduped };
+  });
+  // Provider health + the honest reason line. `ok` stays "the lane ran to
+  // completion"; a dead extraction layer is named in provider_health, reason
+  // and (at the choke point) primary_attribution — never hidden behind ok:true.
+  result.provider_health = summarizeProviderHealth(result, llmStats);
+  result.extraction_available = result.provider_health.llm === 'unavailable' ? false
+    : (result.provider_health.llm === 'healthy' ? true : null);
+  if (result.provider_health.llm === 'unavailable') {
+    result.reason = `extraction_failed:${dominantFailureClass(result.stage_ledger.extraction_failed_by_class) || 'unknown'}`;
+  } else if (result.provider_health.search === 'unavailable') {
+    result.reason = 'search_unavailable';
+  }
 
   // ── Phase 1d: INDEPENDENT TARGET VERIFICATION (promotion evidence) ─────────
   // Runs ONLY when the shadow is active (WEB_LANE_PROFILE_BLIND ON), and its ONLY

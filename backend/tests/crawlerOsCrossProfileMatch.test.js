@@ -11,6 +11,7 @@
 import { describe, it, expect } from 'vitest'
 import Database from 'better-sqlite3'
 import { runProfileDiscoveryLive, buildThesisForProfile } from '../services/crawlerOsService.js'
+import { computeMatchDecision } from '../crawler-os/matchEngine.js'
 
 function makeDb() {
   const raw = new Database(':memory:')
@@ -123,13 +124,25 @@ describe('cross-profile matching (Robert charter)', () => {
 
   it('does not cross-persist a REVIEW scored from a context-light thesis', async () => {
     const db = makeDb()
+    // p-b declares needs the facilities grant does not serve. (Until
+    // 2026-09-12 this fixture carried 'capital' + 'capacity_building' too and
+    // read as REVIEW only because the thesis derivation DROPPED declared
+    // canonical needs; with declared needs surviving verbatim the engine
+    // rightly ACCEPTs a capital/facilities grant for a profile that declares
+    // a capital need, so that fixture no longer exercises the REVIEW case.)
     seedTwoNonprofits(db, {
-      pBNeeds: ['operations', 'programs', 'capacity_building', 'capital'],
+      pBNeeds: ['operations', 'programs'],
     })
     const thA = await buildThesisForProfile(db, 'p-a')
     const thB = await buildThesisForProfile(db, 'p-b')
 
-    await runProfileDiscoveryLive({ db, profileId: 'p-a', fetcher: makeStubFetcher(), matchProfiles: [thA, thB] })
+    const res = await runProfileDiscoveryLive({ db, profileId: 'p-a', fetcher: makeStubFetcher(), matchProfiles: [thA, thB] })
+
+    // Teeth: the engine's own verdict for p-b is REVIEW (not REJECT), so an
+    // absent xmatch row proves the ACCEPT-only precision policy, not a reject.
+    const opp = (res.opportunities || []).find((o) => /Rural Community Facilities/.test(o.title))
+    expect(opp).toBeTruthy()
+    expect(computeMatchDecision(opp, thB).decision).toBe('review')
 
     const targetRows = db.prepare(
       `SELECT m.profile_id, m.matcher_version

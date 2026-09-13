@@ -555,12 +555,22 @@ export async function runLinkVerification(
               AND LOWER(COALESCE(link_status, '')) IN ('ok', 'redirect', 'verified')
               AND COALESCE(verification_error, '') = '')`
 
-  // Oldest evidence gets the next bounded slot, regardless of the last verdict.
-  // A broken pointer remains active and eligible after every failed probe;
-  // putting its status first repeatedly selects it ahead of the entire stale
-  // catalog. Hidden successes can cause the same starvation. Every persisted
-  // attempt advances last_verified_at, so ordering by that clock lets the
-  // backlog drain while repairs remain eligible. Status breaks ties only.
+  // VISIBLE rows first, then oldest evidence. The release gate
+  // (missionHealthService release_catalog_verified_pct, /readyz) counts ONLY
+  // the visible catalog, so a bounded batch spent on hidden rows moves the
+  // gate by nothing. Measured 2026-09-12 on production: the next 300-row
+  // selection under the old oldest-first order was 282 hidden rows and 18
+  // visible ones, and the previous run had refreshed ~600 hidden rows against
+  // 5 visible — while 3,934 visible pointers sat past the 30-day window and
+  // /readyz stayed 503 for ten days (every Sam preflight blocked on it).
+  // Order: (0) visible, (1) hidden successes whose re-probe could RESTORE a
+  // row to the visible catalog, (2) other hidden rows. Within a tier, oldest
+  // evidence first; a broken pointer remains eligible after every failed
+  // probe, so its status breaks ties only — putting it first repeatedly
+  // selected it ahead of the entire stale catalog. Every persisted attempt
+  // advances last_verified_at, so the tiers drain in turn and nothing is
+  // starved forever; the visible tier merely goes first.
+  const visibleSql = `COALESCE(is_hidden, ${hiddenFalseSql}) = ${hiddenFalseSql}`
   const rows = await db
     .prepare(
       `
@@ -577,10 +587,11 @@ export async function runLinkVerification(
             AND (link_status = 'broken' OR last_verified_at IS NULL OR last_verified_at < ?
                  OR ${unexplainedHiddenSuccessSql})
             AND ${mutableLinkLifecycleSql()}
-          ORDER BY (last_verified_at IS NULL) DESC, last_verified_at ASC,
-                   CASE WHEN link_status = 'broken' THEN 0
+          ORDER BY CASE WHEN ${visibleSql} THEN 0
                         WHEN ${unexplainedHiddenSuccessSql} THEN 1
                         ELSE 2 END,
+                   (last_verified_at IS NULL) DESC, last_verified_at ASC,
+                   CASE WHEN link_status = 'broken' THEN 0 ELSE 1 END,
                    id ASC
         LIMIT ?
       `,

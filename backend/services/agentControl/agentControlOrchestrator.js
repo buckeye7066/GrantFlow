@@ -746,7 +746,7 @@ async function executeRunOnce({ db, runId } = {}) {
   const run = await getRun(db, runId)
   if (!run) return
 
-  const finalStates = ['completed', 'completed_noop', 'failed', 'cancelled', 'stopped', 'partial_stop', 'stop_failed']
+  const finalStates = ['completed', 'completed_noop', 'failed', 'blocked', 'cancelled', 'stopped', 'partial_stop', 'stop_failed']
   if (finalStates.includes(run.status)) {
     // Run is already terminal (e.g. a skipped/cancelled start). Guarantee no
     // lock lingers for it — releasing by runId is owner-safe because run IDs
@@ -778,6 +778,10 @@ async function executeRunOnce({ db, runId } = {}) {
   let partial = false
   let pauseRequested = false
   let runError = null
+  // Set when Sam's preflight refuses to clear the fleet. Carries the NAMED
+  // prerequisite + operator action (adapter blocked_reason/blocked_detail) so
+  // the run row, its summary and the UI can all say what is unmet.
+  let blockedBy = null
   const stepResults = []
   let totalWork = 0
 
@@ -940,9 +944,15 @@ async function executeRunOnce({ db, runId } = {}) {
       return result?.ok === false ? 'failed' : 'completed'
     })()
 
+    // A blocked step persists its NAMED reason as error_message (the adapter's
+    // blocked result carries no `error`, so this used to land as NULL and the
+    // only durable trace of WHY was a count in result_json).
+    const stepErrorMessage = result?.error
+      || (status === 'blocked' ? (result?.blocked_reason || null) : null)
+      || null
     await setStepStatus(db, next.id, status, {
       result: result?.summary || null,
-      errorMessage: result?.error || null,
+      errorMessage: stepErrorMessage,
     })
 
     await recordEvent(db, {
@@ -983,7 +993,7 @@ async function executeRunOnce({ db, runId } = {}) {
       status: activityStatus,
       severity: status === 'failed' ? 'high' : status === 'blocked' ? 'medium' : 'info',
       title: `${next.agent_name} ${next.step_name} ${activityStatus}`,
-      description: result?.error || null,
+      description: stepErrorMessage,
       metric_key: 'work_units',
       metric_value: work,
       entity_type: 'agent_control_run',
@@ -1001,11 +1011,25 @@ async function executeRunOnce({ db, runId } = {}) {
     }
 
     if (status === 'blocked') {
+      // Exactly ONE agent-control notification per block, and it names the
+      // prerequisite (blocked_reason). The run is finalised as 'blocked', not
+      // 'failed', so notifyFailed never doubles it.
       await notifyAgentBlocked(db, run, next.agent_name, result?.blocked_reason || 'blocked')
       // Sam preflight blocking ends the cycle so the rest of the agents
       // don't run on a critical-finding system.
       if (next.agent_name === 'sam' && next.step_name === 'sam_preflight') {
-        runError = `Sam preflight blocked: ${result?.blocked_reason || 'critical findings'}`
+        const blockedReason = result?.blocked_reason || 'critical findings'
+        blockedBy = {
+          agent: next.agent_name,
+          step: next.step_name,
+          step_id: next.id,
+          blocked_reason: blockedReason,
+          blocked_detail: result?.blocked_detail && typeof result.blocked_detail === 'object'
+            ? result.blocked_detail
+            : null,
+          sam_run_id: result?.blocked_detail?.sam_run_id ?? result?.summary?.sam_run_id ?? null,
+        }
+        runError = `Sam preflight blocked: ${blockedReason}`
         break
       }
     }
@@ -1040,6 +1064,10 @@ async function executeRunOnce({ db, runId } = {}) {
   for (const s of stepsAfter) {
     if (s.status === 'queued' && stoppedRequested) {
       await setStepStatus(db, s.id, 'skipped', { errorMessage: emergency ? 'emergency_stop' : 'stop_requested' })
+    } else if (s.status === 'queued' && blockedBy) {
+      // The preflight refused the fleet: terminalise the never-started steps
+      // honestly instead of leaving 'queued' rows inside a finished run.
+      await setStepStatus(db, s.id, 'skipped', { errorMessage: 'sam_preflight_blocked' })
     }
   }
   // Re-read after terminalizing queued steps so the persisted summary reports
@@ -1050,7 +1078,7 @@ async function executeRunOnce({ db, runId } = {}) {
   // emergencyStopRun) already set the run to a terminal state, respect
   // that — we should not downgrade `cancelled` → `stopped` just because
   // the orchestrator loop noticed a graceful_stop request along the way.
-  const TERMINAL = new Set(['completed', 'completed_noop', 'failed', 'cancelled', 'stopped', 'partial_stop', 'stop_failed'])
+  const TERMINAL = new Set(['completed', 'completed_noop', 'failed', 'blocked', 'cancelled', 'stopped', 'partial_stop', 'stop_failed'])
   const currentRun = await getRun(db, runId)
   let finalStatus
   if (currentRun && TERMINAL.has(currentRun.status)) {
@@ -1060,6 +1088,10 @@ async function executeRunOnce({ db, runId } = {}) {
     finalStatus = stillRunning ? 'partial_stop' : 'stopped'
   } else if (stoppedRequested) {
     finalStatus = 'stopped'
+  } else if (blockedBy && failedSteps.length === 0) {
+    // sam-preflight-6: a preflight block is its own terminal status. Nothing
+    // failed — the system refused to run the fleet and named why.
+    finalStatus = 'blocked'
   } else if (runError || failedSteps.length > 0) {
     finalStatus = 'failed'
     if (!runError) {
@@ -1086,6 +1118,7 @@ async function executeRunOnce({ db, runId } = {}) {
       stopped: stoppedRequested,
       emergency,
       partial,
+      ...(blockedBy ? { blocked_by: blockedBy } : {}),
     },
   })
 
@@ -1108,9 +1141,17 @@ async function executeRunOnce({ db, runId } = {}) {
   await recordEvent(db, {
     controlRunId: runId,
     eventType: `control.run.${finalStatus}`,
-    severity: finalStatus === 'failed' ? 'high' : finalStatus === 'partial_stop' ? 'high' : 'info',
-    message: `Run finished with status: ${finalStatus}`,
-    data: { final_status: finalStatus, error: runError, emergency, stopped: stoppedRequested },
+    severity: finalStatus === 'failed' ? 'high' : finalStatus === 'partial_stop' ? 'high' : finalStatus === 'blocked' ? 'high' : 'info',
+    message: finalStatus === 'blocked'
+      ? `Run blocked by ${blockedBy?.agent || 'sam'} preflight: ${blockedBy?.blocked_reason || runError || 'unmet prerequisite'}`
+      : `Run finished with status: ${finalStatus}`,
+    data: {
+      final_status: finalStatus,
+      error: runError,
+      emergency,
+      stopped: stoppedRequested,
+      ...(blockedBy ? { blocked_by: blockedBy } : {}),
+    },
   })
   } catch (runtimeErr) {
     // Unexpected failure anywhere in the loop or finalization. Never leak the
@@ -1120,7 +1161,7 @@ async function executeRunOnce({ db, runId } = {}) {
     qualityLog.error('[agent-control] executeRun fatal:', runtimeErr?.message || runtimeErr)
     try {
       const cur = await getRun(db, runId)
-      const TERMINAL = new Set(['completed', 'completed_noop', 'failed', 'cancelled', 'stopped', 'partial_stop', 'stop_failed'])
+      const TERMINAL = new Set(['completed', 'completed_noop', 'failed', 'blocked', 'cancelled', 'stopped', 'partial_stop', 'stop_failed'])
       if (!cur || !TERMINAL.has(cur.status)) {
         await setRunStatus(db, runId, 'failed', {
           errorMessage: `Orchestrator crashed: ${runtimeErr?.message || runtimeErr}`,

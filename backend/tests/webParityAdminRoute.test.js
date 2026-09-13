@@ -40,6 +40,22 @@ describe('web parity background admin route', () => {
     ])
   })
 
+  it('counts a not-evaluated (still re-seedable) candidate as pending, never an exhausted or judged one', () => {
+    // 2026-09-12: a seed the gates could not EVALUATE (dead LLM route, fetch
+    // failure) is `not_evaluated:<class>` and stays eligible for re-seeding —
+    // hiding it from "pending" would read the queue as drained while the
+    // owner rule's backlog is still open. Exhausted / adopted / gated_out are
+    // verdicts (or bounded give-ups) and are not pending.
+    expect(pendingWebParity([
+      { source: 'web_parity_benchmark', status: 'candidate', url: 'https://a.example' },
+      { source: 'web_parity_benchmark', status: 'not_evaluated:extraction_failed', url: 'https://b.example' },
+      { source: 'web_parity_benchmark', status: 'not_evaluated:fetch_failed', url: 'https://c.example' },
+      { source: 'web_parity_benchmark', status: 'not_evaluated:exhausted', url: 'https://d.example' },
+      { source: 'web_parity_benchmark', status: 'gated_out', url: 'https://e.example' },
+      { source: 'web_parity_benchmark', status: 'adopted', url: 'https://f.example' },
+    ]).map((entry) => entry.url)).toEqual(['https://a.example', 'https://b.example', 'https://c.example'])
+  })
+
   it('returns the durable latest benchmark and queue without starting work', async () => {
     const db = makeDb()
     const latest = {
@@ -59,6 +75,7 @@ describe('web parity background admin route', () => {
         candidates: [
           { source: 'web_parity_benchmark', status: 'candidate', url: 'https://pending.example' },
           { source: 'web_parity_benchmark', status: 'gated_out', url: 'https://closed.example' },
+          { source: 'web_parity_benchmark', status: 'not_evaluated:extraction_failed', url: 'https://unread.example' },
         ],
       }),
       latest.generated_at,
@@ -70,7 +87,7 @@ describe('web parity background admin route', () => {
     expect(response.body).toMatchObject({
       ok: true,
       latest: { generated_at: latest.generated_at, fleet_parity: 88.5 },
-      queue: { total: 2, pending_web_parity: 1 },
+      queue: { total: 3, pending_web_parity: 2, pending_breakdown: { candidate: 1, not_evaluated: 1 } },
     })
     db.close()
   })

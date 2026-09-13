@@ -10,6 +10,10 @@ import {
   updateApplicationTask,
   appendTaskEvent,
 } from '../services/hamilton/applicationTaskStore.js'
+import {
+  assessTaskSubmissionProof,
+  SUBMISSION_PROOF_STATE,
+} from '../services/hamilton/submissionProofPredicate.js'
 
 import { createLogger } from '../utils/logger.js'
 const routeLogger = createLogger('route:grantApplications')
@@ -129,6 +133,7 @@ async function fetchHamiltonApplications(db, { isAdmin, userId, filterProfileId,
     rows = await db.prepare(
       `SELECT t.id, t.profile_id, t.user_id, t.opportunity_id, t.grant_id,
               t.status AS task_status, t.submitted_at, t.created_at, t.updated_at,
+              t.output_document_id,
               COALESCE(fo.title, g.title) AS title,
               COALESCE(fo.sponsor, g.funder) AS funder_name
          FROM application_tasks t
@@ -147,14 +152,39 @@ async function fetchHamiltonApplications(db, { isAdmin, userId, filterProfileId,
     if (/no such table|does not exist/i.test(msg)) return []
     throw err
   }
-  return (rows || [])
-    .map((r) => ({
+  const out = []
+  for (const r of rows || []) {
+    const status = mapHamiltonStatus(r)
+    if (filterStatus && status !== filterStatus) continue
+    // "Submitted" has two honest meanings and the tracker card must carry
+    // which one (hamilton-submit-9, 2026-09-12): the canonical predicate
+    // labels a bare Mark-Submitted flip INTERNAL_ONLY, a Hamilton run with a
+    // retrievable portal confirmation VERIFIED_EXTERNAL. A non-submitted row
+    // gets the cheap not_submitted stub the task store uses — no extra query.
+    let submissionProof
+    if (String(r.task_status || '').toLowerCase() === 'submitted') {
+      try {
+        submissionProof = await assessTaskSubmissionProof(db, {
+          id: r.id, profile_id: r.profile_id, status: r.task_status, output_document_id: r.output_document_id ?? null,
+        })
+      } catch {
+        submissionProof = {
+          verified_external: false,
+          state: SUBMISSION_PROOF_STATE.INTERNAL_ONLY,
+          label: 'Marked submitted (internal record — not confirmed sent to the funder)',
+          unverified_reason: 'assessment_error',
+        }
+      }
+    } else {
+      submissionProof = { verified_external: false, state: SUBMISSION_PROOF_STATE.NOT_SUBMITTED }
+    }
+    out.push({
       id: r.id,
       profile_id: r.profile_id,
       opportunity_id: r.opportunity_id ?? null,
       pipeline_grant_id: r.grant_id ?? null,
       user_id: r.user_id,
-      status: mapHamiltonStatus(r),
+      status,
       title: r.title ?? null,
       grant_name: r.title ?? (r.funder_name ? `Application — ${r.funder_name}` : 'Untitled application'),
       funder_name: r.funder_name ?? null,
@@ -170,8 +200,10 @@ async function fetchHamiltonApplications(db, { isAdmin, userId, filterProfileId,
       created_at: r.created_at ?? null,
       updated_at: r.updated_at ?? null,
       source: 'hamilton',
-    }))
-    .filter((r) => !filterStatus || r.status === filterStatus)
+      submission_proof: submissionProof,
+    })
+  }
+  return out
 }
 
 // GET /api/grant-applications — list applications for authenticated user
@@ -465,17 +497,28 @@ async function submitHamiltonTask(req, res, { userId }) {
   // canonical response shape, so this is an honest idempotent no-op.
   if (task.status === 'submitted') return res.json(task)
 
+  // A tracker click records that the USER says they submitted it; it binds no
+  // portal receipt, so the row self-describes as an internal record (the
+  // manual-receipt route is the path that binds proof and sets its own step).
   const now = new Date().toISOString()
-  await updateApplicationTask(req.db, taskId, { status: 'submitted', submittedAt: now })
+  await updateApplicationTask(req.db, taskId, {
+    status: 'submitted', submittedAt: now, currentStep: 'marked_submitted_internal',
+  })
   try {
     await appendTaskEvent(req.db, {
       taskId,
       eventType: 'submitted',
       status: 'submitted',
-      message: 'User marked this application submitted from the Application Tracker.',
+      step: 'marked_submitted_internal',
+      message: 'User marked this application submitted from the Application Tracker (internal record — no portal receipt bound).',
       actorUserId: String(userId),
       actorRole: req.user?.role || null,
-      details: { manual_submit: true },
+      details: {
+        manual_submit: true,
+        evidence: 'none',
+        internal_record: true,
+        submission_proof_state: SUBMISSION_PROOF_STATE.INTERNAL_ONLY,
+      },
     })
   } catch (err) {
     // The submit itself succeeded — don't turn a missing event row into a 500.

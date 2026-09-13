@@ -20,8 +20,10 @@
     "CORS_ORIGIN": "http://127.0.0.1:45207",
     "SMOKE_MODE": "1",
     "DISABLE_AI": "1",
+    "MIGRATE_ON_BOOT": "1",
     "SQLITE_DB_PATH": ".eva-tmp/grantflow/grantflow.sqlite"
   },
+  "$migrate_comment": "September 12: the runner never executes seed_command and SMOKE_MODE opts out of boot migrations, so the disposable DB was schema.sql-only (no onboarding_sessions -> guest quiz 500). Explicit MIGRATE_ON_BOOT=1 makes EVA exercise the same migrated schema production runs.",
   "launch_env_generated": { "AUTH_JWT_SECRET": "secret" },
   "seed_command": "npm run db:setup",
   "reset_command": "npm run migrate",

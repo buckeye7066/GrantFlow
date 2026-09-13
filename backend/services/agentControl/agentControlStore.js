@@ -413,7 +413,7 @@ export async function setRunStatus(db, runId, status, extra = {}) {
     fields.push('started_at = COALESCE(started_at, ?)')
     args.push(now)
   }
-  if (['completed', 'completed_noop', 'failed', 'cancelled', 'stopped', 'partial_stop', 'stop_failed'].includes(status)) {
+  if (['completed', 'completed_noop', 'failed', 'blocked', 'cancelled', 'stopped', 'partial_stop', 'stop_failed'].includes(status)) {
     fields.push('completed_at = COALESCE(completed_at, ?)')
     args.push(now)
   }
@@ -509,6 +509,15 @@ function failureTimestamp(run) {
   return run?.completed_at || run?.started_at || run?.created_at || null
 }
 
+// The full terminal-status vocabulary (mirrors the list `setRunStatus` uses to
+// decide whether to stamp `completed_at`). `last_terminal` is the single most
+// recent run carrying ANY of these — used by the UI to tell whether an old
+// standing state (e.g. a Sam-preflight block) has been superseded by ANYTHING
+// newer, not just by a later SUCCESS.
+const TERMINAL_RUN_STATUSES = [
+  'completed', 'completed_noop', 'failed', 'blocked', 'cancelled', 'stopped', 'partial_stop', 'stop_failed',
+]
+
 /**
  * Latest terminal run of each kind, used by Mission Control summary.
  *
@@ -518,6 +527,12 @@ function failureTimestamp(run) {
  *                              when a success has occurred since it.
  *   - `last_failure_age_hours` age of the failure in whole hours.
  *   - `last_failure_superseded_by_success` true when last_success is newer.
+ *
+ * `last_terminal` is the single most recent run of ANY terminal status
+ * (success, failure, cancel, stop, or another block). A consumer deciding
+ * whether `last_blocked` is still the STANDING state must compare against
+ * this, not just against `last_success` — a later run that failed or was
+ * cancelled also supersedes an old block, even though it is not a success.
  */
 export async function getRunHighlights(db) {
   const empty = {
@@ -528,11 +543,19 @@ export async function getRunHighlights(db) {
     last_failure_is_stale: false,
     last_failure_age_hours: null,
     last_failure_superseded_by_success: false,
+    // Latest Sam-preflight block (terminal 'blocked'); its summary.blocked_by
+    // names the unmet prerequisite + operator action for the UI.
+    last_blocked: null,
+    // Latest run of ANY terminal status — see doc comment above.
+    last_terminal: null,
   }
   if (!db) return empty
   try {
     const last = await db
       .prepare(`SELECT * FROM agent_control_runs ORDER BY COALESCE(started_at, created_at) DESC LIMIT 1`)
+      .get()
+    const last_blocked = await db
+      .prepare(`SELECT * FROM agent_control_runs WHERE status = 'blocked' ORDER BY COALESCE(completed_at, started_at, created_at) DESC LIMIT 1`)
       .get()
     const last_full_cycle = await db
       .prepare(`SELECT * FROM agent_control_runs WHERE run_type IN ('full_cycle','scheduled_cycle') ORDER BY COALESCE(started_at, created_at) DESC LIMIT 1`)
@@ -543,6 +566,9 @@ export async function getRunHighlights(db) {
     const last_failure = await db
       .prepare(`SELECT * FROM agent_control_runs WHERE status IN ('failed','stop_failed','partial_stop') ORDER BY COALESCE(completed_at, started_at, created_at) DESC LIMIT 1`)
       .get()
+    const last_terminal = await db
+      .prepare(`SELECT * FROM agent_control_runs WHERE status IN (${TERMINAL_RUN_STATUSES.map(() => '?').join(',')}) ORDER BY COALESCE(completed_at, started_at, created_at) DESC LIMIT 1`)
+      .get(...TERMINAL_RUN_STATUSES)
 
     const failureRow = row(last_failure)
     const successRow = row(last_success)
@@ -573,6 +599,8 @@ export async function getRunHighlights(db) {
       last_failure_is_stale: isStale,
       last_failure_age_hours: ageHours,
       last_failure_superseded_by_success: supersededBySuccess,
+      last_blocked: row(last_blocked),
+      last_terminal: row(last_terminal),
     }
   } catch {
     return empty
@@ -1006,7 +1034,15 @@ export function stopLockSweeper() {
  * dead-holder lock, and bounded retry-with-backoff. Returns a lease descriptor:
  *
  *   { acquired: true,  ownerToken, lockName, expiresAt, tookOver?, reclaimReason? }
- *   { acquired: false, reason: 'held'|'invalid_args', heldBy, expiresAt }
+ *   { acquired: false, reason: 'held'|'invalid_args', heldBy, acquiredBy, holderInstanceId, acquiredAt, expiresAt }
+ *
+ * The not-acquired descriptor NAMES THE HOLDER (amy-cohort-8): `heldBy` is the
+ * holder's control_run_id (for scheduler locks a minted
+ * `scheduler:<name>:<ts>:<uuid>` that identifies nothing), so `acquiredBy`
+ * (e.g. `amy:scheduler` / `amy:admin`) and `holderInstanceId` (the holder
+ * process's boot id) travel with it — the '[scheduler-lock] skipped; lock held'
+ * log, amyRunner's `lock_held` summary and /status could not otherwise say WHO
+ * holds the lock.
  *
  * `reclaimReason` (present only when `tookOver` is true) is `'ttl_expired'`
  * or `'dead_holder_instance'` — see the "STALE-HOLDER RECLAIM" note above.
@@ -1132,6 +1168,8 @@ export async function acquireLock(db, {
       run: controlRunId,
       attempt,
       held_by: holder?.control_run_id || 'unknown',
+      acquired_by: holder?.acquired_by || 'unknown',
+      holder_instance: holder?.holder_instance_id || 'unknown',
       expires_at: holder?.expires_at || 'n/a',
     })
 
@@ -1143,13 +1181,31 @@ export async function acquireLock(db, {
   }
 
   const holder = await getLock(db, lockName)
-  lockLog('acquire.failed', { lock: lockName, run: controlRunId, held_by: holder?.control_run_id || 'unknown' })
+  lockLog('acquire.failed', {
+    lock: lockName,
+    run: controlRunId,
+    held_by: holder?.control_run_id || 'unknown',
+    acquired_by: holder?.acquired_by || 'unknown',
+    holder_instance: holder?.holder_instance_id || 'unknown',
+  })
   return {
     acquired: false,
     reason: 'held',
     heldBy: holder?.control_run_id || null,
+    acquiredBy: holder?.acquired_by || null,
+    holderInstanceId: holder?.holder_instance_id || null,
+    acquiredAt: holder?.acquired_at || null,
     expiresAt: holder?.expires_at || null,
   }
+}
+
+/** One human-readable phrase naming a refused lease's holder (amy-cohort-8). */
+export function describeLockHolder(lease = {}) {
+  const parts = [`held by ${lease?.heldBy || 'unknown'}`]
+  if (lease?.acquiredBy) parts.push(`acquired_by ${lease.acquiredBy}`)
+  if (lease?.holderInstanceId) parts.push(`instance ${lease.holderInstanceId}`)
+  if (lease?.expiresAt) parts.push(`expires ${lease.expiresAt}`)
+  return parts.join(', ')
 }
 
 /**
@@ -1225,7 +1281,7 @@ export async function withLock(db, opts = {}, fn) {
   if (typeof fn !== 'function') throw new Error('withLock: fn required')
   const lease = await acquireLock(db, opts)
   if (!lease.acquired) {
-    const e = new Error(`withLock: could not acquire "${opts?.lockName}" (held by ${lease.heldBy || 'unknown'})`)
+    const e = new Error(`withLock: could not acquire "${opts?.lockName}" (${describeLockHolder(lease)})`)
     e.code = 'LOCK_NOT_ACQUIRED'
     e.lease = lease
     throw e

@@ -60,7 +60,7 @@ const {
   registerConfirmationArtifact,
   assessStoredConfirmationProof,
 } = await import('../services/hamilton/hamiltonConfirmationArtifacts.js')
-const { ensureApplicationTask, updateApplicationTask, _resetSchemaCache } =
+const { ensureApplicationTask, updateApplicationTask, getApplicationTask, _resetSchemaCache } =
   await import('../services/hamilton/applicationTaskStore.js')
 const { _resetAuthSchemaCache, recordAuthorizations } = await import('../services/hamilton/hamiltonAuthorizationStore.js')
 
@@ -724,5 +724,222 @@ describe('a submitted run persists retrievable proof under a durable dir (not tm
     const doc = await db.prepare('SELECT type FROM documents WHERE id = ?')
       .get(result.autopilot_result.confirmation_document_id)
     expect(doc.type).toBe('hamilton_submission_confirmation')
+  })
+})
+
+// ── hamilton-submit-2 / -7 and the read-side slug guard (2026-09-12) ─────────
+
+describe('registerConfirmationArtifact — the declared-receipt-URL landing (third evidence kind)', () => {
+  async function seedAuthorizedTask(db) {
+    await seedFixture(db)
+    const task = await ensureApplicationTask(db, {
+      profileId: PROFILE, opportunityId: 'opp-1', grantId: 'g-1', automationType: 'portal',
+    })
+    await updateApplicationTask(db, task.id, { allowAutoSubmit: true })
+    await recordAuthorizations(db, {
+      userId: 'user-1', profileId: PROFILE, scope: 'funding_source', fundingSourceIds: ['opp-1'],
+      authorizationTypes: ['complete_forms', 'submit_applications'],
+      authorizationText: 'Test authorization', authorizationVersion: 'hamilton-autopilot-test-v1',
+      options: { require_human_review: false }, replaceOmittedTypes: true,
+    })
+    return task
+  }
+
+  it('a declared-receipt landing WITH a retained capture is filed as confirmation proof', async () => {
+    const db = makeDb()
+    await seedFixture(db)
+    const dir = makeTmpDir('gf-returl-')
+    const shot = path.join(dir, 'confirmation_1.png')
+    const page = path.join(dir, 'confirmation_1.html')
+    fs.writeFileSync(shot, Buffer.from('\x89PNG-returl'))
+    fs.writeFileSync(page, '<html><body>Community. About our programs.</body></html>', 'utf8')
+    const artifact = await registerConfirmationArtifact(db, {
+      profileId: PROFILE, taskId: 'task-returl', title: 'Community Ministry Grant',
+      screenshotPath: shot, pageHtmlPath: page, pageText: 'Community',
+      reference: null, referenceIsNew: false,
+      receivedAcknowledgement: false, receivedAcknowledgementIsNew: false,
+      declaredReceiptUrlLanding: true,
+      capturedUrl: 'https://portal.example.org/apply/thank-you.html',
+    })
+    expect(artifact.evidence_classification).toBe('confirmation_proof')
+    const row = await db.prepare('SELECT type FROM documents WHERE id = ?').get(artifact.screenshot_document_id)
+    expect(row.type).toBe('hamilton_submission_confirmation')
+    // and the read side agrees, through the SAME helper the predicate delegates to
+    const verdict = await assessStoredConfirmationProof(db, {
+      result: {
+        confirmation_evidence: 'declared_receipt_url',
+        confirmation_document_id: artifact.screenshot_document_id,
+        confirmation_page_document_id: artifact.page_document_id,
+      },
+    })
+    expect(verdict.proof_retrievable).toBe(true)
+    expect(verdict.source).toBe('document')
+  })
+
+  it('a declared-receipt landing with NOTHING retained is attempt evidence only (the URL alone is not durable)', async () => {
+    const db = makeDb()
+    await seedFixture(db)
+    const missing = path.join(makeTmpDir('gf-returl-missing-'), 'gone.png')
+    const artifact = await registerConfirmationArtifact(db, {
+      profileId: PROFILE, taskId: 'task-returl-2', title: 'Community Ministry Grant',
+      screenshotPath: missing, pageHtmlPath: null,
+      reference: null, referenceIsNew: false, declaredReceiptUrlLanding: true,
+      capturedUrl: 'https://portal.example.org/apply/thank-you.html',
+    })
+    expect(artifact.evidence_classification).toBe('attempt_evidence')
+    expect(artifact.screenshot_document_id).toBeNull()
+    expect(artifact.page_document_id).toBeNull()
+    // A declared-receipt run whose only "proof" is a disk path is never retrievable proof.
+    const verdict = await assessStoredConfirmationProof(db, {
+      confirmation_screenshot_path: missing,
+      result: { confirmation_evidence: 'declared_receipt_url', confirmation_screenshot_path: missing },
+    })
+    expect(verdict.proof_retrievable).toBe(false)
+  })
+
+  it('ORCHESTRATOR: a retURL landing with a retained capture marks the task submitted AND verifiably external (hamilton-submit-2)', async () => {
+    const uploads = makeTmpDir('gf-returl-uploads-')
+    process.env.UPLOADS_DIR = uploads
+    const durableDir = resolveConfirmationCaptureDir()
+    const shot = path.join(durableDir, `returl_${Date.now()}.png`)
+    const pageHtml = path.join(durableDir, `returl_${Date.now()}.html`)
+    fs.writeFileSync(shot, Buffer.from('\x89PNG-returl-live'))
+    fs.writeFileSync(pageHtml, '<html><body><h1>Community</h1></body></html>', 'utf8')
+    runAutopilot.mockImplementation(async ({ beforeSubmit }) => {
+      const boundary = await beforeSubmit()
+      expect(boundary.allow).toBe(true)
+      return {
+        status: 'submitted',
+        submission_attempt_started: true,
+        submit_clicked: true,
+        confirmation_evidence: 'declared_receipt_url',
+        confirmation_reference: null,
+        confirmation_reference_is_new: false,
+        confirmation_received_acknowledgement: false,
+        confirmation_received_acknowledgement_is_new: false,
+        confirmation_screenshot_path: shot,
+        confirmation_page_html_path: pageHtml,
+        confirmation_page_text: 'Community',
+        confirmation_url: 'https://hamilton-submit-fixture.invalid/apply/thank-you.html',
+        filled_fields: [{ key: 'first_name', fid: 'f1', value: 'x' }],
+        pages_visited: 2, trace: [{ step: 'declared_receipt_url' }],
+      }
+    })
+    const db = makeDb()
+    const task = await seedAuthorizedTask(db)
+    const result = await automateSingleSource(db, {
+      profileId: PROFILE, userId: 'user-1',
+      source: { opportunity_id: 'opp-1', grant_id: 'g-1' }, options: {},
+    })
+    expect(result.task.status).toBe('submitted')
+    expect(result.autopilot_result.submission_evidence_classification).toBe('confirmation_proof')
+    const doc = await db.prepare('SELECT type FROM documents WHERE id = ?').get(result.task.output_document_id)
+    expect(doc.type).toBe('hamilton_submission_confirmation')
+    const read = await getApplicationTask(db, task.id)
+    expect(read.submission_proof.verified_external).toBe(true)
+    expect(read.submission_proof.source).toBe('run_document')
+  })
+
+  it('ORCHESTRATOR: a retURL landing with NO retained capture PARKS at submission_verification_required — never submitted', async () => {
+    const uploads = makeTmpDir('gf-returl-uploads-none-')
+    process.env.UPLOADS_DIR = uploads
+    const durableDir = resolveConfirmationCaptureDir()
+    const missingShot = path.join(durableDir, 'never_written.png')
+    runAutopilot.mockImplementation(async ({ beforeSubmit }) => {
+      await beforeSubmit()
+      return {
+        status: 'submitted',
+        submission_attempt_started: true,
+        submit_clicked: true,
+        confirmation_evidence: 'declared_receipt_url',
+        confirmation_reference: null,
+        confirmation_screenshot_path: missingShot,
+        confirmation_page_html_path: null,
+        confirmation_url: 'https://hamilton-submit-fixture.invalid/apply/thank-you.html',
+        filled_fields: [{ key: 'first_name', fid: 'f1', value: 'x' }],
+        pages_visited: 2, trace: [],
+      }
+    })
+    const db = makeDb()
+    const task = await seedAuthorizedTask(db)
+    const result = await automateSingleSource(db, {
+      profileId: PROFILE, userId: 'user-1',
+      source: { opportunity_id: 'opp-1', grant_id: 'g-1' }, options: {},
+    })
+    expect(result.task.status).toBe('submission_verification_required')
+    expect(result.task.allow_auto_submit).toBe(false)
+    expect(result.task.next_retry_at).toBeNull()
+    const read = await getApplicationTask(db, task.id)
+    expect(read.submission_proof.verified_external).toBe(false)
+  })
+})
+
+describe('proof documents are per-task and never overwrite each other (hamilton-submit-7)', () => {
+  it('two tasks with the SAME profile + title keep two distinct proof rows with their own bytes', async () => {
+    const db = makeDb()
+    await seedFixture(db)
+    const dir = makeTmpDir('gf-dedupe-')
+    const shotA = path.join(dir, 'a.png')
+    const shotB = path.join(dir, 'b.png')
+    fs.writeFileSync(shotA, Buffer.from('PNG-A-bytes'))
+    fs.writeFileSync(shotB, Buffer.from('PNG-B-different-bytes'))
+    const common = {
+      profileId: PROFILE, grantId: 'g-1', opportunityId: 'opp-1', title: 'Application',
+      reference: null, referenceIsNew: false,
+      receivedAcknowledgement: true, receivedAcknowledgementIsNew: true,
+    }
+    const a = await registerConfirmationArtifact(db, { ...common, taskId: 'task-A', screenshotPath: shotA })
+    const b = await registerConfirmationArtifact(db, { ...common, taskId: 'task-B', screenshotPath: shotB })
+    expect(a.screenshot_document_id).toBeTruthy()
+    expect(b.screenshot_document_id).toBeTruthy()
+    expect(a.screenshot_document_id).not.toBe(b.screenshot_document_id)
+    const rowA = await db.prepare('SELECT file_bytes FROM documents WHERE id = ?').get(a.screenshot_document_id)
+    const rowB = await db.prepare('SELECT file_bytes FROM documents WHERE id = ?').get(b.screenshot_document_id)
+    expect(Buffer.from(rowA.file_bytes).toString()).toBe('PNG-A-bytes')
+    expect(Buffer.from(rowB.file_bytes).toString()).toBe('PNG-B-different-bytes')
+  })
+
+  it('the packet generator still dedupes ORDINARY generated packets (the idempotency rule is untouched)', async () => {
+    const db = makeDb()
+    await seedFixture(db)
+    const { _internal } = await import('../services/hamilton/hamiltonApplicationPacketGenerator.js')
+    const first = await _internal.insertDocumentRecord(db, {
+      profileId: PROFILE, grantId: 'g-1', opportunityId: 'opp-1', name: 'Community Ministry Grant — PDF',
+      type: 'hamilton_generated_application', filePath: '/tmp/a.pdf', mimeType: 'application/pdf',
+      fileSize: 3, notes: 'n', extractedText: null, fileBytes: Buffer.from('one'),
+    })
+    const second = await _internal.insertDocumentRecord(db, {
+      profileId: PROFILE, grantId: 'g-1', opportunityId: 'opp-1', name: 'Community Ministry Grant — PDF',
+      type: 'hamilton_generated_application', filePath: '/tmp/a.pdf', mimeType: 'application/pdf',
+      fileSize: 3, notes: 'n', extractedText: null, fileBytes: Buffer.from('two'),
+    })
+    expect(second).toBe(first)
+  })
+})
+
+describe('read-side slug guard: a DOM slug is never durable proof (prod 2026-08-23/24)', () => {
+  it('assessStoredConfirmationProof refuses "children-notification-children-notification" even with modern flags and a retained document', async () => {
+    const db = makeDb()
+    await seedFixture(db)
+    const dir = makeTmpDir('gf-slug-')
+    const shot = path.join(dir, 'slug.png')
+    fs.writeFileSync(shot, Buffer.from('PNG'))
+    const artifact = await registerConfirmationArtifact(db, {
+      profileId: PROFILE, taskId: 'task-slug', title: 'US Bank Scholarship',
+      screenshotPath: shot, reference: 'children-notification-children-notification', referenceIsNew: true,
+    })
+    // Birth of proof refuses it too: the slug is filed as attempt evidence.
+    expect(artifact.evidence_classification).toBe('attempt_evidence')
+    const verdict = await assessStoredConfirmationProof(db, {
+      confirmation_reference: 'children-notification-children-notification',
+      confirmation_screenshot_path: shot,
+      result: {
+        confirmation_evidence: 'portal_reference',
+        confirmation_reference: 'children-notification-children-notification',
+        confirmation_reference_is_new: true,
+        confirmation_document_id: artifact.screenshot_document_id,
+      },
+    })
+    expect(verdict.proof_retrievable).toBe(false)
   })
 })

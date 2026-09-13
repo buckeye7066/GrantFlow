@@ -298,7 +298,12 @@ describe('runWebDiscoveryLane', () => {
     expect(nextWithDirectives.executed.slice(0, 2)).toEqual(directiveQueries.slice(0, 2))
     expect(nextWithDirectives.executed[5]).toBe(directiveQueries[2])
     expect(nextWithDirectives.executed.some((query) => !firstWithDirectives.executed.includes(query))).toBe(true)
-    expect(nextWithDirectives.res.queries).toEqual(expect.arrayContaining(directiveQueries))
+    // webq-1: `queries` is what EXECUTED; the whole plan (every directive
+    // included) lives in `queries_planned` / `query_ledger.planned`.
+    expect(nextWithDirectives.res.queries).toEqual(nextWithDirectives.executed)
+    expect(nextWithDirectives.res.queries_planned).toEqual(expect.arrayContaining(directiveQueries))
+    expect(nextWithDirectives.res.query_ledger.skipped_budget.length)
+      .toBe(nextWithDirectives.res.queries_planned.length - nextWithDirectives.executed.length)
 
     const unlearned = await run(14, directiveQueries, { ...retryThesis, learned_gaps: null })
     expect(unlearned.executed).toEqual(directiveQueries)

@@ -2,6 +2,7 @@ import crypto from 'node:crypto'
 import express from 'express'
 
 import {
+  isPendingGapStatus,
   readWebParityBenchmark,
   readWebParityGapQueue,
   runWebParityBenchmark,
@@ -35,11 +36,27 @@ function snapshotState() {
   return { ...state }
 }
 
+/**
+ * Benchmark-owned candidates the gates have NOT judged: fresh `candidate`
+ * rows and bounded `not_evaluated:<class>` rows still eligible for re-seeding
+ * (the ONE predicate lives in webParityBenchmark.isPendingGapStatus). A
+ * terminal verdict (adopted / gated_out / dismissed) or an exhausted page is
+ * not pending.
+ */
 function pendingWebParity(queue = []) {
   return (Array.isArray(queue) ? queue : []).filter(
     (entry) => String(entry?.source || '') === 'web_parity_benchmark' &&
-      String(entry?.status || 'candidate') === 'candidate',
+      isPendingGapStatus(entry?.status),
   )
+}
+
+function pendingBreakdown(pending = []) {
+  const breakdown = { candidate: 0, not_evaluated: 0 }
+  for (const entry of pending) {
+    if (String(entry?.status || 'candidate').toLowerCase().startsWith('not_evaluated:')) breakdown.not_evaluated += 1
+    else breakdown.candidate += 1
+  }
+  return breakdown
 }
 
 /**
@@ -140,6 +157,7 @@ router.get('/status', async (req, res) => {
       queue: {
         total: Array.isArray(queue) ? queue.length : 0,
         pending_web_parity: pending.length,
+        pending_breakdown: pendingBreakdown(pending),
         pending_top: pending.slice(0, 50),
       },
     })

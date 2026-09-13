@@ -582,6 +582,13 @@ async function updateGeneratedDocument(db, id, { grantId, filePath, mimeType, fi
 
 async function insertDocumentRecord(db, {
   profileId, grantId, opportunityId, name, type, filePath, mimeType, fileSize, notes, extractedText, fileBytes = null,
+  // `dedupe: false` opts a row OUT of the (profile, type, name, mime) reuse
+  // below. Submission PROOF rows (hamiltonConfirmationArtifacts) must be
+  // append-only and per task: two tasks for the same profile + title used to
+  // collapse into ONE documents row, the later capture overwriting the earlier
+  // task's proof bytes (hamilton-submit-7, 2026-09-12). Packets keep the
+  // default: one doc per source + format regardless of how often Hamilton runs.
+  dedupe = true,
 }) {
   const bytes = Buffer.isBuffer(fileBytes) && fileBytes.length > 0 ? fileBytes : null
 
@@ -593,7 +600,7 @@ async function insertDocumentRecord(db, {
   // instead of inserting a new row. One doc per source+format, regardless of how
   // many times Hamilton runs. Best-effort: any lookup/update failure (legacy
   // schema) falls through to a normal insert.
-  if (profileId && name && type) {
+  if (dedupe !== false && profileId && name && type) {
     try {
       const existing = await db.prepare(
         `SELECT id FROM documents

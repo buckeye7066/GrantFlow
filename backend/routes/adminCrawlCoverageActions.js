@@ -110,7 +110,7 @@ router.post('/run-source', ensureAdmin, standardRateLimiter, async (req, res) =>
     }
 
     const outcome = await withBudget(
-      () => runProfileDiscoveryLive({ db, profileId, onlySourceIds: [resolvedSourceId] }),
+      () => runProfileDiscoveryLive({ db, profileId, onlySourceIds: [resolvedSourceId], trigger: 'admin' }),
       RUN_SOURCE_BUDGET_MS,
     )
 

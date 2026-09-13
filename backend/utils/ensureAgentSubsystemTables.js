@@ -12,7 +12,8 @@
  *
  * Mission goal (#1, #6, #9): GrantFlow must show real data, never a
  * misleading "not installed" empty state when in fact the agents are
- * fully wired. So we apply the agent-subsystem migrations inline at boot,
+ * fully wired — and the new-user funnel (onboarding_sessions) must exist
+ * before the first visitor arrives. So we apply these migrations inline at boot,
  * UNCONDITIONALLY (regardless of `MIGRATE_ON_BOOT` / `SMOKE_MODE`),
  * because:
  *   - every file is pure DDL with IF NOT EXISTS / IF EXISTS guards (safe
@@ -43,6 +44,13 @@ const SQLITE_DIR = path.join(__dirname, '..', 'db', 'migrations')
 // but the rename migration is also written to be a no-op when neither side
 // is present, so order is what migrations would naturally have.
 const POSTGRES_FILES = [
+  // New-user funnel (not an agent table, but the same guarantee applies): the
+  // guest onboarding quiz writes onboarding_sessions on its very first request.
+  // A fresh database that never ran the migration runner — SMOKE_MODE opts out
+  // of MIGRATE_ON_BOOT and the EVA edge runner never executes a manifest
+  // seed_command — otherwise 500s on POST /api/onboarding/start (measured on
+  // the EVA disposable DB 2026-09-12: 217 tables, no onboarding_sessions).
+  '0074_onboarding_sessions.sql',
   '0076_sam_runs.sql',
   '0077_robert_tables.sql',
   '0079_john_tables.sql',
@@ -61,6 +69,7 @@ const POSTGRES_FILES = [
 ]
 
 const SQLITE_FILES = [
+  '078_onboarding_sessions.sql',
   '080_sam_runs.sql',
   '081_robert_tables.sql',
   '083_john_tables.sql',
@@ -86,6 +95,8 @@ const SQLITE_FILES = [
 // stable witness table). Keyed by BOTH the postgres and sqlite filenames so a
 // single lookup works for either dialect.
 const REPRESENTATIVE_TABLES = {
+  '0074_onboarding_sessions.sql': 'onboarding_sessions',
+  '078_onboarding_sessions.sql': 'onboarding_sessions',
   '0076_sam_runs.sql': 'sam_runs',
   '080_sam_runs.sql': 'sam_runs',
   '0077_robert_tables.sql': 'robert_runs',

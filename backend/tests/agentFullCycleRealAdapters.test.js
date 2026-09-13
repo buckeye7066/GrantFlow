@@ -6,7 +6,9 @@ import {
   getCanonicalAdminEmail,
 } from '../services/agentControl/agentControlOrchestrator.js'
 import { getRun, listSteps } from '../services/agentControl/agentControlStore.js'
-import { resetRegistry } from '../services/agentControl/agentAdapters/agentAdapterRegistry.js'
+import { resetRegistry, setAdapter } from '../services/agentControl/agentAdapters/agentAdapterRegistry.js'
+import { SamAgentAdapter } from '../services/agentControl/agentAdapters/samAgentAdapter.js'
+import { runSam } from '../services/sam/samAgent.js'
 
 /**
  * Part 2 mission guard: every agent (Sam, Robert, Yana, John, Hamilton) must
@@ -28,7 +30,9 @@ import { resetRegistry } from '../services/agentControl/agentAdapters/agentAdapt
  * ALL_AGENTS) — her loop is covered by the interview-engine + chat tests.
  */
 
-const TERMINAL = new Set(['completed', 'completed_noop', 'failed', 'cancelled', 'emergency_stopped'])
+// 'blocked' is the terminal status a Sam-preflight refusal lands on (2026-09-12);
+// listing it here means a refusal is DIAGNOSED (below) rather than timing out.
+const TERMINAL = new Set(['completed', 'completed_noop', 'failed', 'blocked', 'cancelled', 'stopped', 'emergency_stopped'])
 const OK_STEP_STATUSES = new Set([
   'completed', 'skipped', 'noop', 'completed_noop', 'completed_no_drafts',
 ])
@@ -86,7 +90,13 @@ describe('Agent Control Center — real adapters complete one full cycle error-f
         // Safe, deterministic, no-network full loop:
         run_sam_preflight: true,
         run_sam_postflight: true,
-        stop_on_critical_sam_finding: false, // let the whole cycle run
+        // The preflight gate stays ON (the production default). This harness
+        // boots with PORT='0' (testServer.js), so Sam's two CRITICAL HTTP
+        // checks have no loopback probe: in NODE_ENV=test that must be
+        // RECORDED on the step as skipped_critical_checks — never a silent
+        // green, and never a block (sam-preflight-4). Disabling the gate here
+        // used to hide exactly that vacuous pass.
+        stop_on_critical_sam_finding: true,
         stop_on_agent_failure: false,
         allow_robert_ingest: false,          // observe mode (no live web)
         allow_hamilton_autopilot: false,     // skip browser automation
@@ -103,9 +113,19 @@ describe('Agent Control Center — real adapters complete one full cycle error-f
     expect(finalRun, 'run should exist').toBeTruthy()
     expect(TERMINAL.has(finalRun.status), `run terminal? got ${finalRun.status}`).toBe(true)
     expect(finalRun.status, `run must not fail: ${finalRun.error_message || ''}`).not.toBe('failed')
+    expect(finalRun.status, `preflight must not block the smoke cycle: ${finalRun.error_message || ''}`).not.toBe('blocked')
 
     const steps = await listSteps(db, run.id)
     expect(steps.length).toBeGreaterThanOrEqual(6) // sam pre, robert, yana, john, hamilton, sam post
+
+    // sam-preflight-4: with no loopback probe (PORT='0') the two CRITICAL HTTP
+    // checks are VISIBLY skipped on the preflight step's durable result.
+    const preflight = steps.find((s) => s.step_name === 'sam_preflight')
+    expect(preflight?.status).toBe('completed')
+    const skipped = Array.isArray(preflight?.result?.skipped_critical_checks) ? preflight.result.skipped_critical_checks : []
+    expect(skipped.map((s) => s.check_id).sort()).toEqual(['agent.hamilton.security', 'http.readyz'])
+    for (const s of skipped) expect(s.reason).toBe('http_probe_unavailable')
+    expect(preflight?.result?.critical_findings).toBe(0)
 
     for (const s of steps) {
       expect(
@@ -117,6 +137,73 @@ describe('Agent Control Center — real adapters complete one full cycle error-f
         `step ${s.agent_name}:${s.step_name} carried an error: ${s.error_message}`,
       ).toBe(true)
     }
+  }, 120_000)
+
+  it("REAL SERVER: a readyz 503 preflight finalises as terminal blocked on the migrated sqlite schema, names the prerequisite, and emits exactly ONE admin notification", async () => {
+    // The unit harness builds agent_control_runs from agentControlStore's own
+    // DDL (no CHECK). The real server bootstraps sqlite from schema.sql, whose
+    // status CHECK is the one a deployment actually hits — if 'blocked' is not
+    // in it, setRunStatus throws and the orchestrator demotes the run to
+    // 'failed' ("Orchestrator crashed: CHECK constraint failed"). This drives
+    // the REAL adapter + REAL runSam (persist:true → sam_runs row → escalation
+    // path) with only the loopback probe injected.
+    const READYZ_MISSION_GATE_BODY = {
+      ok: false,
+      status: 'not_ready',
+      reason: 'mission_gate_failed',
+      release_blockers: ['release_catalog_verified_pct_below_target', 'visible_direct_link_requirement_failed'],
+    }
+    setAdapter('sam', new SamAgentAdapter({
+      runSam: (args) => runSam({ ...args, checkIds: ['http.readyz', 'agent.hamilton.security'], emailReport: false }),
+      httpProbe: async ({ path }) => (path === '/readyz'
+        ? { status: 503, body: READYZ_MISSION_GATE_BODY }
+        : { status: 200, body: { ok: true } }),
+      env: { NODE_ENV: 'production', PORT: '3911', ADMIN_TOKEN: 'test-admin-token' },
+    }))
+
+    // Notifications persist across resetDb (the previous full cycle left its
+    // agent_control_started/completed rows), so count only the rows THIS run
+    // adds.
+    const notificationIdsBefore = new Set(db.prepare('SELECT id FROM notifications').all().map((r) => r.id))
+
+    const { run } = await startRun(db, {
+      runType: 'full_cycle',
+      user: adminUser(),
+      options: {
+        stop_on_critical_sam_finding: true,
+        allow_robert_ingest: false,
+        allow_hamilton_autopilot: false,
+        allow_john_send: false,
+      },
+    })
+    const finalRun = await waitForTerminal(db, run.id, 60_000)
+    expect(finalRun, 'run should exist').toBeTruthy()
+    expect(finalRun.status, `run must be terminal 'blocked', not '${finalRun.status}': ${finalRun.error_message || ''}`).toBe('blocked')
+    for (const needle of ['http.readyz', 'mission_gate_failed', 'release_catalog_verified_pct_below_target', 'visible_direct_link_requirement_failed', 'POST /api/admin/verify-links']) {
+      expect(String(finalRun.error_message), `run.error_message names ${needle}`).toContain(needle)
+    }
+    expect(finalRun.summary?.blocked_by?.blocked_detail?.prerequisites?.map((p) => p.code)).toEqual([
+      'release_catalog_verified_pct_below_target',
+      'visible_direct_link_requirement_failed',
+    ])
+
+    const steps = await listSteps(db, run.id)
+    expect(steps.find((s) => s.step_name === 'sam_preflight')?.status).toBe('blocked')
+    const robert = steps.find((s) => s.step_name === 'robert_main')
+    expect(robert?.status).toBe('skipped')
+    expect(robert?.error_message).toBe('sam_preflight_blocked')
+
+    // The Sam run persisted on the real DB and is linked from the block.
+    const samRunId = finalRun.summary?.blocked_by?.sam_run_id
+    expect(samRunId, 'blocked_by.sam_run_id').toBeTruthy()
+    const samRow = db.prepare('SELECT id, status FROM sam_runs WHERE id = ?').get(samRunId)
+    expect(samRow?.status).toBe('completed')
+
+    // Exactly ONE admin notification for the block (the named one).
+    const rows = db.prepare("SELECT id, type, message FROM notifications WHERE type LIKE 'agent_control_%' ORDER BY created_at").all()
+      .filter((r) => !notificationIdsBefore.has(r.id) && r.type !== 'agent_control_started')
+    expect(rows.map((r) => r.type), rows.map((r) => `${r.type}: ${r.message}`).join(' || ')).toEqual(['agent_control_agent_blocked'])
+    expect(rows[0].message).toContain('http.readyz')
   }, 120_000)
 
   it('status snapshot reports all six status agents (5 canonical + anya)', async () => {

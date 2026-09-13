@@ -525,7 +525,7 @@ export async function overlayLiveAmountKnowledge(db, recommendations, idRemap) {
   return { checked: recs.length, enriched };
 }
 
-export async function runProfileDiscoveryLive({ db = getDb(), profileId, fetcher, floor, dryRun = false, matchProfiles = null, onlySourceIds = null, crawlerType = null, deadlineMs = null, timeBudgetMs = null, extraSeedPages = null, extraQueries = null, signal = null } = {}) {
+export async function runProfileDiscoveryLive({ db = getDb(), profileId, fetcher, floor, dryRun = false, matchProfiles = null, onlySourceIds = null, crawlerType = null, deadlineMs = null, timeBudgetMs = null, extraSeedPages = null, extraQueries = null, signal = null, trigger = null } = {}) {
   if (!profileId) throw new Error('runProfileDiscoveryLive: profileId is required');
   signal?.throwIfAborted();
   const ctx = await loadProfileContext(db, profileId);
@@ -764,6 +764,13 @@ export async function runProfileDiscoveryLive({ db = getDb(), profileId, fetcher
             offeredUrls: seedPages.map((s) => s.url),
             adoptedUrls,
             profileId,
+            // The lane's run totals (fetched / extracted) + its per-seed ledger
+            // when it records one: an unadopted seed is `gated_out` ONLY on a
+            // recorded gate verdict; a run that fetched pages and extracted
+            // nothing (dead LLM route) is `not_evaluated:extraction_failed`,
+            // never a verdict (2026-09-12).
+            laneRun: webTelemetry,
+            seedOutcomes: Array.isArray(web.seed_outcomes) ? web.seed_outcomes : null,
           });
         } catch { /* bookkeeping must never fail a crawl */ }
       }
@@ -856,18 +863,78 @@ export async function runProfileDiscoveryLive({ db = getDb(), profileId, fetcher
   // in-memory while the run objects are alive.
   const opportunities = storage.listCatalog(store);
 
+  // ── THE TELEMETRY CHOKE POINT (REQUIREMENT E, 2026-09-12) ────────────────
+  // Every production caller passes through here with `run.web_lane` (the
+  // lane's query/stage/page ledgers + provider_health) in scope. ONE primary
+  // attribution is computed from that ledger — lane-only first, refined by the
+  // profile's coverage audit inside learnFromCrawlGaps — and the SAME value is
+  // stamped on run.web_lane, the web_lane_health ring, the per-profile
+  // last-run record and the gap-learning record. No per-caller exceptions.
+  // `trigger` names the population that produced this call (auth / fleet /
+  // dispatcher / admin / heal / backfill / anya / script) so the 7-day rate can
+  // be read per population (livegap-4); callers that do not say are
+  // 'unattributed', never silently folded into another bucket.
+  const crawlTrigger = trigger
+    ? String(trigger)
+    : (crawlerType && crawlerType !== 'crawler-os' ? String(crawlerType) : 'unattributed');
+  let primaryAttribution = null;
+  try {
+    const { attributePrimaryGap } = await import('./coverageAudit/liveCrawlGapLearning.js');
+    primaryAttribution = attributePrimaryGap({ ledger: run.web_lane ?? null, audit: null });
+  } catch {
+    /* attribution is observability; never fails the crawl */
+  }
+
+  // ── Global crawler-gap learning ────────────────────────────────────────────
+  // On EVERY live (non-dry-run) discovery call, audit this profile's RESULT
+  // coverage and record any gaps into the shared learning store so Sam
+  // (diagnostics) and Anya (brain) get smarter from REAL crawls — not just Amy's
+  // synthetic cohort or the offline nightly sweep. Synthetic Amy profiles are
+  // skipped (they have their own evaluation loop and get reaped, not remediated).
+  // The lane ledger travels with the call so the recorded gap carries its
+  // primary attribution (a dead LLM is recorded as a dead LLM, not as
+  // `low_results`). Best-effort and fully guarded: learning is observability,
+  // never a blocker.
+  try {
+    if (String(ctx?.profile?.created_by ?? '') !== 'agent:amy') {
+      const { learnFromCrawlGaps } = await import('./coverageAudit/liveCrawlGapLearning.js');
+      const learned = await learnFromCrawlGaps(db, {
+        profileId,
+        thesis,
+        displayName: ctx?.profile?.display_name ?? null,
+        laneLedger: run.web_lane ?? null,
+        trigger: crawlTrigger,
+      });
+      if (learned && Object.prototype.hasOwnProperty.call(learned, 'primary_attribution')) {
+        primaryAttribution = learned.primary_attribution ?? primaryAttribution;
+      }
+      run.gap_learning = learned ?? null;
+    }
+  } catch {
+    /* crawler-gap learning must never fail the crawl */
+  }
+  if (run.web_lane && typeof run.web_lane === 'object') {
+    run.web_lane.primary_attribution = primaryAttribution;
+    run.web_lane.trigger = crawlTrigger;
+  }
+  run.primary_attribution = primaryAttribution;
+  run.trigger = crawlTrigger;
+
   // ── Web-lane health telemetry ──────────────────────────────────────────────
-  // Record the lane's per-run telemetry (pages found, extracted, stored, errors)
-  // into the rolling system_kv store Sam's crawler.webLaneHealth check reads. A
-  // dead search backend / exhausted LLM key degrades the lane to a silent no-op
-  // by design (it must never fail a crawl) — this is the observability that
-  // makes that death visible as ITSELF, not as a flood of hyperlocal gaps.
-  // Recorded for ALL live runs (including Amy's synthetic cohort): the lane's
-  // infrastructure health is profile-independent.
+  // Record the lane's per-run telemetry (executed vs planned queries, provider
+  // verdicts, stage counters, extraction failure classes, primary attribution)
+  // into the rolling system_kv ring Sam's crawler.webLaneHealth check reads,
+  // AND the profile's full bounded last-run record (in the LRU-capped
+  // web_lane_last_runs store) the web-parity benchmark reads. A dead search
+  // backend / exhausted LLM key
+  // degrades the lane to a silent no-op by design (it must never fail a crawl)
+  // — this is the observability that makes that death visible as ITSELF, not
+  // as a flood of hyperlocal gaps. Recorded for ALL live runs (including Amy's
+  // synthetic cohort): the lane's infrastructure health is profile-independent.
   try {
     if (run.web_lane) {
       const { recordWebLaneRun } = await import('./coverageAudit/webLaneHealth.js');
-      await recordWebLaneRun(db, { profileId, telemetry: run.web_lane });
+      await recordWebLaneRun(db, { profileId, telemetry: run.web_lane, trigger: crawlTrigger });
     }
   } catch {
     /* web-lane health telemetry must never fail the crawl */
@@ -879,40 +946,27 @@ export async function runProfileDiscoveryLive({ db = getDb(), profileId, fetcher
   // GET /api/admin/crawl-coverage stays live for the Crawler OS. This table's
   // only writer used to be realCrawlers.js's legacy pipeline, removed wholesale
   // by the 2026-06-22 OS cutover without a replacement — leaving the dashboard
-  // frozen on the retired engine's last runs. Best-effort, non-blocking, and
-  // skipped on dry runs (nothing was actually queried against the live DB).
-  if (!dryRun && Array.isArray(run.sources) && run.sources.length > 0) {
+  // frozen on the retired engine's last runs. The open-web lane is appended as
+  // a synthetic `web_search` source row (discovery-attrib-6) so the dashboard
+  // carries the lane that finds county/foundation funding. Best-effort,
+  // non-blocking, and skipped on dry runs (nothing was actually queried
+  // against the live DB).
+  if (!dryRun && ((Array.isArray(run.sources) && run.sources.length > 0) || run.web_lane)) {
     try {
-      const { persistSourceCoverage } = await import('./crawlerOsCoveragePersistence.js');
-      await persistSourceCoverage(db, {
-        crawlerRunId: run.run_id,
-        profileId,
-        crawlerType: crawlerType ?? 'crawler-os',
-        sources: run.sources,
-      });
+      const { persistSourceCoverage, webLaneSourceSummary } = await import('./crawlerOsCoveragePersistence.js');
+      const webSource = webLaneSourceSummary(run.web_lane);
+      const sources = [...(Array.isArray(run.sources) ? run.sources : []), ...(webSource ? [webSource] : [])];
+      if (sources.length > 0) {
+        await persistSourceCoverage(db, {
+          crawlerRunId: run.run_id,
+          profileId,
+          crawlerType: crawlerType ?? 'crawler-os',
+          sources,
+        });
+      }
     } catch {
       /* coverage telemetry must never fail the crawl */
     }
-  }
-
-  // ── Global crawler-gap learning ────────────────────────────────────────────
-  // On EVERY live (non-dry-run) discovery call, audit this profile's RESULT
-  // coverage and record any gaps into the shared learning store so Sam
-  // (diagnostics) and Anya (brain) get smarter from REAL crawls — not just Amy's
-  // synthetic cohort or the offline nightly sweep. Synthetic Amy profiles are
-  // skipped (they have their own evaluation loop and get reaped, not remediated).
-  // Best-effort and fully guarded: learning is observability, never a blocker.
-  try {
-    if (String(ctx?.profile?.created_by ?? '') !== 'agent:amy') {
-      const { learnFromCrawlGaps } = await import('./coverageAudit/liveCrawlGapLearning.js');
-      await learnFromCrawlGaps(db, {
-        profileId,
-        thesis,
-        displayName: ctx?.profile?.display_name ?? null,
-      });
-    }
-  } catch {
-    /* crawler-gap learning must never fail the crawl */
   }
 
   // ── Self-correct this crawl's OWN ineligible output ─────────────────────────

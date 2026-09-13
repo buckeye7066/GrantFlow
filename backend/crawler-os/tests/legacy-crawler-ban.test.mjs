@@ -170,6 +170,15 @@ const ALLOWED_SHARED_IMPORTS = new Set([
   // types with, or the proof and the gate disagree about who may apply. Pure
   // data; its only import is the already-approved farmIdentity vocabulary.
   'backend/config/applicantBucketTokens.js',
+  // The ONE canonical need vocabulary (CANONICAL_NEED_CATEGORIES +
+  // NEED_CATEGORY_GROUPS). The OS thesis builder (profileIntelligence.deriveNeeds)
+  // must keep a DECLARED canonical need id verbatim instead of re-deriving it
+  // through NEED_KEYWORDS — community_development / environment / utilities were
+  // being dropped between need_categories and thesis.needs, so a declared need
+  // never produced a query (prodready 2026-09-12, hyperlocal-3). A private copy
+  // of the id list inside the OS would drift from the registry every consumer
+  // scores against. Pure constants; zero imports, zero I/O — verified 2026-09-12.
+  'backend/constants/needCategories.js',
 ]);
 
 function listFiles(dir) {

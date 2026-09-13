@@ -36,11 +36,15 @@ import {
   identityParts,
   localityFor,
   cellKey,
+  parseCellKey,
 } from './probeSpace.js'
 
 /** Category id used for an adversarial probe, so it never collides with a
- *  catalog category in `by_category` histograms or the coverage weighting. */
-export const ADVERSARIAL_CATEGORY_PREFIX = 'probe'
+ *  catalog category in `by_category` histograms or the coverage weighting.
+ *  Defined in amyConstants.js (a leaf module) and re-exported here so the
+ *  approval ledger can read it without importing probeSpace. */
+import { ADVERSARIAL_CATEGORY_PREFIX } from './amyConstants.js'
+export { ADVERSARIAL_CATEGORY_PREFIX }
 
 const FUNDING_BANDS_INDIVIDUAL = ['$1,500', '$3,000', '$5,000', '$9,000', '$15,000']
 const FUNDING_BANDS_ORG = ['$15,000', '$25,000', '$50,000', '$100,000', '$250,000']
@@ -265,6 +269,28 @@ export function buildIntersectionScenario(cell, { runId = 'amy', index = 0 } = {
   }
 }
 
+/**
+ * amy-cohort-9: recover a probe's cell from the amy_metadata block persisted at
+ * creation (`probe_cell` / `probe_cell_key`). A probe's identity used to travel
+ * only in the in-memory scenario and the report's gap_probes.cells, so an
+ * orphaned probe adopted by a later run was evaluated under a synthesized
+ * scenario with no cell and could not fold into amy_probe_coverage or be
+ * reproduced. Returns null when the metadata carries no resolvable cell —
+ * never invents one.
+ *
+ * @returns {{ cell:object, cell_key:string }|null}
+ */
+export function probeCellFromMetadata(meta) {
+  const raw = meta?.probe_cell && typeof meta.probe_cell === 'object'
+    ? meta.probe_cell
+    : (meta?.probe_cell_key ? parseCellKey(String(meta.probe_cell_key)) : null)
+  if (!raw) return null
+  const cell = { entity: raw.entity, identity: raw.identity, need: raw.need, state: raw.state }
+  if (!cell.entity || !cell.identity || !cell.need || !cell.state) return null
+  if (!PROFILE_TYPES[String(cell.entity)] || !NEED_BY_ID[String(cell.need)] || !localityFor(cell.state)) return null
+  return { cell, cell_key: cellKey(cell) }
+}
+
 /** Build the whole adversarial batch, skipping any cell that cannot build. */
 export function buildIntersectionScenarios(cells = [], { runId = 'amy', startIndex = 0 } = {}) {
   const out = []
@@ -278,4 +304,4 @@ export function buildIntersectionScenarios(cells = [], { runId = 'amy', startInd
   return out
 }
 
-export default { buildIntersectionScenario, buildIntersectionScenarios, ADVERSARIAL_CATEGORY_PREFIX }
+export default { buildIntersectionScenario, buildIntersectionScenarios, probeCellFromMetadata, ADVERSARIAL_CATEGORY_PREFIX }

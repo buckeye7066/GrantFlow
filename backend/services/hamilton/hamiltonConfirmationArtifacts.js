@@ -104,6 +104,43 @@ function readFileBytesSafe(filePath) {
   }
 }
 
+// The engine's confirmation-reference shape rule, loaded lazily: the engine
+// imports this module (resolveConfirmationCaptureDir), so a static import here
+// would be a cycle. Cached after the first load.
+let plausibleReferenceFn = null
+async function loadPlausibleReferenceGuard() {
+  if (plausibleReferenceFn) return plausibleReferenceFn
+  try {
+    const mod = await import('./hamiltonAutopilotEngine.js')
+    const fn = mod?._internal?.isPlausibleConfirmationReference
+    plausibleReferenceFn = typeof fn === 'function' ? fn : null
+  } catch {
+    plausibleReferenceFn = null
+  }
+  return plausibleReferenceFn
+}
+
+/**
+ * Read-side twin of the engine's `isPlausibleConfirmationReference` (2026-09-12).
+ *
+ * Prod 2026-08-24: the ONLY confirmation_reference values in the database were
+ * three copies of the scraped DOM id "children-notification-children-notification",
+ * one of them on a run marked 'submitted'. The extractor now refuses that shape
+ * at capture time; this guard applies the SAME rule when a stored reference is
+ * read back as proof, so a poisoned legacy row — or any writer that bypasses
+ * the extractor — can never count as a durable confirmation. `explicit: true`
+ * mirrors the labelled/URL-keyed capture paths (a digitless ALL-CAPS id is
+ * real), so this is never STRICTER than the bar that admitted the value.
+ * Fails CLOSED when the guard cannot be loaded: a false proof is worse than none.
+ */
+export async function isDurableConfirmationReference(reference) {
+  const value = String(reference || '').trim()
+  if (!value) return false
+  const guard = await loadPlausibleReferenceGuard()
+  if (!guard) return false
+  try { return guard(value, { explicit: true }) === true } catch { return false }
+}
+
 /**
  * Register the captured portal outcome as owner-retrievable `documents` rows.
  * Reuses the packet generator's `insertDocumentRecord` (bytes → BYTEA), so the
@@ -111,7 +148,22 @@ function readFileBytesSafe(filePath) {
  * `/api/documents/<id>/download`. Best-effort: a registration failure NEVER
  * fails the run — the caller keeps the filesystem-path fields regardless.
  *
- * @returns {Promise<{screenshot_document_id: string|null, page_document_id: string|null, evidence_classification: 'confirmation_proof'|'attempt_evidence'}>}
+ * THREE evidence kinds qualify as confirmation proof, and this function is the
+ * single write-side authority on which (the read side, assessStoredConfirmationProof,
+ * mirrors it exactly):
+ *   - a genuinely NEW portal reference that passes the reference shape guard;
+ *   - a genuinely NEW explicit receipt acknowledgement;
+ *   - the portal navigating to the form's OWN declared receipt page
+ *     (`declaredReceiptUrlLanding`, the Salesforce web-to-lead retURL class,
+ *     2026-08-23 U.S. Bank) — durable ONLY when the landing itself was
+ *     retained as owner-retrievable bytes (a URL alone is not evidence).
+ *
+ * Proof rows are PER TASK and append-only (hamilton-submit-7, 2026-09-12):
+ * insertDocumentRecord's packet-idempotency dedupe (profile, type, name, mime)
+ * is bypassed here, so a later capture for another task with the same title
+ * can never overwrite an earlier task's proof bytes.
+ *
+ * @returns {Promise<{screenshot_document_id: string|null, page_document_id: string|null, evidence_classification: 'confirmation_proof'|'attempt_evidence', confirmed_by: 'portal_reference'|'portal_acknowledgement'|'declared_receipt_url'|null}>}
  */
 export async function registerConfirmationArtifact(db, {
   profileId,
@@ -126,12 +178,24 @@ export async function registerConfirmationArtifact(db, {
   referenceIsNew = null,
   receivedAcknowledgement = false,
   receivedAcknowledgementIsNew = false,
+  declaredReceiptUrlLanding = false,
   capturedUrl = null,
 } = {}) {
-  const confirmedReference = Boolean(reference) && referenceIsNew === true
+  const shotBytes = readFileBytesSafe(screenshotPath)
+  const htmlBytes = readFileBytesSafe(pageHtmlPath)
+  const referenceDurable = Boolean(reference) && await isDurableConfirmationReference(reference)
+  const confirmedReference = referenceDurable && referenceIsNew === true
   const confirmedAcknowledgement = receivedAcknowledgement === true
     && receivedAcknowledgementIsNew === true
-  const confirmedReceipt = confirmedReference || confirmedAcknowledgement
+  const confirmedDeclaredReceipt = declaredReceiptUrlLanding === true && Boolean(shotBytes || htmlBytes)
+  const confirmedReceipt = confirmedReference || confirmedAcknowledgement || confirmedDeclaredReceipt
+  const confirmedBy = confirmedReference
+    ? 'portal_reference'
+    : confirmedAcknowledgement
+      ? 'portal_acknowledgement'
+      : confirmedDeclaredReceipt
+        ? 'declared_receipt_url'
+        : null
   const evidenceClassification = confirmedReceipt ? 'confirmation_proof' : 'attempt_evidence'
   const documentType = confirmedReceipt
     ? CONFIRMATION_DOCUMENT_TYPE
@@ -140,6 +204,7 @@ export async function registerConfirmationArtifact(db, {
     screenshot_document_id: null,
     page_document_id: null,
     evidence_classification: evidenceClassification,
+    confirmed_by: confirmedBy,
   }
   if (!db || !profileId) return out
 
@@ -157,14 +222,15 @@ export async function registerConfirmationArtifact(db, {
     confirmedReceipt
       ? confirmedReference
         ? 'External portal submission confirmation with a new portal reference.'
-        : 'External portal submission confirmation with a newly appearing receipt acknowledgement.'
+        : confirmedAcknowledgement
+          ? 'External portal submission confirmation with a newly appearing receipt acknowledgement.'
+          : 'External portal submission confirmation: the portal navigated to the form\'s own declared receipt page and the landing was retained.'
       : 'External portal submit-attempt evidence; receipt is not confirmed.',
     taskId ? `task_id=${taskId}.` : '',
     reference ? `reference=${reference}.` : '',
     capturedUrl ? `url=${capturedUrl}` : '',
   ].filter(Boolean).join(' ')
 
-  const shotBytes = readFileBytesSafe(screenshotPath)
   if (shotBytes) {
     try {
       out.screenshot_document_id = await insertDocumentRecord(db, {
@@ -181,11 +247,12 @@ export async function registerConfirmationArtifact(db, {
         notes,
         extractedText: extracted,
         fileBytes: shotBytes,
+        // Evidence is append-only and per task — never reuse another task's row.
+        dedupe: false,
       })
     } catch { /* best-effort; the run is still recorded honestly */ }
   }
 
-  const htmlBytes = readFileBytesSafe(pageHtmlPath)
   if (htmlBytes) {
     try {
       out.page_document_id = await insertDocumentRecord(db, {
@@ -202,6 +269,7 @@ export async function registerConfirmationArtifact(db, {
         notes,
         extractedText: extracted,
         fileBytes: htmlBytes,
+        dedupe: false,
       })
     } catch { /* best-effort */ }
   }
@@ -225,7 +293,8 @@ export async function registerConfirmationArtifact(db, {
         opportunityId,
         taskId,
         submittedAt: new Date().toISOString(),
-        confirmationReference: reference || null,
+        // Only a reference that itself passed the shape guard is a confirmation.
+        confirmationReference: confirmedReference ? reference : null,
       })
     } catch {
       // Ledger is a safety net, never an authority over the submission path.
@@ -253,12 +322,21 @@ export async function assessStoredConfirmationProof(db, run) {
   const reference = String(
     result.confirmation_reference || run?.confirmation_reference || '',
   ).trim()
-  const referenceIsNew = result.confirmation_reference_is_new === true
+  // The stored reference must still pass the engine's shape guard: a DOM slug
+  // or prose word on a legacy row is never promoted by its flags alone.
+  const referenceDurable = Boolean(reference) && await isDurableConfirmationReference(reference)
+  const referenceIsNew = referenceDurable
+    && result.confirmation_reference_is_new === true
     && result.confirmation_evidence === 'portal_reference'
   const acknowledgementIsNew = result.confirmation_received_acknowledgement_is_new === true
     && result.confirmation_received_acknowledgement === true
     && result.confirmation_evidence === 'portal_acknowledgement'
-  const classifiedAsProof = Boolean((reference && referenceIsNew) || acknowledgementIsNew)
+  // The form's own declared receipt page (retURL) is proof ONLY through a
+  // retained owner document — never a disk path, never the URL alone. The
+  // registrar files that document as CONFIRMATION type only when bytes were
+  // retained, so the type check below is what carries the bar.
+  const declaredReceiptLanding = result.confirmation_evidence === 'declared_receipt_url'
+  const classifiedAsProof = Boolean(referenceIsNew || acknowledgementIsNew || declaredReceiptLanding)
   let attemptDocumentId = null
 
   if (db && docIds.length > 0) {
@@ -283,7 +361,7 @@ export async function assessStoredConfirmationProof(db, run) {
   const pageHtmlPath = result.confirmation_page_html_path || null
   const screenshotExists = Boolean(screenshotPath && fs.existsSync(screenshotPath))
   const pageExists = Boolean(pageHtmlPath && fs.existsSync(pageHtmlPath))
-  if (classifiedAsProof && screenshotExists) {
+  if (classifiedAsProof && !declaredReceiptLanding && screenshotExists) {
     return { proof_retrievable: true, source: 'disk', screenshot_path: screenshotPath }
   }
 

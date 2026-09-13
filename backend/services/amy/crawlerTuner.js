@@ -17,7 +17,7 @@
 
 import { DISCOVERY_MIN_SCORE_FLOOR } from '../../config/matchThresholds.js'
 import { FINDING_TYPES, CODE_TARGETS, SEVERITY } from './amyConstants.js'
-import { itemActionability, normalizeApprovalItem, leverActionability, ACTIONABILITY } from './approvalLedger.js'
+import { itemActionability, normalizeApprovalItem, leverActionability, ACTIONABILITY, PROBE_ITEM_CATEGORY, isProbeCategory } from './approvalLedger.js'
 import { recallAttribution } from './searchAttribution.js'
 import { FINDING_ACTORS, actorFor } from './findingActorRegistry.js'
 
@@ -579,15 +579,26 @@ export function buildApprovalQueue(evaluations = [], { robertGapNotes = [] } = {
   // county), so the item names work that can actually be done rather than a
   // count. Grouped by (finding type, category) so the ledger can age ONE entry
   // per class instead of one per night.
+  //
+  // amy-cohort-3 (prod 2026-09-12): ADVERSARIAL PROBES share ONE class item per
+  // finding type, keyed `${type}:${PROBE_ITEM_CATEGORY}`. A probe's category is
+  // its intersection cell and the planner never re-runs a cell on purpose, so
+  // per-cell keys could never close in the ledger — 90 of prod's 101 open
+  // query_breadth items were single-night probe cells. The class item carries
+  // the cells it was measured on (`evidence.cells`) and the subjects seen THIS
+  // run; the catalog categories keep their per-category key.
   const RECALL_FINDING_TYPES = [FINDING_TYPES.INSTITUTION_RECALL_MISS, FINDING_TYPES.HYPERLOCAL_RECALL_MISS]
   for (const type of RECALL_FINDING_TYPES) {
     const byCat = {}
     for (const e of evals) {
       const hits = (Array.isArray(e.findings) ? e.findings : []).filter((f) => f?.type === type)
       if (hits.length === 0) continue
-      const cat = e.category ?? 'unknown'
-      const bucket = (byCat[cat] ||= { profiles: 0, subjects: new Set() })
+      const rawCategory = e.category ?? 'unknown'
+      const probe = isProbeCategory(rawCategory)
+      const cat = probe ? PROBE_ITEM_CATEGORY : rawCategory
+      const bucket = (byCat[cat] ||= { profiles: 0, subjects: new Set(), cells: new Set() })
       bucket.profiles += 1
+      if (probe) bucket.cells.add(String(rawCategory))
       for (const h of hits) {
         for (const s of h?.evidence?.schools ?? []) bucket.subjects.add(String(s))
         const county = h?.evidence?.county
@@ -597,20 +608,30 @@ export function buildApprovalQueue(evaluations = [], { robertGapNotes = [] } = {
     for (const [category, bucket] of Object.entries(byCat)) {
       const target = CODE_TARGETS[type]
       const subjects = [...bucket.subjects].slice(0, 200)
+      const probeClass = category === PROBE_ITEM_CATEGORY
+      const cells = [...bucket.cells]
       items.push({
         id: `${type}:${category}`,
         lever: 'query_breadth',
         target_file: target.file,
         category,
         severity: target.severity,
-        rationale: `${bucket.profiles} "${category}" profile(s) declared something the results never referenced (${type}). ${target.hint}${subjects.length ? ` Missed subject(s): ${subjects.join(', ')}.` : ''}`,
+        rationale: probeClass
+          ? `${bucket.profiles} adversarial probe profile(s) across ${cells.length} intersection cell(s) declared something the results never referenced (${type}). ${target.hint}${subjects.length ? ` Missed subject(s): ${subjects.join(', ')}.` : ''}`
+          : `${bucket.profiles} "${category}" profile(s) declared something the results never referenced (${type}). ${target.hint}${subjects.length ? ` Missed subject(s): ${subjects.join(', ')}.` : ''}`,
         // `subjects` is the CANONICAL evidence key: `buildCodeBrief` reads
         // `evidence.subjects`, and the registry-driven totality pass below
         // emits the same key. This branch wrote `missed_subjects`, which
         // NOTHING read — so once these classes became CODE_CHANGE the owner
         // would have received a brief with an empty subject list: "some student
         // profiles missed something", with no school ever named.
-        evidence: { profiles: bucket.profiles, finding_type: type, subjects, ...(bucket.subjects.size > 200 ? { subject_history_incomplete: true } : {}) },
+        evidence: {
+          profiles: bucket.profiles,
+          finding_type: type,
+          subjects,
+          ...(probeClass ? { cells: cells.slice(0, 50), cells_total: cells.length } : {}),
+          ...(bucket.subjects.size > 200 ? { subject_history_incomplete: true } : {}),
+        },
         requires_approval: true,
       })
     }
@@ -740,11 +761,15 @@ export function buildApprovalQueue(evaluations = [], { robertGapNotes = [] } = {
   // as "Needs your approval" is the fake ask that made this queue unreadable —
   // six lines in the owner's morning email, none of them clickable, none of
   // them ever actioned in production.
+  // A probe CLASS item (amy-cohort-3) covers every per-cell probe category.
+  const itemCoversEvaluation = (item, e) => (item.category === PROBE_ITEM_CATEGORY ? isProbeCategory(e.category) : e.category === item.category)
   for (const item of items) {
     if (item.lever === 'query_breadth') {
-      item.attribution = recallAttribution(evals.filter(e => e.category === item.category
+      item.attribution = recallAttribution(evals.filter(e => itemCoversEvaluation(item, e)
         && (e.findings || []).some(f => f.type === itemFindingType(item))))
-      item.rationale = `${item.evidence?.profiles || 0} "${item.category}" profile(s) had a measured recall gap (${item.id}). ${item.attribution.reason} Missing subject(s): ${(item.evidence?.subjects || []).join(', ')}.`
+      item.rationale = item.category === PROBE_ITEM_CATEGORY
+        ? `${item.evidence?.profiles || 0} adversarial probe profile(s) across ${item.evidence?.cells_total ?? (item.evidence?.cells || []).length} cell(s) had a measured recall gap (${item.id}). ${item.attribution.reason} Missing subject(s): ${(item.evidence?.subjects || []).join(', ')}.`
+        : `${item.evidence?.profiles || 0} "${item.category}" profile(s) had a measured recall gap (${item.id}). ${item.attribution.reason} Missing subject(s): ${(item.evidence?.subjects || []).join(', ')}.`
       Object.assign(item, normalizeApprovalItem(item))
     }
     const meta = itemActionability(item)

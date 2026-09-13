@@ -437,7 +437,10 @@ export function summarizeAmyFlywheel(amy, { now = new Date() } = {}) {
       .slice(0, 4)
       .map(([k, v]) => `${k} ×${v}`)
       .join(', ')
-    couldNot.push(`Open gap classes the loop has not closed yet: ${types || 'n/a'} — resolve using the evidence and attribution above.`)
+    // digest-1: THREE unrelated "gap class" taxonomies used to share one phrase.
+    // This one is the Amy SYNTHETIC-COHORT finding types, judged on the latest
+    // ET day only — not the planner scoreboard, not the 7-day live-crawl rate.
+    couldNot.push(`Open synthetic-cohort finding types (Amy cohort taxonomy, latest ET day only — ${Number(day.evaluated) || 0} evaluated of ${Number(day.target) || 0} target): ${types || 'n/a'} — resolve using the evidence and attribution above.`)
   }
   // The honest "this cannot finish itself" list, named rather than counted.
   for (const u of (Array.isArray(conv?.unclosable_by_any_lever) ? conv.unclosable_by_any_lever : []).slice(0, 3)) {
@@ -511,8 +514,17 @@ export function summarizeCoverageGaps(gaps) {
   const searchEvidence = gaps.conditionSearch || null
 
   const boardGaps = Array.isArray(board?.gaps) ? board.gaps : []
+  // digest-1: name the TAXONOMY (source-plan / planner classes), the
+  // POPULATION (N scanned of the newest active non-Amy profiles, K skipped)
+  // and the WINDOW (point-in-time). This number is not the 7-day live-crawl
+  // result-coverage rate Sam's crawler.gapLearning reports, and a
+  // point-in-time zero here can never close that window.
+  const skippedCount = Number.isFinite(Number(board?.profiles_skipped)) && board?.profiles_skipped !== null && board?.profiles_skipped !== undefined
+    ? Number(board.profiles_skipped)
+    : null
+  const skippedNote = skippedCount === null ? ', skipped count not recorded' : `, ${skippedCount} skipped`
   const headline = board
-    ? `${boardGaps.length} coverage gap class(es) across ${Number(board.profiles_scanned) || 0} scanned profile(s) (scoreboard ${board.generated_at || 'undated'}).`
+    ? `Source-plan gap classes (planner taxonomy, point-in-time): ${boardGaps.length} coverage gap class(es) across ${Number(board.profiles_scanned) || 0} scanned profile(s)${skippedNote} (scoreboard ${board.generated_at || 'undated'}). This is not the 7-day live-crawl result-coverage rate (Sam crawler.gapLearning) and cannot close it.`
     : 'No fleet gap scoreboard recorded yet — showing overnight agent activity only.'
 
   const topGaps = boardGaps.slice(0, 5).map((g) => `${g.count} profile(s): ${g.statement}`)

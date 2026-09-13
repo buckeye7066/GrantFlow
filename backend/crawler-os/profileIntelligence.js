@@ -23,6 +23,15 @@ import { DEFAULT_MIN_SCORE } from '../services/matchEngine.js';
 // USDA lanes and then hard-dropped by the gate on the way back — static
 // tripwire in backend/tests/farmIdentity.test.js.
 import { FARM_OCCUPATION_FLAG_KEYS, isAgricultureNaics } from '../services/eligibility/farmIdentity.js';
+// The product's DECLARED-need vocabulary (need_categories). A declared canonical
+// id must survive to thesis.needs verbatim: buildWebQueries reads only
+// thesis.needs, and ids with no NEED_KEYWORDS row (community_development,
+// environment, utilities) were silently dropped between need_categories and the
+// thesis, so the declared need never produced a single query (hyperlocal-3,
+// measured on the faithful Amy intersection path 2026-09-12).
+import { CANONICAL_NEED_CATEGORIES } from '../constants/needCategories.js';
+
+const CANONICAL_NEED_IDS = new Set(CANONICAL_NEED_CATEGORIES.map((n) => n.id));
 
 const APPLICANT_TYPE_SYNONYMS = {
   individual: ['individual', 'person', 'resident'],
@@ -54,7 +63,10 @@ const APPLICANT_TYPE_SYNONYMS = {
 };
 
 const NEED_KEYWORDS = {
-  housing: ['housing', 'rent', 'mortgage', 'homeless', 'shelter', 'utilities'],
+  // 'utilities' is NOT a housing keyword: it is its own canonical need (and the
+  // `energy` lane's keyword). Listing it here minted a phantom housing CORE
+  // query for every profile that declared utilities (hyperlocal-3).
+  housing: ['housing', 'rent', 'mortgage', 'homeless', 'shelter'],
   food: ['food assistance', 'food support', 'groceries', 'nutrition', 'meals', 'snap', 'pantry'],
   childcare: ['childcare', 'child care', 'daycare', 'day care', 'early childhood', 'after school care', 'dependent care'],
   transportation: ['transportation', 'transit', 'bus pass', 'bus passes', 'gas card', 'gas cards', 'rideshare', 'vehicle repair', 'medical transportation'],
@@ -530,6 +542,15 @@ const PRIMARY_TYPE_TO_APPLICANT = Object.freeze({
   graduate_student: ['student', 'individual'],
   // Schools / education institutions
   school: ['school'],
+  // Higher-education INSTITUTIONS (the applicant is the college, not a
+  // student at it). They share the school bucket; buildThesis raises
+  // is_higher_ed from the declared type so the query builder can emit the
+  // higher-ed institutional family on identity (hyperlocal-7).
+  university: ['school'],
+  college: ['school'],
+  community_college: ['school'],
+  technical_college: ['school'],
+  higher_education_institution: ['school'],
   school_district: ['school', 'government'],
   public_school: ['school', 'government'],
   special_education_program: ['school'],
@@ -1114,7 +1135,9 @@ function addNeedPhrase(found, phrase) {
   const text = lc(phrase).trim();
   if (!text) return;
   const token = key(text);
-  if (NEED_KEYWORDS[token] || NEED_IMPLICATIONS[token]) found.add(token);
+  // A canonical declared need is added FIRST so declaration order decides which
+  // needs win the CORE need slots downstream (buildWebQueries needs.slice(0, 2)).
+  if (NEED_KEYWORDS[token] || NEED_IMPLICATIONS[token] || CANONICAL_NEED_IDS.has(token)) found.add(token);
   // Whole-word matching only: plain includes() let fragments claim needs —
   // "parental support" derived a housing need because 'rent' ⊂ "parental",
   // the same substring-explosion class as the 13-bucket applicant-type case.
@@ -1157,13 +1180,51 @@ function applyNeedImplications(found) {
   }
 }
 
+/**
+ * A canonical need id that is IDENTICAL to what the profile's own bare
+ * structural TYPE (`primary_type` / `type` / `profile_type`) canonicalizes to
+ * is not a genuine declaration by itself — it is
+ * `pipelinePrecision.typeDerivedNeeds()`'s org-identity inference (minted for
+ * Gate 1.9's pipeline-admission need, "an org's need IS its own type")
+ * bleeding through `crawlerOsPersistenceCore`'s bridge into `need_categories`
+ * even when the profile has said LITERALLY NOTHING ELSE. Measured 2026-09-12:
+ * a blank `primary_type:'nonprofit'` profile with empty sections carries
+ * `need_categories:['nonprofit_ministry']` from that bridge alone, and once a
+ * canonical id no longer needs a NEED_KEYWORDS row to survive (the hyperlocal-3
+ * fix above), that lone artifact value defeated `needs_defaulted` for a
+ * profile that declared nothing.
+ *
+ * Excluded ONLY when the route's own type fallback exists
+ * (`profile_route.default_needs.length > 0` — nothing else this bare a value
+ * could be); a route with no known type default has nothing else to blame it
+ * on, so the value is trusted as the applicant's real declaration (this is
+ * exactly the fixture `declaredNeedSurvival.test.mjs` exercises with an empty
+ * `default_needs`). A need the profile ALSO states independently — in prose,
+ * in another declared field, or as a value NEED_KEYWORDS itself recognizes —
+ * still reaches `found` through the ordinary explicit/blob scan below; this
+ * only withholds a SOLITARY type-echo's power to disprove "nothing declared".
+ */
+function isTypeOnlyNeedArtifact(profile, token) {
+  const defaultNeeds = profile?.profile_route?.default_needs;
+  if (!Array.isArray(defaultNeeds) || defaultNeeds.length === 0) return false;
+  // The bridge (crawlerOsPersistenceCore.profileContextToThesisInput) carries
+  // the canonical ids the profile's BARE TYPE fields echo as
+  // profile_route.type_echo_needs; the OS never imports the service-side
+  // alias map (legacy-crawler-ban boundary). No list => nothing to exclude.
+  const echo = profile?.profile_route?.type_echo_needs;
+  return Array.isArray(echo) && echo.map(key).includes(token);
+}
+
 function deriveNeeds(profile, blob) {
   const explicit = declaredNeedValues(profile)
     .map(lc)
     .filter(Boolean)
     // Bookkeeping tags mark HOW a profile is managed, not WHAT it needs —
     // 'designated'/'synthetic'/'individual' must never seed a need scan.
-    .filter((e) => !RESERVED_PROFILE_TAGS.has(e) && !RESERVED_PROFILE_TAGS.has(key(e)));
+    .filter((e) => !RESERVED_PROFILE_TAGS.has(e) && !RESERVED_PROFILE_TAGS.has(key(e)))
+    // See isTypeOnlyNeedArtifact — a value indistinguishable from the
+    // profile's own bare type must not, alone, prove a declaration.
+    .filter((e) => !isTypeOnlyNeedArtifact(profile, key(e)));
   const found = new Set();
   for (const e of explicit) addNeedPhrase(found, e);
   // WHOLE-WORD blob scan. Substring includes() was the phantom-need driver:
@@ -1315,6 +1376,14 @@ export function buildThesis(profile = {}) {
   const research_topic = is_research_org
     ? ((declaredTypeText.match(RE_RESEARCH_TOPIC)?.[1] ?? blob.match(RE_RESEARCH_TOPIC)?.[1])?.toLowerCase() ?? 'biotechnology')
     : null;
+  // Higher-education INSTITUTION as an identity (a university, a college, a
+  // community/technical college): the org school bucket plus a DECLARED type
+  // that names one — never the narrative, and never a student AT one. Query
+  // breadth only (webQueries' higher-ed institutional family, hyperlocal-7);
+  // not used for scoring or eligibility.
+  const RE_HIGHER_ED_INSTITUTION = /\b(universit(?:y|ies)|colleges?|community[ _-]college|technical[ _-]college|higher[ _-]?education|post-?secondary)\b/i;
+  const is_higher_ed =
+    isOrg && !isStudent && applicant_types.includes('school') && RE_HIGHER_ED_INSTITUTION.test(declaredTypeText.replace(/_/g, ' '));
 
   // Free-text interest / field-of-study / career-goal / talent seeds the applicant
   // entered (major, intended career, demographic scholarship tags). These do NOT
@@ -1367,6 +1436,7 @@ export function buildThesis(profile = {}) {
     cost_share_allowed,
     is_student: isStudent,
     is_org: isOrg,
+    is_higher_ed,
     is_research_org,
     research_topic,
     // Structured eligibility facts the canonical engine's hard gates need but

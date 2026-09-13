@@ -496,12 +496,17 @@ export const DIAGNOSTIC_CHECKS = Object.freeze([
     description: 'Reads the rolling crawler-gap learning store (updated on every live discovery call) and flags when a meaningful share of recent real crawls surfaced coverage gaps.',
     async run({ db, now = new Date() } = {}) {
       if (!db) return { ok: true, skipped: true, summary: 'no db handle; gap-learning read skipped' }
+      // samcheck-1: the injected clock anchors the window (tests can pin the
+      // boundary; a replayed run judges its own day).
+      const nowMs = now instanceof Date ? now.getTime() : (Date.parse(now) || Date.now())
       let store
       let windowSummary = null
+      let windowDays = 7
       try {
-        const { getCrawlerGapLearning, summarizeGapWindow } = await import('../coverageAudit/liveCrawlGapLearning.js')
-        store = await getCrawlerGapLearning(db)
-        windowSummary = summarizeGapWindow(store)
+        const mod = await import('../coverageAudit/liveCrawlGapLearning.js')
+        store = await mod.getCrawlerGapLearning(db)
+        windowDays = mod.WINDOW_DAYS ?? 7
+        windowSummary = mod.summarizeGapWindow(store, { nowMs })
       } catch (err) {
         return { ok: true, skipped: true, summary: `gap-learning store unavailable: ${err?.message || err}` }
       }
@@ -509,45 +514,155 @@ export const DIAGNOSTIC_CHECKS = Object.freeze([
       if (!store || lifetimeCalls === 0) {
         return { ok: true, summary: 'No live crawler-gap telemetry yet.' }
       }
+      // Provider health NOW, from the web-lane ring (the same window the lane
+      // check judges) — a dead LLM or search backend is the usual cause of
+      // this gap signature and must be stated beside the number.
+      let providerHealth = { status: 'unknown' }
+      let laneSummary = null
+      try {
+        const wl = await import('../coverageAudit/webLaneHealth.js')
+        const laneStore = await wl.getWebLaneHealth(db)
+        laneSummary = laneStore ? wl.summarizeRecentWebLane(laneStore) : null
+        if (laneSummary && laneSummary.judged > 0) {
+          providerHealth = {
+            search: laneSummary.provider_health?.search ?? 'unknown',
+            llm: laneSummary.provider_health?.llm ?? 'unknown',
+            detail: {
+              source: 'system_kv web_lane_health (last judged lane runs)',
+              judged_runs: laneSummary.judged,
+              dead: laneSummary.dead,
+              extraction_dead: laneSummary.extraction_dead,
+              dominant_extraction_failure: laneSummary.dominant_extraction_failure ?? null,
+            },
+          }
+        }
+      } catch { /* provider health is context; never blocks the check */ }
+      let buildMetricEnvelope = null
+      try { ({ buildMetricEnvelope } = await import('../observability/metricEnvelope.js')) } catch { /* envelope optional */ }
+      const envelopeFor = ({ windowed, calls, unevaluated, distinct, distinctLowerBound, byTrigger }) => (buildMetricEnvelope
+        ? buildMetricEnvelope({
+            window: windowed
+              ? { kind: 'rolling_days', start: windowSummary.window_start, end: windowSummary.window_end, days: windowSummary.days, label: `last ${windowSummary.days} UTC days inclusive` }
+              : { kind: 'lifetime', start: null, end: store.updated_at ?? null, days: null, label: 'lifetime totals (store predates daily buckets)' },
+            population: {
+              kind: 'live_crawls',
+              description: 'every runProfileDiscoveryLive on a non-Amy profile, one unit per CALL (heal/backfill re-crawls of below-target profiles included — see by_trigger)',
+              selector: 'crawlerOsService.runProfileDiscoveryLive → learnFromCrawlGaps',
+            },
+            evaluated: calls,
+            unevaluated: unevaluated ?? null,
+            sampleSize: calls,
+            providerHealth,
+            freshnessAt: store.updated_at ?? null,
+            extra: {
+              distinct_profiles: distinct ?? null,
+              distinct_profiles_lower_bound: Boolean(distinctLowerBound),
+              by_trigger: byTrigger ?? null,
+              alert_bar: { min_calls: 5, gap_rate_gt: 0.4 },
+              days_with_calls: windowed ? windowSummary.days_with_calls : null,
+            },
+          })
+        : null)
+      const phLabel = providerHealth.status === 'unknown'
+        ? 'provider health now: unknown (no judged lane runs)'
+        : `provider health now: search=${providerHealth.search} llm=${providerHealth.llm}`
+      // livegap-1: day buckets exist but NONE fall inside the window. That is
+      // "the discovery pipeline recorded no live crawl for N days", never a
+      // lifetime verdict wearing a window label.
+      if (windowSummary && windowSummary.calls === 0) {
+        const lastUpdated = store.updated_at ?? 'unknown'
+        return {
+          ok: false,
+          summary: `No live crawls recorded in the last ${windowSummary.days} days (${windowSummary.window_start}..${windowSummary.window_end}) — the discovery pipeline has gone quiet; store last updated ${lastUpdated}. Population: live crawls on non-Amy profiles; ${phLabel}.`,
+          evidence: {
+            calls: 0,
+            with_gap: 0,
+            gap_rate: 0,
+            windowed: true,
+            window_start: windowSummary.window_start,
+            window_end: windowSummary.window_end,
+            store_updated_at: store.updated_at ?? null,
+            unevaluated: windowSummary.unevaluated ?? 0,
+            lifetime: { calls: lifetimeCalls, with_gap: Number(store.totals.with_gap) || 0 },
+            provider_health: providerHealth,
+            metric_envelope: envelopeFor({ windowed: true, calls: 0, unevaluated: windowSummary.unevaluated ?? 0, distinct: 0, distinctLowerBound: false, byTrigger: {} }),
+          },
+          recommended_fix: 'Confirm the discovery entry points are firing (auth-triggered crawls, the Anya fleet loop, the dispatcher jobs, the nightly coverage sweep) and that runProfileDiscoveryLive is reaching learnFromCrawlGaps (CRAWLER_GAP_LEARNING_ENABLED). A quiet store is a dead pipeline, not a healthy one.',
+          confidence: 0.85,
+        }
+      }
       // Judge the RECENT window, not lifetime totals: the lifetime counters
       // never decay, so a store that was ever gappy would otherwise read as a
       // permanent alert long after coverage recovered. Stores predating the
-      // daily buckets fall back to lifetime (better than mistaking "no window
-      // data" for healthy).
+      // daily buckets (windowSummary === null) fall back to lifetime — better
+      // than mistaking "no window data" for healthy — and SAY so.
       const windowed = Boolean(windowSummary && windowSummary.calls > 0)
       const calls = windowed ? windowSummary.calls : lifetimeCalls
       const withGap = windowed ? windowSummary.with_gap : Number(store.totals.with_gap) || 0
       const byClass = windowed ? windowSummary.by_class : store.totals.by_class || {}
+      const byAttribution = windowed ? (windowSummary.by_attribution || {}) : (store.totals.by_attribution || {})
+      const byTrigger = windowed ? (windowSummary.by_trigger || {}) : (store.totals.by_trigger || {})
+      const distinctProfiles = windowed ? windowSummary.distinct_profiles : null
+      const distinctLowerBound = windowed ? windowSummary.distinct_profiles_lower_bound : true
+      const unevaluated = windowed ? (windowSummary.unevaluated ?? 0) : (Number(store.totals.unevaluated) || 0)
       const gapRate = calls > 0 ? withGap / calls : 0
-      const scopeLabel = windowed ? `live crawls in the last ${windowSummary.days} days` : 'live crawls (lifetime — pre-window store)'
+      const scopeLabel = windowed
+        ? `live crawls in the last ${windowSummary.days} days (${windowSummary.window_start}..${windowSummary.window_end}, non-Amy profiles)`
+        : 'live crawls (lifetime — pre-window store)'
       // "×N" not "=N": these summaries land in the owner EMAIL, where a literal
       // "=" followed by two hex chars ("=56", "=28") is eaten by MIME
       // quoted-printable decoding and corrupts the text ("hyperlocal_gapV9").
-      const topClasses = Object.entries(byClass)
+      const topN = (obj, n) => Object.entries(obj || {})
         .sort((a, b) => b[1] - a[1])
-        .slice(0, 3)
+        .slice(0, n)
         .map(([k, v]) => `${k} ×${v}`)
         .join(', ')
+      const topClasses = topN(byClass, 3)
+      const topAttribution = topN(byAttribution, 4)
+      const topTriggers = topN(byTrigger, 4)
+      const populationLabel = distinctProfiles === null
+        ? 'population: distinct profiles not recorded (pre-attribution store)'
+        : `population: ${distinctProfiles}${distinctLowerBound ? '+' : ''} distinct profile(s)${topTriggers ? `; triggers: ${topTriggers}` : ''}${unevaluated ? `; ${unevaluated} call(s) unevaluated` : ''}`
+      const attributionLabel = topAttribution
+        ? `Primary attribution: ${topAttribution}.`
+        : 'Primary attribution: not recorded (pre-attribution records).'
+      const evidence = {
+        calls,
+        with_gap: withGap,
+        gap_rate: Number(gapRate.toFixed(3)),
+        windowed,
+        window_start: windowed ? windowSummary.window_start : null,
+        window_end: windowed ? windowSummary.window_end : null,
+        window_days: windowed ? windowSummary.days : null,
+        store_updated_at: store.updated_at ?? null,
+        by_class: byClass,
+        by_attribution: byAttribution,
+        by_trigger: byTrigger,
+        with_gap_by_trigger: windowed ? (windowSummary.with_gap_by_trigger || {}) : null,
+        distinct_profiles: distinctProfiles,
+        distinct_profiles_lower_bound: distinctLowerBound,
+        unevaluated,
+        provider_health: providerHealth,
+        lifetime: { calls: lifetimeCalls, with_gap: Number(store.totals.with_gap) || 0 },
+        recent_examples: Array.isArray(store.recent) ? store.recent.slice(0, 5) : [],
+        metric_envelope: envelopeFor({ windowed, calls, unevaluated, distinct: distinctProfiles, distinctLowerBound, byTrigger }),
+      }
       // Alert only with a real sample AND a high gap share — a systemic signal,
-      // not the occasional legitimately-narrow profile.
+      // not the occasional legitimately-narrow profile. Bar unchanged.
       if (calls >= 5 && gapRate > 0.4) {
         return {
           ok: false,
-          summary: `${Math.round(gapRate * 100)}% of ${calls} ${scopeLabel} surfaced coverage gaps (${withGap}/${calls}). Top classes: ${topClasses || 'n/a'}.`,
-          evidence: {
-            calls,
-            with_gap: withGap,
-            gap_rate: Number(gapRate.toFixed(3)),
-            windowed,
-            by_class: byClass,
-            lifetime: { calls: lifetimeCalls, with_gap: Number(store.totals.with_gap) || 0 },
-            recent_examples: Array.isArray(store.recent) ? store.recent.slice(0, 5) : [],
-          },
-          recommended_fix: 'FIRST check crawler.webLaneHealth — a dead open-web lane (search backend down / LLM key exhausted) makes EVERY crawl miss county-level and institution funding, which is exactly this gap signature. Then inspect system_kv `crawler_gap_learning` + Anya brain (memory_key crawler_gap), widen buildWebQueries for institution/hyperlocal/low_results gaps, and confirm the coverage self-heal + student-aid eligibility invariant are running for the ineligible/surfacing classes.',
+          summary: `${Math.round(gapRate * 100)}% of ${calls} ${scopeLabel} surfaced coverage gaps (${withGap}/${calls}). Top classes: ${topClasses || 'n/a'}. ${attributionLabel} ${populationLabel[0].toUpperCase()}${populationLabel.slice(1)}. ${phLabel[0].toUpperCase()}${phLabel.slice(1)}.`,
+          evidence,
+          recommended_fix: 'Read `by_attribution` FIRST: extraction_failed:* means the LLM extraction layer is dead (Anthropic/OpenAI credit, free routes) — fix the environment before treating this as a crawler regression; provider_unavailable/provider_degraded name the search backend (crawler.webLaneHealth / crawler.searchProviderHealth); query_budget_truncation means the page budget never executed the plan; gate_rejected:* and canonical_duplicate are matcher/identity questions; healthy_no_results / under_result_target are genuine coverage gaps — widen buildWebQueries for institution/hyperlocal/result_floor classes and confirm the coverage self-heal + student-aid eligibility invariant are running for the ineligible/surfacing classes.',
           confidence: 0.85,
         }
       }
-      return { ok: true, summary: `${withGap}/${calls} ${scopeLabel} had gaps${topClasses ? ` (${topClasses})` : ''}.` }
+      return {
+        ok: true,
+        summary: `${withGap}/${calls} ${scopeLabel} had gaps${topClasses ? ` (${topClasses})` : ''}. ${attributionLabel} ${populationLabel[0].toUpperCase()}${populationLabel.slice(1)}. ${phLabel[0].toUpperCase()}${phLabel.slice(1)}.`,
+        evidence,
+      }
     },
   },
   {
@@ -1146,30 +1261,75 @@ export const DIAGNOSTIC_CHECKS = Object.freeze([
       } catch (err) {
         return { ok: true, skipped: true, summary: `web-lane health store unavailable: ${err?.message || err}` }
       }
-      if (!store || !summary || summary.judged === 0) {
+      if (!store || !summary || (summary.judged === 0 && !(summary.skipped > 0 || summary.no_crawl > 0))) {
         return { ok: true, summary: 'No web-lane telemetry yet (no live discovery since deploy).' }
+      }
+      let envelope = null
+      try {
+        const { buildMetricEnvelope } = await import('../observability/metricEnvelope.js')
+        envelope = buildMetricEnvelope({
+          window: { kind: 'point_in_time', start: summary.window?.oldest_at ?? null, end: summary.window?.newest_at ?? null, days: null, label: `last ${summary.judged} judgeable lane runs (queries executed) in the ${store.recent?.length ?? 0}-run ring` },
+          population: { kind: 'web_lane_runs', description: 'open-web lane runs recorded by runProfileDiscoveryLive (ALL profiles incl. Amy synthetics); skipped / no-crawl runs are counted as unevaluated, never judged', selector: 'system_kv web_lane_health.recent' },
+          evaluated: summary.judged,
+          unevaluated: (summary.skipped || 0) + (summary.no_crawl || 0),
+          sampleSize: summary.judged,
+          providerHealth: { ...summary.provider_health, detail: { dominant_extraction_failure: summary.dominant_extraction_failure ?? null, extraction_failed_by_class: summary.extraction_failed_by_class } },
+          freshnessAt: store.updated_at ?? null,
+          extra: { by_attribution: summary.by_attribution, totals: store.totals ?? null },
+        })
+      } catch { /* envelope optional */ }
+      const evidence = {
+        judged: summary.judged,
+        skipped: summary.skipped,
+        no_crawl: summary.no_crawl,
+        zero_page: summary.zero_page,
+        zero_extract: summary.zero_extract,
+        errored: summary.errored,
+        stored: summary.stored,
+        fetched: summary.fetched,
+        extracted: summary.extracted,
+        reasons: summary.reasons,
+        extraction_failed_by_class: summary.extraction_failed_by_class,
+        dominant_extraction_failure: summary.dominant_extraction_failure ?? null,
+        by_attribution: summary.by_attribution,
+        provider_health: summary.provider_health,
+        recent: Array.isArray(store.recent) ? store.recent.slice(0, 8) : [],
+        metric_envelope: envelope,
+      }
+      if (summary.judged === 0) {
+        return {
+          ok: true,
+          summary: `web lane not judged: the last ${summary.skipped + summary.no_crawl} recorded run(s) were skipped (${summary.skipped}, time budget) or never searched (${summary.no_crawl}, deps/zero queries) — no verdict on the search or extraction layer.`,
+          evidence,
+        }
       }
       if (summary.dead) {
         const reasons = summary.reasons.length ? ` Recent errors/reasons: ${summary.reasons.join(' | ')}.` : ''
         return {
           ok: false,
-          summary: `Open-web discovery lane is DEAD: ${summary.zero_page}/${summary.judged} recent live crawls got ZERO search pages (0 opportunities stored from the web lane).${reasons}`,
-          evidence: {
-            judged: summary.judged,
-            zero_page: summary.zero_page,
-            errored: summary.errored,
-            stored: summary.stored,
-            reasons: summary.reasons,
-            recent: Array.isArray(store.recent) ? store.recent.slice(0, 8) : [],
-          },
-          recommended_fix: 'Probe the search backends from the prod container: SearXNG (upstream engines suspended? restart the searxng service), Brave API key (HTTP 402 = billing lapsed), and the LLM extraction keys (Anthropic credit balance; OpenAI fallback). Hyperlocal/institution coverage cannot recover until this lane is alive.',
+          summary: `Open-web discovery lane is DEAD: ${summary.zero_page}/${summary.judged} judged live crawls (queries executed) got ZERO search pages (0 opportunities stored from the web lane; ${summary.skipped} skipped run(s) not judged).${reasons}`,
+          evidence,
+          recommended_fix: 'Probe the search backends from the prod container: SearXNG (upstream engines suspended? restart the searxng service), Brave API key (HTTP 402 = billing lapsed), DDG breaker. Hyperlocal/institution coverage cannot recover until this lane is alive.',
+          confidence: 0.9,
+        }
+      }
+      // discovery-attrib-5: pages were fetched, nothing was extracted, and the
+      // runs recorded LLM-class extraction failures — the EXTRACTION layer died
+      // (exhausted Anthropic/OpenAI credit, free routes down), not the search.
+      if (summary.extraction_dead) {
+        const cls = summary.dominant_extraction_failure || 'unknown'
+        return {
+          ok: false,
+          summary: `Open-web discovery lane EXTRACTION is DEAD: ${summary.zero_extract}/${summary.judged} judged live crawls fetched pages (${summary.fetched} total) and extracted ZERO candidates; dominant failure class ${cls} (${JSON.stringify(summary.extraction_failed_by_class)}). Search backend: ${summary.provider_health.search}. Every crawl in this state reads as a coverage gap downstream.`,
+          evidence,
+          recommended_fix: `The LLM extraction layer is not answering (${cls}): check the Anthropic credit balance and OpenAI quota (WEB_DISCOVERY_MODEL_ANTHROPIC / WEB_DISCOVERY_MODEL_OPENAI) and the free Groq routes; re-run one discovery and confirm web_lane_health.recent[0].extracted > 0. Do NOT treat the coincident crawler.gapLearning / Amy hyperlocal_recall_miss findings as crawler regressions until this is green.`,
           confidence: 0.9,
         }
       }
       return {
         ok: true,
-        summary: `web lane alive: ${summary.judged - summary.zero_page}/${summary.judged} recent runs returned search pages, ${summary.stored} web-lane opportunities stored.`,
-        evidence: { judged: summary.judged, zero_page: summary.zero_page, stored: summary.stored },
+        summary: `web lane alive: ${summary.judged - summary.zero_page}/${summary.judged} judged runs returned search pages, ${summary.extracted} candidates extracted from ${summary.fetched} fetched pages, ${summary.stored} web-lane opportunities stored (${summary.skipped} skipped run(s) not judged; provider health search=${summary.provider_health.search} llm=${summary.provider_health.llm}).`,
+        evidence,
       }
     },
   },
@@ -1311,12 +1471,42 @@ export const DIAGNOSTIC_CHECKS = Object.freeze([
       const recordedAtMs = Date.parse(last.recorded_at || row.updated_at || '') || 0
       const startedAtMs = Date.parse(last.started_at || '') || recordedAtMs
       const ageMs = Date.now() - recordedAtMs
+      // sweephealth-1: the counts that DOMINATE the live-gap rate (the result
+      // floor) and the profiles excluded from it (unconfigured) used to be
+      // dropped here, so the owner's green line could not show the class that
+      // drove 1,696 of 1,722 gappy crawls.
       const gapCounts = {
         scanned: last.summary?.scanned ?? null,
+        selected: last.summary?.selected ?? null,
+        audit_failures: last.summary?.audit_failures ?? null,
+        scan_limit: last.summary?.scan_limit ?? null,
         with_gap: last.summary?.with_gap ?? null,
         needs_rediscovery: last.summary?.needs_rediscovery ?? null,
         surfacing_regressions: last.summary?.surfacing_regressions ?? null,
+        below_result_target: last.summary?.below_result_target ?? null,
+        low_results: last.summary?.low_results ?? null,
+        unconfigured: last.summary?.unconfigured ?? null,
+        applyable_measured: last.summary?.applyable_measured ?? null,
+        below_applyable_floor: last.summary?.below_applyable_floor ?? null,
+        result_floor_exhausted: Array.isArray(last.result_floor?.exhausted) ? last.result_floor.exhausted.length : null,
+        result_floor_skipped_by_ledger: Array.isArray(last.result_floor?.skipped_by_ledger) ? last.result_floor.skipped_by_ledger.length : null,
+        result_floor_queued: last.result_floor?.queued ?? null,
         healed: last.healed_count ?? null,
+      }
+      let metricEnvelope = last.metric_envelope && typeof last.metric_envelope === 'object' ? last.metric_envelope : null
+      if (!metricEnvelope) {
+        try {
+          const { buildMetricEnvelope } = await import('../observability/metricEnvelope.js')
+          metricEnvelope = buildMetricEnvelope({
+            window: { kind: 'point_in_time', start: last.started_at ?? null, end: last.recorded_at ?? row.updated_at ?? null, days: null, label: 'nightly profile result-coverage sweep' },
+            population: { kind: 'active_profiles', description: `active, non-Amy profiles, newest first, LIMIT ${gapCounts.scan_limit ?? 'unknown'}`, selector: 'auditAllProfilesResultCoverage' },
+            evaluated: gapCounts.scanned,
+            unevaluated: gapCounts.audit_failures,
+            codeVersion: last.code_version && typeof last.code_version === 'object' ? last.code_version : null,
+            freshnessAt: last.recorded_at ?? row.updated_at ?? null,
+            extra: { scan_limit: gapCounts.scan_limit, selected: gapCounts.selected },
+          })
+        } catch { /* envelope optional */ }
       }
       if (last.status === 'failed') {
         return {
@@ -1347,8 +1537,8 @@ export const DIAGNOSTIC_CHECKS = Object.freeze([
       }
       return {
         ok: true,
-        summary: `Coverage sweep healthy: recorded ${last.recorded_at || row.updated_at || 'recently'}; scanned=${gapCounts.scanned ?? 'n/a'}, with_gap=${gapCounts.with_gap ?? 'n/a'}, needs_rediscovery=${gapCounts.needs_rediscovery ?? 'n/a'}, surfacing_regressions=${gapCounts.surfacing_regressions ?? 'n/a'}, healed=${gapCounts.healed ?? 'n/a'}.`,
-        evidence: { recorded_at: last.recorded_at || row.updated_at || null, status: last.status || 'completed', gap_counts: gapCounts },
+        summary: `Coverage sweep healthy: recorded ${last.recorded_at || row.updated_at || 'recently'} (point-in-time over ${gapCounts.scanned ?? 'n/a'} active non-Amy profile(s)${gapCounts.scan_limit ? `, LIMIT ${gapCounts.scan_limit}` : ''}${gapCounts.audit_failures ? `, ${gapCounts.audit_failures} audit failure(s)` : ''}); scanned=${gapCounts.scanned ?? 'n/a'}, with_gap=${gapCounts.with_gap ?? 'n/a'}, needs_rediscovery=${gapCounts.needs_rediscovery ?? 'n/a'}, surfacing_regressions=${gapCounts.surfacing_regressions ?? 'n/a'}, below_result_target=${gapCounts.below_result_target ?? 'n/a'}, unconfigured=${gapCounts.unconfigured ?? 'n/a'}, result_floor_exhausted=${gapCounts.result_floor_exhausted ?? 'n/a'}, healed=${gapCounts.healed ?? 'n/a'}.`,
+        evidence: { recorded_at: last.recorded_at || row.updated_at || null, status: last.status || 'completed', gap_counts: gapCounts, code_version: last.code_version ?? null, metric_envelope: metricEnvelope },
       }
     },
   },
@@ -1404,21 +1594,59 @@ export const DIAGNOSTIC_CHECKS = Object.freeze([
         }
       }
       const scanned = Number(board.profiles_scanned) || 0
+      const skipped = board.profiles_skipped === null || board.profiles_skipped === undefined ? null : (Number(board.profiles_skipped) || 0)
       const top = topGaps[0] || null
       const topShare = top && scanned > 0 ? (Number(top.count) || 0) / scanned : 0
+      // REQUIREMENT 8: this is a POINT-IN-TIME census of the PLANNER (source-
+      // plan) taxonomy over the newest N active non-Amy profiles. It measures a
+      // different population over a different window than the 7-day live-crawl
+      // gap rate (crawler.gapLearning), and canCloseRegression() says so — a
+      // zero here can never be presented as closing that window.
+      let metricEnvelope = null
+      let canClose = { ok: false, reason: 'missing_envelope' }
+      try {
+        const { buildMetricEnvelope, canCloseRegression } = await import('../observability/metricEnvelope.js')
+        metricEnvelope = buildMetricEnvelope({
+          window: { kind: 'point_in_time', start: board.generated_at ?? null, end: board.generated_at ?? null, days: null, label: 'Amy gap-learning scan at run time' },
+          population: { kind: 'active_profiles', description: `newest ${board.scan_limit ?? 'N'} active non-Amy profiles (stress-test personas included); source-plan / planner gap taxonomy`, selector: 'coverageGapScoreboard.buildFleetGapScoreboard' },
+          evaluated: scanned,
+          unevaluated: skipped,
+          freshnessAt: board.generated_at ?? row.updated_at ?? null,
+          extra: { taxonomy: 'source_plan_planner_classes', scan_limit: board.scan_limit ?? null },
+        })
+        const liveGapWindowReference = {
+          measurement_window: { kind: 'rolling_days', days: 7 },
+          evaluated_population: { kind: 'live_crawls' },
+          sample_size: null,
+        }
+        canClose = canCloseRegression(metricEnvelope, liveGapWindowReference)
+      } catch { /* envelope optional */ }
+      const populationLabel = `source-plan (planner) taxonomy, point-in-time over ${scanned} scanned profile(s)${skipped === null ? ' (skipped count not recorded)' : ` (${skipped} skipped)`}`
+      const closeNote = 'This point-in-time census cannot close the 7-day live-crawl gap window (crawler.gapLearning).'
+      const evidence = {
+        generated_at: board.generated_at,
+        profiles_scanned: scanned,
+        profiles_skipped: skipped,
+        scan_limit: board.scan_limit ?? null,
+        taxonomy: 'source_plan_planner_classes',
+        top_gaps: topGaps,
+        adapter_wishlist: wishlist,
+        metric_envelope: metricEnvelope,
+        can_close_live_gap_window: canClose,
+      }
       if (top && scanned >= MIN_SCANNED && topShare >= LARGE_SHARE) {
         return {
           ok: false,
-          summary: `Fleet coverage gap hits ${Math.round(topShare * 100)}% of the ${scanned} scanned profile(s): ${top.statement}`,
-          evidence: { profiles_scanned: scanned, top_gaps: topGaps, adapter_wishlist: wishlist },
+          summary: `Fleet coverage gap hits ${Math.round(topShare * 100)}% of the ${scanned} scanned profile(s) (${populationLabel}): ${top.statement} ${closeNote}`,
+          evidence,
           recommended_fix: top.suggested_action || 'Review the top gap classes on the Coverage & Evidence dashboard and widen the affected source lane.',
           confidence: 0.85,
         }
       }
       return {
         ok: true,
-        summary: `Gap scoreboard fresh (${Math.round(ageMs / 3600000)}h old): ${gaps.length} gap class(es) across ${scanned} profile(s); top gap affects ${top ? top.count : 0}; adapter wishlist ${wishlist.length} item(s).`,
-        evidence: { generated_at: board.generated_at, profiles_scanned: scanned, top_gaps: topGaps, adapter_wishlist: wishlist },
+        summary: `Gap scoreboard fresh (${Math.round(ageMs / 3600000)}h old; ${populationLabel}): ${gaps.length} gap class(es) across ${scanned} profile(s); top gap affects ${top ? top.count : 0}; adapter wishlist ${wishlist.length} item(s). ${closeNote}`,
+        evidence,
       }
     },
   },
@@ -1666,6 +1894,26 @@ export const DIAGNOSTIC_CHECKS = Object.freeze([
       const topWebOnly = perProfile
         .flatMap((p) => (Array.isArray(p.web_only_top) ? p.web_only_top.map((w) => ({ ...w, profile: p.label || p.profile_id })) : []))
         .slice(0, 6)
+      // REQUIREMENT 8: every reported benchmark carries its envelope — the run
+      // record's own when the producer wrote one, else one built here from the
+      // same fields (window = this run; population = the golden profiles;
+      // evaluated = scored; unevaluated = unscored; sample = verified denominator).
+      let metricEnvelope = latest.metric_envelope && typeof latest.metric_envelope === 'object' ? latest.metric_envelope : null
+      if (!metricEnvelope) {
+        try {
+          const { buildMetricEnvelope } = await import('../observability/metricEnvelope.js')
+          metricEnvelope = buildMetricEnvelope({
+            window: { kind: 'run', start: latest.started_at ?? latest.generated_at ?? null, end: latest.generated_at ?? null, days: null, label: 'one nightly web-parity benchmark run' },
+            population: { kind: 'golden_profiles', description: 'owner-verified golden profiles (system_kv golden_outcome_expectations)', selector: 'webParityBenchmark.runWebParityBenchmark' },
+            evaluated: latest.profiles_scored ?? null,
+            unevaluated: latest.profiles_unscored ?? null,
+            sampleSize: latest.verified_denominator ?? null,
+            providerHealth: latest.provider_health ?? latest.search_provider_health ?? null,
+            freshnessAt: latest.generated_at ?? null,
+            extra: { semantics_version: latest.semantics_version ?? null, measurement_status: latest.measurement_status ?? null, sample_qualified: latest.sample_qualified ?? null },
+          })
+        } catch { /* envelope optional */ }
+      }
       const evidence = {
         generated_at: latest.generated_at || null,
         fleet_parity: latest.fleet_parity ?? null,
@@ -1676,6 +1924,7 @@ export const DIAGNOSTIC_CHECKS = Object.freeze([
         sample_qualified: latest.sample_qualified ?? null,
         verified_denominator: latest.verified_denominator ?? null,
         minimum_verified_denominator: latest.minimum_verified_denominator ?? mod.MIN_VERIFIED_DENOMINATOR ?? null,
+        metric_envelope: metricEnvelope,
         per_profile: perProfile.map((p) => ({
           profile_id: p.profile_id,
           label: p.label,

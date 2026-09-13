@@ -531,18 +531,26 @@ export async function auditAllProfilesResultCoverage(db, { limit = 500, floor = 
   const applyabilityCtx = await loadApplyabilityContext()
 
   const audits = []
+  let auditFailures = 0
   for (const p of profiles) {
     try {
       const resultTarget = resolveTarget ? resolveTarget(p.id, effLedger) : null
       const a = await auditProfileResultCoverage(db, p.id, { floor, resultTarget, applyabilityCtx })
       audits.push({ ...a, display_name: p.display_name ?? null })
     } catch (err) {
+      auditFailures += 1
       log.warn('per-profile coverage audit failed (non-fatal)', { profile: p.id, error: err?.message })
     }
   }
 
   const summary = {
     scanned: audits.length,
+    // Population accounting (REQUIREMENT 8): how many profiles were SELECTED
+    // vs evaluated, and the scan bound — so `scanned` can never be read as
+    // "the fleet" when the LIMIT or a per-profile failure narrowed it.
+    selected: profiles.length,
+    audit_failures: auditFailures,
+    scan_limit: limit,
     with_gap: audits.filter((a) => a.has_gap).length,
     surfacing_regressions: audits.filter((a) => a.surfacing_gap).length,
     institution_gaps: audits.filter((a) => a.institution_gap).length,
@@ -572,6 +580,130 @@ export async function auditAllProfilesResultCoverage(db, { limit = 500, floor = 
     padded_by_geo_stub: audits.filter((a) => (a.geo_stub_count || 0) > 0).length,
   }
   return { audits, summary }
+}
+
+// ── Reading the discovery outcome (sweepheal-1 / discovery-attrib-1) ────────
+// runProfileDiscoveryLive returns `{ run, persisted, thesis, opportunities }`;
+// a skipped profile returns `{ run:{ skipped:true, reason }, persisted:{ skipped:true } }`.
+// These three helpers are the ONLY place the heal loop and the applyable
+// backfill read that shape, so the two can never drift apart again.
+
+/** The inner `run` (tolerates a bare run object from an older caller/mock). */
+export function unwrapDiscoveryOutcome(outcome) {
+  if (!outcome || typeof outcome !== 'object') return null
+  if (outcome.run && typeof outcome.run === 'object') {
+    const run = outcome.run
+    // Carry the persisted-side skip flag onto the run so one predicate reads it.
+    if (outcome.persisted?.skipped === true && run.skipped !== true) return { ...run, skipped: true, reason: run.reason ?? outcome.persisted?.reason ?? null }
+    return run
+  }
+  return outcome
+}
+
+/**
+ * Did this run tell us anything about the profile's ceiling? False for a
+ * skipped run, a run that reports failure, and a run whose open-web lane was
+ * DEAD (no search provider answered / no extractor answered) — "an outage
+ * never burns" (#944 / #1006 rule).
+ */
+export function discoveryRanOk(run) {
+  if (!run || typeof run !== 'object') return false
+  if (run.skipped === true || run.ok === false) return false
+  if (discoveryLaneOutageReason(run)) return false
+  return true
+}
+
+/**
+ * Isolates JUST the "the open-web lane itself was dead" half of
+ * discoveryRanOk — a provider outage (search/LLM infrastructure unavailable),
+ * distinct from a skipped/unconfigured profile or an explicit run failure.
+ * Returns a short reason string when the run shows a dead lane, else null.
+ *
+ * WHY THIS IS SEPARATE from discoveryRanOk: a heal loop needs to tell "this
+ * profile's own run failed" apart from "the infrastructure every profile
+ * would hit is down right now" — see the provider-outage short-circuit in
+ * runProfileCoverageSweepInner / runApplyableFloorBackfill, which uses this to
+ * decide whether the REST of the bounded heal queue would just rediscover the
+ * same outage.
+ */
+export function discoveryLaneOutageReason(run) {
+  if (!run || typeof run !== 'object') return null
+  const lane = run.web_lane
+  if (!lane || typeof lane !== 'object' || lane.skipped === true) return null
+  const ph = lane.provider_health || {}
+  if (ph.llm === 'unavailable') return 'llm_unavailable'
+  if (ph.search === 'unavailable') return 'search_unavailable'
+  const attribution = String(lane.primary_attribution ?? run.primary_attribution ?? '')
+  if (attribution === 'provider_unavailable') return 'provider_unavailable'
+  if (attribution.startsWith('extraction_failed:')) return attribution
+  return null
+}
+
+/**
+ * Did the run's REGISTRY (non-web) lanes actually execute at least one source?
+ * `run.sources` is the crawler-os pipeline's per-source summary array — the
+ * SAME field `discoveryEvidence` below reads as `lanes_queried`. A non-empty
+ * array means at least one registry source was searched (found, empty, or
+ * failed — all real outcomes), independent of whatever the open-web lane did.
+ */
+export function discoveryRegistryLanesRan(run) {
+  if (!run || typeof run !== 'object') return false
+  return Array.isArray(run.sources) && run.sources.length > 0
+}
+
+/**
+ * THE RESULT-FLOOR HEAL LOOP's own verdict on one discovery attempt —
+ * deliberately DISTINCT from discoveryRanOk (unchanged; still used by
+ * anyaToolRegistry.js and the provider-outage short-circuit below, where a
+ * skipped run must still read `ok:false`). discoveryRanOk's blanket "a dead
+ * web lane never burns an attempt" rule is right when NOTHING ran — a
+ * skipped/thrown/no-registry-work crawl legitimately tells us nothing about
+ * this profile's ceiling — but WRONG when the REGISTRY lanes executed: that
+ * work is real signal (it may itself have met the floor, or moved the
+ * awardable count), and treating it as "never burn" left an outage-hit
+ * profile pinned at attempts:0 forever, permanently out-ranking (fewest-
+ * attempts-first) every profile carrying real, addressable attempts — the
+ * 2026-09-12 heal-queue starvation finding: an extended provider outage let a
+ * handful of dead-web-lane profiles monopolize every one of the 5 nightly
+ * heal slots night after night while healthy-but-tried profiles never got a
+ * turn.
+ *
+ * Returns:
+ *   'no_run'          — skipped, an explicit run failure, or the crawl threw
+ *                        before any registry source ever ran. Spends NOTHING
+ *                        (identical to the old discoveryRanOk-false path).
+ *   'web_lane_outage'  — registry lanes ran, but the open-web lane was dead. A
+ *                        REAL attempt: the caller must spend it (so the
+ *                        profile rotates to the back of the fewest-attempts
+ *                        queue instead of camping at the front) and record the
+ *                        outage on the ledger entry
+ *                        (`applyFloorAttempt`'s `webLaneDegraded`).
+ *   'ok'               — an ordinary run (whether or not it found anything).
+ */
+export function classifyDiscoveryFloorAttempt(run) {
+  if (discoveryRanOk(run)) return 'ok'
+  if (discoveryLaneOutageReason(run) && discoveryRegistryLanesRan(run)) return 'web_lane_outage'
+  return 'no_run'
+}
+
+/** The evidence a floor verdict is allowed to cite, read from the REAL shape. */
+export function discoveryEvidence(run) {
+  const lane = run?.web_lane && typeof run.web_lane === 'object' ? run.web_lane : null
+  const stage = lane?.stage_ledger && typeof lane.stage_ledger === 'object' ? lane.stage_ledger : null
+  const executed = Array.isArray(lane?.queries) ? lane.queries.length : (Number(lane?.queries_executed ?? lane?.queries) || 0)
+  const rejected = stage
+    ? (Number(stage.reality_rejected) || 0) + (Number(stage.eligibility_rejected) || 0) + (Number(stage.need_match_rejected) || 0) + (Number(stage.apply_target_rejected) || 0)
+    : (Number(lane?.rejected) || 0)
+  return {
+    lanes_queried: Number(run?.sources?.length) || 0,
+    queries_issued: executed,
+    queries_planned: Array.isArray(lane?.queries_planned) ? lane.queries_planned.length : (Number(lane?.queries_planned) || executed),
+    pages_fetched: Number(lane?.fetched) || 0,
+    candidates_extracted: Number(lane?.extracted) || 0,
+    rejected_by_engine: rejected,
+    primary_attribution: lane?.primary_attribution ?? run?.primary_attribution ?? null,
+    web_lane_health: lane?.provider_health ? { search: lane.provider_health.search ?? 'unknown', llm: lane.provider_health.llm ?? 'unknown' } : null,
+  }
 }
 
 // ── Observability: persist the last sweep to system_kv (Agent Observability
@@ -771,10 +903,24 @@ async function runProfileCoverageSweepInner(db, { autoheal, maxHeal, limit, star
   const healQueue = (orderFloorQueue ? orderFloorQueue(candidates) : candidates).slice(0, Math.max(0, maxHeal))
   const healed = []
   const exhausted = []
+  // PROVIDER-OUTAGE short-circuit (2026-09-12). discoveryRanOk's "a dead web
+  // lane never burns an attempt" rule is correct per-profile, but a fleet-wide
+  // provider outage makes EVERY heal attempt this sweep come back TRANSIENT —
+  // and because orderFloorQueue sorts fewest-attempts-first, a profile pinned
+  // at attempts:0 by that rule permanently out-ranks profiles carrying real,
+  // addressable attempts. Left unchecked, the bounded queue (COVERAGE_AUTOHEAL_MAX,
+  // default 5) re-learns "the lane is dead" up to maxHeal times a night for the
+  // outage's whole duration while the sweep spends every remaining slot
+  // rediscovering the identical fact instead of trying a different profile.
+  // Checked ONLY on the first heal attempt (a real outage is infrastructure-wide,
+  // not per-profile) — once observed, the rest of the queue is skipped WITHOUT
+  // being attempted, so nothing further is spent this sweep either way.
+  let providerOutage = null
   if (autoheal && healQueue.length) {
     try {
       const { runProfileDiscoveryLive } = await import('../crawlerOsService.js')
-      for (const item of healQueue) {
+      for (const [queueIndex, item] of healQueue.entries()) {
+        if (providerOutage) break
         const a = item.audit
         // `before` is the AWARDABLE count — what the owner would recognise as
         // funding — not the pointer-padded total the old loop reported.
@@ -782,15 +928,41 @@ async function runProfileCoverageSweepInner(db, { autoheal, maxHeal, limit, star
         let run = null
         let ranOk = false
         try {
-          run = await runProfileDiscoveryLive({ db, profileId: a.profile_id })
-          // A run that was SKIPPED (deleted profile, no sources selected) or
-          // that reports failure has told us nothing about this profile's
-          // ceiling — it must not spend an attempt.
-          ranOk = Boolean(run) && run.ok !== false && run.skipped !== true
+          // runProfileDiscoveryLive returns { run, persisted, thesis, opportunities }
+          // (or { run:{skipped:true,…}, persisted:{skipped:true} }). The lane
+          // telemetry lives at run.web_lane. Reading a top-level `ok`/`skipped`/
+          // `web` — a shape the function never returned — made ranOk always true
+          // and every evidence field 0 (sweepheal-1 / discovery-attrib-1).
+          const outcome = await runProfileDiscoveryLive({ db, profileId: a.profile_id, trigger: 'heal' })
+          run = unwrapDiscoveryOutcome(outcome)
+          // A run that was SKIPPED (deleted / unconfigured profile, no sources
+          // selected), that reports failure, or whose open-web lane was DEAD
+          // (no search backend / no extractor answered) has told us nothing
+          // about this profile's ceiling — it must not spend an attempt.
+          ranOk = discoveryRanOk(run)
         } catch (err) {
           log.warn('coverage self-heal failed for profile (non-fatal)', { profile: a.profile_id, error: err?.message })
           ranOk = false
         }
+
+        if (queueIndex === 0 && !ranOk) {
+          const outageReason = discoveryLaneOutageReason(run)
+          if (outageReason) {
+            providerOutage = {
+              detected_on_profile_id: a.profile_id,
+              reason: outageReason,
+              skipped_profile_ids: healQueue.slice(1).map((h) => h.profile_id),
+            }
+          }
+        }
+
+        // FLOOR-ATTEMPT CLASSIFICATION (2026-09-12 starvation fix). `ranOk`
+        // above still answers "did the run tell us anything at all" (used only
+        // for the outage short-circuit and the healed[] log). The floor ledger
+        // asks a narrower question: registry lanes that actually ran are real
+        // signal even when the open-web lane was dead, and must not be folded
+        // in as a free, never-burning TRANSIENT — see classifyDiscoveryFloorAttempt.
+        const floorAttemptKind = classifyDiscoveryFloorAttempt(run)
 
         let after = null
         try {
@@ -814,17 +986,24 @@ async function runProfileCoverageSweepInner(db, { autoheal, maxHeal, limit, star
           target: a.result_target ?? null,
           escalation: item.escalation,
           ran: ranOk,
+          floor_attempt_kind: floorAttemptKind,
           gaps_before: a.gaps,
         })
         log.info('coverage self-heal re-discovered profile', {
-          profile: a.profile_id, before, after: afterAwardable, target: a.result_target, escalation: item.escalation, ran: ranOk,
+          profile: a.profile_id, before, after: afterAwardable, target: a.result_target, escalation: item.escalation, ran: ranOk, floorAttemptKind,
         })
 
         // Fold the outcome into the ledger — only ever AFTER a successful
         // recount, and only for profiles the floor actually queued.
         if (floorApi && FLOOR_OUTCOME && after && a.below_result_target) {
           const added = Math.max(0, (afterAwardable ?? before) - before)
-          const outcome = !ranOk
+          // 'no_run' (skipped/thrown/no registry work at all) stays TRANSIENT —
+          // spends nothing, exactly as before. 'web_lane_outage' (registry
+          // lanes ran, web lane dead) is a REAL attempt: it is folded as
+          // ADDED/NO_NEW_RESULTS like an ordinary run, with the outage recorded
+          // on the ledger entry so an eventual exhausted verdict can name it.
+          const webLaneDegraded = floorAttemptKind === 'web_lane_outage'
+          const outcome = floorAttemptKind === 'no_run'
             ? FLOOR_OUTCOME.TRANSIENT
             : (added > 0 ? FLOOR_OUTCOME.ADDED : FLOOR_OUTCOME.NO_NEW_RESULTS)
           floorLedger = floorApi.recordFloorAttempt(floorLedger, a.profile_id, {
@@ -833,14 +1012,8 @@ async function runProfileCoverageSweepInner(db, { autoheal, maxHeal, limit, star
             awardable: afterAwardable,
             added,
             fingerprint: floorAssessments.get(a.profile_id)?.fingerprint ?? null,
-            evidence: {
-              lanes_queried: Number(run?.sources?.length) || 0,
-              queries_issued: Number(run?.web?.queries?.length) || 0,
-              pages_fetched: Number(run?.web?.fetched) || 0,
-              candidates_extracted: Number(run?.web?.extracted) || 0,
-              rejected_by_engine: Number(run?.web?.rejected) || 0,
-              added_total: added,
-            },
+            evidence: { ...discoveryEvidence(run), added_total: added },
+            webLaneDegraded,
           })
           // Commit each observed outcome before starting the next expensive
           // crawl. A restart must not erase completed attempts and repeatedly
@@ -858,6 +1031,9 @@ async function runProfileCoverageSweepInner(db, { autoheal, maxHeal, limit, star
     } catch (err) {
       log.warn('coverage self-heal unavailable (non-fatal)', { error: err?.message })
     }
+    if (providerOutage) {
+      log.warn('coverage sweep detected a provider outage on the first heal attempt — skipping the rest of this sweep\'s heal slots instead of rediscovering the same outage', providerOutage)
+    }
   }
 
   // Record the OBSERVED floor state for every profile the sweep looked at, so a
@@ -870,6 +1046,11 @@ async function runProfileCoverageSweepInner(db, { autoheal, maxHeal, limit, star
         if (!f) continue
         if (floorLedger.profiles?.[a.profile_id]?.last_attempt_at &&
             healQueue.some((h) => h.profile_id === a.profile_id)) continue
+        // A profile the provider-outage short-circuit SPARED was never touched
+        // this sweep — not attempted, not folded as transient — so it must not
+        // acquire an observation-only ledger entry either: "spared" means the
+        // ledger reads exactly as it did before the sweep.
+        if (providerOutage?.skipped_profile_ids?.includes(a.profile_id)) continue
         floorLedger = floorApi.refreshFloorObservation(floorLedger, a.profile_id, {
           target: f.target, awardable: a.surfaced_awardable ?? 0, fingerprint: f.fingerprint,
         })
@@ -916,11 +1097,32 @@ async function runProfileCoverageSweepInner(db, { autoheal, maxHeal, limit, star
     }
   }
 
+  // The sweep's own metric envelope (REQUIREMENT 8): a point-in-time census
+  // over the active non-Amy profiles the LIMIT selected, stamped with the code
+  // version that produced it.
+  let metricEnvelope = null
+  let codeVersion = null
+  try {
+    const { buildMetricEnvelope, resolveCodeVersion } = await import('../observability/metricEnvelope.js')
+    codeVersion = resolveCodeVersion()
+    metricEnvelope = buildMetricEnvelope({
+      window: { kind: 'point_in_time', start: startedAt, end: new Date().toISOString(), label: 'nightly profile result-coverage sweep' },
+      population: { kind: 'active_profiles', description: `active, non-Amy profiles (deleted_at IS NULL), newest first, LIMIT ${limit}`, selector: 'auditAllProfilesResultCoverage' },
+      evaluated: summary.scanned,
+      unevaluated: summary.audit_failures ?? 0,
+      codeVersion,
+      freshnessAt: new Date().toISOString(),
+      extra: { scan_limit: limit, selected: summary.selected ?? null, result_target_default: null },
+    })
+  } catch { /* envelope is reporting metadata; never fails the sweep */ }
+
   const result = {
     ok: true,
     status: 'completed',
     started_at: startedAt,
     summary,
+    code_version: codeVersion,
+    metric_envelope: metricEnvelope,
     autoheal: Boolean(autoheal),
     healed_count: healed.length,
     healed,
@@ -933,6 +1135,13 @@ async function runProfileCoverageSweepInner(db, { autoheal, maxHeal, limit, star
       queued: healQueue.length,
       skipped_by_ledger: skippedByLedger,
       exhausted,
+      // A fleet-wide provider outage observed on this sweep's first heal
+      // attempt — null when none was detected. Names who revealed it and
+      // which queued profiles were spared a redundant crawl (see the
+      // provider-outage short-circuit above); attempts were spent on NONE of
+      // them. Surfaced here so it lands in the same persisted
+      // `coverage_audit_last_run` record Sam's coverage.sweepHealth check reads.
+      provider_outage: providerOutage,
       // NOT a shortfall — a prerequisite. Named, so the owner can act.
       unconfigured: audits
         .filter((a) => a.unconfigured)
@@ -1074,19 +1283,23 @@ export async function runApplyableFloorBackfill(db, { audits = null, maxHeal = 5
     let run = null
     let ranOk = false
     try {
-      run = await discovery.runProfileDiscoveryLive({
+      const outcome = await discovery.runProfileDiscoveryLive({
         db,
         profileId: a.profile_id,
         extraSeedPages: directive.seedPages,
         extraQueries: directive.queries,
+        trigger: 'backfill',
       })
-      ranOk = Boolean(run) && run.ok !== false && run.skipped !== true
+      run = unwrapDiscoveryOutcome(outcome)
+      ranOk = discoveryRanOk(run)
     } catch (err) {
       log.warn('applyable-floor archetype discovery failed (non-fatal, not burned)', {
         profile: a.profile_id, error: err?.message,
       })
       ranOk = false
     }
+
+    const floorAttemptKind = classifyDiscoveryFloorAttempt(run)
 
     let after = null
     try {
@@ -1107,32 +1320,31 @@ export async function runApplyableFloorBackfill(db, { audits = null, maxHeal = 5
       queries: directive.queries.length,
       categories: directive.categories,
       ran: ranOk,
+      web_lane_degraded: floorAttemptKind === 'web_lane_outage',
     })
     log.info('applyable-floor: ran archetype discovery for a below-floor profile', {
       profile: a.profile_id, before, after: afterApplyable, seeded: directive.seedPages.length,
-      queries: directive.queries.length, ran: ranOk,
+      queries: directive.queries.length, ran: ranOk, attempt_kind: floorAttemptKind,
     })
 
-    // Fold the outcome — ONLY after a successful recount (#946).
+    // Fold the outcome — ONLY after a successful recount (#946). Same
+    // classification as the awardable heal loop (the 2026-09-12 starvation
+    // fix): 'no_run' spends nothing; a dead web lane over executed registry
+    // lanes is a REAL, degraded attempt so the profile rotates to the back of
+    // the fewest-attempts queue instead of camping at its front.
     if (after) {
       const added = Math.max(0, (afterApplyable ?? before) - before)
-      const outcome = !ranOk
+      const outcome = floorAttemptKind === 'no_run'
         ? FLOOR_OUTCOME.TRANSIENT
         : (added > 0 ? FLOOR_OUTCOME.ADDED : FLOOR_OUTCOME.NO_NEW_RESULTS)
       ledger = ledgerApi.recordApplyableAttempt(ledger, a.profile_id, {
         outcome,
+        webLaneDegraded: floorAttemptKind === 'web_lane_outage',
         target: after.applyable_floor ?? item.assess.target,
         awardable: afterApplyable,
         added,
         fingerprint: item.assess.fingerprint,
-        evidence: {
-          lanes_queried: Number(run?.sources?.length) || 0,
-          queries_issued: Number(run?.web?.queries?.length) || 0,
-          pages_fetched: Number(run?.web?.fetched) || 0,
-          candidates_extracted: Number(run?.web?.extracted) || 0,
-          rejected_by_engine: Number(run?.web?.rejected) || 0,
-          added_total: added,
-        },
+        evidence: { ...discoveryEvidence(run), added_total: added },
       })
     }
   }

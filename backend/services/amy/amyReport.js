@@ -24,6 +24,7 @@ import { titleStatesTerm } from '../../config/profileDerivedFacts.js'
 import { classifyKnownNonLeaf } from '../../config/fundingResultFilters.js'
 import { blindSpotForGate } from './pipelineGuardEscapeAudit.js'
 import { searchEvidence, recallAttribution } from './searchAttribution.js'
+import { classifyWebLane, evaluationOutcome } from './discoveryGate.js'
 
 /** Needs that mean a profile legitimately WANTS student aid (engine's carve-out). */
 const STUDENT_AID_NEEDS = ['student_aid', 'cost_of_attendance', 'scholarship']
@@ -31,6 +32,122 @@ const STUDENT_AID_NEEDS = ['student_aid', 'cost_of_attendance', 'scholarship']
 function num(v) {
   const n = Number(v)
   return Number.isFinite(n) ? n : 0
+}
+
+// ── PER-MEMBER BASELINE (amy-cohort-5) ────────────────────────────────────
+// The only durable per-profile evidence used to be lossy: query strings were
+// dropped (only query_index/provider/status survived), per-candidate verdicts
+// never left the pipeline, and extracted/canonical counts lived solely in
+// audit-reports/amy-run-<runId>.json on an ephemeral filesystem. The 2026-09-12
+// prod report could not say whether any query ran or any candidate was
+// extracted for its 50 "issues". Every evaluation now carries a BOUNDED
+// baseline the receipt/report persists; anything the pipeline did not hand
+// over is written as the literal UNKNOWN_not_persisted, never inferred.
+export const UNKNOWN_NOT_PERSISTED = 'UNKNOWN_not_persisted'
+const BASELINE_MAX_QUERIES = 30
+const BASELINE_MAX_EXTRACTED_TITLES = 20
+const BASELINE_MAX_ADMISSION_TITLES = 10
+const BASELINE_MAX_TEXT = 160
+
+function clip(value) {
+  const s = String(value ?? '').trim()
+  return s.length > BASELINE_MAX_TEXT ? `${s.slice(0, BASELINE_MAX_TEXT - 1)}…` : s
+}
+
+function tierOf(entry) {
+  const t = entry?.tier ?? entry?.query_tier ?? null
+  return t ? String(t) : 'UNKNOWN'
+}
+
+function baselineQueries(lane) {
+  const planned = Array.isArray(lane?.query_ledger?.planned) ? lane.query_ledger.planned : null
+  if (planned) {
+    return planned.slice(0, BASELINE_MAX_QUERIES).map((p) => (
+      typeof p === 'string' ? { query: clip(p), tier: 'UNKNOWN' } : { query: clip(p?.query ?? p?.text), tier: tierOf(p) }
+    ))
+  }
+  const queries = Array.isArray(lane?.queries) ? lane.queries : []
+  return queries.slice(0, BASELINE_MAX_QUERIES).map((q) => ({ query: clip(q), tier: 'UNKNOWN' }))
+}
+
+function baselineExecuted(lane) {
+  const executed = Array.isArray(lane?.query_ledger?.executed) ? lane.query_ledger.executed : null
+  if (executed) {
+    return executed.slice(0, BASELINE_MAX_QUERIES).map((e, i) => ({
+      query_index: Number.isInteger(e?.query_index) ? e.query_index : i,
+      query: clip(e?.query ?? e?.text),
+      tier: tierOf(e),
+      provider: e?.provider ?? null,
+      provenance: e?.provenance ?? null,
+      status: e?.status ?? null,
+      result_count: Number.isInteger(e?.result_count) ? e.result_count : null,
+    }))
+  }
+  const queries = Array.isArray(lane?.queries) ? lane.queries : []
+  const provenance = Array.isArray(lane?.search_provenance) ? lane.search_provenance : []
+  return provenance.slice(0, BASELINE_MAX_QUERIES).map((p, i) => {
+    const idx = Number.isInteger(p?.query_index) ? p.query_index : i
+    return {
+      query_index: idx,
+      query: queries[idx] !== undefined ? clip(queries[idx]) : UNKNOWN_NOT_PERSISTED,
+      tier: 'UNKNOWN',
+      provider: p?.provider ?? null,
+      provenance: p?.provenance ?? null,
+      status: p?.status ?? null,
+      result_count: Number.isInteger(p?.result_count) ? p.result_count : null,
+    }
+  })
+}
+
+function extractedTitles(lane) {
+  const raw = Array.isArray(lane?.extracted_titles)
+    ? lane.extracted_titles
+    : Array.isArray(lane?.extracted_candidates)
+      ? lane.extracted_candidates.map((c) => (typeof c === 'string' ? c : c?.title))
+      : []
+  return raw.map(clip).filter(Boolean).slice(0, BASELINE_MAX_EXTRACTED_TITLES)
+}
+
+function decisionTally(run) {
+  const t = run?.decision_tally
+  return t && typeof t === 'object' ? t : null
+}
+
+/**
+ * Build the bounded per-member baseline. `final_class` is filled by the caller
+ * once the whole evaluation exists (it is the canonical evaluationOutcome).
+ */
+function buildMemberBaseline({ run, lane, gate, recommendations, accepted, review, stored }) {
+  const tally = decisionTally(run)
+  const counters = gate.counters
+  return {
+    generated_queries: baselineQueries(lane),
+    executed_queries: baselineExecuted(lane),
+    provider_health: gate.provider_health,
+    extracted_candidates: {
+      count: counters.extracted,
+      titles: extractedTitles(lane),
+    },
+    canonical_candidates: {
+      stored: counters.stored,
+      deduped: counters.deduped,
+      rejected: counters.rejected,
+      run_stored: stored,
+    },
+    qualification_decisions: {
+      accept: tally ? num(tally.accept) : accepted.length,
+      review: tally ? num(tally.review) : review.length,
+      reject: tally ? num(tally.reject) : UNKNOWN_NOT_PERSISTED,
+      top_reject_reasons: tally?.top_reject_reasons ?? UNKNOWN_NOT_PERSISTED,
+      candidates_reached_engine: stored,
+      verdict_source: tally ? 'pipeline_decision_tally' : 'recommendations_only',
+    },
+    admission_decisions: {
+      recommendations: recommendations.length,
+      titles: recommendations.slice(0, BASELINE_MAX_ADMISSION_TITLES).map((r) => clip(r?.title)).filter(Boolean),
+    },
+    final_class: null,
+  }
 }
 
 function decisionUpper(d) {
@@ -280,6 +397,31 @@ export function evaluateDiscovery(scenario, profileId, result, opts = {}) {
     archetype: result?.thesis ? classifyThesisArchetype(result.thesis) : null,
   }
 
+  // ── DISCOVERY GATE (amy-cohort-1) ──────────────────────────────────────
+  // Did the open-web lane actually RUN, with providers up, and did extraction
+  // produce anything? This is the ONE verdict every downstream consumer reads
+  // (receipt outcome, probe coverage, ledger hold-open). It is computed here
+  // from the run's own lane telemetry and travels on the evaluation.
+  const lane = result?.run?.web_lane
+  const gate = classifyWebLane(lane, { primaryAttribution: result?.run?.primary_attribution ?? null })
+  const gateFields = {
+    discovery_gate: {
+      evaluable: gate.evaluable,
+      recall_measurable: gate.recall_measurable,
+      reason: gate.reason,
+      class: gate.class,
+      detail: gate.detail,
+      executed: gate.executed,
+      skipped: gate.skipped,
+      skip_reason: gate.skip_reason,
+      errored: gate.errored,
+      search: gate.search,
+      extraction: gate.extraction,
+      counters: gate.counters,
+    },
+    provider_health: gate.provider_health,
+  }
+
   // Hard error path (discovery threw).
   if (opts.error) {
     findings.push(
@@ -289,7 +431,7 @@ export function evaluateDiscovery(scenario, profileId, result, opts = {}) {
         evidence: { ...baseEvidence, error: String(opts.error) },
       }),
     )
-    return { ...baseEvidence, status: 'error', stored: 0, accepted: 0, review: 0, findings }
+    return { ...baseEvidence, ...gateFields, status: 'error', stored: 0, accepted: 0, review: 0, findings }
   }
 
   const run = result?.run || {}
@@ -303,7 +445,7 @@ export function evaluateDiscovery(scenario, profileId, result, opts = {}) {
         evidence: { ...baseEvidence, reason: run.reason },
       }),
     )
-    return { ...baseEvidence, status: 'skipped', stored: 0, accepted: 0, review: 0, findings }
+    return { ...baseEvidence, ...gateFields, status: 'skipped', stored: 0, accepted: 0, review: 0, findings }
   }
 
   const sources = Array.isArray(run.sources) ? run.sources : []
@@ -601,9 +743,19 @@ export function evaluateDiscovery(scenario, profileId, result, opts = {}) {
   // reference the school / county, the open-web query breadth is the weakness —
   // route the finding at buildWebQueries so Anya/Sam evolve it. Only fires when
   // discovery actually produced candidates (else ZERO_RESULT already covers it).
+  //
+  // GATED ON THE LANE HAVING RUN (amy-cohort-1, prod 2026-09-12): these two
+  // detectors diagnose the OPEN-WEB lane, so they may only speak when that lane
+  // executed with providers reachable and extraction not provably dead. When
+  // the lane was skipped/absent/errored, every search query was unavailable,
+  // or ~40 pages were fetched and ZERO candidates extracted, the registry-only
+  // recommendations cannot tell us anything about query breadth — the member is
+  // `discovery_blocked:<reason>` (see discoveryGate.js) and no recall finding is
+  // minted. Degraded-but-present search still fires (the finding is measured,
+  // its attribution stays inconclusive → the item is BLOCKED, never a code claim).
   const recTitles = recommendations.map((r) => normLower(`${r.title || ''} ${r.sponsor || ''}`))
   const thesisSchools = Array.isArray(thesis.schools) ? thesis.schools.filter(Boolean) : []
-  if (thesis.is_student && thesisSchools.length > 0 && recommendations.length > 0) {
+  if (gate.evaluable && thesis.is_student && thesisSchools.length > 0 && recommendations.length > 0) {
     const missingSchools = thesisSchools.filter((s) => !titlesReference(recTitles, s))
     if (missingSchools.length === thesisSchools.length) {
       findings.push(
@@ -689,7 +841,7 @@ export function evaluateDiscovery(scenario, profileId, result, opts = {}) {
   // term-inside-title matcher `crisisNeedRecall.rowNamesProfileCounty` uses for
   // exactly this question — so the two can never drift.
   const thesisCounty = thesis?.location?.county ? normLower(thesis.location.county).replace(/\b(county|parish|borough)\b/g, '').trim() : ''
-  if (thesisCounty && recommendations.length > 0 && !recTitles.some((t) => titleStatesTerm(thesisCounty, t))) {
+  if (gate.evaluable && thesisCounty && recommendations.length > 0 && !recTitles.some((t) => titleStatesTerm(thesisCounty, t))) {
     findings.push(
       makeFinding(FINDING_TYPES.HYPERLOCAL_RECALL_MISS, {
         message: `${scenario.label}: profile in ${thesis.location.county} but 0 of ${recommendations.length} results are county/hyperlocal.`,
@@ -792,11 +944,36 @@ export function evaluateDiscovery(scenario, profileId, result, opts = {}) {
       )
     } else {
       status = 'weak'
+      // amy-cohort-6: say WHICH fact this is. `top_score` is the max over
+      // run.recommendations (isRecommendable rows only), so it is 0 by
+      // construction whenever nothing was recommendable and cannot tell "all
+      // stored rows scored below REVIEW" from "stored rows were REJECTed at 80+
+      // by eligibility/geo/temporal/four-truth gates". The engine input is
+      // recorded from what the pipeline hands over; verdict tallies it does
+      // not persist are written as UNKNOWN_not_persisted, never inferred.
+      const tally = decisionTally(run)
+      const verdicts = tally
+        ? { accept: num(tally.accept), review: num(tally.review), reject: num(tally.reject) }
+        : UNKNOWN_NOT_PERSISTED
+      const engineInput = {
+        stored_candidates: stored,
+        web_extracted: gate.counters.extracted,
+        web_stored: gate.counters.stored,
+        verdicts,
+        top_reject_reasons: tally?.top_reject_reasons ?? UNKNOWN_NOT_PERSISTED,
+        distinction: tally ? 'candidates_below_bands' : 'candidates_reached_engine_verdicts_not_persisted',
+      }
+      const rejectReasons = tally?.top_reject_reasons && typeof tally.top_reject_reasons === 'object'
+        ? Object.entries(tally.top_reject_reasons).sort((a, b) => Number(b[1]) - Number(a[1])).slice(0, 5).map(([k, v]) => `${k} ×${v}`).join(', ')
+        : ''
+      const message = tally
+        ? `${scenario.label}: ${stored} stored; ${stored} candidate(s) reached the engine and ${num(tally.reject) >= stored && num(tally.accept) + num(tally.review) === 0 ? `all ${num(tally.reject)} were REJECTed by gates` : `${num(tally.reject)} were REJECTed, ${num(tally.review)} held at REVIEW below the recommendation rule`}${rejectReasons ? ` (top reasons: ${rejectReasons})` : ''}; none reached the review/accept bands (top recommended score ${topScore}).`
+        : `${scenario.label}: ${stored} stored; ${stored} stored candidate(s) reached the engine but none reached the review/accept bands (top recommended score ${topScore}); per-candidate verdicts were not persisted by the pipeline (web lane extracted ${gate.counters.extracted ?? 'UNKNOWN'}).`
       findings.push(
         makeFinding(FINDING_TYPES.NO_QUALIFIED_MATCHES, {
-          message: `${scenario.label}: ${stored} stored, but none reached the review/accept bands (top score ${topScore}).`,
-          excerpt: `stored=${stored} top_score=${topScore}`,
-          evidence: { ...baseEvidence, stored, top_score: topScore },
+          message,
+          excerpt: `stored=${stored} top_score=${topScore} verdicts=${tally ? `${num(tally.accept)}/${num(tally.review)}/${num(tally.reject)}` : 'unknown'}`,
+          evidence: { ...baseEvidence, stored, top_score: topScore, engine_input: engineInput },
         }),
       )
     }
@@ -813,12 +990,20 @@ export function evaluateDiscovery(scenario, profileId, result, opts = {}) {
     status = 'ok'
   }
 
-  return {
+  const evaluation = {
     ...baseEvidence,
+    ...gateFields,
     status,
     recall_coverage: {
       institution_recall_miss: thesisSchools.filter(s => titlesReference(recTitles, s)),
       hyperlocal_recall_miss: thesisCounty && recTitles.some(t => titleStatesTerm(thesisCounty, t)) ? [thesis.location.county] : [],
+    },
+    // The subjects this profile DECLARED for each recall class (what a healthy
+    // rerun would have to cover), so the ledger can tell "re-run and covered"
+    // from "never re-run" without guessing from the finding list.
+    recall_subjects: {
+      institution_recall_miss: thesisSchools.slice(0, 20),
+      hyperlocal_recall_miss: thesisCounty ? [thesis.location.county] : [],
     },
     stored,
     accepted: accepted.length,
@@ -861,6 +1046,12 @@ export function evaluateDiscovery(scenario, profileId, result, opts = {}) {
     opportunity_oracle: opportunityOracle,
     findings,
   }
+  // The bounded per-member baseline (amy-cohort-5); its final class is the
+  // SAME canonical verdict the receipt and the probe ledger will compute.
+  const baseline = buildMemberBaseline({ run, lane, gate, recommendations, accepted, review, stored })
+  baseline.final_class = evaluationOutcome(evaluation).class
+  evaluation.member_baseline = baseline
+  return evaluation
 }
 
 function tally(arr, keyFn) {

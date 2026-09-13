@@ -4043,7 +4043,7 @@ CREATE TABLE IF NOT EXISTS agent_control_runs (
   )),
   status TEXT NOT NULL DEFAULT 'queued' CHECK(status IN (
     'queued','running','pausing','paused','stopping','stopped',
-    'completed','completed_noop','failed','cancelled','partial_stop','stop_failed'
+    'completed','completed_noop','failed','blocked','cancelled','partial_stop','stop_failed'
   )),
   started_by_user_id TEXT,
   started_by_email TEXT,
@@ -4816,3 +4816,31 @@ CREATE TABLE IF NOT EXISTS api_rate_limit_buckets (
 );
 CREATE INDEX IF NOT EXISTS idx_api_rate_limit_buckets_expiry
   ON api_rate_limit_buckets(expires_ms);
+
+-- New-user funnel: in-flight Anya conversational onboarding sessions
+-- (migration 078 / postgres 0074). Base-schema copy so a fresh SQLite database
+-- that never ran the migration runner (SMOKE_MODE opts out of MIGRATE_ON_BOOT;
+-- the EVA edge runner never executes a manifest seed_command) can still serve
+-- POST /api/onboarding/start — the first thing a brand-new visitor does.
+-- Measured 2026-09-12: the EVA disposable DB held 217 tables and no
+-- onboarding_sessions, so the guest-quiz journey 500'd on every fresh run.
+CREATE TABLE IF NOT EXISTS onboarding_sessions (
+  id TEXT PRIMARY KEY,
+  status TEXT NOT NULL DEFAULT 'in_progress'
+    CHECK (status IN ('in_progress', 'completed', 'abandoned')),
+  current_question TEXT,
+  answers TEXT NOT NULL DEFAULT '{}',
+  profile_patch TEXT NOT NULL DEFAULT '{}',
+  email TEXT,
+  user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+  profile_id TEXT REFERENCES profiles(id) ON DELETE SET NULL,
+  user_agent TEXT,
+  ip_hash TEXT,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  completed_at TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_onboarding_sessions_email
+  ON onboarding_sessions (email);
+CREATE INDEX IF NOT EXISTS idx_onboarding_sessions_status_updated
+  ON onboarding_sessions (status, updated_at);

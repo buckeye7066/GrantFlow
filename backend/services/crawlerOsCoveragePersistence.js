@@ -42,6 +42,59 @@ const FAILURE_OUTCOMES = new Set([
   CRAWLER_OUTCOME.RATE_LIMITED,
 ])
 
+/** The synthetic source id the open-web lane writes under (matches webLane.WEB_SOURCE). */
+export const WEB_LANE_SOURCE_ID = 'web_search'
+
+function num(v) {
+  const n = Number(v)
+  return Number.isFinite(n) ? n : 0
+}
+
+/**
+ * PURE: map the open-web lane's telemetry (`run.web_lane`) onto the SAME
+ * per-source summary shape pipeline.js emits for registry sources, so the
+ * lane lands in `crawler_source_runs` beside them (discovery-attrib-6: the
+ * dashboard had no row at all for the lane that finds county / community /
+ * foundation funding). Returns null when the lane did not run.
+ *
+ * Column semantics, kept identical to the registry rows:
+ *   outcome   SKIPPED (time budget / deps) · ERROR (lane threw or every search
+ *             query was unavailable) · EMPTY (ran, stored nothing) · OK
+ *   reason    the lane's own reason line (extraction_failed:<class>,
+ *             search_unavailable, time_budget_exhausted, …)
+ *   fetched   pages fetched      parsed    candidates extracted
+ *   rejected  reality rejections + catalog refusals (the registry definition)
+ *   stored / existing (durable dedupes)   accepted  primary-profile ACCEPTs
+ */
+export function webLaneSourceSummary(lane) {
+  if (!lane || typeof lane !== 'object') return null
+  const stage = lane.stage_ledger && typeof lane.stage_ledger === 'object' ? lane.stage_ledger : null
+  const attempted = stage ? num(stage.provider_attempted) : (Array.isArray(lane.queries) ? lane.queries.length : num(lane.queries))
+  let outcome
+  if (lane.skipped === true || (lane.ok === false && attempted === 0)) outcome = CRAWLER_OUTCOME.SKIPPED
+  else if (lane.ok === false || lane.provider_health?.search === 'unavailable') outcome = CRAWLER_OUTCOME.ERROR
+  else if (num(lane.stored) > 0) outcome = CRAWLER_OUTCOME.OK
+  else outcome = CRAWLER_OUTCOME.EMPTY
+  const reason = lane.error ?? lane.reason ?? null
+  return {
+    source_id: WEB_LANE_SOURCE_ID,
+    outcome,
+    reason: reason === null || reason === undefined ? null : String(reason).slice(0, 200),
+    queries: Array.isArray(lane.queries) ? lane.queries.slice(0, 64) : [],
+    fetched: num(lane.fetched),
+    parsed: stage ? num(stage.candidates_extracted) : num(lane.extracted),
+    rejected: stage ? num(stage.reality_rejected) + num(stage.catalog_refused) : num(lane.rejected),
+    stored: num(lane.stored),
+    existing: num(lane.deduped),
+    deduped: stage ? num(stage.canonical_duplicates) : num(lane.deduped),
+    accepted: stage ? num(stage.qualified_admitted) : 0,
+    match_score_sum: 0,
+    match_score_n: 0,
+    provider_health: lane.provider_health ?? null,
+    primary_attribution: lane.primary_attribution ?? null,
+  }
+}
+
 /**
  * Persist one crawl run's per-source coverage outcomes.
  *
@@ -163,4 +216,4 @@ export async function persistSourceCoverage(db, { crawlerRunId, profileId, crawl
   return { written }
 }
 
-export default { persistSourceCoverage }
+export default { persistSourceCoverage, webLaneSourceSummary, WEB_LANE_SOURCE_ID }

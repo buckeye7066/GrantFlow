@@ -45,6 +45,19 @@ export const TAG_AGENT = 'amy'
 export const TAG_PIPELINE = PIPELINE
 export const TAG_ALLOW_CLEANUP = 'allow_sam_cleanup'
 
+/**
+ * Category id prefix for an ADVERSARIAL probe scenario (`probe:<entity>+
+ * <identity>+<need>`), so it never collides with a catalog category in
+ * `by_category` histograms or the coverage weighting. Lives here (a leaf
+ * module with no imports) rather than in intersectionScenario.js because the
+ * approval ledger reads it and the ledger is imported by the crawler tuner and
+ * the owner report; importing it from intersectionScenario pulled
+ * probeSpace.js — and its import-time read of profileHelpers — into every one
+ * of those module graphs (caught by crawlerOsDiscoveryJob.test.js's partial
+ * profileHelpers mock on 2026-09-12).
+ */
+export const ADVERSARIAL_CATEGORY_PREFIX = 'probe'
+
 export const BASE_TAGS = Object.freeze([
   TAG_SYNTHETIC,
   TAG_AGENT,

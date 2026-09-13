@@ -54,7 +54,9 @@ describe('durable canonical discovery', () => {
     const sources = [{ source_id: 'example', outcome: 'SKIPPED', reason: 'time_budget_exhausted' }]
     discover.mockResolvedValue({ run: { stored: 2, sources }, persisted: { opportunities: 2, matches: 3 } })
     const result = await processCrawlerOsDiscoveryJob({ db: 'fixture-db', job: { profile_id: 'profile-a' }, signal, deadlineMs: 10000 })
-    expect(discover).toHaveBeenCalledExactlyOnceWith({ db: 'fixture-db', profileId: 'profile-a', signal, deadlineMs: 5000 })
+    // `trigger: 'dispatcher'` names this call's population for the live-crawl
+    // gap metric (livegap-4): every discovery entry point tags itself.
+    expect(discover).toHaveBeenCalledExactlyOnceWith({ db: 'fixture-db', profileId: 'profile-a', signal, deadlineMs: 5000, trigger: 'dispatcher' })
     expect(result.result_meta).toMatchObject({ sources, stored: 2, matches: 3, partial: true })
     discover.mockRejectedValue(new Error('persistence unavailable'))
     await expect(processCrawlerOsDiscoveryJob({ job: { profile_id: 'profile-a' } })).rejects.toThrow('persistence unavailable')

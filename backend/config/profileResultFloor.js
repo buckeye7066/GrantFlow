@@ -312,11 +312,20 @@ export function evaluateFloorEligibility(entry, {
  *   - `NO_NEW_RESULTS` — the pass searched and found nothing. Attempts +1; at
  *     `maxAttempts` the honest verdict is recorded with its evidence.
  *
+ * `webLaneDegraded` (2026-09-12, the heal-queue starvation fix): true when this
+ * pass's REGISTRY lanes ran but the open-web lane was dead — a REAL attempt,
+ * not a "never burn" transient one (see `classifyDiscoveryFloorAttempt` in
+ * `services/coverageAudit/profileResultCoverageAudit.js`). It is recorded on
+ * the entry (`web_lane_dead`, `last_web_lane_outage_at`,
+ * `web_lane_degraded_attempts`) so an eventual exhausted verdict can name how
+ * many of its passes ran without the web lane, instead of reading as a clean
+ * "exhausted" when part of the search space was never actually reachable.
+ *
  * The caller must only call this AFTER the recount has succeeded — a mark
  * written before the outcome is known is the #946 defect.
  *
  * @param {object|null} entry
- * @param {object} outcome  { outcome, target, awardable, added, evidence, at }
+ * @param {object} outcome  { outcome, target, awardable, added, evidence, at, webLaneDegraded }
  */
 export function applyFloorAttempt(entry, {
   outcome,
@@ -327,6 +336,7 @@ export function applyFloorAttempt(entry, {
   at = new Date().toISOString(),
   maxAttempts = RESULT_FLOOR_MAX_ATTEMPTS,
   fingerprint = null,
+  webLaneDegraded = false,
 } = {}) {
   const prev = entry && typeof entry === 'object' ? { ...entry } : {}
   const next = {
@@ -337,21 +347,38 @@ export function applyFloorAttempt(entry, {
     last_attempt_at: at,
     last_outcome: outcome,
     last_attempt_added: Number(added) || 0,
+    web_lane_dead: Boolean(webLaneDegraded),
+    ...(webLaneDegraded ? { last_web_lane_outage_at: at } : {}),
     ...(fingerprint ? { fingerprint } : {}),
+  }
+
+  // A MET floor is met regardless of the web lane's health, so this check must
+  // run BEFORE the TRANSIENT early return below (2026-09-12). Registry lanes
+  // can independently satisfy the floor while the web lane is dead, and a
+  // blanket "TRANSIENT spends/concludes nothing" used to mask that census —
+  // leaving a served profile recorded as still short and endlessly re-queued.
+  // `awardable` must be an ACTUAL measured value, never coerced from a missing
+  // one: `Number(null)` is 0 and IS finite (the exact trap this file's own
+  // comments warn about elsewhere), so a bare `Number.isFinite(Number(x))`
+  // would read a genuinely absent census as "0 awardable, floor not met" —
+  // the null/undefined check below keeps that reading impossible. A TRANSIENT
+  // outcome with no census at all (a crawl that threw before any recount ever
+  // ran) still falls through untouched to the branch below.
+  const hasCensusValue = awardable !== null && awardable !== undefined && awardable !== '' && Number.isFinite(Number(awardable))
+  if (hasCensusValue && Number(awardable) >= Number(target)) {
+    // The floor is MET. Clear the whole attempt state — this profile is served.
+    next.attempts = 0
+    next.web_lane_degraded_attempts = 0
+    next.exhausted_at = null
+    next.exhausted_evidence = null
+    next.last_outcome = FLOOR_OUTCOME.ADDED
+    return next
   }
 
   if (outcome === FLOOR_OUTCOME.TRANSIENT) {
     // Nothing is spent and nothing is concluded.
     next.attempts = Number(prev.attempts) || 0
-    return next
-  }
-
-  if (Number(awardable) >= Number(target)) {
-    // The floor is MET. Clear the whole attempt state — this profile is served.
-    next.attempts = 0
-    next.exhausted_at = null
-    next.exhausted_evidence = null
-    next.last_outcome = FLOOR_OUTCOME.ADDED
+    next.web_lane_degraded_attempts = Number(prev.web_lane_degraded_attempts) || 0
     return next
   }
 
@@ -359,6 +386,7 @@ export function applyFloorAttempt(entry, {
     // Progress, but still short: the lane is productive, so give it a full
     // budget again rather than counting down to a premature "exhausted".
     next.attempts = 0
+    next.web_lane_degraded_attempts = 0
     next.exhausted_at = null
     next.exhausted_evidence = null
     return next
@@ -366,6 +394,8 @@ export function applyFloorAttempt(entry, {
 
   const attempts = (Number(prev.attempts) || 0) + 1
   next.attempts = attempts
+  const webLaneDegradedAttempts = (Number(prev.web_lane_degraded_attempts) || 0) + (webLaneDegraded ? 1 : 0)
+  next.web_lane_degraded_attempts = webLaneDegradedAttempts
   if (attempts >= maxAttempts) {
     next.exhausted_at = at
     // The verdict must name what was actually done, or it is just a shrug.
@@ -373,12 +403,20 @@ export function applyFloorAttempt(entry, {
       target: Number(target) || 0,
       found: Number(awardable) || 0,
       attempts,
+      // How many of those attempts ran without the web lane — an exhausted
+      // verdict that hides this reads as a clean, fully-searched "exhausted"
+      // when part of the search space (open-web) was never reachable at all.
+      web_lane_degraded_attempts: webLaneDegradedAttempts,
       lanes_queried: Number(evidence?.lanes_queried) || 0,
       queries_issued: Number(evidence?.queries_issued) || 0,
       pages_fetched: Number(evidence?.pages_fetched) || 0,
       candidates_extracted: Number(evidence?.candidates_extracted) || 0,
       rejected_by_engine: Number(evidence?.rejected_by_engine) || 0,
       added_total: Number(evidence?.added_total) || 0,
+      // The crawl's own primary attribution (liveCrawlGapLearning.
+      // attributePrimaryGap) so the verdict names WHY: a healthy empty web
+      // and a dead extractor are different exhaustions (2026-09-12).
+      primary_attribution: typeof evidence?.primary_attribution === 'string' ? evidence.primary_attribution : null,
     }
     next.last_outcome = FLOOR_OUTCOME.EXHAUSTED
   }
@@ -388,15 +426,23 @@ export function applyFloorAttempt(entry, {
 /**
  * PURE: the human sentence an exhausted verdict is allowed to make. Every
  * number in it comes from a measurement — there is no "we tried hard" here.
+ *
+ * When one or more of the spent attempts ran with a dead web lane
+ * (`web_lane_degraded_attempts` > 0, 2026-09-12), the sentence names it
+ * explicitly — a profile exhausted while the open-web lane was unreachable for
+ * part of its budget must never read as a clean, fully-searched "exhausted".
  */
 export function describeExhaustion(entry) {
   const e = entry?.exhausted_evidence
   if (!entry?.exhausted_at || !e) return null
+  const degraded = Number(e.web_lane_degraded_attempts) || 0
   return (
     `exhausted — searched ${e.lanes_queried} lane(s) and ${e.queries_issued} quer${e.queries_issued === 1 ? 'y' : 'ies'} ` +
     `over ${e.attempts} attempt(s); ${e.candidates_extracted} candidate(s) reached the engine, ` +
     `${e.rejected_by_engine} were rejected, ${e.added_total} were added. ` +
-    `Found ${e.found} of a requested ${e.target}.`
+    `Found ${e.found} of a requested ${e.target}.` +
+    (degraded > 0 ? ` ${degraded} of ${e.attempts} pass(es) ran without the web lane.` : '') +
+    (e.primary_attribution ? ` Primary cause on the last pass: ${e.primary_attribution}.` : '')
   )
 }
 

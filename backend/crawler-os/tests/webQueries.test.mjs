@@ -7,7 +7,7 @@
 // surface field-specific scholarship searches.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { buildWebQueries } from '../webQueries.js';
+import { buildWebQueries, hasPersistentQueryShortfall } from '../webQueries.js';
 
 const STUDENT_THESIS = {
   applicant_types: ['student', 'individual'],
@@ -45,7 +45,7 @@ test('persistent shortfalls interleave breadth even when the full query plan fit
   };
   const first = buildWebQueries(thesis, { max: 28, seed: 0, year: 2026 });
   const next = buildWebQueries(thesis, { max: 28, seed: 5, year: 2026 });
-  assert.equal(first.length, 9, 'fixture stays below the 28-query budget');
+  assert.ok(first.length > 6 && first.length < 28, `fixture stays below the 28-query budget and above the head window (got ${first.length})`);
   assert.deepEqual(next.slice(0, 2), first.slice(0, 2), 'highest-signal anchors stay fixed');
   assert.ok(
     next.slice(0, 6).some((query) => !first.slice(0, 6).includes(query)),
@@ -363,7 +363,14 @@ test('one complete seed cycle reaches every budgeted query without double-rotati
   ];
   for (const thesis of profiles) {
     const inventory = buildWebQueries(thesis, { year: 2026, max: 10000, seed: 0 });
-    for (const max of [1, 6, 8, 14]) {
+    // max=1 is the ONE budget with no rotating slot by contract: the strongest
+    // CORE query, seed-independent (webq-3). max=2 under a learned shortfall
+    // is anchor + core, likewise unrotated. Complete recall is promised from
+    // the first budget that carries a rotating slot.
+    const atOne = new Set(Array.from({ length: 5 }, (_, seed) => buildWebQueries(thesis, { year: 2026, max: 1, seed })[0]));
+    assert.equal(atOne.size, 1, 'max=1 emits the same strongest core query for every seed');
+    const firstRotatingBudget = hasPersistentQueryShortfall(thesis) ? 3 : 2;
+    for (const max of [firstRotatingBudget, 6, 8, 14]) {
       const observed = new Set();
       for (let seed = 0; seed < inventory.length; seed += 1) {
         const queries = buildWebQueries(thesis, { year: 2026, max, seed });

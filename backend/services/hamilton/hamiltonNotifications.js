@@ -64,6 +64,14 @@ export const HAMILTON_USER_NOTIFICATION_TYPES = Object.freeze([
   // registered here, so every identity ask was refused as "invalid type" and
   // swallowed by the caller's catch — nobody was ever asked.
   'hamilton_identity_needed',
+  // A submit click reached (or may have reached) the portal but no durable
+  // confirmation was captured: the task is parked at
+  // submission_verification_required and the owner must check the funder
+  // portal before anything is retried. Found 2026-09-12: the orchestrator had
+  // emitted this type since the three-state protocol shipped, but it was never
+  // registered here, so emitHamiltonNotification refused it as "invalid type"
+  // and the caller's catch swallowed it — no parked submission ever paged anyone.
+  'hamilton_submission_verification_required',
   // A portal needs a captured browser SESSION (post-2FA) before Hamilton can act
   // inside the real account — proactive reminder to (re)capture.
   'hamilton_session_capture_needed',
