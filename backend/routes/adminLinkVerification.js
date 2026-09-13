@@ -2,14 +2,13 @@ import crypto from 'node:crypto'
 import express from 'express'
 import { runLinkVerification } from '../services/linkVerificationService.js'
 import { runWithSchedulerLock } from '../services/schedulerLock.js'
-import { getLock } from '../services/agentControl/agentControlStore.js'
 import { createLogger } from '../utils/logger.js'
 
 export const LINK_VERIFICATION_JOB_STATE_KEY = 'link_verification_admin_job'
 const LOCK_NAME = 'link-verification'
 const STATUS_URL = '/api/admin/verify-links/status'
 const log = createLogger('route:admin-link-verification')
-const STAT_KEYS = ['checked', 'ok', 'broken', 'skipped', 'redirect', 'unverified', 'deactivated', 'expired', 'quarantined', 'restored']
+const STAT_KEYS = ['checked', 'ok', 'broken', 'skipped', 'redirect', 'suspicious', 'unverified', 'deactivated', 'expired', 'quarantined', 'restored']
 
 function sumStats(previous, next) {
   return Object.fromEntries(STAT_KEYS.map(key => {
@@ -22,7 +21,8 @@ function sumStats(previous, next) {
 export async function readLinkVerificationRun(db) {
   const row = await db.prepare('SELECT value FROM system_kv WHERE key = ?').get(LINK_VERIFICATION_JOB_STATE_KEY)
   let run = row?.value ? JSON.parse(row.value) : null
-  const lease = await getLock(db, `scheduler:${LOCK_NAME}`)
+  // Unlike the best-effort diagnostics helper, this lookup must not hide DB errors.
+  const lease = await db.prepare('SELECT acquired_by, expires_at FROM agent_control_locks WHERE lock_name = ? LIMIT 1').get(`scheduler:${LOCK_NAME}`)
   const active = Boolean(lease && Date.parse(lease.expires_at) > Date.now())
   if (run?.status === 'running' && (!active || lease.acquired_by !== `admin:${run.run_id}`)) {
     run = { ...run, status: 'interrupted', error: 'worker_lease_unavailable' }

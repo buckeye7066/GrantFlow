@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const state = vi.hoisted(() => ({
   rows: new Map(), lease: null, verify: vi.fn(), errors: vi.fn(),
-  failWrites: false, failReads: false, pending: [], signal: null,
+  failWrites: false, failReads: false, failLeaseReads: false, pending: [], signal: null,
 }))
 vi.mock('../services/linkVerificationService.js', () => ({ runLinkVerification: state.verify }))
 vi.mock('../services/agentControl/agentControlStore.js', () => ({ getLock: async () => state.lease }))
@@ -28,6 +28,10 @@ import { createAdminLinkVerificationRouter, LINK_VERIFICATION_JOB_STATE_KEY } fr
 function database() {
   return { dialect: 'postgres', prepare: sql => ({
     get: async key => {
+      if (sql.includes('agent_control_locks')) {
+        if (state.failLeaseReads) throw new Error('fixture lease read unavailable')
+        return state.lease
+      }
       if (state.failReads) throw new Error('fixture database read failure')
       return state.rows.has(key) ? { value: state.rows.get(key) } : undefined
     },
@@ -63,7 +67,7 @@ async function status(app) {
   return (await request(app).get('/verify-links/status').set('x-test-admin', 'yes')).body
 }
 beforeEach(() => {
-  state.rows.clear(); state.lease = null; state.failWrites = false; state.failReads = false
+  state.rows.clear(); state.lease = null; state.failWrites = false; state.failReads = false; state.failLeaseReads = false
   state.verify.mockReset().mockResolvedValue({ checked: 200, ok: 199, broken: 1 })
   state.errors.mockClear(); state.pending = []; state.signal = null
 })
@@ -167,5 +171,24 @@ describe('admin link-verification job', () => {
     expect(idle.headers['cache-control']).toBe('no-store')
     state.failReads = true
     expect((await request(app).get('/verify-links/status').set('x-test-admin', 'yes')).status).toBe(503)
+  })
+})
+
+describe('review regression: complete job status', () => {
+  it('retains suspicious verdicts so checked equals the sum of verdict categories', async () => {
+    state.verify.mockResolvedValueOnce({ checked: 3, ok: 1, suspicious: 2, quarantined: 2 })
+    const app = application()
+    await request(app).post('/verify-links').set('x-test-admin', 'yes').send({})
+    await vi.waitFor(async () => expect((await status(app)).run.status).toBe('completed'))
+    expect((await status(app)).run.stats).toMatchObject({ checked: 3, ok: 1, suspicious: 2, quarantined: 2 })
+  })
+  it('returns 503 rather than a fabricated interrupted state when lease storage fails', async () => {
+    const app = application(); pendingVerification()
+    await request(app).post('/verify-links').set('x-test-admin', 'yes').send({})
+    state.failLeaseReads = true
+    const response = await request(app).get('/verify-links/status').set('x-test-admin', 'yes')
+    expect(response.status).toBe(503)
+    expect(response.body.error).toBe('link_verification_status_unavailable')
+    expect(JSON.parse(state.rows.get(LINK_VERIFICATION_JOB_STATE_KEY)).status).toBe('running')
   })
 })

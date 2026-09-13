@@ -36,3 +36,11 @@ Poll the admin-authenticated `GET /api/admin/verify-links/status`. Its `run` is 
 HTTP 409 means another manual, recurring, weekly, or repair verifier holds the shared scheduler lease. No duplicate pass was launched. HTTP 503 means admission/status persistence was unavailable. The job stores only bounded aggregate statistics, never provider keys, fetched page content, or raw error payloads. Repeated calls cannot overwrite a newer run's record while an older worker settles.
 
 Local verification before publication: 17 job-contract tests and 45 related verifier/lifecycle/scheduler tests pass (62 total); changed-file ESLint passes with zero warnings. Both new cancellation tests failed against the prior verifier before the checkpoints were added. Full repository checks and post-deployment evidence remain separate gates.
+
+## Review corrections, September 13
+
+The review identified four integration gaps: the cloud weekly helper was outside the shared lease, active HEAD/GET requests did not receive cancellation, suspicious verdicts were absent from job aggregates, and the best-effort lease reader could turn a database error into an interrupted status.
+
+All four now have corrections. The cloud helper uses the same renewed lease and explicitly starts/stops its separate process heartbeat. The canonical probe receives cancellation through `safeFetch` and never retries GET after caller cancellation. Job statistics preserve `suspicious`; status performs a strict lease query and returns 503 when that query is unavailable.
+
+Five new regression cases failed before these corrections. The complete targeted set now passes: 19 job-contract cases and 3 active-probe/cloud-wiring cases. These results are local tests, not evidence of a deployed fix or a passing mission gate. Full current-head CI and live completion evidence remain required.
