@@ -546,3 +546,45 @@ describe('link backlog safety regression', () => {
     expect(verifier).toContain("status = CASE WHEN status = 'paused' THEN 'active' ELSE status END")
   })
 })
+
+describe('repair worker cancellation', () => {
+  it('does no repair work when its lease is already cancelled', async () => {
+    const db = makeDb(); const controller = new AbortController(); controller.abort()
+    insert(db, { id: 'cancel-before', source_url: 'https://8.8.8.8/fixture' })
+    const before = db.prepare('SELECT * FROM funding_opportunities').all()
+    const fetchImpl = vi.fn(async () => ({ status: 200, url: 'https://8.8.8.8/fixture' }))
+    try {
+      await expect(repairBrokenDirectBatch(db, { signal: controller.signal, fetchImpl })).rejects.toThrow()
+      expect(fetchImpl).not.toHaveBeenCalled()
+      expect(db.prepare('SELECT * FROM funding_opportunities').all()).toEqual(before)
+    } finally { db.close() }
+  })
+  it('never publishes a probe result or starts the next row after lease loss', async () => {
+    const db = makeDb(); const controller = new AbortController()
+    insert(db, { id: 'cancel-during-a', source_url: 'https://8.8.8.8/fixture' })
+    insert(db, { id: 'cancel-during-b', source_url: 'https://8.8.4.4/fixture' })
+    const fetchImpl = vi.fn(async () => { controller.abort(); return { status: 200, url: 'https://8.8.8.8/fixture' } })
+    const rescue = vi.fn()
+    try {
+      await expect(repairBrokenDirectBatch(db, { signal: controller.signal, fetchImpl, findOfficialUrlImpl: rescue, concurrency: 1 })).rejects.toThrow()
+      expect(fetchImpl).toHaveBeenCalledTimes(1)
+      expect(rescue).not.toHaveBeenCalled()
+      expect(db.prepare('SELECT COUNT(*) AS n FROM verification_events').get().n).toBe(0)
+      expect(db.prepare('SELECT COUNT(*) AS n FROM funding_opportunities WHERE last_verified_at IS NOT NULL').get().n).toBe(0)
+    } finally { db.close() }
+  })
+  it('carries cancellation into official-URL rescue and fences the returned verdict', async () => {
+    const db = makeDb(); const controller = new AbortController()
+    insert(db, { id: 'cancel-rescue', title: 'Fixture Relief Program' })
+    const rescue = vi.fn(async () => {
+      controller.abort()
+      return { url: 'https://8.8.8.8/official', searched: true, probe: { status: 'ok', code: 200 } }
+    })
+    try {
+      await expect(repairBrokenDirectBatch(db, { signal: controller.signal, findOfficialUrlImpl: rescue })).rejects.toThrow()
+      expect(rescue.mock.calls[0][1]).toMatchObject({ signal: controller.signal })
+      expect(db.prepare('SELECT COUNT(*) AS n FROM verification_events').get().n).toBe(0)
+      expect(db.prepare('SELECT link_status, last_verified_at FROM funding_opportunities').get()).toEqual({ link_status: 'broken', last_verified_at: null })
+    } finally { db.close() }
+  })
+})

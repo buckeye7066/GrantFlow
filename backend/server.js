@@ -4022,7 +4022,9 @@ if (process.env.NODE_ENV !== 'test') {
             concurrency: 8,
             timeoutMs: 10_000,
             verifiedBy: `recurring-link-repair:pid=${process.pid}`,
+            signal: lease.signal,
           })
+          lease.signal?.throwIfAborted()
           console.log('[link-repair] recurring lifecycle pass:', lifecycle)
           // Link freshness can leave the boot census intentionally pending.
           // Refresh only that already-readable snapshot here, after the

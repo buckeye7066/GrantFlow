@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const state = vi.hoisted(() => ({
   rows: new Map(), lease: null, verify: vi.fn(), errors: vi.fn(),
-  failWrites: false, failReads: false, failLeaseReads: false, pending: [], signal: null,
+  failWrites: false, failReads: false, failLeaseReads: false, releasedStates: [], readQueries: [], pending: [], signal: null,
 }))
 vi.mock('../services/linkVerificationService.js', () => ({ runLinkVerification: state.verify }))
 vi.mock('../services/agentControl/agentControlStore.js', () => ({ getLock: async () => state.lease }))
@@ -18,7 +18,11 @@ vi.mock('../services/schedulerLock.js', () => ({
     const controller = new AbortController()
     state.signal = controller
     try { return await fn({ signal: controller.signal }) }
-    finally { if (state.lease === lease) state.lease = null }
+    finally { if (state.lease === lease) {
+      const stored = [...state.rows.values()][0]
+      state.releasedStates.push(stored ? JSON.parse(stored).status : null)
+      state.lease = null
+    } }
   },
 }))
 vi.mock('../utils/logger.js', () => ({ createLogger: () => ({ error: state.errors, warn: vi.fn(), info: vi.fn() }) }))
@@ -28,6 +32,11 @@ import { createAdminLinkVerificationRouter, LINK_VERIFICATION_JOB_STATE_KEY } fr
 function database() {
   return { dialect: 'postgres', prepare: sql => ({
     get: async key => {
+      state.readQueries.push(sql)
+      if (sql.startsWith('SELECT (SELECT value')) {
+        if (state.failReads || state.failLeaseReads) throw new Error('fixture snapshot unavailable')
+        return { value: state.rows.get(key), acquired_by: state.lease?.acquired_by, expires_at: state.lease?.expires_at }
+      }
       if (sql.includes('agent_control_locks')) {
         if (state.failLeaseReads) throw new Error('fixture lease read unavailable')
         return state.lease
@@ -69,7 +78,7 @@ async function status(app) {
 beforeEach(() => {
   state.rows.clear(); state.lease = null; state.failWrites = false; state.failReads = false; state.failLeaseReads = false
   state.verify.mockReset().mockResolvedValue({ checked: 200, ok: 199, broken: 1 })
-  state.errors.mockClear(); state.pending = []; state.signal = null
+  state.errors.mockClear(); state.pending = []; state.signal = null; state.releasedStates = []; state.readQueries = []
 })
 afterEach(async () => {
   for (const resolve of state.pending) resolve({ checked: 0 })
@@ -190,5 +199,21 @@ describe('review regression: complete job status', () => {
     expect(response.status).toBe(503)
     expect(response.body.error).toBe('link_verification_status_unavailable')
     expect(JSON.parse(state.rows.get(LINK_VERIFICATION_JOB_STATE_KEY)).status).toBe('running')
+  })
+})
+
+describe('review regression: terminal state and status snapshot', () => {
+  it('persists completed before the lease is released', async () => {
+    const app = application()
+    await request(app).post('/verify-links').set('x-test-admin', 'yes').send({})
+    await vi.waitFor(() => expect(state.lease).toBeNull())
+    expect(state.releasedStates).toEqual(['completed'])
+  })
+  it('reads the durable state and lease from one database snapshot', async () => {
+    const app = application(); pendingVerification()
+    await request(app).post('/verify-links').set('x-test-admin', 'yes').send({})
+    state.readQueries = []
+    expect((await status(app)).run.status).toBe('running')
+    expect(state.readQueries).toHaveLength(1)
   })
 })

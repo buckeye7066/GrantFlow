@@ -44,3 +44,9 @@ The review identified four integration gaps: the cloud weekly helper was outside
 All four now have corrections. The cloud helper uses the same renewed lease and explicitly starts/stops its separate process heartbeat. The canonical probe receives cancellation through `safeFetch` and never retries GET after caller cancellation. Job statistics preserve `suspicious`; status performs a strict lease query and returns 503 when that query is unavailable.
 
 Five new regression cases failed before these corrections. The complete targeted set now passes: 19 job-contract cases and 3 active-probe/cloud-wiring cases. These results are local tests, not evidence of a deployed fix or a passing mission gate. Full current-head CI and live completion evidence remain required.
+
+## Completion ordering and repair cancellation review
+
+A further review found a completion-before-unlock race and an uncancelled recurring repair phase. Five failing-first regression cases reproduced the ordering/snapshot and repair failures. Completion now persists inside the lease, and status reads the job plus lease from one SQL snapshot. Repair forwards the signal to candidate probes and official-URL rescue, checks cancellation before verdict/audit writes, and waits for all concurrent workers to settle before releasing its caller's lease. An already-running search-provider request remains bounded by that provider's timeout; cancellation prevents subsequent rescue searches, target probes, and repair writes.
+
+Local verification of this correction: 90 tests pass across eight job, verifier, repair, URL-enrichment, and scheduler files; changed-file lint and git diff checks return exit 0. The earlier broad local suite had one load-dependent admin-banner failure (10,107 passed); its two tests passed standalone, and the corresponding GitHub test-suite passed at e8169b35. This is not a claim that the local broad run was green. Current-head CI and deployment evidence still govern release.

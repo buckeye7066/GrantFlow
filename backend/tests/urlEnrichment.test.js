@@ -222,3 +222,27 @@ describe('findOfficialUrlForOpportunity', () => {
     expect(res.error).toContain('socket melted')
   })
 })
+
+describe('official URL rescue cancellation', () => {
+  it('stops after an in-flight search is cancelled without retrying or probing', async () => {
+    const controller = new AbortController()
+    const searchWebImpl = vi.fn(async () => { controller.abort(); return [] })
+    const checkUrlImpl = vi.fn()
+    await expect(findOfficialUrlForOpportunity({ title: 'Fixture Relief Scholarship' }, {
+      signal: controller.signal, searchWebImpl, checkUrlImpl,
+    })).rejects.toThrow()
+    expect(searchWebImpl).toHaveBeenCalledTimes(1)
+    expect(searchWebImpl.mock.calls[0][1].signal).toBe(controller.signal)
+    expect(checkUrlImpl).not.toHaveBeenCalled()
+  })
+  it('rejects a successful-looking probe after its caller cancels', async () => {
+    const controller = new AbortController()
+    const searchWebImpl = vi.fn(async () => [{ url: 'https://8.8.8.8/fixture', title: 'Fixture Relief Scholarship', snippet: 'Apply for Fixture Relief Scholarship' }])
+    const checkUrlImpl = vi.fn(async () => { controller.abort(); return { status: 'ok', code: 200 } })
+    await expect(findOfficialUrlForOpportunity({ title: 'Fixture Relief Scholarship' }, {
+      signal: controller.signal, searchWebImpl, checkUrlImpl,
+    })).rejects.toThrow()
+    expect(checkUrlImpl).toHaveBeenCalledTimes(1)
+    expect(checkUrlImpl.mock.calls[0][1].signal).toBe(controller.signal)
+  })
+})

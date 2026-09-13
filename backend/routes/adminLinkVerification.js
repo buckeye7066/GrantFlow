@@ -19,10 +19,13 @@ function sumStats(previous, next) {
 
 /** Return only the durable latest run and whether its worker still holds a lease. */
 export async function readLinkVerificationRun(db) {
-  const row = await db.prepare('SELECT value FROM system_kv WHERE key = ?').get(LINK_VERIFICATION_JOB_STATE_KEY)
+  // One statement prevents observing old running state beside a newly released lease.
+  const row = await db.prepare(`SELECT (SELECT value FROM system_kv WHERE key = ?) AS value,
+    (SELECT acquired_by FROM agent_control_locks WHERE lock_name = ?) AS acquired_by,
+    (SELECT expires_at FROM agent_control_locks WHERE lock_name = ?) AS expires_at`)
+    .get(LINK_VERIFICATION_JOB_STATE_KEY, `scheduler:${LOCK_NAME}`, `scheduler:${LOCK_NAME}`)
   let run = row?.value ? JSON.parse(row.value) : null
-  // Unlike the best-effort diagnostics helper, this lookup must not hide DB errors.
-  const lease = await db.prepare('SELECT acquired_by, expires_at FROM agent_control_locks WHERE lock_name = ? LIMIT 1').get(`scheduler:${LOCK_NAME}`)
+  const lease = row
   const active = Boolean(lease && Date.parse(lease.expires_at) > Date.now())
   if (run?.status === 'running' && (!active || lease.acquired_by !== `admin:${run.run_id}`)) {
     run = { ...run, status: 'interrupted', error: 'worker_lease_unavailable' }
@@ -76,6 +79,8 @@ export function launchLinkVerificationJob(db, { maxBatches = 1, logger = log } =
           await save({ ...run, batches_completed: index + 1, stats: sumStats(run.stats, stats) })
           if (stats.checked === 0) break
         }
+        workerSignal.throwIfAborted()
+        await save({ ...run, status: 'completed', finished_at: new Date().toISOString() })
         return { ran: true }
       })
       if (result?.skipped) {
@@ -83,7 +88,6 @@ export function launchLinkVerificationJob(db, { maxBatches = 1, logger = log } =
         return { skipped: true }
       }
       workerSignal?.throwIfAborted()
-      await save({ ...run, status: 'completed', finished_at: new Date().toISOString() })
       return { completed: true, run_id: runId }
     } catch (error) {
       const interrupted = workerSignal?.aborted || error?.code === 'LOCK_LEASE_LOST'
