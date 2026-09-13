@@ -21,7 +21,7 @@ vi.mock('../utils/logger.js', () => ({
   createLogger: () => ({ warn: state.warn, info: vi.fn(), error: vi.fn(), debug: vi.fn() }),
 }))
 
-import { invokeFreeJsonRoutes, resolveFreeAiRoutes } from '../utils/freeAiRoutes.js'
+import { getConfiguredFreeAiRoutes, invokeFreeJsonRoutes, resolveFreeAiRoutes } from '../utils/freeAiRoutes.js'
 
 function routesFor(key = 'FREE_AI_ROUTE_CUSTOM_API_KEY') {
   return resolveFreeAiRoutes([{
@@ -50,7 +50,7 @@ describe('free route credentials through the default SDK client', () => {
     expect(state.configs[0].apiKey).toBe('fixture-custom-credential')
   })
 
-  it('observes credential rotation without reloading the module', async () => {
+  it('reads the current process credential at each client construction', async () => {
     vi.stubEnv('FREE_AI_ROUTE_CUSTOM_API_KEY', 'fixture-first')
     const routes = routesFor()
     await invokeFreeJsonRoutes({ routes, prompt: 'fixture' })
@@ -131,7 +131,7 @@ describe('free route credential isolation', () => {
   it.each(['DATABASE_URL', 'AUTH_JWT_SECRET', 'OPENAI_API_KEY', 'ANTHROPIC_API_KEY', 'ADMIN_TOKEN', 'FREE_AI_ROUTES'])(
     'rejects unrelated process variable %s before SDK construction', async key => {
       vi.stubEnv(key, 'fixture-unrelated-secret')
-      const result = await invokeFreeJsonRoutes({ routes: routesFor(key), prompt: 'fixture' })
+      const result = await invokeFreeJsonRoutes({ routes: [{ ...routesFor()[0], apiKeyEnv: key }], prompt: 'fixture' })
       expect(result.ok).toBe(false)
       expect(state.configs).toHaveLength(0)
       expect(result.freeRouteErrors).toEqual([
@@ -156,7 +156,7 @@ describe('free route credential isolation', () => {
     vi.stubEnv('DATABASE_URL', 'fixture-database-secret')
     vi.stubEnv('FREE_AI_API_KEY', 'fixture-free-key')
     const result = await invokeFreeJsonRoutes({
-      routes: [...routesFor('DATABASE_URL'), ...routesFor('FREE_AI_API_KEY')], prompt: 'fixture',
+      routes: [{ ...routesFor()[0], apiKeyEnv: 'DATABASE_URL' }, ...routesFor('FREE_AI_API_KEY')], prompt: 'fixture',
     })
     expect(result.ok).toBe(true)
     expect(state.configs).toHaveLength(1)
@@ -169,5 +169,33 @@ describe('free route credential isolation', () => {
     const result = await invokeFreeJsonRoutes({ routes: routesFor('OLLAMA_API_KEY'), prompt: 'fixture' })
     expect(result.ok).toBe(true)
     expect(state.configs[0].apiKey).toBe('fixture-ollama-key')
+  })
+})
+
+
+describe('configured free-route health inventory', () => {
+  it.each(['DATABASE_URL', 'FREE_TIER_PROVIDER_KEY', 'not_a_valid_key'])(
+    'does not count unsupported credential reference %s as usable', key => {
+      const config = [{ id: 'invalid', base_url: 'https://free.example.test/v1', model: 'one', api_key_env: key }]
+      expect(resolveFreeAiRoutes(config)).toEqual([])
+      expect(getConfiguredFreeAiRoutes({ FREE_AI_ROUTES: JSON.stringify(config) })).toEqual([])
+    },
+  )
+
+  it('preserves valid route order while excluding forbidden credential references', () => {
+    const config = [
+      { id: 'first', base_url: 'https://one.example.test/v1', model: 'one', api_key_env: 'FREE_AI_ROUTE_ONE_API_KEY' },
+      { id: 'invalid', base_url: 'https://invalid.example.test/v1', model: 'invalid', api_key_env: 'AUTH_JWT_SECRET' },
+      { id: 'last', base_url: 'https://last.example.test/v1', model: 'last', api_key_env: 'FREE_AI_API_KEY' },
+    ]
+    expect(getConfiguredFreeAiRoutes({ FREE_AI_ROUTES: JSON.stringify(config) }).map(route => route.id)).toEqual(['first', 'last'])
+  })
+
+  it('keeps explicitly unauthenticated local routes in the configured inventory', () => {
+    const routes = getConfiguredFreeAiRoutes({ FREE_AI_ROUTES: JSON.stringify([
+      { id: 'local', base_url: 'http://ollama.internal:11434/v1', model: 'local', api_key_env: '' },
+    ]) })
+    expect(routes).toHaveLength(1)
+    expect(routes[0].apiKeyEnv).toBeNull()
   })
 })

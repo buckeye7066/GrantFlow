@@ -129,10 +129,13 @@ truth: `shared/freeWeek.js` (enforced in `backend/utils/tierGating.js` and
     ```json
     [
       { "id": "local-primary", "base_url": "http://ollama:11434/v1", "model": "your-installed-model" },
-      { "id": "free-tier-backup", "base_url": "https://provider.example/v1", "model": "provider-model", "api_key_env": "FREE_TIER_PROVIDER_KEY" }
+      { "id": "free-tier-backup", "base_url": "https://provider.example/v1", "model": "provider-model", "api_key_env": "FREE_AI_ROUTE_BACKUP_API_KEY" }
     ]
     ```
     Put only the secret's environment-variable **name** in `api_key_env`; set its value separately in Railway. Do not embed credentials in URLs or in `FREE_AI_ROUTES`.
+  - **Credential scope:** `api_key_env` accepts `FREE_AI_API_KEY`, `OLLAMA_API_KEY`, or a dedicated name matching `FREE_AI_ROUTE_<NAME>_API_KEY`. `NAME` starts with an uppercase letter and otherwise contains uppercase letters, digits, or underscores. For example, provision `FREE_AI_ROUTE_BACKUP_API_KEY` in Railway for the backup route above. References to unrelated secrets, legacy names such as `FREE_TIER_PROVIDER_KEY`, and malformed names are excluded from the configured-route inventory and rejected if passed directly to client construction. A missing or empty `api_key_env` deliberately selects an unauthenticated/self-hosted route.
+  - **Provisioning and rotation:** custom `FREE_AI_ROUTE_<NAME>_API_KEY` values are deployment-managed. Set or rotate them in Railway and apply the deployment so the backend receives the updated process environment. `POST /api/admin/env/apply` does **not** accept or persist these custom names. Its existing guarded runtime override path continues to support `FREE_AI_API_KEY` and `OLLAMA_API_KEY`. Clients read the current process value at each call; that does not imply an unsupported admin mutation or persistence capability.
+  - **Failure diagnostics:** `[utils:freeAiRoutes]` warnings include only a numeric HTTP status, a generic failure message, and a quota/rate-limit indicator. They do not include provider payloads or credential values. A configured route count confirms supported configuration, not live provider availability; verify an actual successful fallback before declaring recovery.
   - **`FREE_AI_TIMEOUT_MS`** — per-client timeout in milliseconds (default `12000`).
   - **`FREE_AI_MAX_RETRIES`** — SDK retries per free route (default `0`; GrantFlow already advances to the next route).
   - **`FREE_AI_RESERVE_MS`** — part of the shared request deadline reserved for free-route failover (default `6000`).

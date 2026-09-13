@@ -39,6 +39,15 @@ function parseJsonLoose(text) {
   return first >= 0 && last > first ? safeParseJSON(raw.slice(first, last + 1), null) : null
 }
 
+/** Allow only credentials dedicated to free/self-hosted routes. */
+function isAllowedCredentialRef(name) {
+  return typeof name === 'string' && (
+    name === FREE_ROUTE_ENV_KEYS.genericApiKey ||
+    name === FREE_ROUTE_ENV_KEYS.ollamaApiKey ||
+    /^FREE_AI_ROUTE_[A-Z][A-Z0-9_]*_API_KEY$/.test(name)
+  )
+}
+
 function normalizeRoute(entry, index) {
   if (!entry || typeof entry !== 'object') return null
   const baseURL = String(entry.base_url ?? entry.baseURL ?? '').trim().replace(/\/+$/, '')
@@ -50,11 +59,12 @@ function normalizeRoute(entry, index) {
   const rawId = String(entry.id || `route-${index + 1}`).trim().toLowerCase()
   const id = rawId.replace(/[^a-z0-9._-]+/g, '-').replace(/^-+|-+$/g, '') || `route-${index + 1}`
   const apiKeyEnv = String(entry.api_key_env ?? entry.apiKeyEnv ?? '').trim()
+  if (apiKeyEnv && !isAllowedCredentialRef(apiKeyEnv)) return null
   return {
     id,
     baseURL,
     model,
-    apiKeyEnv: /^[A-Z][A-Z0-9_]*$/.test(apiKeyEnv) ? apiKeyEnv : null,
+    apiKeyEnv: apiKeyEnv || null,
   }
 }
 
@@ -122,14 +132,12 @@ export function isProviderCreditExhaustion(error) {
 // Route configuration is admin-editable, so it must not select arbitrary
 // process secrets as bearer tokens. Custom credentials use the dedicated
 // FREE_AI_ROUTE_<NAME>_API_KEY namespace; existing generic/Ollama keys remain
-// supported. Validate at SDK construction even for unnormalized callers, then
-// resolve the allowed key at call time so rotations do not need a restart.
+// supported. Validate again for unnormalized callers before reading any value.
+// Read the current process value for each client. Custom key provisioning and
+// rotation remain deployment-managed; this does not add admin runtime writes.
 function clientFor(route, env = process.env) {
   const apiKeyEnv = route.apiKeyEnv
-  const allowed = apiKeyEnv === FREE_ROUTE_ENV_KEYS.genericApiKey ||
-    apiKeyEnv === FREE_ROUTE_ENV_KEYS.ollamaApiKey ||
-    /^FREE_AI_ROUTE_[A-Z][A-Z0-9_]*_API_KEY$/.test(apiKeyEnv || '')
-  if (apiKeyEnv && !allowed) {
+  if (apiKeyEnv && !isAllowedCredentialRef(apiKeyEnv)) {
     throw Object.assign(new Error('free route credential reference is not permitted'), { status: 403 })
   }
   const apiKey = apiKeyEnv ? String(env?.[apiKeyEnv] || '').trim() : ''
