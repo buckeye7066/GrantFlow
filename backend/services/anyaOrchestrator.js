@@ -22,7 +22,6 @@ const log = createLogger('anyaOrchestrator')
 const TASK_STATUSES = new Set(['open', 'in_progress', 'completed', 'cancelled'])
 const TASK_PRIORITIES = new Set(['low', 'normal', 'high', 'urgent'])
 
-let cachedOpenAI = null
 const openAIBreaker = createCircuitBreaker({
   name: 'anya-openai',
   failureThreshold: Number(process.env.ANYA_OPENAI_FAILURE_THRESHOLD || 3),
@@ -30,10 +29,9 @@ const openAIBreaker = createCircuitBreaker({
 })
 
 function getOpenAIClient() {
-  if (cachedOpenAI) return cachedOpenAI
-  const { openai } = createOpenAIClient()
-  cachedOpenAI = openai
-  return cachedOpenAI
+  // Resolve current runtime configuration for every request. A cached SDK client
+  // would keep a revoked/cleared credential alive after an admin key change.
+  return createOpenAIClient().openai
 }
 
 const DEFAULT_ASSISTANT_MODEL = process.env.ANYA_OPENAI_MODEL || 'gpt-4o-mini'

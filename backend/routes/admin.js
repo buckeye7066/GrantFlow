@@ -5,7 +5,7 @@ import crypto from 'crypto';
 import multer from 'multer';
 import fs from 'fs';
 import { promises as fsp } from 'fs';
-import { dirname, join, resolve } from 'path';
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'path';
 import { fileURLToPath } from 'url';
 import pdfParse from 'pdf-parse';
 import { createOpenAIClient, summarizeOpenAIError } from '../utils/openaiClient.js';
@@ -901,15 +901,27 @@ router.post('/openai/verify-key', async (req, res) => {
 });
 
 // POST /api/admin/openai/apply-key
-// Applies a provided OpenAI key to the *running process* (in-memory) and verifies immediately.
-// This avoids env-var tooling/restarts for local/dev use. It does NOT persist across restarts.
-// Body: { "apiKey": "sk-..." }
+// Both credential-edit surfaces use the same verify-save-apply sequence.
+// Body: { "apiKey": "sk-...", "persist": true|false }
 router.post('/openai/apply-key', async (req, res) => {
   if (!(await ensureAdminRequest(req, res))) return;
+  return applyVerifiedOpenAIKey(req, res, {
+    apiKey: req.body?.apiKey,
+    persist: req.body?.persist,
+  });
+});
 
-  const apiKey = typeof req.body?.apiKey === 'string' ? req.body.apiKey.trim() : '';
-  const persist = Boolean(req.body?.persist);
-  if (!apiKey) {
+async function applyVerifiedOpenAIKey(req, res, {
+  apiKey: rawKey,
+  persist: saveRequested,
+  allowClear = false,
+  envEdit = false,
+} = {}) {
+  const apiKey = typeof rawKey === 'string' ? rawKey.trim() : '';
+  const persist = Boolean(saveRequested);
+  const clearing = allowClear && apiKey === '';
+  const responseFields = envEdit ? { key: 'OPENAI_API_KEY' } : {};
+  if (!apiKey && !clearing) {
     return res.status(400).json({
       ok: false,
       error: 'Missing apiKey',
@@ -917,65 +929,89 @@ router.post('/openai/apply-key', async (req, res) => {
     });
   }
 
-  // Apply to process env (in-memory). openaiClient normalization will strip common junk.
-  process.env.OPENAI_API_KEY = apiKey;
-
-  // Optionally persist encrypted value into DB so it can be restored on restart.
-  // This is an emergency override mechanism; do not rely on it long-term.
-  if (persist) {
+  let diagnostics = null;
+  let models;
+  if (!clearing) {
     try {
-      const encrypted = encryptRuntimeSecret(apiKey);
-      await req.db
-        .prepare(
-          `
-            INSERT INTO app_runtime_secrets (key, value_ciphertext, iv, tag, updated_at)
-            VALUES ('OPENAI_API_KEY', ?, ?, ?, CURRENT_TIMESTAMP)
-            ON CONFLICT(key) DO UPDATE SET
-              value_ciphertext = excluded.value_ciphertext,
-              iv = excluded.iv,
-              tag = excluded.tag,
-              updated_at = CURRENT_TIMESTAMP
-          `,
-        )
-        .run(encrypted.value_ciphertext, encrypted.iv, encrypted.tag);
-    } catch (e) {
-      console.warn('[admin/openai/apply-key] Failed to persist runtime secret:', e?.message || e);
+      const candidate = createOpenAIClient({ apiKeyOverride: apiKey });
+      diagnostics = candidate.diagnostics;
+      models = await candidate.openai.models.list();
+    } catch (error) {
+      const summary = summarizeOpenAIError(error);
+      return res.status(summary.isAuth ? PROVIDER_AUTH_FAILURE_STATUS : 500).json({
+        ...responseFields,
+        ok: false,
+        applied: false,
+        persisted: false,
+        error: summary.message,
+        status: summary.status ?? null,
+        diagnostics,
+        hint: summary.isAuth
+          ? 'Provided key failed authentication. The active key was not changed. Check the key and try again.'
+          : 'Key verification failed. The active key was not changed. Check provider availability and connectivity.',
+      });
     }
   }
 
-  try {
-    const { openai, diagnostics } = createOpenAIClient();
-    const models = await openai.models.list();
-    const first = Array.isArray(models?.data) ? models.data[0]?.id : null;
-
-    res.json({
-      ok: true,
-      applied: true,
-      persisted: persist,
-      diagnostics,
-      sample_model: first,
-      model_count: Array.isArray(models?.data) ? models.data.length : null,
-      note: persist
-        ? 'Key applied and persisted to DB for emergency restart recovery. Please set OPENAI_API_KEY in your host environment for a permanent fix.'
-        : 'Key applied to running process only (not persisted). To persist, set OPENAI_API_KEY in your host environment.',
-    });
-  } catch (error) {
-    const summary = summarizeOpenAIError(error);
-    const { diagnostics } = createOpenAIClient({ allowMissing: true });
-
-    res.status(summary.isAuth ? PROVIDER_AUTH_FAILURE_STATUS : 500).json({
-      ok: false,
-      applied: true,
-      persisted: persist,
-      error: summary.message,
-      status: summary.status ?? null,
-      diagnostics,
-      hint: summary.isAuth
-        ? 'Applied key failed authentication. Ensure you pasted the raw OpenAI key (sk-...) with no extra text.'
-        : 'Applied key verification failed. Check outbound network/DNS/firewall and try again.',
-    });
+  let persisted = false;
+  if (persist) {
+    try {
+      if (clearing) {
+        await req.db.prepare('DELETE FROM app_runtime_secrets WHERE key = ?').run('OPENAI_API_KEY');
+      } else {
+        const encrypted = encryptRuntimeSecret(apiKey);
+        await req.db
+          .prepare(
+            `
+              INSERT INTO app_runtime_secrets (key, value_ciphertext, iv, tag, updated_at)
+              VALUES ('OPENAI_API_KEY', ?, ?, ?, CURRENT_TIMESTAMP)
+              ON CONFLICT(key) DO UPDATE SET
+                value_ciphertext = excluded.value_ciphertext,
+                iv = excluded.iv,
+                tag = excluded.tag,
+                updated_at = CURRENT_TIMESTAMP
+            `,
+          )
+          .run(encrypted.value_ciphertext, encrypted.iv, encrypted.tag);
+      }
+      persisted = true;
+    } catch {
+      // Database/encryption errors can contain secrets; do not log their payloads.
+      console.warn('[admin/openai/apply-key] Runtime secret persistence failed; active key unchanged.');
+      return res.status(503).json({
+        ...responseFields,
+        ok: false,
+        applied: false,
+        persisted: false,
+        code: 'RUNTIME_SECRET_PERSISTENCE_FAILED',
+        error: 'Could not persist the requested key change. The active key was not changed.',
+        diagnostics,
+      });
+    }
   }
-});
+
+  // No mutation occurs until verification and any requested persistence succeed.
+  if (clearing) delete process.env.OPENAI_API_KEY;
+  else process.env.OPENAI_API_KEY = apiKey;
+  const note = clearing
+    ? (persisted
+      ? 'Key cleared from the running process and its encrypted restart recovery entry removed.'
+      : 'Key cleared from the running process only. The stored restart recovery key was not changed.')
+    : (persisted
+      ? 'Key applied and persisted to DB for emergency restart recovery. Please set OPENAI_API_KEY in your host environment for a permanent fix.'
+      : 'Key applied to running process only (not persisted). To persist, set OPENAI_API_KEY in your host environment.');
+  return res.json({
+    ...responseFields,
+    ...(envEdit ? { cleared: clearing } : {}),
+    ok: true,
+    applied: true,
+    persisted,
+    diagnostics,
+    sample_model: Array.isArray(models?.data) ? models.data[0]?.id ?? null : null,
+    model_count: Array.isArray(models?.data) ? models.data.length : null,
+    note,
+  });
+}
 
 // POST /api/admin/env/apply
 // Applies an allowlisted env var to the *running process* (in-memory).
@@ -1042,6 +1078,16 @@ router.post('/env/apply', async (req, res) => {
       ok: false,
       error: 'Key not allowed',
       message: `Editing ${key} is not permitted from this endpoint.`,
+    });
+  }
+
+  // OpenAI edits, including intentional clearing, share the dedicated safety gate.
+  if (key === 'OPENAI_API_KEY') {
+    return applyVerifiedOpenAIKey(req, res, {
+      apiKey: value,
+      persist,
+      allowClear: true,
+      envEdit: true,
     });
   }
 
@@ -1116,9 +1162,22 @@ function safeDeleteFile(req, filePath) {
     if (!raw) return false
     const resolved = resolve(raw)
     const base = resolve(getUploadsDir(req))
-    if (!resolved.startsWith(base)) return false
-    if (!fs.existsSync(resolved)) return false
-    fs.unlinkSync(resolved)
+    const isContained = (root, target) => {
+      const rel = relative(root, target)
+      return rel !== '' && rel !== '..' && !rel.startsWith('..' + sep) && !isAbsolute(rel)
+    }
+    if (!isContained(base, resolved)) return false
+
+    // Check both the lexical boundary and the real filesystem boundary. A
+    // directory symlink/junction must not turn an uploads path into an escape.
+    const realBase = fs.realpathSync(base)
+    const realParent = fs.realpathSync(dirname(resolved))
+    if (relative(realBase, realParent) !== '' && !isContained(realBase, realParent)) return false
+    const entry = join(realParent, basename(resolved))
+    if (!isContained(realBase, fs.realpathSync(entry))) return false
+
+    // Unlink the entry, not a symlink's target, using its resolved parent.
+    fs.unlinkSync(entry)
     return true
   } catch {
     return false
@@ -1173,6 +1232,19 @@ router.get('/knowledge', async (req, res) => {
       .all(...params, limit, offset)
 
     res.json({ ok: true, q: q || null, limit, offset, items: rows || [] })
+  } catch (error) {
+    res.status(500).json({ ok: false, error: error?.message || String(error) })
+  }
+})
+
+// Register collection paths before the document-id route.
+// GET /api/admin/knowledge/opportunities
+// Extract funding opportunities from analyzed KB documents
+router.get('/knowledge/opportunities', async (req, res) => {
+  if (!(await ensureAdminRequest(req, res))) return
+  try {
+    const opportunities = await extractFundingOpportunitiesFromKB(req.db)
+    res.json({ ok: true, opportunities, count: opportunities.length })
   } catch (error) {
     res.status(500).json({ ok: false, error: error?.message || String(error) })
   }
@@ -1378,18 +1450,6 @@ router.post('/knowledge/process-pending', async (req, res) => {
     const limit = parseInt(req.body?.limit || '10', 10)
     const result = await processPendingKBDocuments(req.db, limit)
     res.json({ ok: true, ...result })
-  } catch (error) {
-    res.status(500).json({ ok: false, error: error?.message || String(error) })
-  }
-})
-
-// GET /api/admin/knowledge/opportunities
-// Extract funding opportunities from analyzed KB documents
-router.get('/knowledge/opportunities', async (req, res) => {
-  if (!(await ensureAdminRequest(req, res))) return
-  try {
-    const opportunities = await extractFundingOpportunitiesFromKB(req.db)
-    res.json({ ok: true, opportunities, count: opportunities.length })
   } catch (error) {
     res.status(500).json({ ok: false, error: error?.message || String(error) })
   }
