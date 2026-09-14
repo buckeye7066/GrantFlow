@@ -5,7 +5,7 @@ import crypto from 'crypto';
 import multer from 'multer';
 import fs from 'fs';
 import { promises as fsp } from 'fs';
-import { dirname, join, resolve } from 'path';
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'path';
 import { fileURLToPath } from 'url';
 import pdfParse from 'pdf-parse';
 import { createOpenAIClient, summarizeOpenAIError } from '../utils/openaiClient.js';
@@ -901,9 +901,9 @@ router.post('/openai/verify-key', async (req, res) => {
 });
 
 // POST /api/admin/openai/apply-key
-// Applies a provided OpenAI key to the *running process* (in-memory) and verifies immediately.
-// This avoids env-var tooling/restarts for local/dev use. It does NOT persist across restarts.
-// Body: { "apiKey": "sk-..." }
+// Verify the candidate before changing active or persisted configuration.
+// Persistence is optional, but when requested it must succeed before activation.
+// Body: { "apiKey": "sk-...", "persist": true|false }
 router.post('/openai/apply-key', async (req, res) => {
   if (!(await ensureAdminRequest(req, res))) return;
 
@@ -917,11 +917,28 @@ router.post('/openai/apply-key', async (req, res) => {
     });
   }
 
-  // Apply to process env (in-memory). openaiClient normalization will strip common junk.
-  process.env.OPENAI_API_KEY = apiKey;
+  let diagnostics = null;
+  let models;
+  try {
+    const candidate = createOpenAIClient({ apiKeyOverride: apiKey });
+    diagnostics = candidate.diagnostics;
+    models = await candidate.openai.models.list();
+  } catch (error) {
+    const summary = summarizeOpenAIError(error);
+    return res.status(summary.isAuth ? PROVIDER_AUTH_FAILURE_STATUS : 500).json({
+      ok: false,
+      applied: false,
+      persisted: false,
+      error: summary.message,
+      status: summary.status ?? null,
+      diagnostics,
+      hint: summary.isAuth
+        ? 'Provided key failed authentication. The active key was not changed. Check the key and try again.'
+        : 'Key verification failed. The active key was not changed. Check provider availability and connectivity.',
+    });
+  }
 
-  // Optionally persist encrypted value into DB so it can be restored on restart.
-  // This is an emergency override mechanism; do not rely on it long-term.
+  let persisted = false;
   if (persist) {
     try {
       const encrypted = encryptRuntimeSecret(apiKey);
@@ -938,43 +955,34 @@ router.post('/openai/apply-key', async (req, res) => {
           `,
         )
         .run(encrypted.value_ciphertext, encrypted.iv, encrypted.tag);
-    } catch (e) {
-      console.warn('[admin/openai/apply-key] Failed to persist runtime secret:', e?.message || e);
+      persisted = true;
+    } catch {
+      // Database/encryption errors can contain secrets; do not log their payloads.
+      console.warn('[admin/openai/apply-key] Runtime secret persistence failed; active key unchanged.');
+      return res.status(503).json({
+        ok: false,
+        applied: false,
+        persisted: false,
+        code: 'RUNTIME_SECRET_PERSISTENCE_FAILED',
+        error: 'Could not persist the verified key. The active key was not changed.',
+        diagnostics,
+      });
     }
   }
 
-  try {
-    const { openai, diagnostics } = createOpenAIClient();
-    const models = await openai.models.list();
-    const first = Array.isArray(models?.data) ? models.data[0]?.id : null;
-
-    res.json({
-      ok: true,
-      applied: true,
-      persisted: persist,
-      diagnostics,
-      sample_model: first,
-      model_count: Array.isArray(models?.data) ? models.data.length : null,
-      note: persist
-        ? 'Key applied and persisted to DB for emergency restart recovery. Please set OPENAI_API_KEY in your host environment for a permanent fix.'
-        : 'Key applied to running process only (not persisted). To persist, set OPENAI_API_KEY in your host environment.',
-    });
-  } catch (error) {
-    const summary = summarizeOpenAIError(error);
-    const { diagnostics } = createOpenAIClient({ allowMissing: true });
-
-    res.status(summary.isAuth ? PROVIDER_AUTH_FAILURE_STATUS : 500).json({
-      ok: false,
-      applied: true,
-      persisted: persist,
-      error: summary.message,
-      status: summary.status ?? null,
-      diagnostics,
-      hint: summary.isAuth
-        ? 'Applied key failed authentication. Ensure you pasted the raw OpenAI key (sk-...) with no extra text.'
-        : 'Applied key verification failed. Check outbound network/DNS/firewall and try again.',
-    });
-  }
+  // No mutation occurs until verification and any requested persistence succeed.
+  process.env.OPENAI_API_KEY = apiKey;
+  return res.json({
+    ok: true,
+    applied: true,
+    persisted,
+    diagnostics,
+    sample_model: Array.isArray(models?.data) ? models.data[0]?.id ?? null : null,
+    model_count: Array.isArray(models?.data) ? models.data.length : null,
+    note: persisted
+      ? 'Key applied and persisted to DB for emergency restart recovery. Please set OPENAI_API_KEY in your host environment for a permanent fix.'
+      : 'Key applied to running process only (not persisted). To persist, set OPENAI_API_KEY in your host environment.',
+  });
 });
 
 // POST /api/admin/env/apply
@@ -1116,9 +1124,22 @@ function safeDeleteFile(req, filePath) {
     if (!raw) return false
     const resolved = resolve(raw)
     const base = resolve(getUploadsDir(req))
-    if (!resolved.startsWith(base)) return false
-    if (!fs.existsSync(resolved)) return false
-    fs.unlinkSync(resolved)
+    const isContained = (root, target) => {
+      const rel = relative(root, target)
+      return rel !== '' && rel !== '..' && !rel.startsWith('..' + sep) && !isAbsolute(rel)
+    }
+    if (!isContained(base, resolved)) return false
+
+    // Check both the lexical boundary and the real filesystem boundary. A
+    // directory symlink/junction must not turn an uploads path into an escape.
+    const realBase = fs.realpathSync(base)
+    const realParent = fs.realpathSync(dirname(resolved))
+    if (relative(realBase, realParent) !== '' && !isContained(realBase, realParent)) return false
+    const entry = join(realParent, basename(resolved))
+    if (!isContained(realBase, fs.realpathSync(entry))) return false
+
+    // Unlink the entry, not a symlink's target, using its resolved parent.
+    fs.unlinkSync(entry)
     return true
   } catch {
     return false
@@ -1173,6 +1194,19 @@ router.get('/knowledge', async (req, res) => {
       .all(...params, limit, offset)
 
     res.json({ ok: true, q: q || null, limit, offset, items: rows || [] })
+  } catch (error) {
+    res.status(500).json({ ok: false, error: error?.message || String(error) })
+  }
+})
+
+// Register collection paths before the document-id route.
+// GET /api/admin/knowledge/opportunities
+// Extract funding opportunities from analyzed KB documents
+router.get('/knowledge/opportunities', async (req, res) => {
+  if (!(await ensureAdminRequest(req, res))) return
+  try {
+    const opportunities = await extractFundingOpportunitiesFromKB(req.db)
+    res.json({ ok: true, opportunities, count: opportunities.length })
   } catch (error) {
     res.status(500).json({ ok: false, error: error?.message || String(error) })
   }
@@ -1378,18 +1412,6 @@ router.post('/knowledge/process-pending', async (req, res) => {
     const limit = parseInt(req.body?.limit || '10', 10)
     const result = await processPendingKBDocuments(req.db, limit)
     res.json({ ok: true, ...result })
-  } catch (error) {
-    res.status(500).json({ ok: false, error: error?.message || String(error) })
-  }
-})
-
-// GET /api/admin/knowledge/opportunities
-// Extract funding opportunities from analyzed KB documents
-router.get('/knowledge/opportunities', async (req, res) => {
-  if (!(await ensureAdminRequest(req, res))) return
-  try {
-    const opportunities = await extractFundingOpportunitiesFromKB(req.db)
-    res.json({ ok: true, opportunities, count: opportunities.length })
   } catch (error) {
     res.status(500).json({ ok: false, error: error?.message || String(error) })
   }
