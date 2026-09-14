@@ -901,15 +901,27 @@ router.post('/openai/verify-key', async (req, res) => {
 });
 
 // POST /api/admin/openai/apply-key
-// Verify the candidate before changing active or persisted configuration.
-// Persistence is optional, but when requested it must succeed before activation.
+// Both credential-edit surfaces use the same verify-save-apply sequence.
 // Body: { "apiKey": "sk-...", "persist": true|false }
 router.post('/openai/apply-key', async (req, res) => {
   if (!(await ensureAdminRequest(req, res))) return;
+  return applyVerifiedOpenAIKey(req, res, {
+    apiKey: req.body?.apiKey,
+    persist: req.body?.persist,
+  });
+});
 
-  const apiKey = typeof req.body?.apiKey === 'string' ? req.body.apiKey.trim() : '';
-  const persist = Boolean(req.body?.persist);
-  if (!apiKey) {
+async function applyVerifiedOpenAIKey(req, res, {
+  apiKey: rawKey,
+  persist: saveRequested,
+  allowClear = false,
+  envEdit = false,
+} = {}) {
+  const apiKey = typeof rawKey === 'string' ? rawKey.trim() : '';
+  const persist = Boolean(saveRequested);
+  const clearing = allowClear && apiKey === '';
+  const responseFields = envEdit ? { key: 'OPENAI_API_KEY' } : {};
+  if (!apiKey && !clearing) {
     return res.status(400).json({
       ok: false,
       error: 'Missing apiKey',
@@ -919,71 +931,87 @@ router.post('/openai/apply-key', async (req, res) => {
 
   let diagnostics = null;
   let models;
-  try {
-    const candidate = createOpenAIClient({ apiKeyOverride: apiKey });
-    diagnostics = candidate.diagnostics;
-    models = await candidate.openai.models.list();
-  } catch (error) {
-    const summary = summarizeOpenAIError(error);
-    return res.status(summary.isAuth ? PROVIDER_AUTH_FAILURE_STATUS : 500).json({
-      ok: false,
-      applied: false,
-      persisted: false,
-      error: summary.message,
-      status: summary.status ?? null,
-      diagnostics,
-      hint: summary.isAuth
-        ? 'Provided key failed authentication. The active key was not changed. Check the key and try again.'
-        : 'Key verification failed. The active key was not changed. Check provider availability and connectivity.',
-    });
+  if (!clearing) {
+    try {
+      const candidate = createOpenAIClient({ apiKeyOverride: apiKey });
+      diagnostics = candidate.diagnostics;
+      models = await candidate.openai.models.list();
+    } catch (error) {
+      const summary = summarizeOpenAIError(error);
+      return res.status(summary.isAuth ? PROVIDER_AUTH_FAILURE_STATUS : 500).json({
+        ...responseFields,
+        ok: false,
+        applied: false,
+        persisted: false,
+        error: summary.message,
+        status: summary.status ?? null,
+        diagnostics,
+        hint: summary.isAuth
+          ? 'Provided key failed authentication. The active key was not changed. Check the key and try again.'
+          : 'Key verification failed. The active key was not changed. Check provider availability and connectivity.',
+      });
+    }
   }
 
   let persisted = false;
   if (persist) {
     try {
-      const encrypted = encryptRuntimeSecret(apiKey);
-      await req.db
-        .prepare(
-          `
-            INSERT INTO app_runtime_secrets (key, value_ciphertext, iv, tag, updated_at)
-            VALUES ('OPENAI_API_KEY', ?, ?, ?, CURRENT_TIMESTAMP)
-            ON CONFLICT(key) DO UPDATE SET
-              value_ciphertext = excluded.value_ciphertext,
-              iv = excluded.iv,
-              tag = excluded.tag,
-              updated_at = CURRENT_TIMESTAMP
-          `,
-        )
-        .run(encrypted.value_ciphertext, encrypted.iv, encrypted.tag);
+      if (clearing) {
+        await req.db.prepare('DELETE FROM app_runtime_secrets WHERE key = ?').run('OPENAI_API_KEY');
+      } else {
+        const encrypted = encryptRuntimeSecret(apiKey);
+        await req.db
+          .prepare(
+            `
+              INSERT INTO app_runtime_secrets (key, value_ciphertext, iv, tag, updated_at)
+              VALUES ('OPENAI_API_KEY', ?, ?, ?, CURRENT_TIMESTAMP)
+              ON CONFLICT(key) DO UPDATE SET
+                value_ciphertext = excluded.value_ciphertext,
+                iv = excluded.iv,
+                tag = excluded.tag,
+                updated_at = CURRENT_TIMESTAMP
+            `,
+          )
+          .run(encrypted.value_ciphertext, encrypted.iv, encrypted.tag);
+      }
       persisted = true;
     } catch {
       // Database/encryption errors can contain secrets; do not log their payloads.
       console.warn('[admin/openai/apply-key] Runtime secret persistence failed; active key unchanged.');
       return res.status(503).json({
+        ...responseFields,
         ok: false,
         applied: false,
         persisted: false,
         code: 'RUNTIME_SECRET_PERSISTENCE_FAILED',
-        error: 'Could not persist the verified key. The active key was not changed.',
+        error: 'Could not persist the requested key change. The active key was not changed.',
         diagnostics,
       });
     }
   }
 
   // No mutation occurs until verification and any requested persistence succeed.
-  process.env.OPENAI_API_KEY = apiKey;
+  if (clearing) delete process.env.OPENAI_API_KEY;
+  else process.env.OPENAI_API_KEY = apiKey;
+  const note = clearing
+    ? (persisted
+      ? 'Key cleared from the running process and its encrypted restart recovery entry removed.'
+      : 'Key cleared from the running process only. The stored restart recovery key was not changed.')
+    : (persisted
+      ? 'Key applied and persisted to DB for emergency restart recovery. Please set OPENAI_API_KEY in your host environment for a permanent fix.'
+      : 'Key applied to running process only (not persisted). To persist, set OPENAI_API_KEY in your host environment.');
   return res.json({
+    ...responseFields,
+    ...(envEdit ? { cleared: clearing } : {}),
     ok: true,
     applied: true,
     persisted,
     diagnostics,
     sample_model: Array.isArray(models?.data) ? models.data[0]?.id ?? null : null,
     model_count: Array.isArray(models?.data) ? models.data.length : null,
-    note: persisted
-      ? 'Key applied and persisted to DB for emergency restart recovery. Please set OPENAI_API_KEY in your host environment for a permanent fix.'
-      : 'Key applied to running process only (not persisted). To persist, set OPENAI_API_KEY in your host environment.',
+    note,
   });
-});
+}
 
 // POST /api/admin/env/apply
 // Applies an allowlisted env var to the *running process* (in-memory).
@@ -1050,6 +1078,16 @@ router.post('/env/apply', async (req, res) => {
       ok: false,
       error: 'Key not allowed',
       message: `Editing ${key} is not permitted from this endpoint.`,
+    });
+  }
+
+  // OpenAI edits, including intentional clearing, share the dedicated safety gate.
+  if (key === 'OPENAI_API_KEY') {
+    return applyVerifiedOpenAIKey(req, res, {
+      apiKey: value,
+      persist,
+      allowClear: true,
+      envEdit: true,
     });
   }
 

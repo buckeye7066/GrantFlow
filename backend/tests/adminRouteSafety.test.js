@@ -164,6 +164,84 @@ describe('admin OpenAI key activation is verify-then-save-then-apply', () => {
   })
 })
 
+describe('generic OpenAI environment edits use the same verification gate', () => {
+  function editKey(value, persist = true, database = db, options = {}) {
+    return request(createApp(database, options)).post('/api/admin/env/apply').send({ key: 'OPENAI_API_KEY', value, persist })
+  }
+  it('rejects an invalid generic edit without changing either key', async () => {
+    mocks.list.mockRejectedValue(Object.assign(new Error('Unauthorized'), { status: 401 }))
+    const res = await editKey(CANDIDATE)
+    expect(res.status).toBe(422)
+    expect(res.body).toMatchObject({ ok: false, applied: false, persisted: false })
+    expect(process.env.OPENAI_API_KEY).toBe(ACTIVE)
+    expect(savedSecret()).toBe('original-ciphertext')
+  })
+  it('verifies and persists a generic edit before activation and preserves its response fields', async () => {
+    let activeDuringVerification
+    mocks.list.mockImplementation(async () => {
+      activeDuringVerification = process.env.OPENAI_API_KEY
+      return { data: [] }
+    })
+    const res = await editKey(CANDIDATE)
+    expect(res.status).toBe(200)
+    expect(res.body).toMatchObject({ key: 'OPENAI_API_KEY', cleared: false, applied: true, persisted: true })
+    expect(activeDuringVerification).toBe(ACTIVE)
+    expect(mocks.create).toHaveBeenCalledWith(expect.objectContaining({ apiKeyOverride: CANDIDATE }))
+    expect(savedSecret()).toBe('new-ciphertext')
+    expect(process.env.OPENAI_API_KEY).toBe(CANDIDATE)
+  })
+  it('does not activate a generic edit when saving fails', async () => {
+    const failingDb = { prepare(sql) {
+      if (sql.includes('INSERT INTO app_runtime_secrets')) return { run() { throw new Error('DB unavailable') } }
+      return db.prepare(sql)
+    } }
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const res = await editKey(CANDIDATE, true, failingDb)
+    expect(res.status).toBe(503)
+    expect(res.body).toMatchObject({ applied: false, persisted: false })
+    expect(process.env.OPENAI_API_KEY).toBe(ACTIVE)
+    expect(savedSecret()).toBe('original-ciphertext')
+  })
+  it('preserves intentional key clearing and removes recovery only when requested', async () => {
+    const res = await editKey('')
+    expect(res.status).toBe(200)
+    expect(res.body).toMatchObject({ key: 'OPENAI_API_KEY', cleared: true, persisted: true })
+    expect(process.env.OPENAI_API_KEY).toBeUndefined()
+    expect(db.prepare('SELECT COUNT(*) AS n FROM app_runtime_secrets').get().n).toBe(0)
+    expect(mocks.list).not.toHaveBeenCalled()
+  })
+  it('leaves both keys unchanged if persisted clearing fails', async () => {
+    const failingDb = { prepare(sql) {
+      if (sql.includes('DELETE FROM app_runtime_secrets')) return { run() { throw new Error('DB unavailable') } }
+      return db.prepare(sql)
+    } }
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const res = await editKey('', true, failingDb)
+    expect(res.status).toBe(503)
+    expect(res.body).toMatchObject({ applied: false, persisted: false })
+    expect(process.env.OPENAI_API_KEY).toBe(ACTIVE)
+    expect(savedSecret()).toBe('original-ciphertext')
+  })
+  it('can clear only the active key without deleting recovery', async () => {
+    const res = await editKey('', false)
+    expect(res.status).toBe(200)
+    expect(res.body).toMatchObject({ cleared: true, persisted: false })
+    expect(process.env.OPENAI_API_KEY).toBeUndefined()
+    expect(savedSecret()).toBe('original-ciphertext')
+  })
+  it('keeps custom provider credential names deployment-managed', async () => {
+    const res = await request(createApp()).post('/api/admin/env/apply').send({ key: 'FREE_AI_ROUTE_UNAPPROVED_API_KEY', value: CANDIDATE })
+    expect(res.status).toBe(403)
+    expect(mocks.list).not.toHaveBeenCalled()
+  })
+  it('still rejects generic key changes from non-admin users', async () => {
+    const res = await editKey(CANDIDATE, true, db, { admin: false })
+    expect(res.status).toBe(403)
+    expect(mocks.list).not.toHaveBeenCalled()
+    expect(process.env.OPENAI_API_KEY).toBe(ACTIVE)
+  })
+})
+
 describe('admin knowledge route ordering', () => {
   it('routes opportunities to the collection handler even when that document id exists', async () => {
     addDocument('opportunities')
