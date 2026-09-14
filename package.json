@@ -138,7 +138,7 @@
   "dependencies": {
     "@anthropic-ai/sdk": "^0.125.0",
     "@aws-sdk/client-textract": "^3.1130.0",
-    "@babel/parser": "7.29.8",
+    "@babel/parser": "8.0.5",
     "@capacitor/android": "8.5.1",
     "@capacitor/app": "^8.1.1",
     "@capacitor/core": "8.5.1",
