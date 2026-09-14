@@ -5,10 +5,10 @@
  * Honesty contract under test: the finder only ever returns a URL that came
  * back from a real search for the candidate's own title+sponsor, passed the
  * token-overlap plausibility check, and answered a liveness probe — and it
- * never throws (provider failures surface as searched:false).
+ * surfaces provider failures as searched:false while caller cancellation rejects.
  */
 
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import {
   significantTitleTokens,
   isPlausibleOfficialHit,
@@ -220,5 +220,29 @@ describe('findOfficialUrlForOpportunity', () => {
     expect(res.url).toBe(null)
     expect(res.searched).toBe(false)
     expect(res.error).toContain('socket melted')
+  })
+})
+
+describe('official URL rescue cancellation', () => {
+  it('stops after an in-flight search is cancelled without retrying or probing', async () => {
+    const controller = new AbortController()
+    const searchWebImpl = vi.fn(async () => { controller.abort(); return [] })
+    const checkUrlImpl = vi.fn()
+    await expect(findOfficialUrlForOpportunity({ title: 'Fixture Relief Scholarship' }, {
+      signal: controller.signal, searchWebImpl, checkUrlImpl,
+    })).rejects.toThrow()
+    expect(searchWebImpl).toHaveBeenCalledTimes(1)
+    expect(searchWebImpl.mock.calls[0][1].signal).toBe(controller.signal)
+    expect(checkUrlImpl).not.toHaveBeenCalled()
+  })
+  it('rejects a successful-looking probe after its caller cancels', async () => {
+    const controller = new AbortController()
+    const searchWebImpl = vi.fn(async () => [{ url: 'https://8.8.8.8/fixture', title: 'Fixture Relief Scholarship', snippet: 'Apply for Fixture Relief Scholarship' }])
+    const checkUrlImpl = vi.fn(async () => { controller.abort(); return { status: 'ok', code: 200 } })
+    await expect(findOfficialUrlForOpportunity({ title: 'Fixture Relief Scholarship' }, {
+      signal: controller.signal, searchWebImpl, checkUrlImpl,
+    })).rejects.toThrow()
+    expect(checkUrlImpl).toHaveBeenCalledTimes(1)
+    expect(checkUrlImpl.mock.calls[0][1].signal).toBe(controller.signal)
   })
 })

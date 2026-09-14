@@ -158,6 +158,8 @@ function hitMentionsSponsor(sponsor, hit) {
  * }>}
  */
 export async function findOfficialUrlForOpportunity({ title, sponsor } = {}, deps = {}) {
+  const signal = deps.signal
+  signal?.throwIfAborted()
   const searchWebImpl = deps.searchWebImpl ?? searchWeb
   const checkUrlImpl = deps.checkUrlImpl ?? checkUrl
   try {
@@ -182,7 +184,9 @@ export async function findOfficialUrlForOpportunity({ title, sponsor } = {}, dep
     let hits = []
     let searchedOnce = false
     for (const query of queries) {
-      const raw = await searchWebImpl(query, { count: MAX_SEARCH_HITS, timeoutMs: SEARCH_TIMEOUT_MS })
+      signal?.throwIfAborted()
+      const raw = await searchWebImpl(query, { count: MAX_SEARCH_HITS, timeoutMs: SEARCH_TIMEOUT_MS, ...(signal ? { signal } : {}) })
+      signal?.throwIfAborted()
       searchedOnce = true
       const list = Array.isArray(raw) ? raw.slice(0, MAX_SEARCH_HITS) : []
       if (list.length > 0) { hits = list; break }
@@ -202,7 +206,9 @@ export async function findOfficialUrlForOpportunity({ title, sponsor } = {}, dep
     for (const hit of plausible) {
       if (probes >= MAX_LIVENESS_PROBES) break
       probes += 1
-      const probe = await checkUrlImpl(hit.url, { timeoutMs: PROBE_TIMEOUT_MS })
+      signal?.throwIfAborted()
+      const probe = await checkUrlImpl(hit.url, { timeoutMs: PROBE_TIMEOUT_MS, ...(signal ? { signal } : {}) })
+      signal?.throwIfAborted()
       if (probe && (probe.status === 'ok' || probe.status === 'redirect')) {
         return { url: probe.finalUrl || hit.url, hit, probe, searched: true, hits: hits.length }
       }
@@ -223,7 +229,9 @@ export async function findOfficialUrlForOpportunity({ title, sponsor } = {}, dep
     }
     return { url: null, searched: true, hits: hits.length }
   } catch (err) {
-    // Never throws — the rescue sweep treats searched:false as a provider
+    signal?.throwIfAborted()
+    // Ordinary provider failures stay non-throwing; caller cancellation above rejects.
+    // The rescue sweep treats searched:false as a provider
     // failure (candidate is preserved for a later attempt).
     const message = String(err?.message || err)
     log.warn('findOfficialUrlForOpportunity failed (non-fatal)', { error: message })

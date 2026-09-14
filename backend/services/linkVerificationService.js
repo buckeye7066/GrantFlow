@@ -237,6 +237,7 @@ export function classifySuccessfulProbe(requestedUrl, finalUrl) {
 }
 
 export async function checkUrl(url, opts = {}) {
+  opts.signal?.throwIfAborted()
   if (shouldSkipUrl(url)) {
     return { status: 'skipped', code: null, method: null, error: null }
   }
@@ -246,6 +247,7 @@ export async function checkUrl(url, opts = {}) {
   // crafted application_url can't make us scan internal services (and we follow
   // redirects below, so only fetch hosts we've cleared here).
   const ssrf = await assertSsrfSafeUrl(url)
+  opts.signal?.throwIfAborted()
   if (!ssrf.ok) {
     return { status: 'skipped', code: null, method: null, error: `ssrf_blocked:${ssrf.reason}` }
   }
@@ -261,6 +263,7 @@ export async function checkUrl(url, opts = {}) {
     : REQUEST_TIMEOUT_MS
 
   const tryProbe = async (method) => {
+    opts.signal?.throwIfAborted()
     try {
       const osmHost = /(^|\.)openstreetmap\.org$/i.test(new URL(url).hostname)
       // safeFetch re-validates EVERY redirect hop. The previous
@@ -278,7 +281,7 @@ export async function checkUrl(url, opts = {}) {
               Accept: 'text/html,application/xhtml+xml,application/json;q=0.9,*/*;q=0.8',
               'Accept-Language': 'en-US,en;q=0.9',
             },
-      }, { timeoutMs, fetchImpl: opts.fetchImpl })
+      }, { timeoutMs, fetchImpl: opts.fetchImpl, signal: opts.signal })
       // safeFetch stamps the post-redirect URL it actually settled on.
       const finalUrl = res.grantflowFinalUrl
         || (typeof res.url === 'string' && res.url ? res.url : url)
@@ -286,6 +289,7 @@ export async function checkUrl(url, opts = {}) {
       await discardResponseBody(res)
       return { code, error: null, finalUrl, ssrfBlocked: false }
     } catch (err) {
+      opts.signal?.throwIfAborted()
       if (err instanceof SsrfBlockedError) {
         // We refused to look. That is NOT evidence the link is dead, so it must
         // never be reported as 'broken' — doing so would deactivate a possibly
@@ -297,12 +301,14 @@ export async function checkUrl(url, opts = {}) {
   }
 
   let outcome = await tryProbe('HEAD')
+  opts.signal?.throwIfAborted()
   let method = 'head'
 
   // Some servers ban HEAD entirely. Retry with GET when HEAD comes back as
   // method-not-allowed / forbidden so we don't mark a working page as broken.
   if (!outcome.ssrfBlocked && (outcome.code === null || outcome.code < 200 || outcome.code >= 400)) {
     outcome = await tryProbe('GET')
+    opts.signal?.throwIfAborted()
     method = 'get'
   }
 
@@ -531,13 +537,15 @@ export async function quarantineUnverifiedDirectOpportunities(db) {
 
 export async function runLinkVerification(
   db,
-  { limit = 100, verifiedBy = 'recurring-verifier', fetchImpl } = {},
+  { limit = 100, verifiedBy = 'recurring-verifier', fetchImpl, signal } = {},
 ) {
+  signal?.throwIfAborted()
   // Normalize visibility before selecting work so a visible stale success is
   // selected back as retryable/unverified and can be restored by this same run.
   // Selecting first left the in-memory row at status=ok, which made the restore
   // guard preserve its new quarantine even after the fresh probe succeeded.
   const quarantine = await quarantineUnverifiedDirectOpportunities(db)
+  signal?.throwIfAborted()
   if (!quarantine?.ok) {
     console.warn('[link-verify] quarantine pass failed:', quarantine?.reason || 'unknown')
   }
@@ -666,12 +674,15 @@ export async function runLinkVerification(
   }
 
   for (let i = 0; i < rows.length; i += BATCH_SIZE) {
+    signal?.throwIfAborted()
     const batch = rows.slice(i, i + BATCH_SIZE)
     await Promise.all(
       batch.map(async (row) => {
+        signal?.throwIfAborted()
         const url = row.application_url || row.source_url
         const startMs = Date.now()
-        const result = await checkUrl(url, { fetchImpl })
+        const result = await checkUrl(url, { fetchImpl, signal })
+        signal?.throwIfAborted()
         const durationMs = Date.now() - startMs
         const now = new Date().toISOString()
         const persisted = await update.run(
@@ -729,13 +740,14 @@ export async function runLinkVerification(
         }
       }),
     )
-    if (i + BATCH_SIZE < rows.length) await sleep(BATCH_DELAY_MS)
+    if (i + BATCH_SIZE < rows.length) await sleep(BATCH_DELAY_MS, undefined, { signal })
   }
 
   // Expire direct opportunities that have not been successfully verified in
   // STALE_AFTER_DAYS — either their last verification confirmed broken, or
   // they have been sitting un-checked since discovery for longer than the
   // staleness window. Directories are pointers and remain visible.
+  signal?.throwIfAborted()
   const staleCutoff = new Date(
     Date.now() - STALE_AFTER_DAYS * 24 * 60 * 60 * 1000,
   ).toISOString()
@@ -762,6 +774,7 @@ export async function runLinkVerification(
   // direct row to suspicious/skipped/unverified. Re-apply the exact mission
   // visibility invariant after all verdicts are persisted so /readyz never
   // observes a non-successful direct row left visible by this run.
+  signal?.throwIfAborted()
   const postProbeQuarantine = await quarantineUnverifiedDirectOpportunities(db)
   if (postProbeQuarantine?.ok) {
     stats.quarantined += Number(postProbeQuarantine.quarantined || 0)

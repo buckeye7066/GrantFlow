@@ -20,6 +20,8 @@
  */
 import { runLinkVerification } from '/app/backend/services/linkVerificationService.js'
 import pg from 'pg'
+import { runWithSchedulerLock } from '/app/backend/services/schedulerLock.js'
+import { startInstanceHeartbeat, stopInstanceHeartbeat } from '/app/backend/services/agentControl/agentControlStore.js'
 
 const CHUNKS = 10
 const LIMIT = 500
@@ -49,9 +51,20 @@ const db = {
 }
 
 let checkedTotal = 0
+startInstanceHeartbeat(db)
+try {
 for (let i = 0; i < CHUNKS; i++) {
   try {
-    const s = await runLinkVerification(db, { limit: LIMIT, verifiedBy: 'weekly-verify' })
+    const s = await runWithSchedulerLock(db, {
+      lockName: 'link-verification', ttlMs: 5 * 60 * 1000, heartbeat: true,
+      acquiredBy: 'weekly-cloud-verifier', logger: console,
+    }, (lease = {}) => runLinkVerification(db, {
+      limit: LIMIT, verifiedBy: 'weekly-verify', signal: lease.signal,
+    }))
+    if (s?.skipped) {
+      console.log('## DEFERRED shared verifier already active')
+      break
+    }
     checkedTotal += s.checked
     console.log('## BATCH_STATS ' + JSON.stringify(s))
     if (s.checked === 0) {
@@ -59,7 +72,9 @@ for (let i = 0; i < CHUNKS; i++) {
       break
     }
   } catch (e) {
-    console.log('## BATCH_ERROR ' + (e?.message || String(e)))
+    console.log('## BATCH_ERROR ' + (e?.code === 'LOCK_LEASE_LOST' ? 'lease_lost' : 'verification_failed'))
+    process.exitCode = 1
+    break
   }
 }
 
@@ -74,4 +89,7 @@ const cat = (
 ).rows[0]
 console.log('## CATALOG ' + JSON.stringify(cat) + ' checked_this_run=' + checkedTotal)
 
-await pool.end()
+} finally {
+  stopInstanceHeartbeat()
+  await pool.end()
+}

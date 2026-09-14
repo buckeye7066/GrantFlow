@@ -172,7 +172,8 @@ function semanticResourceKind(row) {
   return null
 }
 
-export async function reclassifyBrokenResources(db) {
+export async function reclassifyBrokenResources(db, { signal } = {}) {
+  signal?.throwIfAborted()
   const { yes, no } = bools(db)
   let osm = 0
   let semantic = 0
@@ -197,6 +198,7 @@ export async function reclassifyBrokenResources(db) {
      WHERE id = ? AND ${mutableLinkLifecycleSql()}
   `)
   for (const row of osmRows || []) {
+    signal?.throwIfAborted()
     const url = osmElementUrl(row.source_id)
     if (!url) continue
     const contactInfo = preservedOsmContactInfo(row, url)
@@ -217,6 +219,7 @@ export async function reclassifyBrokenResources(db) {
      WHERE id = ?
   `)
   for (const row of rows || []) {
+    signal?.throwIfAborted()
     const kind = semanticResourceKind(row)
     if (!kind || !RESOURCE_RESULTS.has(String(row.result_kind || '').toLowerCase())) continue
     semantic += countChanges(await updateResource.run(kind, kind, row.id))
@@ -233,14 +236,17 @@ function terminalFailureSet(outcomes = [], entries = []) {
   return outcomes.length === entries.length && outcomes.every((outcome) => PERMANENT_HTTP_CODES.has(Number(outcome.code)))
 }
 
-async function probeRow(row, timeoutMs, fetchImpl) {
+async function probeRow(row, timeoutMs, fetchImpl, signal) {
+  signal?.throwIfAborted()
   const entries = candidateUrlEntries(row)
   const outcomes = []
   for (const entry of entries) {
     let last = null
     for (let attempt = 0; attempt < 2; attempt += 1) {
       const started = Date.now()
-      const result = await checkUrl(entry.url, { timeoutMs, fetchImpl })
+      signal?.throwIfAborted()
+      const result = await checkUrl(entry.url, { timeoutMs, fetchImpl, signal })
+      signal?.throwIfAborted()
       last = { ...result, url: entry.url, role: entry.role, duration_ms: Date.now() - started }
       if (SUCCESS.has(String(result.status || '').toLowerCase())) {
         return { success: true, terminal: false, outcome: last, outcomes: [...outcomes, last] }
@@ -261,9 +267,12 @@ async function probeRow(row, timeoutMs, fetchImpl) {
   }
 }
 
-async function rescueOfficialUrl(row, findOfficialUrlImpl) {
+async function rescueOfficialUrl(row, findOfficialUrlImpl, signal) {
+  signal?.throwIfAborted()
   const started = Date.now()
-  const rescue = await findOfficialUrlImpl({ title: row.title, sponsor: row.sponsor })
+  const candidate = { title: row.title, sponsor: row.sponsor }
+  const rescue = signal ? await findOfficialUrlImpl(candidate, { signal }) : await findOfficialUrlImpl(candidate)
+  signal?.throwIfAborted()
   if (!rescue?.url) {
     return {
       rescued: false,
@@ -322,15 +331,18 @@ async function rescueOfficialUrl(row, findOfficialUrlImpl) {
   }
 }
 
-async function concurrentMap(rows, concurrency, fn) {
+async function concurrentMap(rows, concurrency, fn, signal) {
   let cursor = 0
-  await Promise.all(Array.from({ length: concurrency }, async () => {
+  const settled = await Promise.allSettled(Array.from({ length: concurrency }, async () => {
     while (cursor < rows.length) {
+      signal?.throwIfAborted()
       const index = cursor
       cursor += 1
       await fn(rows[index])
     }
   }))
+  const failure = settled.find(result => result.status === 'rejected')
+  if (failure) throw failure.reason
 }
 
 export async function brokenDirectSummary(db) {
@@ -449,6 +461,8 @@ export async function scheduleRetryableBrokenRows(db, options = {}) {
 }
 
 export async function repairBrokenDirectBatch(db, options = {}) {
+  const signal = options.signal
+  signal?.throwIfAborted()
   const limit = Math.max(1, Math.min(100, Number(options.limit) || 40))
   const concurrency = Math.max(1, Math.min(12, Number(options.concurrency) || 8))
   const timeoutMs = Math.max(3000, Math.min(20000, Number(options.timeoutMs) || 10000))
@@ -463,7 +477,9 @@ export async function repairBrokenDirectBatch(db, options = {}) {
   const fetchImpl = options.fetchImpl
   const { yes, no } = bools(db)
   const before = await brokenDirectSummary(db)
-  const reclassified = await reclassifyBrokenResources(db)
+  signal?.throwIfAborted()
+  const reclassified = await reclassifyBrokenResources(db, { signal })
+  signal?.throwIfAborted()
 
   // Quarantine every broken direct row, but claim only the selected batch as
   // paused. Untouched rows remain active-status quarantine, not fake pending work.
@@ -517,12 +533,14 @@ export async function repairBrokenDirectBatch(db, options = {}) {
   const claimedRows = []
   for (const row of rows || []) {
     try {
+      signal?.throwIfAborted()
       const claimed = countChanges(await claimSelected.run(yes, no, row.id))
       if (claimed > 0) {
         stats.claimed += claimed
         claimedRows.push(row)
       }
     } catch {
+      signal?.throwIfAborted()
       stats.row_errors += 1
       stats.failures.claim_failed = (stats.failures.claim_failed || 0) + 1
     }
@@ -559,6 +577,7 @@ export async function repairBrokenDirectBatch(db, options = {}) {
   // never aborts the remaining selected rows. Each worker accumulates locally;
   // the final synchronous fold prevents lost += updates across awaited work.
   await concurrentMap(claimedRows, concurrency, async (row) => {
+    signal?.throwIfAborted()
     const rowStats = {
       checked: 0, restored: 0, retired: 0, pending: 0,
       official_searches: 0, official_search_rescues: 0,
@@ -573,12 +592,14 @@ export async function repairBrokenDirectBatch(db, options = {}) {
     }
     let finalStatus = 'broken'
     try {
-      let result = await probeRow(row, timeoutMs, fetchImpl)
+      let result = await probeRow(row, timeoutMs, fetchImpl, signal)
+      signal?.throwIfAborted()
       rowStats.checked += 1
 
       if (!result.success && String(row.title || '').trim()) {
         rowStats.official_searches += 1
-        const rescue = await rescueOfficialUrl(row, findOfficialUrlImpl)
+        const rescue = await rescueOfficialUrl(row, findOfficialUrlImpl, signal)
+        signal?.throwIfAborted()
         if (rescue.rescued) {
           rowStats.official_search_rescues += 1
           result = {
@@ -594,6 +615,7 @@ export async function repairBrokenDirectBatch(db, options = {}) {
         }
       }
 
+      signal?.throwIfAborted()
       outcome = result.outcome
       const at = nowIso()
       if (result.success) {
@@ -638,6 +660,7 @@ export async function repairBrokenDirectBatch(db, options = {}) {
         }
       }
     } catch (error) {
+      signal?.throwIfAborted()
       rowStats.row_errors += 1
       fail('repair_exception')
       const message = String(error?.message || error).replace(/[\r\n]+/g, ' ').slice(0, 120)
@@ -670,6 +693,7 @@ export async function repairBrokenDirectBatch(db, options = {}) {
       stats.failures[kind] = (stats.failures[kind] || 0) + count
     }
 
+    signal?.throwIfAborted()
     try {
       await recordVerificationEvent(db, {
         opportunity_id: row.id,
@@ -683,8 +707,9 @@ export async function repairBrokenDirectBatch(db, options = {}) {
         duration_ms: outcome.duration_ms,
       })
     } catch { /* audit persistence is best-effort */ }
-  })
+  }, signal)
 
+  signal?.throwIfAborted()
   return { ok: true, before, ...stats, after: await brokenDirectSummary(db) }
 }
 
