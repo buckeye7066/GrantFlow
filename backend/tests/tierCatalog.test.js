@@ -85,4 +85,32 @@ describe('public pricing matches backend tier definitions', () => {
     for (const f of CAP_FLAGS) expect(c.capability_labels[f]?.label).toBeTruthy()
     expect(c.discounts.length).toBeGreaterThanOrEqual(4)
   })
+
+  /* Owner decision 2026-09-15: the $0 tiers carry pipeline automation.
+     This is not cosmetic. Prod incident on record (see
+     billingUniversalEntitlement.test.js): a senior billed the $0 'individual'
+     tier was locked out of pipeline automation and an admin had to hand-grant
+     an add-on. The universal entitlement that papered over it is now scoped to
+     the free period, so once a trial lapses the BILLED tier decides - and for
+     these two tiers it must still say yes, or that lockout returns.
+     Pinned here so a future catalog edit cannot revoke it silently. */
+  it('the $0 tiers carry pipeline automation so a lapsed trial does not lock them out', () => {
+    for (const id of ['foundation', 'individual']) {
+      const t = tierById(id)
+      expect(t.monthly_cents).toBe(0)
+      expect(t.capabilities[CAPABILITY_KEYS.PIPELINE_AUTOMATION]).toBe(true)
+    }
+  })
+
+  /* A tier that advertises a capability as excluded while granting it (or the
+     reverse) is a user-visible contradiction: TierMatrix.jsx and Pricing.jsx
+     render `excludes` straight from this catalog. */
+  it('no tier advertises a capability it actually grants as excluded', () => {
+    for (const t of TIERS) {
+      const excludesText = (t.excludes || []).join(' ').toLowerCase()
+      if (t.capabilities[CAPABILITY_KEYS.PIPELINE_AUTOMATION] === true) {
+        expect(excludesText).not.toMatch(/pipeline automation/)
+      }
+    }
+  })
 })
