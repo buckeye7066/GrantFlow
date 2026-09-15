@@ -238,23 +238,29 @@ test('tier enforcement is backend-authoritative (pipeline automation, item fundi
     const adminToken = await loginEmailOtp({ port, email: adminEmail, profileId: null })
     const userToken = await loginEmailOtp({ port, email: userEmail, profileId })
 
-    // PIPELINE_AUTOMATION: the BILLED tier decides again.
+    // PIPELINE_AUTOMATION: allowed, and now for an honest reason.
     //
-    // History of this assertion, because it has now been inverted twice and the
-    // reasoning matters. Originally it asserted a refusal for the 'test_low'
-    // tier, which is exactly what "backend-authoritative" means. Owner order
-    // 2026-09-07 granted every non-admin profile the highest non-admin tier's
-    // capabilities unconditionally, so it was flipped to ALLOWED. Owner
-    // clarification 2026-09-15 - "That entitlement tier is during the free
-    // period. Afterwards, they go to the tier they are paying for." - scopes
-    // that grant to an active free period/promotion, and this fixture grants
-    // none. So the excluding tier refuses again, and the original expectation
-    // is the correct one.
+    // This assertion has been inverted twice, so the reasoning is recorded.
+    // Originally it asserted a refusal for the fixture's excluding tier. Owner
+    // order 2026-09-07 granted EVERY non-admin profile the highest non-admin
+    // tier's capabilities unconditionally, which flipped it to ALLOWED - but
+    // for a bad reason: a blanket override that made the billed tier
+    // irrelevant. Owner clarification 2026-09-15 scoped that override to an
+    // active free period, and the owner then granted pipeline automation to
+    // every tier in the catalog, small_org included. So the outcome here is
+    // ALLOWED again, this time because the profile's OWN billed tier grants it
+    // rather than because a blanket grant ignored the tier.
     //
-    // Deliberately NOT fixed by granting this fixture a free period: that would
-    // set promotionActive, which nulls the payment prerequisite, and every
-    // lapsed-payment assertion below would stop testing anything.
-    const pipelineDenied = await fetchJson(`http://127.0.0.1:${port}/api/crawlers/jobs`, {
+    // What this means for coverage: with no catalog tier excluding any
+    // capability, `tier_or_addon_required` is no longer reachable from the
+    // catalog, so tier-denial is pinned in unit tests against synthetic tiers
+    // (billingEntitlementAuthority.test.js: "once the free period lapses the
+    // BILLED tier decides and denies what it excludes", and "a missing
+    // entitlement tier denies rather than granting everything"). The
+    // backend-authoritative property this e2e test exists for is still proven
+    // below: payment standing and suspension are enforced server-side, and the
+    // client cannot talk its way past either.
+    const pipelineAllowed = await fetchJson(`http://127.0.0.1:${port}/api/crawlers/jobs`, {
       method: 'POST',
       headers: { Authorization: `Bearer ${userToken}` },
       body: JSON.stringify({
@@ -263,9 +269,7 @@ test('tier enforcement is backend-authoritative (pipeline automation, item fundi
         parameters: { organization_id: null, limit: 1 },
       }),
     })
-    assert.equal(pipelineDenied.status, 403, `pipeline (billed tier): ${JSON.stringify(pipelineDenied.json)}`)
-    assert.equal(pipelineDenied.json?.error, 'tier_or_addon_required')
-    assert.equal(pipelineDenied.json?.capability, 'enable_pipeline_automation')
+    assert.ok([200, 201].includes(pipelineAllowed.status), `pipeline (billed tier grants it): ${JSON.stringify(pipelineAllowed.json)}`)
 
     // Move the single payment authority out of good standing. The universal
     // entitlement tier includes every capability, so each one must now be

@@ -111,18 +111,34 @@ describe('universal entitlement: every non-admin profile holds the highest non-a
     })
   })
 
-  /* THE POST-EXPIRY HALF - the assertion that was missing, and the reason
+  /* THE POST-EXPIRY HALF - the mechanism that was missing, and the reason
      nothing held a paying user to the tier they bought. LATER is far outside
-     the granted month. */
-  it('once the free period lapses capabilities come from the BILLED tier', async () => {
+     the granted month.
+
+     This asserts WHICH TIER the entitlement is resolved from, not a change in
+     the answer. Since the owner granted pipeline automation to every tier in
+     the catalog (2026-09-15), no catalog tier excludes any capability, so today
+     the allowed set is identical either side of expiry. The scoping is still
+     load-bearing: `entitlement_tier_id` moves from the universal large_org to
+     the profile's own billed tier, so the moment any tier's capabilities
+     diverge - or a custom tier is assigned - the billed tier is what decides.
+     The denial path itself is pinned against synthetic tiers in
+     billingEntitlementAuthority.test.js ("once the free period lapses the
+     BILLED tier decides and denies what it excludes"). */
+  it('once the free period lapses the entitlement resolves from the BILLED tier', async () => {
     await seedProfile('uni-individual')
     await grantFreePeriod(db, { profileId: 'uni-individual', kind: 'month', grantedBy: 'test', announce: false, now: NOW })
 
-    const ent = await resolveAllProfileEntitlements(db, { profileId: 'uni-individual', isAdmin: false, now: LATER })
-    const pipeline = ent.capabilities[CAPABILITY_KEYS.PIPELINE_AUTOMATION]
-    expect(pipeline.allowed).toBe(false)
+    const during = await resolveAllProfileEntitlements(db, { profileId: 'uni-individual', isAdmin: false, now: NOW })
+    expect(during.capabilities[CAPABILITY_KEYS.PIPELINE_AUTOMATION].entitlement_tier_id).toBe('large_org')
+
+    const after = await resolveAllProfileEntitlements(db, { profileId: 'uni-individual', isAdmin: false, now: LATER })
+    const pipeline = after.capabilities[CAPABILITY_KEYS.PIPELINE_AUTOMATION]
     expect(pipeline.entitlement_tier_id).toBe('individual')
-    expect(ent.allowed.sort()).not.toEqual([...ALL_KEYS].sort())
+    expect(pipeline.tier_id).toBe('individual')
+    /* Still allowed, because the individual tier now grants it on its own
+       merits rather than via a blanket override. */
+    expect(pipeline.allowed).toBe(true)
   })
 
   /* Pro bono is not a promotion - a 100% discount leaves net_monthly_cents at 0
@@ -138,9 +154,16 @@ describe('universal entitlement: every non-admin profile holds the highest non-a
     expect(ent.capabilities[CAPABILITY_KEYS.PIPELINE_AUTOMATION].allowed).toBe(true)
   })
 
-  /* An add-on is bought independently of the tier, so it must still grant its
-     capability once the universal grant is gone. */
-  it('an add-on still grants its capability after the free period lapses', async () => {
+  /* An add-on is bought independently of the tier and must survive expiry.
+     `source` is 'tier' rather than 'addon' here only because every catalog tier
+     now grants this capability, and the tier branch is evaluated first - so the
+     add-on is currently redundant for catalog capabilities. What must not
+     regress is that the grant is still recorded, still active after the free
+     period, and still reported alongside the decision. The add-on OVERRIDING an
+     excluding tier is pinned against a synthetic tier in
+     billingEntitlementAuthority.test.js, where an excluding tier can still be
+     constructed. */
+  it('an add-on is still active and honoured after the free period lapses', async () => {
     await seedProfile('uni-addon')
     await grantBillingAddon(db, {
       profileId: 'uni-addon',
@@ -149,10 +172,16 @@ describe('universal entitlement: every non-admin profile holds the highest non-a
       grantedBy: 'test',
       now: NOW,
     })
+    expect(await listActiveBillingAddons(db, 'uni-addon', { now: LATER }))
+      .toEqual([expect.objectContaining({ capability_key: CAPABILITY_KEYS.PIPELINE_AUTOMATION })])
+
     const ent = await resolveAllProfileEntitlements(db, { profileId: 'uni-addon', isAdmin: false, now: LATER })
     const pipeline = ent.capabilities[CAPABILITY_KEYS.PIPELINE_AUTOMATION]
     expect(pipeline.allowed).toBe(true)
-    expect(pipeline.source).toBe('addon')
+    /* active_addons is the publicBillingAddon() projection filtered to this
+       capability, not a list of capability keys. */
+    expect(pipeline.active_addons).toHaveLength(1)
+    expect(pipeline.active_addons[0]).toMatchObject({ capability_key: CAPABILITY_KEYS.PIPELINE_AUTOMATION })
   })
 
   it('what the profile is BILLED does not move: net_monthly_cents stays the individual tier amount', async () => {
