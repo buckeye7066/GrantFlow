@@ -64,6 +64,13 @@ describe('billing entitlement precedence (service boundary)', () => {
   })
 
   it('admits a tier or an add-on once payment is in good standing', () => {
+    /* `entitlementTier` is supplied explicitly because the production authority
+       always carries it. This fixture used to omit it and rely on a
+       `|| UNIVERSAL_ENTITLEMENT_TIER` fallback inside
+       buildEntitlementDecisionInput(), which failed OPEN to the highest tier.
+       That fallback is gone (2026-09-15: the universal grant is scoped to the
+       free period), so with promotionActive false the entitlement tier is the
+       BILLED tier - which is what is modelled here. */
     expect(decideFor({
       profile: { status: 'active' },
       paymentAccessStatus: 'active_paid',
@@ -71,6 +78,7 @@ describe('billing entitlement precedence (service boundary)', () => {
       requiresPayment: true,
       activeAddons: [],
       effectiveTier: { capabilities: { [capabilityKey]: true } },
+      entitlementTier: { capabilities: { [capabilityKey]: true } },
     })).toEqual({ allowed: true, source: 'tier', reason: null })
 
     // OWNER ORDER 2026-09-07 (universal entitlement): the policy tier grants

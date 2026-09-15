@@ -6,22 +6,36 @@ import {
 } from '../services/billing/entitlementService.js'
 import { CAPABILITY_KEYS } from '../../shared/tierCatalog.js'
 
-const authority = (overrides = {}) => ({
-  profile: { status: 'active' },
-  paymentAccessStatus: 'active_paid',
-  effectiveTier: {
-    id: 'mid_size',
-    capabilities: {
-      enable_document_ai: true,
-      enable_item_funding: true,
-      enable_pipeline_automation: true,
+/* The fixture derives `entitlementTier` exactly as loadEntitlementAuthority()
+   does, because the production authority ALWAYS carries it. The previous
+   fixture omitted it and leaned on a `|| UNIVERSAL_ENTITLEMENT_TIER` fallback
+   in buildEntitlementDecisionInput() - a fail-OPEN default in a service where
+   every other failure denies. That fallback is gone, so the fixture has to be
+   honest about what the authority actually supplies. */
+const authority = (overrides = {}) => {
+  const base = {
+    profile: { status: 'active' },
+    paymentAccessStatus: 'active_paid',
+    effectiveTier: {
+      id: 'mid_size',
+      capabilities: {
+        enable_document_ai: true,
+        enable_item_funding: true,
+        enable_pipeline_automation: true,
+      },
     },
-  },
-  activeAddons: [],
-  promotionActive: false,
-  requiresPayment: true,
-  ...overrides,
-})
+    activeAddons: [],
+    promotionActive: false,
+    requiresPayment: true,
+    ...overrides,
+  }
+  if (!('entitlementTier' in base)) {
+    base.entitlementTier = (base.promotionActive || Boolean(base.effectiveBilling?.is_pro_bono))
+      ? UNIVERSAL_ENTITLEMENT_TIER
+      : base.effectiveTier
+  }
+  return base
+}
 
 describe('billing entitlement authority', () => {
   // OWNER ORDER 2026-09-07 ("make these changes global and permanent" —
@@ -30,25 +44,53 @@ describe('billing entitlement authority', () => {
   // test used to pin `tier_or_addon_required` for a small_org effective tier;
   // the billed tier no longer decides capabilities, only the universal policy
   // tier does — while the billed tier is still the one pricing selected.
-  it('entitles the highest non-admin tier capabilities regardless of the BILLED effective tier', () => {
-    const billed = {
-      id: 'small_org',
-      capabilities: {
-        enable_document_ai: true,
-        enable_item_funding: true,
-        enable_pipeline_automation: false,
-      },
-    }
+  /* UPDATED 2026-09-15 on the owner's clarification: "That entitlement tier is
+     during the free period. Afterwards, they go to the tier they are paying
+     for." This test previously asserted the billed tier is ignored outright,
+     which is only true WHILE the promotion/free period is live. Both halves are
+     now pinned, because the second half is what nothing was enforcing. */
+  const billedSmallOrg = {
+    id: 'small_org',
+    capabilities: {
+      enable_document_ai: true,
+      enable_item_funding: true,
+      enable_pipeline_automation: false,
+    },
+  }
+
+  it('while the free period is live the billed tier does not limit capabilities', () => {
     const { input } = buildEntitlementDecisionInput(
-      authority({ effectiveTier: billed }),
+      authority({ effectiveTier: billedSmallOrg, promotionActive: true, requiresPayment: false }),
       'enable_pipeline_automation',
     )
     expect(UNIVERSAL_ENTITLEMENT_TIER.id).toBe('large_org')
+    /* tierAllows is the thing under test here: the universal tier is what the
+       authority resolved, so the small_org exclusion does not apply. The
+       decision itself reports source 'promotion', because decideBillingEntitlement
+       grants on an active promotion BEFORE it consults the tier. */
     expect(input.tierAllows).toBe(true)
+    expect(decideBillingEntitlement(input)).toMatchObject({ allowed: true })
+  })
+
+  it('once the free period lapses the BILLED tier decides and denies what it excludes', () => {
+    const { input } = buildEntitlementDecisionInput(
+      authority({ effectiveTier: billedSmallOrg, promotionActive: false }),
+      'enable_pipeline_automation',
+    )
+    expect(input.tierAllows).toBe(false)
     expect(decideBillingEntitlement(input)).toMatchObject({
-      allowed: true,
-      source: 'tier',
+      allowed: false,
+      reason: 'tier_or_addon_required',
     })
+  })
+
+  it('a missing entitlement tier denies rather than granting everything', () => {
+    const { input } = buildEntitlementDecisionInput(
+      authority({ entitlementTier: null }),
+      'enable_pipeline_automation',
+    )
+    expect(input.tierAllows).toBe(false)
+    expect(decideBillingEntitlement(input)).toMatchObject({ allowed: false })
   })
 
   it('the universal policy tier carries every capability and never rewrites the billing it reads', () => {
