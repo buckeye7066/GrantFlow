@@ -132,10 +132,10 @@ export const TIERS = Object.freeze([
     hourly_cents: 8500,
     support_hours: 1,
     seat_range: { min: 1, max: 1 },
-    capabilities: cap(true, true, false),
+    capabilities: cap(true, true, true),
     summary: 'For small organizations operating with a single login.',
-    includes: ['Grant discovery', 'AI document reading', 'Item funding search', '1 hr/mo support'],
-    excludes: ['Pipeline automation'],
+    includes: ['Grant discovery', 'AI document reading', 'Item funding search', 'Pipeline automation', '1 hr/mo support'],
+    excludes: [],
   },
   {
     id: 'mid_size',
