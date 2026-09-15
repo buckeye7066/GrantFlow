@@ -15,7 +15,7 @@
   authenticated while public sibling profile routes fall through.
 - The production smoke now probes the backend `/readyz` mission gate directly
   instead of treating `/api/health` liveness as release readiness. The workflow
-   uses `SMOKE_READY_URL` because Vercel intentionally proxies `/api` and
+  uses `SMOKE_READY_URL` because Vercel intentionally proxies `/api` and
   `/uploads`, not the backend-root `/readyz` route. The workflow exposes that
   value as a required `ready_url` dispatch input so a non-production frontend
   smoke cannot accidentally report the production backend's readiness.
