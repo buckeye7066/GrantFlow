@@ -166,6 +166,11 @@ import {
   getLinkHealthSummary,
   quarantineUnverifiedDirectOpportunities,
 } from './services/linkVerificationService.js'
+import { buildMissionHealth } from './services/missionHealthService.js'
+import {
+  addLinkVerificationPassStats,
+  buildWeeklyLinkVerificationReport,
+} from './services/weeklyLinkVerificationReport.js'
 import { sendEmail, isEmailServiceConfigured } from './services/email.js'
 import { runBillingCycle } from './services/billing/invoiceService.js'
 import { validateCriticalImports } from './startup/validateImports.js'
@@ -4146,9 +4151,7 @@ if (process.env.NODE_ENV !== 'test') {
         if (last === weekKey) return // already ran for this week's Monday window
         const chunks = Math.max(1, Number(process.env.WEEKLY_VERIFY_CHUNKS) || 6)
         const limit = Math.max(50, Number(process.env.LINK_VERIFICATION_BATCH) || 500)
-        let checked = 0
-        let ok = 0
-        let broken = 0
+        let passStats = addLinkVerificationPassStats()
         for (let i = 0; i < chunks; i += 1) {
           const s = await runWithSchedulerLock(dbInstance, {
             lockName: 'link-verification', ttlMs: 5 * 60 * 1000, heartbeat: true,
@@ -4158,28 +4161,24 @@ if (process.env.NODE_ENV !== 'test') {
             console.info('[weekly-verify-report] deferred; shared verifier is active')
             return // Do not email or mark a contended run complete; the next tick retries.
           }
-          checked += s.checked
-          ok += s.ok || 0
-          broken += s.broken || 0
+          passStats = addLinkVerificationPassStats(passStats, s)
           if (s.checked === 0) break // backlog drained for this run
         }
         const health = await getLinkHealthSummary(dbInstance)
         const byStatus = Object.fromEntries(
           (health || []).map((r) => [r.link_status || 'unknown', Number(r.count)]),
         )
-        const text = [
-          `GrantFlow weekly link verification — week of ${weekKey} (America/New_York)`,
-          '',
-          `This pass: checked ${checked}, ok ${ok}, broken ${broken}.`,
-          `Catalog link health: ${JSON.stringify(byStatus)}.`,
-          '',
-          'The in-app verifier also runs every 6h between these weekly passes.',
-        ].join('\n')
-        console.log('[weekly-verify-report]', { checked, ok, broken, byStatus })
+        const missionHealth = await buildMissionHealth(dbInstance)
+        const releaseCatalog = missionHealth?.release_catalog
+        if (!releaseCatalog || releaseCatalog.error) {
+          throw new Error('release catalog snapshot unavailable for weekly verification report')
+        }
+        const text = buildWeeklyLinkVerificationReport({ weekKey, passStats, byStatus, releaseCatalog })
+        console.log('[weekly-verify-report]', { passStats, byStatus, releaseCatalog })
         if (isEmailServiceConfigured()) {
           await sendEmail({
             to: ADMIN_EMAIL,
-            subject: `GrantFlow weekly link verification — ${byStatus.unverified ?? 0} unverified remaining`,
+            subject: `GrantFlow weekly link verification — ${releaseCatalog.unverified_or_stale} visible unverified/stale`,
             text,
             html: `<pre style="font:14px/1.5 monospace">${text.replace(/</g, '&lt;')}</pre>`,
           })
