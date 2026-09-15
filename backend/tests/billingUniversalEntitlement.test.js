@@ -136,9 +136,15 @@ describe('universal entitlement: every non-admin profile holds the highest non-a
     const pipeline = after.capabilities[CAPABILITY_KEYS.PIPELINE_AUTOMATION]
     expect(pipeline.entitlement_tier_id).toBe('individual')
     expect(pipeline.tier_id).toBe('individual')
-    /* Still allowed, because the individual tier now grants it on its own
-       merits rather than via a blanket override. */
-    expect(pipeline.allowed).toBe(true)
+    /* DENIED, and this is the whole point of the scoping. Unattended portal
+       work is the most expensive capability to serve, so the $0 tiers do not
+       carry it (packaging 2026-09-15) - which means the lapse of a free period
+       now changes a real answer, not just which tier the answer came from.
+       The capability the free tier DOES carry is unaffected. */
+    expect(pipeline.allowed).toBe(false)
+    expect(pipeline.reason).toBe('tier_or_addon_required')
+    expect(after.capabilities[CAPABILITY_KEYS.DOCUMENT_AI].allowed).toBe(true)
+    expect(after.allowed.sort()).not.toEqual([...ALL_KEYS].sort())
   })
 
   /* Pro bono is not a promotion - a 100% discount leaves net_monthly_cents at 0

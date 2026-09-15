@@ -13,16 +13,39 @@
  *     and the useTierEntitlements hook (all via the API, so the backend stays
  *     the runtime source of truth).
  *
- * Capability flags are the SAME three the backend enforces everywhere
- * (backend/utils/tierGating.js): enable_document_ai, enable_item_funding,
- * enable_pipeline_automation. Plain-English labels live here so no UI ever
+ * Capability flags are the vocabulary the backend enforces
+ * (backend/utils/tierGating.js). Plain-English labels live here so no UI ever
  * shows a raw flag name.
+ *
+ * PACKAGING (2026-09-15). Three flags could not express a seven-rung ladder, so
+ * every tier had been given every capability and there was nothing to sell.
+ * The flag set below is the smallest one that separates the tiers on the two
+ * axes that actually matter:
+ *   - COST TO SERVE: drafting and automation burn LLM and portal time; reading
+ *     a saved grant does not. Anything with a per-use cost sits behind a paid
+ *     tier.
+ *   - RISK: `enable_auto_submit` is split out of `enable_pipeline_automation`
+ *     on purpose. "Run unattended and leave a draft" and "file an application
+ *     on someone's behalf" are the same flag no longer: one is recoverable, the
+ *     other is an irreversible act in the outside world, and only the second
+ *     belongs at the top of the ladder.
+ *
+ * Discovery, saved grants, deadlines and reminders are deliberately UNGATED at
+ * every tier, including free. They are the hook, they cost almost nothing to
+ * serve, and gating them would mean a new user cannot see the product work.
  */
 
 export const CAPABILITY_KEYS = Object.freeze({
   DOCUMENT_AI: 'enable_document_ai',
   ITEM_FUNDING: 'enable_item_funding',
+  MATCHING_INTELLIGENCE: 'enable_matching_intelligence',
+  APPLICATION_DRAFTING: 'enable_application_drafting',
   PIPELINE_AUTOMATION: 'enable_pipeline_automation',
+  AUTO_SUBMIT: 'enable_auto_submit',
+  FUNDER_INTELLIGENCE: 'enable_funder_intelligence',
+  OUTREACH: 'enable_outreach',
+  COMPLIANCE_REPORTING: 'enable_compliance_reporting',
+  BULK_EXPORT: 'enable_bulk_export',
 })
 
 // Plain-English description of each capability — shown in the tier matrix.
@@ -35,9 +58,37 @@ export const CAPABILITY_LABELS = Object.freeze({
     label: 'Item funding search',
     plain: 'Search for funding toward specific items and needs, and queue deeper crawlers that hunt down sources for them.',
   },
+  enable_matching_intelligence: {
+    label: 'Deep match scoring',
+    plain: 'Every funding source is scored against your whole profile and must clear four checks before it reaches you: it is real, it is relevant to you, it funds something you actually need, and you qualify for it.',
+  },
+  enable_application_drafting: {
+    label: 'Application drafting',
+    plain: 'Hamilton writes the application for you, drawing on your profile and the funder’s own stated requirements instead of a generic template.',
+  },
   enable_pipeline_automation: {
     label: 'Pipeline automation',
-    plain: 'Hamilton works your pipeline for you — preparing applications, filling portals, and tracking deadlines hands-off.',
+    plain: 'Hamilton works your pipeline hands-off — opening portals, filling forms and saving drafts — and stops before submitting so you have the last word.',
+  },
+  enable_auto_submit: {
+    label: 'Autonomous submission',
+    plain: 'Hamilton finishes the job and submits without waiting for a final review. You turn this on yourself, per profile, and can turn it off at any time.',
+  },
+  enable_funder_intelligence: {
+    label: 'Funder intelligence',
+    plain: 'See what a funder has actually given, to whom, where and how much, from their public 990 filings — so you approach the ones who already fund work like yours.',
+  },
+  enable_outreach: {
+    label: 'Outreach campaigns',
+    plain: 'Find new funder and partner leads and send personalised introductions written from that organisation’s own mission and giving history.',
+  },
+  enable_compliance_reporting: {
+    label: 'Compliance & award reporting',
+    plain: 'Track budgets and spend against an award, and produce the compliance reports and award summaries a funder asks for after you win.',
+  },
+  enable_bulk_export: {
+    label: 'Bulk export & analytics',
+    plain: 'Export your whole pipeline and profile packets in bulk, and see portfolio-level analytics across every profile you manage.',
   },
 })
 
@@ -47,17 +98,32 @@ export const CAPABILITY_LABELS = Object.freeze({
  * verified Stripe/service purchase, while this catalog owns only the stable
  * capability vocabulary and customer-facing meaning.
  */
-export const ADDON_CATALOG = Object.freeze([
-  Object.freeze({ id: 'document_ai', capability_key: CAPABILITY_KEYS.DOCUMENT_AI, label: CAPABILITY_LABELS.enable_document_ai.label, plain: CAPABILITY_LABELS.enable_document_ai.plain }),
-  Object.freeze({ id: 'item_funding', capability_key: CAPABILITY_KEYS.ITEM_FUNDING, label: CAPABILITY_LABELS.enable_item_funding.label, plain: CAPABILITY_LABELS.enable_item_funding.plain }),
-  Object.freeze({ id: 'pipeline_automation', capability_key: CAPABILITY_KEYS.PIPELINE_AUTOMATION, label: CAPABILITY_LABELS.enable_pipeline_automation.label, plain: CAPABILITY_LABELS.enable_pipeline_automation.plain }),
-])
+export const ADDON_CATALOG = Object.freeze(
+  Object.values(CAPABILITY_KEYS).map((key) => Object.freeze({
+    id: key.replace(/^enable_/, ''),
+    capability_key: key,
+    label: CAPABILITY_LABELS[key].label,
+    plain: CAPABILITY_LABELS[key].plain,
+  })),
+)
 
-const cap = (documentAi, itemFunding, pipeline) => ({
-  enable_document_ai: documentAi,
-  enable_item_funding: itemFunding,
-  enable_pipeline_automation: pipeline,
-})
+/**
+ * Build a capability set from the flags a tier GRANTS. Everything unnamed is
+ * false. Positional arguments did not survive going from three flags to ten -
+ * `cap(true, true, false, true, ...)` is unreadable and a silently reordered
+ * argument would hand out a capability nobody sold.
+ */
+const cap = (...granted) => {
+  const set = {}
+  for (const key of Object.values(CAPABILITY_KEYS)) set[key] = false
+  for (const key of granted) {
+    if (!(key in set)) throw new Error(`unknown capability in tier catalog: ${key}`)
+    set[key] = true
+  }
+  return set
+}
+
+const K = CAPABILITY_KEYS
 
 /**
  * Canonical tiers. `id` matches billing_tiers.id (do not rename without a
@@ -75,10 +141,10 @@ export const TIERS = Object.freeze([
     hourly_cents: 0,
     support_hours: 0,
     seat_range: null,
-    capabilities: cap(true, true, true),
-    summary: 'Free starting point — discover grants, save and track them, let AI read your documents, and let Hamilton run your pipeline.',
-    includes: ['Curated grant discovery', 'AI document reading', 'Save & track opportunities', 'Item funding search', 'Pipeline automation'],
-    excludes: [],
+    capabilities: cap(K.DOCUMENT_AI, K.ITEM_FUNDING),
+    summary: 'Free starting point — find grants, keep track of deadlines, and let AI read your documents and fill in your profile.',
+    includes: ['Curated grant discovery', 'Deadline tracking & reminders', 'Save & track opportunities', 'AI document reading', 'Item funding search'],
+    excludes: ['Deep match scoring', 'Application drafting', 'Pipeline automation', 'Autonomous submission'],
   },
   {
     id: 'growth',
@@ -89,24 +155,31 @@ export const TIERS = Object.freeze([
     hourly_cents: 15000,
     support_hours: 2,
     seat_range: null,
-    capabilities: cap(true, true, true),
-    summary: 'Everything in Foundation, plus deeper itemized funding intelligence and included support hours.',
-    includes: ['Everything in Foundation', 'Itemized funding intelligence', '2 hrs/mo support'],
-    excludes: [],
+    capabilities: cap(K.DOCUMENT_AI, K.ITEM_FUNDING, K.MATCHING_INTELLIGENCE, K.APPLICATION_DRAFTING, K.PIPELINE_AUTOMATION),
+    summary: 'Everything in Foundation, plus Hamilton scoring your matches, drafting your applications, and working your pipeline hands-off.',
+    includes: ['Everything in Foundation', 'Deep match scoring', 'Application drafting', 'Pipeline automation', '2 hrs/mo support'],
+    excludes: ['Autonomous submission', 'Funder intelligence', 'Compliance & award reporting'],
   },
   {
     id: 'enterprise',
-    name: 'Enterprise',
+    /* DISPLAY NAME 2026-09-15: "Enterprise" at $249 sits BELOW the $349 and
+       $599 organization tiers, so an org buyer reading the matrix saw
+       "Enterprise" as a downgrade. The id is unchanged deliberately - it maps
+       to billing_tiers.id and renaming it needs a migration - but the name
+       customers see now describes what this tier is: the full-service option
+       for one person or household, not a company plan. */
+    name: 'Concierge',
     family: 'service',
-    audience: 'Full-service concierge',
+    audience: 'Full-service, for one person or household',
     monthly_cents: 24900,
     hourly_cents: 22500,
     support_hours: 5,
     seat_range: null,
-    capabilities: cap(true, true, true),
-    summary: 'Full-service concierge with custom automation rules and dedicated analyst support.',
-    includes: ['Everything in Growth', 'Custom automation rules', 'Dedicated analyst', '5 hrs/mo support'],
-    excludes: [],
+    capabilities: cap(K.DOCUMENT_AI, K.ITEM_FUNDING, K.MATCHING_INTELLIGENCE, K.APPLICATION_DRAFTING,
+      K.PIPELINE_AUTOMATION, K.AUTO_SUBMIT, K.FUNDER_INTELLIGENCE, K.COMPLIANCE_REPORTING),
+    summary: 'Hands-off from search to submitted. Hamilton finishes and files applications for you, and you see what a funder has actually given before you apply.',
+    includes: ['Everything in Growth', 'Autonomous submission', 'Funder intelligence (990 giving history)', 'Compliance & award reporting', 'Dedicated analyst', '5 hrs/mo support'],
+    excludes: ['Outreach campaigns', 'Bulk export & analytics'],
   },
   {
     id: 'individual',
@@ -117,10 +190,10 @@ export const TIERS = Object.freeze([
     hourly_cents: 8500,
     support_hours: 0,
     seat_range: null,
-    capabilities: cap(true, true, true),
+    capabilities: cap(K.DOCUMENT_AI, K.ITEM_FUNDING),
     summary: 'Pay-as-you-go help for one person or family. No monthly fee; hourly support when you want it.',
-    includes: ['Grant discovery', 'AI document reading', 'Item funding search', 'Pipeline automation', 'Hourly support as needed'],
-    excludes: [],
+    includes: ['Grant discovery', 'Deadline tracking & reminders', 'AI document reading', 'Item funding search', 'Hourly support as needed'],
+    excludes: ['Deep match scoring', 'Application drafting', 'Pipeline automation', 'Autonomous submission'],
   },
   // ── Organization tiers — selected by number of email logins (seats) ──────
   {
@@ -132,10 +205,14 @@ export const TIERS = Object.freeze([
     hourly_cents: 8500,
     support_hours: 1,
     seat_range: { min: 1, max: 1 },
-    capabilities: cap(true, true, true),
-    summary: 'For small organizations operating with a single login.',
-    includes: ['Grant discovery', 'AI document reading', 'Item funding search', 'Pipeline automation', '1 hr/mo support'],
-    excludes: [],
+    /* At $149 this must carry everything Growth ($99) carries, or the ladder
+       charges more for less. It adds what an organization needs even at one
+       seat: award compliance and reporting. */
+    capabilities: cap(K.DOCUMENT_AI, K.ITEM_FUNDING, K.MATCHING_INTELLIGENCE, K.APPLICATION_DRAFTING,
+      K.PIPELINE_AUTOMATION, K.COMPLIANCE_REPORTING),
+    summary: 'For small organizations operating with a single login. Everything in Growth, plus the budget and compliance reporting an award requires.',
+    includes: ['Everything in Growth', 'Organization profile & contacts', 'Compliance & award reporting', '1 hr/mo support'],
+    excludes: ['Autonomous submission', 'Funder intelligence', 'Outreach campaigns'],
   },
   {
     id: 'mid_size',
@@ -146,10 +223,11 @@ export const TIERS = Object.freeze([
     hourly_cents: 11500,
     support_hours: 3,
     seat_range: { min: 2, max: 5 },
-    capabilities: cap(true, true, true),
-    summary: 'For mid-sized organizations with a small team (2–5 logins). Adds pipeline automation.',
-    includes: ['Everything in Small', 'Pipeline automation', '2–5 team logins', '3 hrs/mo support'],
-    excludes: [],
+    capabilities: cap(K.DOCUMENT_AI, K.ITEM_FUNDING, K.MATCHING_INTELLIGENCE, K.APPLICATION_DRAFTING,
+      K.PIPELINE_AUTOMATION, K.AUTO_SUBMIT, K.FUNDER_INTELLIGENCE, K.OUTREACH, K.COMPLIANCE_REPORTING),
+    summary: 'For mid-sized organizations with a small team (2–5 logins). Hamilton files for you, and Yana and John go find and approach new funders.',
+    includes: ['Everything in Small organization', 'Autonomous submission', 'Funder intelligence', 'Outreach campaigns (leads & email)', '2–5 team logins', '3 hrs/mo support'],
+    excludes: ['Bulk export & analytics'],
   },
   {
     id: 'large_org',
@@ -160,9 +238,9 @@ export const TIERS = Object.freeze([
     hourly_cents: 15000,
     support_hours: 6,
     seat_range: { min: 6, max: null },
-    capabilities: cap(true, true, true),
-    summary: 'For large organizations with 6 or more logins. Full automation and the most support hours.',
-    includes: ['Everything in Mid-sized', '6+ team logins', 'Full automation', '6 hrs/mo support'],
+    capabilities: cap(...Object.values(CAPABILITY_KEYS)),
+    summary: 'For large organizations with 6 or more logins. Every capability, portfolio-wide analytics, and the most support hours.',
+    includes: ['Everything in Mid-sized', 'Bulk export & analytics', '6+ team logins', '6 hrs/mo support'],
     excludes: [],
   },
 ])

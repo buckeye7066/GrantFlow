@@ -14,13 +14,27 @@ import { isRealProfileId } from "@/api/profileIdGuards"
  * locked features, and plain-English upgrade messaging.
  *
  * Admins bypass all gates (mirrors the backend). Capability keys are the SAME
- * three the backend enforces: enable_document_ai, enable_item_funding,
- * enable_pipeline_automation.
+ * ones the backend enforces — the catalog's `CAPABILITY_KEYS`. There were three
+ * until 2026-09-15; there are now ten, because three could not express a
+ * seven-rung ladder and every tier had ended up granting everything.
+ *
+ * This map IS the frontend's vocabulary: both `capabilities` and `locked` are
+ * derived from it, so a flag missing here has no shorthand AND never appears in
+ * the locked list the upgrade prompts are built from. Enforcement is still the
+ * backend's (`can(key)` passes any raw key straight through), but keep this in
+ * step with `shared/tierCatalog.js` CAPABILITY_KEYS.
  */
 const CAP = {
   documentAI: "enable_document_ai",
   itemFunding: "enable_item_funding",
+  matchingIntelligence: "enable_matching_intelligence",
+  applicationDrafting: "enable_application_drafting",
   pipelineAutomation: "enable_pipeline_automation",
+  autoSubmit: "enable_auto_submit",
+  funderIntelligence: "enable_funder_intelligence",
+  outreach: "enable_outreach",
+  complianceReporting: "enable_compliance_reporting",
+  bulkExport: "enable_bulk_export",
 }
 
 export function useTierEntitlements(profileId) {
@@ -87,11 +101,15 @@ export function useTierEntitlements(profileId) {
         : `${feature} requires an active add-on.`
     }
 
-    const capabilities = {
-      documentAI: has(CAP.documentAI),
-      itemFunding: has(CAP.itemFunding),
-      pipelineAutomation: has(CAP.pipelineAutomation),
-    }
+    /* DERIVED from CAP, not hand-listed. Three of these were enumerated by
+       hand while `locked` below already iterated CAP — so expanding the
+       vocabulary from three flags to ten (2026-09-15) would have left seven
+       capabilities correctly LOCKED but invisible to `capabilities.*`, and a
+       consumer reading `capabilities.autoSubmit` would get `undefined`, which
+       is falsy and therefore indistinguishable from "denied". */
+    const capabilities = Object.fromEntries(
+      Object.entries(CAP).map(([name, key]) => [name, has(key)]),
+    )
     const locked = Object.entries(CAP)
       .filter(([, key]) => !has(key))
       .map(([name, key]) => ({ name, key, label: labelFor(key), upgradeMessage: upgradeMessage(key) }))

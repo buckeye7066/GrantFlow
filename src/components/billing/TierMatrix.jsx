@@ -23,14 +23,30 @@ export default function TierMatrix({ currentTierId = null }) {
 
   const tiers = data.tiers || []
   const labels = data.capability_labels || {}
+  /* The served `capability_labels` is the catalog's own vocabulary in its own
+     order. Union in anything a tier declares but the labels omit, so a flag can
+     never be invisible here just because its label was forgotten. */
+  const capabilityKeys = [
+    ...Object.keys(labels),
+    ...tiers.flatMap((t) => Object.keys(t.capabilities || {})),
+  ].filter((key, i, all) => all.indexOf(key) === i)
   const rows = [
     { key: "monthly", label: "Monthly price", render: (t) => money(t.monthly_usd) },
     { key: "hourly", label: "Hourly support rate", render: (t) => money(t.hourly_usd) },
     { key: "support_hours", label: "Included support / month", render: (t) => (t.support_hours ? `${t.support_hours} hr${t.support_hours === 1 ? "" : "s"}` : "—") },
     { key: "seats", label: "Team logins (seats)", render: (t) => (t.seat_range ? (t.seat_range.max ? `${t.seat_range.min}–${t.seat_range.max}` : `${t.seat_range.min}+`) : "—") },
-    { key: "enable_document_ai", label: labels.enable_document_ai?.label || "Document AI", render: (t) => (t.capabilities?.enable_document_ai ? <Yes /> : <No />) },
-    { key: "enable_item_funding", label: labels.enable_item_funding?.label || "Item funding search", render: (t) => (t.capabilities?.enable_item_funding ? <Yes /> : <No />) },
-    { key: "enable_pipeline_automation", label: labels.enable_pipeline_automation?.label || "Pipeline automation", render: (t) => (t.capabilities?.enable_pipeline_automation ? <Yes /> : <No />) },
+    /* Capability rows are DERIVED from the catalog the backend served, never
+       hand-listed. Three flags were enumerated here by hand; the catalog now
+       carries ten, so a hand-listed matrix advertised 3 of 10 capabilities and
+       every tier looked identical on the only axis a buyer compares. The order
+       is the catalog's own (cheap-to-serve first, autonomous submission last),
+       so adding a flag cannot silently fall out of the pricing table. */
+    ...capabilityKeys.map((key) => ({
+      key,
+      label: labels[key]?.label || key.replace(/^enable_/, "").replace(/_/g, " "),
+      title: labels[key]?.plain || undefined,
+      render: (t) => (t.capabilities?.[key] ? <Yes /> : <No />),
+    })),
   ]
 
   return (

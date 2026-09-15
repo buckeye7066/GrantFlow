@@ -101,21 +101,58 @@ soft-deleted; the restore route existed; Anya had no tool for it). Rules:
   (the context builder injects a plan block from `billingAccounts` +
   `entitlementService`, so a locked feature is named, never simulated).
   Off-topic requests get one friendly sentence and a redirect.
-- **UNIVERSAL ENTITLEMENT (owner order 2026-09-07, "make these changes global
-  and permanent" — "(highest non-admin tier)").** Every non-admin profile is
-  ENTITLED to every capability of the highest non-admin tier
-  (`shared/tierCatalog.highestNonAdminTier()` = `large_org`: document AI, item
-  funding, pipeline automation) with no add-on. Enforced ONLY at the choke
-  point: `entitlementService.UNIVERSAL_ENTITLEMENT_TIER` feeds `tierAllows`
-  in `buildEntitlementDecisionInput`; every gate (`tierGating.js`,
-  `middleware/entitlements.js`, Anya's plan block, `/api/billing/me`) reads
-  through it. What it does NOT change: what anyone is BILLED
-  (`computeEffectiveBilling` still follows the profile type — `tier_id` in a
-  decision is the billed tier, `entitlement_tier_id` the policy tier), the
-  payment prerequisite (`requiresPayment` / `payment_not_active`), admins,
-  suspended/blocked/banned profiles, or the fail-closed unavailable path. Never
-  re-lock a capability at a call site. Guard:
-  `backend/tests/billingUniversalEntitlement.test.js`.
+- **ENTITLEMENT IS THE FREE PERIOD'S GRANT, THEN THE TIER YOU PAY FOR
+  (owner clarification 2026-09-15). THIS SECTION PREVIOUSLY SAID THE OPPOSITE
+  — read the code, not the memory of it.** For a week this said every
+  non-admin profile holds every capability of the highest non-admin tier
+  "global and permanent" (owner order 2026-09-07). That was the FREE PERIOD's
+  grant and it never expired: `loadEntitlementAuthority` assigned
+  `UNIVERSAL_ENTITLEMENT_TIER` UNCONDITIONALLY, so no paying profile was ever
+  held to the tier it bought and the catalog's capability differences were
+  inert.
+  Today: `entitlementTier` is `UNIVERSAL_ENTITLEMENT_TIER` **only** while a
+  promotion or free period is live (`account.free_until`, `isFreeWeekActive`)
+  **or** the account is `is_pro_bono` (read with `Boolean()` — SQLite stores
+  0/1, so `=== true` silently downgrades every pro-bono profile); otherwise it
+  is the BILLED tier (`effectiveTier`). Every new profile gets a self-expiring
+  free period at signup (`routes/profiles.js`, `signupTrialGrant` →
+  `billing_accounts.free_until`), so the trial covers the whole trial and only
+  the post-expiry half changed. A MISSING `entitlementTier` now DENIES —
+  `buildEntitlementDecisionInput` used to fall back to
+  `UNIVERSAL_ENTITLEMENT_TIER`, the one fail-OPEN path in a service where
+  authority-unavailable is 503 and an unknown capability is 400.
+  **The capability vocabulary is TEN flags, not three** (2026-09-15): three
+  could not express a seven-rung ladder, so every tier had been given
+  everything and there was nothing to sell. `enable_auto_submit` is split out
+  of `enable_pipeline_automation` deliberately — "run unattended and leave a
+  draft" is recoverable, "file an application on someone's behalf" is an
+  irreversible act in the outside world. Discovery, saved grants, deadlines
+  and reminders stay UNGATED at every tier including free. The catalog is the
+  single source of truth and enforces its own packaging: a dearer tier must
+  grant a SUPERSET of every cheaper one (the `small_org` $149-excluding-what-
+  `growth`-grants-at-$99 class), and no tier may sell `auto_submit` without
+  `pipeline_automation`, `pipeline_automation` without
+  `application_drafting`, or `application_drafting` without
+  `matching_intelligence`.
+  Unchanged: enforcement is ONLY at the choke point
+  (`entitlementService` → `tierAllows` in `buildEntitlementDecisionInput`;
+  `tierGating.js`, `middleware/entitlements.js`, Anya's plan block and
+  `/api/billing/me` all read through it — never re-lock at a call site); what
+  anyone is BILLED (`computeEffectiveBilling` still follows the profile type —
+  `tier_id` is the billed tier, `entitlement_tier_id` the policy tier); the
+  payment prerequisite; admins; suspended/blocked/banned; and the fail-closed
+  unavailable path. Add-ons still grant a single capability independent of the
+  tier (`entitlementDecision.js`), and every flag is purchasable
+  (`ADDON_CATALOG`). Guards:
+  `backend/tests/billingUniversalEntitlement.test.js`,
+  `backend/tests/billingEntitlementAuthority.test.js`,
+  `backend/tests/tierCatalog.test.js`, and the e2e
+  `tests/unit/tier-enforcement.test.mjs`.
+  **TRAP: this repo has TWO test roots** — `backend/tests/*.test.js` (vitest,
+  via `scripts/run-vitest-isolated.mjs`) and `tests/unit/*.test.mjs`
+  (node:test, via `scripts/run-unit-tests.mjs`, which boots a real server and
+  hits real routes). A green vitest sweep proves roughly half; the e2e root is
+  what caught a tier regression 92 green vitest tests missed.
 - Every mutating tool follows the `student.commitToUniversity` shape:
   `confirmed:false` returns `confirmation_required` + what will change;
   `confirmed:true` acts. A new chat tool must be added to
