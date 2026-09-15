@@ -238,12 +238,28 @@ test('tier enforcement is backend-authoritative (pipeline automation, item fundi
     const adminToken = await loginEmailOtp({ port, email: adminEmail, profileId: null })
     const userToken = await loginEmailOtp({ port, email: userEmail, profileId })
 
-    // PIPELINE_AUTOMATION: OWNER ORDER 2026-09-07 ("make these changes global
-    // and permanent" — "(highest non-admin tier)"): every non-admin profile in
-    // good payment standing holds the highest non-admin tier's capabilities,
-    // regardless of the tier it is billed at. This used to assert 403
-    // tier_or_addon_required for the 'test_low' assigned tier; the assigned
-    // tier no longer decides capabilities, so the paid user is ALLOWED.
+    // PIPELINE_AUTOMATION: allowed, and now for an honest reason.
+    //
+    // This assertion has been inverted twice, so the reasoning is recorded.
+    // Originally it asserted a refusal for the fixture's excluding tier. Owner
+    // order 2026-09-07 granted EVERY non-admin profile the highest non-admin
+    // tier's capabilities unconditionally, which flipped it to ALLOWED - but
+    // for a bad reason: a blanket override that made the billed tier
+    // irrelevant. Owner clarification 2026-09-15 scoped that override to an
+    // active free period, and the owner then granted pipeline automation to
+    // every tier in the catalog, small_org included. So the outcome here is
+    // ALLOWED again, this time because the profile's OWN billed tier grants it
+    // rather than because a blanket grant ignored the tier.
+    //
+    // What this means for coverage: with no catalog tier excluding any
+    // capability, `tier_or_addon_required` is no longer reachable from the
+    // catalog, so tier-denial is pinned in unit tests against synthetic tiers
+    // (billingEntitlementAuthority.test.js: "once the free period lapses the
+    // BILLED tier decides and denies what it excludes", and "a missing
+    // entitlement tier denies rather than granting everything"). The
+    // backend-authoritative property this e2e test exists for is still proven
+    // below: payment standing and suspension are enforced server-side, and the
+    // client cannot talk its way past either.
     const pipelineAllowed = await fetchJson(`http://127.0.0.1:${port}/api/crawlers/jobs`, {
       method: 'POST',
       headers: { Authorization: `Bearer ${userToken}` },
@@ -253,7 +269,7 @@ test('tier enforcement is backend-authoritative (pipeline automation, item fundi
         parameters: { organization_id: null, limit: 1 },
       }),
     })
-    assert.ok([200, 201].includes(pipelineAllowed.status), `pipeline (universal tier): ${JSON.stringify(pipelineAllowed.json)}`)
+    assert.ok([200, 201].includes(pipelineAllowed.status), `pipeline (billed tier grants it): ${JSON.stringify(pipelineAllowed.json)}`)
 
     // Move the single payment authority out of good standing. The universal
     // entitlement tier includes every capability, so each one must now be
@@ -311,8 +327,10 @@ test('tier enforcement is backend-authoritative (pipeline automation, item fundi
       .run('active_paid', profileId)
     restoreDb.close()
 
-    // A durable add-on is still recorded and honored (it is redundant for a
-    // catalog capability under the universal tier, but must never break access).
+    // A durable add-on is recorded and honored. This is no longer redundant:
+    // with the universal grant scoped to the free period, an add-on is what
+    // carries a capability the billed tier excludes - which is precisely the
+    // refusal asserted above being lifted by a purchase.
     const addonDb = new Database(dbPath)
     addonDb.pragma('busy_timeout = 5000')
     addonDb.prepare(`

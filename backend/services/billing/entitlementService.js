@@ -163,14 +163,31 @@ async function loadEntitlementAuthority(db, profileId, now) {
   const promotionActive = isFreeWeekActive(process.env) || freePeriodActive
   const requiresPayment = Number(effectiveBilling?.net_monthly_cents || 0) > 0 && !promotionActive
 
+  // The universal grant is the FREE PERIOD's grant, not a permanent one. It was
+  // applied unconditionally, so a profile kept the highest non-admin tier's
+  // capabilities forever and nothing ever held a paying user to the tier they
+  // bought. Everything needed to scope it is already computed above.
+  //
+  // Pro bono keeps the universal grant: a 100% discount makes
+  // net_monthly_cents 0, so `promotionActive` is false for them even though the
+  // owner has deliberately given them the product. Read with Boolean() rather
+  // than `=== true` - SQLite stores this as 0/1, so a strict comparison would
+  // silently downgrade every pro-bono profile.
+  const proBono = Boolean(effectiveBilling?.is_pro_bono)
+  const entitlementTier = (promotionActive || proBono)
+    ? UNIVERSAL_ENTITLEMENT_TIER
+    : effectiveTier
+
   return {
     profile,
     account,
     effectiveBilling,
     effectiveTier,
-    // Capabilities come from the universal policy tier; `effectiveTier` above
-    // stays the BILLED tier so invoices and the reported tier_id never move.
-    entitlementTier: UNIVERSAL_ENTITLEMENT_TIER,
+    // Capabilities come from the universal tier only while the free period or a
+    // promotion is live (or for pro bono); otherwise from the BILLED tier.
+    // `effectiveTier` above stays the BILLED tier regardless, so invoices and
+    // the reported tier_id never move.
+    entitlementTier,
     paymentAccessStatus,
     activeAddons,
     promotionActive,
@@ -190,10 +207,14 @@ export function buildEntitlementDecisionInput(authority, key) {
     : authority?.requiresPayment && !authority?.paymentAccessStatus
       ? 'not_active'
       : authority?.paymentAccessStatus
-  // `tierAllows` reads the UNIVERSAL entitlement tier (see the constant above),
-  // never the billed `effectiveTier`: every non-admin profile holds the highest
-  // non-admin tier's capabilities while being billed per its profile type.
-  const entitlementTier = authority?.entitlementTier || UNIVERSAL_ENTITLEMENT_TIER
+  // `tierAllows` reads whatever tier the authority resolved: the universal tier
+  // while a promotion/free period is live or for pro bono, the BILLED tier
+  // afterwards. This used to fall back to UNIVERSAL_ENTITLEMENT_TIER when the
+  // authority was missing, which failed OPEN to the highest tier - the one
+  // fail-open path in a service where every other failure denies (authority
+  // unavailable -> 503, unknown capability -> 400). A missing tier now yields
+  // no capabilities and the decision denies.
+  const entitlementTier = authority?.entitlementTier
   return {
     paymentAccessStatus,
     input: {
