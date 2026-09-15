@@ -55,7 +55,7 @@ function appFor(userId) {
   const app = express()
   app.use(express.json())
   app.use((req, _res, next) => {
-    req.user = { userId, role: 'user' }
+    req.user = userId ? { userId, role: 'user' } : null
     req.ctx = { userId }
     req.db = {
       prepare: () => ({
@@ -65,10 +65,25 @@ function appFor(userId) {
     next()
   })
   app.use('/api/profiles', profileMemoryRouter)
+  app.get('/api/profiles/schema', (_req, res) => res.json({ public: true }))
   return app
 }
 
 describe('profile memory owner/admin authorization', () => {
+  it('does not apply its auth gate to public sibling profile routes', async () => {
+    const response = await request(appFor(null))
+      .get('/api/profiles/schema')
+      .expect(200)
+
+    expect(response.body).toEqual({ public: true })
+  })
+
+  it('still requires authentication for memory routes', async () => {
+    await request(appFor(null))
+      .get('/api/profiles/profile-1/memory')
+      .expect(401)
+  })
+
   it('denies collaborator erasure while permitting the owner and DB-backed admin', async () => {
     await request(appFor('collaborator-1'))
       .delete('/api/profiles/profile-1/memory/memory-1')

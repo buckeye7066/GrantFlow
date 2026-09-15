@@ -36,4 +36,7 @@ jobs:
         env:
           SMOKE_BASE_URL: ${{ inputs.base_url }}
           SMOKE_BASE_PATH: ${{ inputs.base_path }}
+          # /readyz is a backend release gate; the Vercel frontend proxies only
+          # /api and /uploads, so probe Railway directly.
+          SMOKE_READY_URL: https://grantflow-production.up.railway.app/readyz
         run: node scripts/smoke-prod-readonly.mjs
