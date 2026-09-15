@@ -14,6 +14,10 @@ on:
         description: "App base path (production is served at /)"
         required: true
         default: "/"
+      ready_url:
+        description: "Backend /readyz URL (may be on a different origin)"
+        required: true
+        default: "https://grantflow-production.up.railway.app/readyz"
 
 jobs:
   smoke:
@@ -37,6 +41,7 @@ jobs:
           SMOKE_BASE_URL: ${{ inputs.base_url }}
           SMOKE_BASE_PATH: ${{ inputs.base_path }}
           # /readyz is a backend release gate; the Vercel frontend proxies only
-          # /api and /uploads, so probe Railway directly.
-          SMOKE_READY_URL: https://grantflow-production.up.railway.app/readyz
+          # /api and /uploads. Keep it an explicit dispatch input so a smoke of
+          # another environment cannot silently report production's readiness.
+          SMOKE_READY_URL: ${{ inputs.ready_url }}
         run: node scripts/smoke-prod-readonly.mjs

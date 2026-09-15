@@ -75,6 +75,14 @@ test('production smoke builds root-mounted URLs without changing the hostname', 
   assert.equal(landing, 'https://app.axiombiolabs.org/welcome')
 })
 
+test('production smoke binds readiness to the explicitly selected backend', () => {
+  const workflow = read('.github/workflows/prod-smoke.yml')
+
+  assert.match(workflow, /^      ready_url:\n(?:        .*\n)*?        required: true$/m)
+  assert.match(workflow, /^          SMOKE_READY_URL: \$\{\{ inputs\.ready_url \}\}$/m)
+  assert.doesNotMatch(workflow, /^          SMOKE_READY_URL: https?:\/\//m)
+})
+
 test('landing copy does not promise eligibility, awards, or autonomous submission', () => {
   const landing = read('src/pages/Landing.jsx')
 
