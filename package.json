@@ -180,7 +180,7 @@
     "zod": "^4.6.2"
   },
   "devDependencies": {
-    "@capacitor/cli": "8.5.1",
+    "@capacitor/cli": "8.5.2",
     "@eslint/js": "^9.39.2",
     "@hello-pangea/dnd": "^16.5.0",
     "@hookform/resolvers": "^5.9.1",
@@ -244,7 +244,7 @@
     "react": "^18.2.0",
     "react-day-picker": "^8.10.1",
     "react-dom": "^18.2.0",
-    "react-hook-form": "^7.87.0",
+    "react-hook-form": "^7.88.0",
     "react-markdown": "^9.0.1",
     "react-resizable-panels": "^4.12.4",
     "react-router-dom": "^7.18.3",
