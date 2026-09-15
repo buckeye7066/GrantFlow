@@ -16,13 +16,14 @@ const authority = (overrides = {}) => {
   const base = {
     profile: { status: 'active' },
     paymentAccessStatus: 'active_paid',
+    /* Stands in for a tier that grants everything, so it is built from the
+       CANONICAL key list rather than three hand-typed flags. Hand-typing them
+       meant that expanding the vocabulary from three to ten (2026-09-15) left
+       this fixture silently denying seven capabilities, and the test read as a
+       regression in the service rather than a stale fixture. */
     effectiveTier: {
       id: 'mid_size',
-      capabilities: {
-        enable_document_ai: true,
-        enable_item_funding: true,
-        enable_pipeline_automation: true,
-      },
+      capabilities: Object.fromEntries(Object.values(CAPABILITY_KEYS).map((k) => [k, true])),
     },
     activeAddons: [],
     promotionActive: false,
