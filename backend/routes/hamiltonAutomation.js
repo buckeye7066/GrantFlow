@@ -1038,6 +1038,44 @@ router.post('/authorize', async (req, res) => {
         message: 'Tick at least one capability so Hamilton has something to do.',
       })
     }
+
+    // CONSENT-GAP FIX. The profile owner's full-automation TOGGLE is the
+    // authority for whether Hamilton may submit unattended, but the grant that
+    // reaches this route carries the intent only in `options.allow_auto_submit`.
+    // A client that POSTs `options: {}` therefore made `isFullAutomationGrant()`
+    // false below, the sweep never ran, the legacy `require_human_review` vetoes
+    // were never cleared, and the submit leg refused with
+    // `profile_auto_submit_disabled` — a green toggle over a run that never
+    // submits, which is the defect the owner has named repeatedly.
+    //
+    // The toggle lives in `profile_sections.automation_preferences`, so
+    // readAutomationPreferenceState() is what must be consulted here.
+    // isFullAutomationEnabled() is NOT usable for this: it derives "enabled"
+    // from the presence of an active submit authorization that ALREADY carries
+    // allow_auto_submit, so using it to decide whether to SET
+    // allow_auto_submit is circular — it can never fire on the first grant,
+    // which is precisely the case that was broken.
+    //
+    // Consent is still the only gate. This fires only when the owner both
+    // turned the toggle on AND is granting submit_applications, and an explicit
+    // client veto continues to win.
+    if (types.includes('submit_applications')) {
+      try {
+        const prefs = await readAutomationPreferenceState(req.db, profileId)
+        const ownerWantsUnattended = prefs?.readable === true
+          && (prefs.hamilton_auto_submit === true || prefs.hamilton_autopilot === true)
+        if (ownerWantsUnattended
+            && options?.allow_auto_submit !== false
+            && options?.require_human_review !== true) {
+          options.allow_auto_submit = true
+        }
+      } catch (err) {
+        // Fail CLOSED: leave the grant exactly as the client sent it, so an
+        // unreadable preference store can never widen authority by itself.
+        log.warn('automation_preference_read_failed', { err: err?.message, profileId })
+      }
+    }
+
     if (types.includes('submit_applications')
         && options?.allow_auto_submit === true
         && options?.require_human_review === true) {
