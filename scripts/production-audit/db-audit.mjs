@@ -180,6 +180,7 @@ export const FINDINGS = [
       FROM profile_opportunity_matches pom
       JOIN profiles p ON p.id = pom.profile_id
       WHERE ${NON_SYNTHETIC} AND p.deleted_at IS NULL AND ${SCOPE}
+        AND lower(COALESCE(pom.match_decision, '')) IN ('accept', 'review')
       GROUP BY p.id, p.display_name, pom.match_decision
       HAVING count(*) FILTER (WHERE pom.match_score < ${PIPELINE_BAR}) > 0
           OR count(*) FILTER (WHERE pom.match_score IS NULL) > 0
@@ -469,11 +470,11 @@ export const FINDINGS = [
     unscoped: true,
   },
   {
-    id: 'catalog_contamination',
-    requirement: '14. Portal-derived personal awards in the GLOBAL catalog',
+    id: 'catalog_profile_provenance',
+    requirement: '14. Profile-attributed discovery provenance in the shared catalog',
     file: 'database',
     question:
-      'funding_opportunities is the GLOBAL catalog; a row carrying a profile_id is profile-scoped by definition, and a portal-derived personal award leaking in would be shown to unrelated users. Grouped by source/origin/kind so the producing lane is identifiable.',
+      'funding_opportunities is shared, but profile_id is discovery provenance rather than ownership. Inventory these rows by producer; route and matcher choke points decide whether another profile may see or use them. A nonzero row count is evidence to review, not catalog contamination by itself.',
     sql: `
       SELECT fo.source, fo.record_origin, fo.opportunity_kind,
              count(*)::int AS rows_with_profile_id,
@@ -799,7 +800,7 @@ async function collectAmy(client) {
 
   const res = await probe(
     client,
-    "SELECT key, value, updated_at FROM system_kv WHERE key IN ('amy_last_report','amy_recent_runs','amy_approval_queue')",
+    "SELECT key, value, updated_at FROM system_kv WHERE key IN ('amy_last_report','amy_recent_runs','amy_approval_queue','amy_flywheel_cohort')",
   );
   if (!res.ok) {
     out.errors.push(`system_kv read failed: ${res.code} ${res.message}`);
@@ -821,9 +822,34 @@ async function collectAmy(client) {
 
   const report = parse('amy_last_report');
   const runs = parse('amy_recent_runs');
+  const flywheel = parse('amy_flywheel_cohort');
 
   out.report_updated_at = byKey.amy_last_report?.updated_at ?? null;
   out.runs_updated_at = byKey.amy_recent_runs?.updated_at ?? null;
+
+  // The daily flywheel is the disposition authority for an exact cohort. The
+  // legacy last-report counts say only "not clean"; they do not distinguish a
+  // genuine quality issue from an unevaluable provider outage, an exception,
+  // a missing member, or a duplicate. Preserve the latest dated receipt and
+  // its finding classes so operators fix the correct choke point.
+  if (flywheel?.days && typeof flywheel.days === 'object') {
+    const latestDay = Object.keys(flywheel.days).sort().at(-1) ?? null;
+    const latest = latestDay ? flywheel.days[latestDay] : null;
+    if (latest) {
+      out.flywheel = {
+        day: latestDay,
+        target: latest.target ?? null,
+        evaluated: latest.evaluated ?? null,
+        clean: latest.clean ?? null,
+        issues: latest.issues ?? null,
+        complete: latest.complete ?? null,
+        all_clean: latest.all_clean ?? null,
+        finding_types: latest.finding_types ?? {},
+        run_receipts: latest.run_receipts ?? [],
+        issue_examples: latest.issue_examples ?? [],
+      };
+    }
+  }
 
   if (report) {
     out.report = report;
