@@ -12,7 +12,7 @@ on:
         default: ''
         type: string
       profile_names:
-        description: 'Comma-separated exact active profile names (use only with owner approval; ambiguous names fail closed)'
+        description: 'Comma-separated exact active profile names or unambiguous first names (owner approval required)'
         required: false
         default: ''
         type: string

@@ -43,6 +43,10 @@
    accepted only opaque profile IDs; the follow-up adds an exact-name resolver
    inside the read-only GitHub environment. It fails closed on zero/multiple active matches,
    masks the resolved ID, and never broadens the audit beyond that one profile.
+   Run `35046484059` proved the database guard but stopped before the audit because
+   the owner-provided first name was not a full display-name match. The resolver
+   now also accepts a unique first-name match, prefers an exact display-name match,
+   and still fails closed rather than selecting among multiple candidates.
 4. **Hamilton confirmed submission:** UNKNOWN. The aggregate probe is healthy
    except for its intentionally denied document join; no real submission was
    attempted.
