@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "policy_id": "owner-production-web-parity",
+  "version": "2026-09-16-v1",
+  "owner_approved": true,
+  "approved_by": "Dr. John White / Axiom BioLabs",
+  "approved_at": "2026-09-16T00:00:00.000Z",
+  "metric": "fleet_parity",
+  "operator": "gte",
+  "threshold": 100,
+  "cohort_size": 50
+}

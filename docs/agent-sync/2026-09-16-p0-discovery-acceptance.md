@@ -49,6 +49,15 @@ close this phase.
   (`24.19.0`). Live run `35129147632` proved the workflow itself selected that
   pin but the runner still required the retired `20.20.2`, stopping before any
   cohort work; the assertion and workflow are coherent again.
+- Owner direction in the production-readiness closeout ratified a meet-or-beat
+  parity bar. The benchmark persists `fleet_parity` as a percentage, so the
+  requested ratio `1.0` is versioned as threshold `100` for the exact-50 cohort;
+  using numeric `1` would have meant only one-percent overlap and would have
+  silently weakened the stated bar.
+- Live run `35130829519` then reached the OpenAI search provider but its
+  15-second outer dependency probe expired before the provider's request. The
+  official tool-backed search now has a 45-second client budget inside a
+  60-second acceptance deadline.
 
 ## Unknown / external blockers
 
@@ -57,10 +66,6 @@ close this phase.
   OpenAI fallback removes the *configuration* blocker, but a fresh dispatched
   run is still required to prove that the protected key has web-search access,
   returns useful results, and survives the exact-50 quantity/quality gates.
-- `config/web-parity-acceptance-policy.json` is intentionally absent. Even a
-  technically complete run must finish `blocked` until the owner ratifies and
-  versions the fleet-parity threshold; an agent must not invent that product
-  bar.
 - No fresh live acceptance result is claimed by this change.
 
 ## Operator sequence

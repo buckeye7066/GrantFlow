@@ -29,7 +29,10 @@ export function citationResults(response, count) {
 
 /** Official web-search fallback. Only tool-cited URLs leave this provider. */
 export function makeOpenAIWebSearchProvider({ client = null, count = 8, model = null } = {}) {
-  const openai = client || createOpenAIClient({ timeoutMs: 20_000, maxRetries: 1 }).openai
+  // Tool-backed web search is materially slower than a plain completion. Keep
+  // this below the acceptance preflight's outer deadline so the provider owns
+  // the useful error instead of being abandoned mid-request.
+  const openai = client || createOpenAIClient({ timeoutMs: 45_000, maxRetries: 1 }).openai
   const selectedModel = String(model || process.env.OPENAI_WEB_SEARCH_MODEL || DEFAULT_MODEL).trim()
   return async function openAIWebSearch({ query, count: requestedCount = count } = {}) {
     const q = String(query || '').trim()

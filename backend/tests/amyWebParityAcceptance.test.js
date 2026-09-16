@@ -175,6 +175,21 @@ function makeRuntime({
 }
 
 describe('bounded live dependency preflight', () => {
+  it('gives tool-backed search enough time to return before the outer preflight deadline', async () => {
+    const results = [{ url: 'https://grants.gov/example', title: 'Example', snippet: 'funding' }]
+    Object.defineProperty(results, 'searchMeta', {
+      value: Object.freeze({ provider: 'openai_web_search', provenance: 'live', status: 'ok' }),
+      enumerable: false,
+    })
+    const proof = await runDependencyPreflight({
+      env: { OPENAI_API_KEY: 'configured' },
+      allowedProviders: ['openai_web_search'],
+      searchWeb: async () => results,
+      extractOpportunitiesFromPage: async () => [{ title: 'Grant', sponsor: 'Funder', raw: { blind_extraction: true } }],
+    })
+    expect(proof.ok).toBe(true)
+  })
+
   it('requires configured reliable search + AI providers and records names only', async () => {
     const env = {
       GOOGLE_CSE_KEY: 'google-key-must-not-leak',

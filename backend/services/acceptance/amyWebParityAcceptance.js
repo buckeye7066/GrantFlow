@@ -387,7 +387,7 @@ export async function runDependencyPreflight({
   allowedProviders,
   searchWeb,
   extractOpportunitiesFromPage,
-  searchTimeoutMs = 15_000,
+  searchTimeoutMs = 60_000,
   extractorTimeoutMs = 20_000,
 } = {}) {
   const searchConfig = configuredSearchProviders(env || {}, allowedProviders || [])
