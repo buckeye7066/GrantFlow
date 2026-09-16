@@ -16,6 +16,7 @@ Actions → `production-audit` → *Run workflow*.
 | Input | Meaning |
 | --- | --- |
 | `profile_ids` | Comma-separated production profile IDs to audit |
+| `profile_names` | Comma-separated exact active profile names; use only with owner approval. Exactly one of `profile_ids` or `profile_names` is required, and ambiguous names fail closed. |
 | `portal_hosts` | Comma-separated portal hosts; only used when portal reads are on |
 | `run_portal_reads` | Perform READ-ONLY Hamilton portal syncs (default `false`) |
 | `include_screenshots` | Capture sanitized screenshots (default `true`) |

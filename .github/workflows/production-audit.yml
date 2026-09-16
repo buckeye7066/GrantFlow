@@ -8,7 +8,13 @@ on:
     inputs:
       profile_ids:
         description: 'Comma-separated production profile IDs to audit'
-        required: true
+        required: false
+        default: ''
+        type: string
+      profile_names:
+        description: 'Comma-separated exact active profile names (use only with owner approval; ambiguous names fail closed)'
+        required: false
+        default: ''
         type: string
       portal_hosts:
         description: 'Comma-separated portal hosts (only used when run_portal_reads is true)'
@@ -52,6 +58,7 @@ jobs:
     env:
       GRANTFLOW_PROD_BASE_URL: ${{ vars.GRANTFLOW_PROD_BASE_URL }}
       AUDIT_OUT: ${{ github.workspace }}/audit-out
+      PROFILE_SCOPE_FILE: ${{ runner.temp }}/grantflow-production-audit-profile-scope
 
     steps:
       - name: Check out the repository
@@ -94,6 +101,13 @@ jobs:
           mkdir -p "$AUDIT_OUT"
           node scripts/production-audit/db-audit.mjs --guard-only --out "$AUDIT_OUT"
 
+      - name: Resolve the explicitly approved profile scope
+        env:
+          GRANTFLOW_PROD_AUDIT_DATABASE_URL: ${{ secrets.GRANTFLOW_PROD_AUDIT_DATABASE_URL }}
+          PROFILE_IDS: ${{ inputs.profile_ids }}
+          PROFILE_NAMES: ${{ inputs.profile_names }}
+        run: node scripts/production-audit/resolve-profile-scope.mjs
+
       # ---- lanes ------------------------------------------------------
 
       # Dispatch inputs are passed through `env`, never interpolated into the
@@ -102,8 +116,8 @@ jobs:
       - name: Run database audit
         env:
           GRANTFLOW_PROD_AUDIT_DATABASE_URL: ${{ secrets.GRANTFLOW_PROD_AUDIT_DATABASE_URL }}
-          PROFILE_IDS: ${{ inputs.profile_ids }}
         run: |
+          PROFILE_IDS="$(cat "$PROFILE_SCOPE_FILE")"
           node scripts/production-audit/db-audit.mjs \
             --out "$AUDIT_OUT" \
             --profiles "$PROFILE_IDS"
@@ -118,11 +132,11 @@ jobs:
           GRANTFLOW_PROD_AUDIT_DATABASE_URL: ${{ secrets.GRANTFLOW_PROD_AUDIT_DATABASE_URL }}
           GRANTFLOW_AUDIT_EMAIL: ${{ secrets.GRANTFLOW_AUDIT_EMAIL }}
           GRANTFLOW_AUDIT_PASSWORD: ${{ secrets.GRANTFLOW_AUDIT_PASSWORD }}
-          PROFILE_IDS: ${{ inputs.profile_ids }}
           PORTAL_HOSTS: ${{ inputs.portal_hosts }}
           RUN_PORTAL_READS: ${{ inputs.run_portal_reads }}
           INCLUDE_SCREENSHOTS: ${{ inputs.include_screenshots }}
         run: |
+          PROFILE_IDS="$(cat "$PROFILE_SCOPE_FILE")"
           FLAGS=""
           if [ "$RUN_PORTAL_READS" = "true" ]; then FLAGS="$FLAGS --portal-reads"; fi
           if [ "$INCLUDE_SCREENSHOTS" != "true" ]; then FLAGS="$FLAGS --no-screenshots"; fi
