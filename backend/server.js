@@ -81,6 +81,7 @@ import adminRouter from './routes/admin.js';
 import discoveryRouter from './routes/discovery.js';
 import statsRouter from './routes/stats.js';
 import jwt from 'jsonwebtoken';
+import { isZipClosureRequest, verifyZipClosureOidc } from './services/githubActionsOidc.js';
 import healthRouter, { sensitiveHealthRouter } from './routes/health.js';
 import crawlLogsRouter from './routes/crawlLogs.js'
 import sourceDirectoryRouter from './routes/sourceDirectory.js'
@@ -540,7 +541,7 @@ const corsOptions = {
   origin: [...new Set([...(configuredCorsOrigins && configuredCorsOrigins.length > 0 ? configuredCorsOrigins : defaultCorsOrigins), ...capacitorOrigins])],
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'X-Admin-Token', 'X-Anya-Token', 'X-Profile-Id', 'X-Request-Id'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'X-Admin-Token', 'X-Anya-Token', 'X-GitHub-OIDC-Token', 'X-Profile-Id', 'X-Request-Id'],
 };
 
 app.use(cors(corsOptions));
@@ -1727,8 +1728,28 @@ app.use(async (req, res, next) => {
   const authHeader = req.headers.authorization || '';
   const xAdminToken = req.headers['x-admin-token'];
   const xAnyaToken = req.headers['x-anya-token'];
+  const githubOidcToken = req.headers['x-github-oidc-token'];
   let user = { role: 'guest', profileId: null };
   let handled = false;
+
+  // Repository-bound, protected-environment GitHub Actions identity. The
+  // verifier also constrains this credential to the ZIP-closure route/method set.
+  if (!handled && githubOidcToken && isZipClosureRequest(req.method, req.originalUrl)) {
+    try {
+      const claims = await verifyZipClosureOidc(githubOidcToken);
+      if (claims) {
+        user = {
+          role: 'admin', is_admin: true, serviceToken: true,
+          userId: 'system_github_zip_closure', profileId: null,
+          full_name: 'GitHub ZIP Closure', email: 'actions@github.com',
+          scope: 'nationwide_zip_closure',
+        };
+        handled = true;
+      }
+    } catch (error) {
+      console.warn('[auth] GitHub Actions OIDC verification failed:', error?.message || error);
+    }
+  }
 
   // 1. Check X-Admin-Token
   const expectedAdminToken = ADMIN_TOKEN;
