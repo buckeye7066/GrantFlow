@@ -255,7 +255,7 @@ describe('runAmyWebParityAcceptance', () => {
       expectedSha: SHA,
       output,
       env: {},
-      nodeVersion: '20.20.2',
+      nodeVersion: '24.19.0',
       inspectSource: vi.fn(async () => ({ sha: SHA, status: '' })),
       runMigrations: vi.fn(async () => ({ ok: true })),
       loadRuntime: vi.fn(async (root, context) => {
@@ -326,7 +326,7 @@ describe('runAmyWebParityAcceptance', () => {
     expect(JSON.parse(await fs.readFile(output, 'utf8')).exit_code).toBe(ACCEPTANCE_EXIT.PREFLIGHT)
   })
 
-  it('rejects a Node 20 runtime below the verified release version before creating temporary state', async () => {
+  it('rejects a runtime below the verified release version before creating temporary state', async () => {
     const { runtime } = makeRuntime()
     const runMigrations = vi.fn()
     const loadRuntime = vi.fn()
@@ -339,7 +339,7 @@ describe('runAmyWebParityAcceptance', () => {
     }))
 
     expect(result.exitCode).toBe(ACCEPTANCE_EXIT.PREFLIGHT)
-    expect(result.receipt.error.message).toContain('Node 20.20.2 is required')
+    expect(result.receipt.error.message).toContain('Node 24.19.0 is required')
     expect(runMigrations).not.toHaveBeenCalled()
     expect(loadRuntime).not.toHaveBeenCalled()
     expect(makeTempDir).not.toHaveBeenCalled()
