@@ -34,4 +34,6 @@ test('production audit workflow uses an expression context valid at job scope', 
   const workflow = fs.readFileSync('.github/workflows/production-audit.yml', 'utf8')
   assert.match(workflow, /PROFILE_SCOPE_FILE: \$\{\{ github\.workspace \}\}\/\.grantflow-production-audit-profile-scope/)
   assert.doesNotMatch(workflow, /PROFILE_SCOPE_FILE: \$\{\{ runner\./)
+  assert.match(workflow, /GRANTFLOW_PROD_READY_URL: \$\{\{ inputs\.ready_url \}\}/)
+  assert.match(workflow, /ready_url:\n(?:        .*\n)*?        required: true/)
 })

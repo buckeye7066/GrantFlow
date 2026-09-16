@@ -632,7 +632,8 @@ async function verifyAutomationPosture(client, { baseUrl, record }) {
 
   let live = null;
   try {
-    const res = await fetch(`${baseUrl.replace(/\/$/, '')}/readyz`, {
+    const readyUrl = String(process.env.GRANTFLOW_PROD_READY_URL || '').trim() || `${baseUrl.replace(/\/$/, '')}/readyz`;
+    const res = await fetch(readyUrl, {
       signal: AbortSignal.timeout(20_000),
     });
     if (res.ok) live = await res.json();
