@@ -77,6 +77,17 @@
 - The assertion now requires the selected set to be a non-empty subset of the
   account's authorized profiles. It still fails closed if a requested profile is
   absent, and it does not broaden any database, API, screenshot, or portal read.
+- PR `#1712` merged at `0f86419a9baf3642885c08fb8872688b3cd0b7c7`.
+  Protected run `35057018314` then passed end to end: non-admin/read-only guards,
+  owner-approved scope resolution, database audit, authenticated identity/scope,
+  all four scoped application reads, report composition, secret scan, and artifact
+  upload. This closes the audit-transport blocker; it does not turn the recorded
+  Amy/catalog findings into passes.
+- P0 moved to the Hamilton evidence phase with read-only lifecycle probe
+  `35057233244`. The probe completed and uploaded its artifact; 16 of 17 queries
+  ran, while the confirmation-document join remained correctly denied by the
+  audit role. A real, owner-authorized submission and durable confirmation are
+  still required before Hamilton can be called production-ready.
 
 ## Next operator chain
 
