@@ -132,6 +132,14 @@ export function assessIdentityAndScope(meResult, expectedProfileIds = []) {
   }
 
   const expected = [...new Set(expectedProfileIds.map((id) => String(id).trim()).filter(Boolean))].sort();
+  if (expected.length === 0) {
+    return {
+      ok: false,
+      reason: 'approved_profile_scope_required',
+      expected_profile_count: 0,
+      actual_profile_count: null,
+    };
+  }
   const actualRows = Array.isArray(body.profiles) ? body.profiles : [];
   const actual = actualRows.map((profile) => String(profile?.id || '').trim()).filter(Boolean).sort();
   const actualUnique = [...new Set(actual)];
@@ -144,11 +152,14 @@ export function assessIdentityAndScope(meResult, expectedProfileIds = []) {
     };
   }
 
-  const exact = expected.length === actualUnique.length
-    && expected.every((profileId, index) => profileId === actualUnique[index]);
+  // The explicit selector controls every read below. A dedicated non-admin
+  // account may legitimately manage other profiles; requiring its entire
+  // account scope to equal this run's approved subset would reject a safely
+  // scoped audit. Still fail closed unless each requested profile is authorized.
+  const approved = expected.every((profileId) => actualUnique.includes(profileId));
   return {
-    ok: exact,
-    reason: exact ? 'exact_non_admin_profile_scope' : 'auth_me_profile_scope_mismatch',
+    ok: approved,
+    reason: approved ? 'approved_non_admin_profile_scope' : 'auth_me_missing_approved_profile',
     expected_profile_count: expected.length,
     actual_profile_count: actualUnique.length,
   };

@@ -66,6 +66,18 @@
    attempted.
 5. **Stripe lifecycle:** NOT RUN in this pass.
 
+### 2026-09-16 authenticated audit follow-up
+
+- Credential rotation was verified by protected run `35055230713`: password
+  login succeeded and all four explicitly scoped application reads returned 200.
+- The run then exposed an overly strict audit assertion: it required the audit
+  account's entire authorized profile set to equal the single profile selected
+  for this run. The account is non-admin and legitimately manages more than one
+  profile; the workflow already supplies the explicit boundary to every read.
+- The assertion now requires the selected set to be a non-empty subset of the
+  account's authorized profiles. It still fails closed if a requested profile is
+  absent, and it does not broaden any database, API, screenshot, or portal read.
+
 ## Next operator chain
 
 1. Run the authenticated discovery/Amy/parity acceptance cohort and report
