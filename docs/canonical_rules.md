@@ -469,19 +469,25 @@ All three degrade cleanly without `OPENAI_API_KEY` (no-op / honest
 
 ## Known gaps / TODOs (must become hard rules once implemented)
 
-- Standardized crawler output schema: `{ raw, normalized, score_0_1, explain, provenance }`
-  - **Page-fact provenance storage (Phase 0.1, LAID — extractor not yet built).**
-    `funding_opportunities` carries additive, NULL-default columns
-    `eligibility_text`, `eligibility_bullets` (pre-existing), `page_fact_schema_version`,
-    and `field_provenance` (JSON `{ field: { value, evidence_snippet, source } }`).
-    Migration `144` / pg `0148` (guarded numbered migration, NOT `ensureOsTables`).
-    The OS opportunity shape (`contract.makeOpportunity`) carries the fields;
-    `storage.upsertOpportunity`, `osOppToLiveRow`, and the `crawler-os/matchEngine`
-    facade thread them through so they round-trip write→read. **Nothing populates
-    them yet — they default null and change no matching / scoring / behavior.** The
-    tri-state for `is_loan` / `requires_match` / `is_national` lives in
-    `field_provenance`: an ABSENT key means "not stated", distinct from the boolean
-    columns' coalesced false (which existing consumers keep reading unchanged). A
-    later profile-blind extractor is the consumer that will fill these.
-- Deterministic pipeline runner: every crawler × every profile, persist results with score > 0.50
+- Standardized crawler output schema: `{ raw, normalized, score_0_1, explain, provenance }`.
+  The profile-blind page-fact extractor is now implemented and wired through the
+  web lane (`blindPageFactExtractor` → evidence-span validator → mapper → writer).
+  `funding_opportunities` carries `eligibility_text`, `eligibility_bullets`,
+  `page_fact_schema_version`, and `field_provenance`; an absent tri-state key still
+  means “not stated.” Unit wiring is not a production-population claim: the
+  protected audit finding `page_fact_provenance` is the evidence authority for
+  how many live crawler rows carry a schema version, provenance, and a cited fact.
+- Fleet discovery is implemented as a deterministic per-profile scheduler:
+  `runScheduledAutoDiscovery` enumerates each active profile and invokes the one
+  canonical `runProfileDiscoveryLive` entry point, whose persistence layer writes
+  catalog rows and profile-specific match rows. It is intentionally NOT a
+  Cartesian “every adapter against every profile” runner: the canonical planner
+  selects relevant sources from profile facts. Production completeness is proven
+  from scheduled-run markers and stage ledgers, never inferred from the loop's
+  existence.
+- Nationwide ZIP coverage is a measured claim, not a crawler-exists claim. The
+  protected audit finding `nationwide_zip_coverage` compares every persisted
+  `national_zip_progress` ZIP with distinct active, URL-backed opportunities that
+  were verified in the last 30 days. A ZIP is complete only at three or more;
+  progress counters do not qualify as verification evidence.
 - Stripe end-to-end billing contract and idempotent webhook handling

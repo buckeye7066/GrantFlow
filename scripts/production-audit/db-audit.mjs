@@ -400,6 +400,75 @@ export const FINDINGS = [
       LIMIT 200`,
   },
   {
+    id: 'nationwide_zip_coverage',
+    requirement: '16. Nationwide ZIP coverage claim',
+    file: 'database',
+    question:
+      'Measures the persisted ZIP backlog against the product promise: each claimed ZIP needs at least three distinct, active, URL-backed opportunities with fresh verification. Progress counters alone are not proof because they can outlive catalog verification or count duplicate rows.',
+    sql: `
+      WITH claimed AS (
+        SELECT zip, status, sources_found, last_run_at, updated_at
+        FROM national_zip_progress
+      ),
+      verified AS (
+        SELECT gi.zip,
+               count(DISTINCT fo.id)::int AS verified_sources
+        FROM funding_opportunity_geo_index gi
+        JOIN funding_opportunities fo ON fo.id = gi.opportunity_id
+        WHERE fo.is_active IS TRUE
+          AND COALESCE(NULLIF(btrim(fo.application_url), ''), NULLIF(btrim(fo.source_url), ''), NULLIF(btrim(fo.evidence_url), '')) IS NOT NULL
+          AND fo.last_verified_at >= CURRENT_TIMESTAMP - INTERVAL '30 days'
+        GROUP BY gi.zip
+      )
+      SELECT CASE
+               WHEN COALESCE(v.verified_sources, 0) = 0 THEN '0'
+               WHEN v.verified_sources = 1 THEN '1'
+               WHEN v.verified_sources = 2 THEN '2'
+               ELSE '3_plus'
+             END AS verified_source_bucket,
+             count(*)::int AS zips,
+             count(*) FILTER (WHERE c.status = 'completed')::int AS progress_marked_completed,
+             count(*) FILTER (WHERE c.sources_found >= 3)::int AS progress_claimed_three_plus,
+             min(c.last_run_at) AS oldest_run,
+             max(c.last_run_at) AS newest_run
+      FROM claimed c
+      LEFT JOIN verified v ON v.zip = c.zip
+      GROUP BY 1
+      ORDER BY 1`,
+    unscoped: true,
+  },
+  {
+    id: 'page_fact_provenance',
+    requirement: '17. Page-fact provenance population',
+    file: 'database',
+    question:
+      'Measures whether live crawler rows actually carry the profile-blind extractor contract. Code wiring is not production evidence: active crawled rows are grouped by schema/provenance completeness and cited evidence coverage.',
+    sql: `
+      SELECT COALESCE(fo.record_origin, '(null)') AS record_origin,
+             count(*)::int AS active_rows,
+             count(*) FILTER (WHERE fo.page_fact_schema_version IS NOT NULL)::int AS with_schema_version,
+             count(*) FILTER (WHERE fo.field_provenance IS NOT NULL
+                               AND btrim(fo.field_provenance) NOT IN ('', '{}', 'null'))::int AS with_provenance,
+             count(*) FILTER (WHERE fo.eligibility_text IS NOT NULL
+                               AND btrim(fo.eligibility_text) <> '')::int AS with_eligibility_text,
+             count(*) FILTER (WHERE EXISTS (
+               SELECT 1
+               FROM jsonb_each(CASE
+                 WHEN fo.field_provenance IS NULL OR btrim(fo.field_provenance) IN ('', 'null')
+                   THEN '{}'::jsonb
+                 ELSE fo.field_provenance::jsonb
+               END) AS e
+               WHERE NULLIF(btrim(e.value ->> 'evidence_snippet'), '') IS NOT NULL
+                 AND NULLIF(btrim(e.value ->> 'source'), '') IS NOT NULL
+             ))::int AS with_cited_fact
+      FROM funding_opportunities fo
+      WHERE fo.is_active IS TRUE
+        AND fo.record_origin IN ('live_crawl', 'geo_crawl', 'discovered', 'scholarship_crawler')
+      GROUP BY fo.record_origin
+      ORDER BY active_rows DESC`,
+    unscoped: true,
+  },
+  {
     id: 'catalog_contamination',
     requirement: '14. Portal-derived personal awards in the GLOBAL catalog',
     file: 'database',
