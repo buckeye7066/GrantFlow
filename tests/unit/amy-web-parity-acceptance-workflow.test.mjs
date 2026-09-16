@@ -6,7 +6,7 @@ const workflow = fs.readFileSync('.github/workflows/amy-web-parity-acceptance.ym
 
 test('manual Amy/parity acceptance runs the hermetic exact-50 command', () => {
   assert.match(workflow, /workflow_dispatch:/)
-  assert.match(workflow, /node-version: 20\.20\.2/)
+  assert.match(workflow, /node-version-file: \.nvmrc/)
   assert.match(workflow, /scripts\/grantflow-acceptance-50\.mjs/)
   assert.match(workflow, /--expected-sha="\$\(git rev-parse HEAD\)"/)
   assert.doesNotMatch(workflow, /GRANTFLOW_PROD_AUDIT_DATABASE_URL|DATABASE_URL:/)
