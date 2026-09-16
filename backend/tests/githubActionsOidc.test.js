@@ -11,7 +11,8 @@ function fixture(overrides = {}) {
   const claims = Buffer.from(JSON.stringify({
     iss: 'https://token.actions.githubusercontent.com', aud: ZIP_CLOSURE_AUDIENCE,
     nbf: now - 10, exp: now + 300, repository: 'buckeye7066/GrantFlow',
-    ref: 'refs/heads/main', event_name: 'workflow_dispatch', environment: 'production-audit',
+    ref: 'refs/heads/main', event_name: 'workflow_dispatch',
+    sub: 'repo:buckeye7066/GrantFlow:environment:production-audit',
     job_workflow_ref: 'buckeye7066/GrantFlow/.github/workflows/nationwide-zip-closure.yml@refs/heads/main',
     ...overrides,
   })).toString('base64url')
@@ -41,7 +42,7 @@ describe('GitHub Actions ZIP-closure identity', () => {
     ['fork', { repository: 'attacker/fork' }],
     ['branch', { ref: 'refs/heads/feature' }],
     ['workflow', { job_workflow_ref: 'buckeye7066/GrantFlow/.github/workflows/other.yml@refs/heads/main' }],
-    ['environment', { environment: 'preview' }],
+    ['environment subject', { sub: 'repo:buckeye7066/GrantFlow:environment:preview' }],
   ])('rejects a token with the wrong %s', async (_label, override) => {
     const { token, jwk } = fixture(override)
     expect(await verifyZipClosureOidc(token, { fetchImpl: async () => ({ ok: true, json: async () => ({ keys: [jwk] }) }) })).toBeNull()

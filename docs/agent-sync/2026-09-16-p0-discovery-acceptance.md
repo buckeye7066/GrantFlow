@@ -78,6 +78,11 @@ close this phase.
   exact audience, repository, `main` ref, manual-dispatch event, protected
   `production-audit` environment, and workflow path. A fork, another branch,
   another environment, or another workflow fails closed.
+- First OIDC run `35140053453` proved token minting worked but authentication
+  still failed because the verifier expected a standalone `environment` claim.
+  GitHub binds protected environments in the canonical `sub` claim; the guard
+  now requires the exact subject
+  `repo:buckeye7066/GrantFlow:environment:production-audit`.
 
 ## Operator sequence
 
