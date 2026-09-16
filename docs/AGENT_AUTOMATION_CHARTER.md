@@ -84,13 +84,15 @@ The lead pipeline (Yana → John) is documented further in
 - Resume automatically after a blocker is resolved.
 
 **Hard-stop escalation** — agents escalate to the admin **only** for:
-missing required information that can't be derived · login/SSO required ·
-MFA/2FA · CAPTCHA / anti-bot · payment required · wet/digital signature ·
-legal attestation · portal-terms block · destructive DB change · credential or
-secret handling · genuinely ambiguous decisions.
+missing required information that can't be derived · login/SSO, MFA/2FA, or
+CAPTCHA/anti-bot that the user's saved session and configured, compliant helpers
+cannot complete · payment required · a wet signature · a digital signature or
+legal attestation not covered by the user's matching standing Complete Autonomy
+consent · portal-terms block · destructive DB change · credential or secret
+handling outside the vault-backed flow · genuinely ambiguous decisions.
 
 **Safety (absolute — never, for any agent):** forge signatures · invent facts ·
-bypass CAPTCHA · evade anti-bot systems · intercept 2FA · violate portal ToS ·
+bypass CAPTCHA outside configured compliant helpers · evade anti-bot systems · intercept 2FA · violate portal ToS ·
 store raw credentials or card numbers · misuse FAFSA/FSA credentials · submit
 unsafe legal attestations · expose secrets.
 

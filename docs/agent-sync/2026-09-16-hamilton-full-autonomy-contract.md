@@ -29,3 +29,16 @@ captured.
 - A contract test prevents the old owner-only submission prohibition from being
   reintroduced and asserts the docs remain connected to the tier and consent
   choke points.
+
+## Review correction
+
+- Removed the remaining fixture-only and mandatory-owner-submit language from
+  the Hamilton guide and aligned the binding automation charter with supported,
+  compliant verification helpers and standing attestations.
+- Restored the promised per-task veto at the canonical submission decision:
+  Complete Autonomy supplies authority and its enable flow arms workable tasks,
+  but `application_tasks.allow_auto_submit = false` remains decisive even while
+  the broader profile grant is active.
+- Strengthened the contract guard to assert the actual tier-gated router mount
+  and the orchestrator's live-task recheck wired into `runAutopilot`, rather
+  than checking for disconnected tokens.

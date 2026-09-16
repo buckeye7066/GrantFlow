@@ -1,5 +1,5 @@
 /**
- * The submit gate honors the PROFILE-WIDE toggle, not only the per-task mirror.
+ * The submit gate requires BOTH profile-wide authority and per-task intent.
  *
  * Live evidence 2026-08-21 (a real applicant's run): the "Full automation is on"
  * card was showing enabled, yet 100+ tasks sat at `waiting_for_review`
@@ -11,8 +11,9 @@
  * row, or one created after the toggle flipped on) therefore drafted forever
  * while the card said "on".
  *
- * The gate now reads intent from the active authorization too, so the two
- * predicates agree by construction. Every veto still refuses: a
+ * The Complete Autonomy enable flow sweeps workable tasks to persist their
+ * intent. The irreversible boundary reads that live task value, so a later
+ * per-task disable remains a durable veto. Every other veto still refuses: a
  * `require_human_review` option at any scope, a missing `submit_applications`
  * grant, and (in the caller) the global env kill switch.
  */
@@ -61,23 +62,23 @@ async function grantFullAutomation({ requireHumanReview = false } = {}) {
   })
 }
 
-const decide = () => resolveSubmissionDecision(db, {
+const decide = (taskAllowAutoSubmit = false) => resolveSubmissionDecision(db, {
   profileId: PROFILE,
   taskId: TASK,
-  taskAllowAutoSubmit: false, // the stale backlog case — column never swept
+  taskAllowAutoSubmit,
 })
 
-describe('resolveSubmissionDecision — the toggle is authoritative intent', () => {
-  it('ARMS submission from the authorization even when the per-task column is false', async () => {
+describe('resolveSubmissionDecision — task intent is authoritative at the click boundary', () => {
+  it('REFUSES submission when the per-task flag is false despite profile-wide authority', async () => {
     await grantFullAutomation()
     const decision = await decide()
-    expect(decision.allow_auto_submit).toBe(true)
-    expect(decision.reason).toBe('authorized')
+    expect(decision.allow_auto_submit).toBe(false)
+    expect(decision.reason).toBe('not_requested')
   })
 
   it('still REFUSES when a require_human_review veto is present at the profile scope', async () => {
     await grantFullAutomation({ requireHumanReview: true })
-    const decision = await decide()
+    const decision = await decide(true)
     expect(decision.allow_auto_submit).toBe(false)
     expect(decision.reason).toBe('human_review_required')
   })
@@ -93,7 +94,7 @@ describe('resolveSubmissionDecision — the toggle is authoritative intent', () 
       authorizationText: 'Forms only.',
       options: { allow_auto_submit: true },
     })
-    const decision = await decide()
+    const decision = await decide(true)
     expect(decision.allow_auto_submit).toBe(false)
     expect(decision.reason).toBe('missing_submit_authorization')
   })
@@ -104,7 +105,7 @@ describe('resolveSubmissionDecision — the toggle is authoritative intent', () 
     expect(decision.reason).toBe('not_requested')
   })
 
-  it('still ARMS from the per-task column alone (back-compat with the sweep)', async () => {
+  it('ARMS when the Complete Autonomy sweep has persisted per-task intent', async () => {
     await grantFullAutomation()
     const decision = await resolveSubmissionDecision(db, {
       profileId: PROFILE,
