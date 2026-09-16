@@ -46,20 +46,30 @@ test('Hamilton production preflight reports readiness and blockers without treat
   })), {
     http_status: 200,
     outcome: 'ready',
+    source_count: 2,
     ready_source_count: 2,
     blocked_source_count: 0,
     blocker_count: 0,
+    blocker_kind_counts: {},
   })
 
   assert.deepEqual(summarizeHamiltonPreflight(ok({
     ok: false,
-    results: [{ ok: false, blockers: [{ kind: 'missing_authorization' }] }],
+    results: [
+      { ok: true, blockers: [] },
+      { ok: false, blockers: [{ kind: 'missing_authorization' }, { code: 'missing_profile_fact' }] },
+    ],
   })), {
     http_status: 200,
     outcome: 'blocked',
+    source_count: 2,
     ready_source_count: 1,
     blocked_source_count: 1,
-    blocker_count: 1,
+    blocker_count: 2,
+    blocker_kind_counts: {
+      missing_authorization: 1,
+      missing_profile_fact: 1,
+    },
   })
   assert.equal(summarizeHamiltonPreflight({
     status: 409, ok: false, body: { error: 'no_ready_sources' },

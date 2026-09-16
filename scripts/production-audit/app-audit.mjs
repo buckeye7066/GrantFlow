@@ -219,14 +219,28 @@ export function summarizeHamiltonPreflight(result) {
     (total, row) => total + (Array.isArray(row?.blockers) ? row.blockers.length : 0),
     0,
   );
+  const blockerKindCounts = {};
+  for (const row of rows) {
+    for (const blocker of Array.isArray(row?.blockers) ? row.blockers : []) {
+      // Log only the bounded blocker classification. Detail strings can contain
+      // profile facts, portal names, or URLs and remain in the sanitized audit
+      // artifact instead of the public Actions log.
+      const kind = String(blocker?.kind || blocker?.code || 'unclassified').trim() || 'unclassified';
+      blockerKindCounts[kind] = (blockerKindCounts[kind] || 0) + 1;
+    }
+  }
+  const readyRows = rows.filter((row) => row?.ok === true);
+  const blockedRows = rows.filter((row) => row?.ok !== true);
   return {
     http_status: status,
     outcome: status >= 200 && status < 300
       ? (body.ok === true ? 'ready' : 'blocked')
       : (body.error || 'request_failed'),
-    ready_source_count: rows.length,
-    blocked_source_count: rows.filter((row) => row?.ok !== true).length,
+    source_count: rows.length,
+    ready_source_count: readyRows.length,
+    blocked_source_count: blockedRows.length,
     blocker_count: blockerCount,
+    blocker_kind_counts: blockerKindCounts,
   };
 }
 
@@ -501,7 +515,11 @@ async function main() {
         throw new Error(`HTTP ${summary.http_status}`);
       }
       capture.hamilton_preflight_summary = summary;
-      return `${summary.outcome}; ${summary.ready_source_count} ready source(s), ${summary.blocker_count} blocker(s)`;
+      const blockerKinds = Object.entries(summary.blocker_kind_counts)
+        .sort(([left], [right]) => left.localeCompare(right))
+        .map(([kind, count]) => `${kind}:${count}`)
+        .join(', ');
+      return `${summary.outcome}; ${summary.ready_source_count}/${summary.source_count} ready source(s), ${summary.blocked_source_count} blocked source(s), ${summary.blocker_count} blocker(s)${blockerKinds ? ` [${blockerKinds}]` : ''}`;
     });
     await step(`profile ${profileId}: portal sync runs`, async () => {
       capture.portal_sync_runs = await apiGet(`/api/hamilton/portal-sync/runs?profileId=${profileId}`, profileId);
