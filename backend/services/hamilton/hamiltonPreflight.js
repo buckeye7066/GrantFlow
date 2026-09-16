@@ -28,6 +28,13 @@ import { isAuthorizationActive, listActiveAuthorizations } from './hamiltonAutho
 import { parseFullName, looksLikeOrganization } from '../../../shared/nameParsing.js'
 import { normalizeFafsaStatus, deriveFafsaCompleted } from '../college/fafsaStatus.js'
 
+// Unforgeable, process-local proof that the canonical ready-source selector
+// already evaluated this exact source successfully in the current request.
+// JSON clients cannot manufacture a Symbol property. The irreversible engine
+// still rechecks policy immediately before acting; this only prevents the
+// launch-screen preflight from contradicting its own selector seconds earlier.
+export const HAMILTON_READY_SOURCE_POLICY_PROOF = Symbol('hamilton-ready-source-policy-proof')
+
 // Individual/person identity fields. An ORGANIZATION profile (a church, a
 // ministry, a nonprofit, a school, a business) has NO first/last name — it has
 // an organization name and a contact — so requiring first_name/last_name from
@@ -393,7 +400,7 @@ export async function preflightSingleSource(db, {
   const warnings = []
   const classification = classifyFundingSource({ opportunity, grant, profile, portalLink })
 
-  const fundingPolicy = await assessHamiltonFundingSource(db, {
+  const fundingPolicy = source?.[HAMILTON_READY_SOURCE_POLICY_PROOF] || await assessHamiltonFundingSource(db, {
     profileId: profileId || profile?.id,
     opportunity,
     grant,
