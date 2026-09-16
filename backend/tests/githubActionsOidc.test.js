@@ -48,3 +48,11 @@ describe('GitHub Actions ZIP-closure identity', () => {
     expect(await verifyZipClosureOidc(token, { fetchImpl: async () => ({ ok: true, json: async () => ({ keys: [jwk] }) }) })).toBeNull()
   })
 })
+
+it('registers the verified ZIP closure principal with the canonical service-admin identity gate', async () => {
+  const { isSyntheticServiceAdmin } = await import('../middleware/syntheticServiceTokens.js')
+  expect(isSyntheticServiceAdmin({
+    role: 'admin', is_admin: true, serviceToken: true,
+    userId: 'system_github_zip_closure',
+  })).toBe(true)
+})
