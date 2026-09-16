@@ -109,13 +109,6 @@ async function resolveProfileId(db, subscription) {
   return null
 }
 
-/**
- * Apply a Stripe subscription to a profile billing account.
- *
- * @returns {Promise<{ok:boolean, reason?:string, profile_id?:string,
- *   previous_tier_id?:string, new_tier_id?:string, status?:string, changed?:boolean}>}
- */
-
 /** Record payment failure without allowing an older invoice event to overwrite newer state. */
 export async function applyStripePaymentFailure(db, { subscriptionId, eventCreated = null } = {}) {
   const sid = String(subscriptionId || '').trim()
@@ -141,6 +134,13 @@ export async function applyStripePaymentFailure(db, { subscriptionId, eventCreat
   ).run(incomingEventAt, account.id)
   return { ok: true, changed: true, reason: 'invoice_payment_failed' }
 }
+
+/**
+ * Apply a Stripe subscription to a profile billing account.
+ *
+ * @returns {Promise<{ok:boolean, reason?:string, profile_id?:string,
+ *   previous_tier_id?:string, new_tier_id?:string, status?:string, changed?:boolean}>}
+ */
 
 export async function applyStripeSubscription(
   db,
