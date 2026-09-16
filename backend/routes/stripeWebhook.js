@@ -6,7 +6,7 @@ import { recordPaymentAccessEvent } from '../services/pricing/profilePricingInit
 import { PAYMENT_ACCESS_EVENT, QUOTE_STATUS } from '../services/pricing/pricingTypes.js'
 import { updateQuoteStatus, tableExists } from '../services/pricing/quoteBuilder.js'
 import { markInvoicePaid } from '../services/billing/invoiceService.js'
-import { applyStripeSubscription } from '../services/billing/subscriptionSync.js'
+import { applyStripePaymentFailure, applyStripeSubscription } from '../services/billing/subscriptionSync.js'
 
 import { createLogger } from '../utils/logger.js'
 const routeLogger = createLogger('route:stripeWebhook')
@@ -238,6 +238,7 @@ router.post('/', async (req, res) => {
       const subscription = event.data?.object
       const result = await applyStripeSubscription(req.db, subscription, {
         source: `stripe_webhook:${event.type}`,
+        eventCreated: event.created,
       })
       if (!result.ok) {
         // Do not 500 back to Stripe for a resolution problem we cannot fix by
@@ -257,14 +258,13 @@ router.post('/', async (req, res) => {
       const invoice = event.data?.object
       const subscriptionId = invoice?.subscription ? String(invoice.subscription) : null
       if (subscriptionId) {
-        await req.db
-          .prepare(
-            `UPDATE billing_accounts
-               SET subscription_status = 'past_due', updated_at = CURRENT_TIMESTAMP
-             WHERE stripe_subscription_id = ?`,
-          )
-          .run(subscriptionId)
-        routeLogger.warn('invoice payment failed; marked past_due', { subscriptionId, eventId: event?.id })
+        const failure = await applyStripePaymentFailure(req.db, {
+          subscriptionId,
+          eventCreated: event.created,
+        })
+        routeLogger.warn('invoice payment failed', {
+          subscriptionId, eventId: event?.id, result: failure.reason,
+        })
       }
     }
   } catch (error) {
