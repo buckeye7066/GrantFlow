@@ -4,10 +4,12 @@ Hamilton is the GrantFlow agent that takes over a funding opportunity once a
 discovered match has reached the "ready for application" stage in the
 pipeline. She links the opportunity to the right student-portal record,
 drafts the application from profile + document data, detects missing
-information, and either prepares a final review or, when explicitly
-authorised in the reserved synthetic fixture, exercises the submit state
-machine. In the current controlled beta, every real-domain final submission is
-completed by the owner in the official portal.
+information, and either prepares a final review or completes the application
+end to end. On an eligible tier, a user who enables Complete Autonomy grants
+Hamilton standing permission to use the profile's vault-backed credentials,
+solve supported CAPTCHA/verification challenges, fill the application, and
+perform the final submission on a real portal. The persisted authorization —
+not an environment flag or an operator shortcut — is the submission authority.
 
 This document is the contract for what Hamilton **will** and **will not**
 do, and how to extend her safely.
@@ -48,19 +50,23 @@ Hamilton **never**:
 
 - invents answers to required questions (missing info is recorded and
   surfaced — never fabricated);
-- bypasses CAPTCHAs, 2FA, SSO security, paywalls, ToS gates, manual
-  signatures, legal attestations, or final-submission consent boxes;
-- logs into a school portal on behalf of the student — institutional
-  portals always require either a stored credential reference (no plain
-  passwords are ever stored) or a manual user-initiated login;
-- launches a server browser or performs final submission on a real portal
-  domain during controlled beta. Saved submit intent, environment flags,
-  provider metadata, and host allow-lists do not expand this boundary;
-- treats login, 2FA, CAPTCHA, a signature, an attestation, an owner approval, or
-  portal confirmation as bypassable. The owner completes those steps directly
-  in the official portal.
+- invents or silently assumes consent. Real-domain submission requires an
+  active `submit_applications` authorization, `allow_auto_submit`, an eligible
+  tier, no `require_human_review` veto, and the task's own durable submit intent;
+- stores raw portal passwords outside the profile vault or uses credentials
+  that the user did not authorize Hamilton to use;
+- treats an unresolved login, 2FA, CAPTCHA, signature, attestation, payment,
+  terms/policy gate, or portal confirmation as success. Complete Autonomy may
+  use the configured CAPTCHA helper, vault credentials, Hamilton-owned
+  verification channels, and matching standing attestations; if a supported
+  helper cannot clear the gate, Hamilton stops and asks for the precise missing
+  human action;
+- clicks Submit without re-reading the canonical authorization immediately at
+  the irreversible boundary, or ignores a revocation received mid-run;
+- reports `submitted` without new, durable portal confirmation evidence.
 
-When Hamilton reaches a required human boundary, it stops in
+When Hamilton reaches a required human boundary that the user's authorization
+and configured helpers cannot lawfully or reliably clear, it stops in
 `waiting_for_user`, `waiting_for_admin`, `blocked_login_required`,
 `blocked_missing_info`, `blocked_2fa`, `blocked_captcha`, or
 `blocked_terms_or_policy` and emits the matching notification.
