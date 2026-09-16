@@ -68,6 +68,17 @@ close this phase.
   returns useful results, and survives the exact-50 quantity/quality gates.
 - No fresh live acceptance result is claimed by this change.
 
+## ZIP closure authentication correction
+
+- Live ZIP closure run `35131967138` reconfirmed that the duplicated
+  `ANYA_ADMIN_TOKEN` in GitHub no longer matched Railway (`401`). The workflow
+  no longer depends on that drift-prone shared secret.
+- It now mints a short-lived GitHub Actions OIDC token. The backend grants the
+  ZIP-closure service identity only after verifying the GitHub signature plus
+  exact audience, repository, `main` ref, manual-dispatch event, protected
+  `production-audit` environment, and workflow path. A fork, another branch,
+  another environment, or another workflow fails closed.
+
 ## Operator sequence
 
 1. Configure one reliable search provider secret pair/value in GitHub.

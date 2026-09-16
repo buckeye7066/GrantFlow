@@ -16,6 +16,7 @@ on:
 
 permissions:
   contents: read
+  id-token: write
 
 concurrency:
   group: nationwide-zip-closure-production
@@ -30,12 +31,20 @@ jobs:
     env:
       GF_API: https://grantflow-production.up.railway.app/api
       GF_CONFIRM_MUTATING_HOST: grantflow-production.up.railway.app
-      GF_ADMIN_TOKEN: ${{ secrets.ANYA_ADMIN_TOKEN }}
     steps:
       - name: Check out dispatched commit
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
+
+      - name: Mint repository-bound production identity
+        run: |
+          token="$(curl --fail --silent --show-error \
+            -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=grantflow-production-zip-closure" | jq -r '.value')"
+          test -n "$token" && test "$token" != null
+          echo "::add-mask::$token"
+          echo "GF_GITHUB_OIDC_TOKEN=$token" >> "$GITHUB_ENV"
 
       - name: Run bounded resumable ZIP closure
         run: |

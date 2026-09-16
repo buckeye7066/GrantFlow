@@ -66,10 +66,11 @@ if (confirmedHost !== apiUrl.hostname.toLowerCase()) {
 
 const API = apiUrl.toString().replace(/\/$/, '')
 const ADMIN_TOKEN = String(process.env.GF_ADMIN_TOKEN || '').trim()
+const GITHUB_OIDC_TOKEN = String(process.env.GF_GITHUB_OIDC_TOKEN || '').trim()
 const EMAIL = String(process.env.GF_ADMIN_EMAIL || '').trim()
 const PASSWORD = String(process.env.GF_ADMIN_PASSWORD || '')
-if (!ADMIN_TOKEN && (!EMAIL || !PASSWORD)) {
-  throw new Error('set GF_ADMIN_TOKEN, or both GF_ADMIN_EMAIL and GF_ADMIN_PASSWORD')
+if (!ADMIN_TOKEN && !GITHUB_OIDC_TOKEN && (!EMAIL || !PASSWORD)) {
+  throw new Error('set GF_ADMIN_TOKEN, GF_GITHUB_OIDC_TOKEN, or both GF_ADMIN_EMAIL and GF_ADMIN_PASSWORD')
 }
 
 const MAX_RUNS = boundedInteger(args['max-runs'] || '12', { name: 'max-runs', min: 1, max: 100 })
@@ -113,24 +114,25 @@ async function login() {
 }
 
 async function api(path, init = {}) {
-  if (!token) await login()
+  if (!token && !GITHUB_OIDC_TOKEN) await login()
   const request = () => fetch(`${API}${path}`, {
     ...init,
     redirect: 'error',
     signal: AbortSignal.timeout(30_000),
     headers: {
-      Authorization: `Bearer ${token}`,
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
       // Admin automation historically accepted Bearer, while the canonical
       // admin router and internal probes use x-admin-token. Send the same
       // explicitly supplied secret through both supported authentication
       // headers so middleware ordering cannot demote a valid service identity.
       ...(ADMIN_TOKEN ? { 'x-admin-token': token } : {}),
+      ...(GITHUB_OIDC_TOKEN ? { 'x-github-oidc-token': GITHUB_OIDC_TOKEN } : {}),
       'Content-Type': 'application/json',
       ...(init.headers || {}),
     },
   })
   let response = await request()
-  if (response.status === 401 && !ADMIN_TOKEN) {
+  if (response.status === 401 && !ADMIN_TOKEN && !GITHUB_OIDC_TOKEN) {
     await login()
     response = await request()
   }
