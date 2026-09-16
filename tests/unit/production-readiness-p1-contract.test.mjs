@@ -10,6 +10,7 @@ test('nationwide ZIP evidence counts distinct fresh verified catalog sources, no
   const audit = finding('nationwide_zip_coverage')
   assert.ok(audit, 'protected production audit must measure nationwide ZIP coverage')
   assert.equal(audit.unscoped, true)
+  assert.equal(audit.logRows, true, 'non-sensitive ZIP buckets must remain visible in workflow logs')
   assert.match(audit.sql, /count\(DISTINCT fo\.id\)/)
   assert.match(audit.sql, /fo\.is_active IS TRUE/)
   assert.match(audit.sql, /fo\.last_verified_at >= CURRENT_TIMESTAMP - INTERVAL '30 days'/)
