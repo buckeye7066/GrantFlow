@@ -61,6 +61,14 @@
    require operator rotation; this is external configuration, not an application
    auth transport defect. The workflow now uploads its sanitized evidence before
    re-failing the job so database/Amy findings are not discarded by that blocker.
+   Run `35051715073` verified that behavior: scope resolution, the database lane,
+   report composition, secret scanning, and sanitized artifact upload all passed;
+   the final enforcement step kept the run red. The database lane completed all
+   17 findings and reported Amy `evaluated=50`, `clean=42`, `issues=8`, with one
+   below-threshold surfaced match and five catalog-contamination findings. Browser
+   acceptance remains BLOCKED on the stale `GRANTFLOW_AUDIT_PASSWORD` secret. The
+   artifact exists, but this task container cannot download GitHub's Azure Blob
+   artifact URL because its network allowlist returns HTTP 403.
 4. **Hamilton confirmed submission:** UNKNOWN. The aggregate probe is healthy
    except for its intentionally denied document join; no real submission was
    attempted.
