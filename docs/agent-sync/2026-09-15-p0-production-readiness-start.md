@@ -47,6 +47,12 @@
    the owner-provided first name was not a full display-name match. The resolver
    now also accepts a unique first-name match, prefers an exact display-name match,
    and still fails closed rather than selecting among multiple candidates.
+   Run `35048264827` then passed scope resolution, the read-only database audit,
+   and the live-process authority gate. Its browser lane exposed a transport bug:
+   the SPA keeps its bearer token in memory, while the audit's direct API reads
+   sent only the refresh cookie and received 401. The browser audit now refreshes
+   after UI login, retains the access token only inside the browser realm, and
+   attaches it only to its allowlisted read requests; no token enters logs or artifacts.
 4. **Hamilton confirmed submission:** UNKNOWN. The aggregate probe is healthy
    except for its intentionally denied document join; no real submission was
    attempted.

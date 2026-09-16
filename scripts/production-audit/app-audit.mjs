@@ -330,6 +330,8 @@ async function main() {
     return page.evaluate(async ({ p, pid }) => {
       try {
         const headers = { accept: 'application/json' };
+        const token = globalThis.__GRANTFLOW_AUDIT_ACCESS_TOKEN__;
+        if (typeof token === 'string' && token) headers.authorization = `Bearer ${token}`;
         if (pid) headers['X-Profile-Id'] = pid;
         const res = await fetch(p, { credentials: 'include', headers });
         const text = await res.text();
@@ -368,6 +370,25 @@ async function main() {
     await page.locator('button[type="submit"]').first().click();
 
     await page.waitForLoadState('networkidle', { timeout: 45_000 }).catch(() => {});
+    // Access tokens intentionally live only in the SPA's in-memory API client.
+    // Obtain a fresh token through the HttpOnly refresh cookie, keep it inside
+    // the browser realm, and attach it only to this audit's read-only requests.
+    // Never return or serialize the token into Node, logs, screenshots, or the
+    // artifact.
+    const refreshed = await page.evaluate(async () => {
+      const response = await fetch('/api/auth/refresh', {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'X-Requested-With': 'XMLHttpRequest' },
+      });
+      let body = {};
+      try { body = await response.json(); } catch { /* sanitized below */ }
+      if (response.ok && typeof body?.accessToken === 'string' && body.accessToken) {
+        globalThis.__GRANTFLOW_AUDIT_ACCESS_TOKEN__ = body.accessToken;
+      }
+      return { status: response.status, hasAccessToken: Boolean(globalThis.__GRANTFLOW_AUDIT_ACCESS_TOKEN__) };
+    });
+    if (!refreshed.hasAccessToken) throw new Error(`session_refresh_http_${refreshed.status || 0}`);
     await shot('02-after-login');
     return page.url();
   });
