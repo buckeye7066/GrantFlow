@@ -1,0 +1,46 @@
+name: nationwide-zip-closure
+
+on:
+  workflow_dispatch:
+    inputs:
+      max_runs:
+        description: 'Maximum resumable production crawl passes'
+        required: true
+        default: '4'
+        type: string
+      max_zips:
+        description: 'Maximum ZIPs examined per pass'
+        required: true
+        default: '500'
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: nationwide-zip-closure-production
+  cancel-in-progress: false
+
+jobs:
+  close-gap:
+    name: Close verified ZIP coverage gap
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    environment: production-audit
+    env:
+      GF_API: https://grantflow-production.up.railway.app/api
+      GF_CONFIRM_MUTATING_HOST: grantflow-production.up.railway.app
+      GF_ADMIN_TOKEN: ${{ secrets.ANYA_ADMIN_TOKEN }}
+    steps:
+      - name: Check out dispatched commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - name: Run bounded resumable ZIP closure
+        run: |
+          node scripts/admin-geocrawl-until-complete.mjs \
+            --max-runs="${{ inputs.max_runs }}" \
+            --target-percent=100 \
+            --max-zips="${{ inputs.max_zips }}" \
+            --poll-ms=60000

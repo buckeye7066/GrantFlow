@@ -51,13 +51,17 @@ test('Hamilton production preflight reports readiness and blockers without treat
     blocked_source_count: 0,
     blocker_count: 0,
     blocker_kind_counts: {},
+    blocker_reason_counts: {},
   })
 
   assert.deepEqual(summarizeHamiltonPreflight(ok({
     ok: false,
     results: [
       { ok: true, blockers: [] },
-      { ok: false, blockers: [{ kind: 'missing_authorization' }, { code: 'missing_profile_fact' }] },
+      { ok: false, blockers: [
+        { kind: 'missing_authorization', reasons: ['authorization_inactive', 'Profile title must not be logged'] },
+        { code: 'missing_profile_fact', reasons: ['missing_field:income'] },
+      ] },
     ],
   })), {
     http_status: 200,
@@ -69,6 +73,10 @@ test('Hamilton production preflight reports readiness and blockers without treat
     blocker_kind_counts: {
       missing_authorization: 1,
       missing_profile_fact: 1,
+    },
+    blocker_reason_counts: {
+      authorization_inactive: 1,
+      'missing_field:income': 1,
     },
   })
   assert.equal(summarizeHamiltonPreflight({

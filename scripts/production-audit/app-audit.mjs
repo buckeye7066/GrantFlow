@@ -220,6 +220,7 @@ export function summarizeHamiltonPreflight(result) {
     0,
   );
   const blockerKindCounts = {};
+  const blockerReasonCounts = {};
   for (const row of rows) {
     for (const blocker of Array.isArray(row?.blockers) ? row.blockers : []) {
       // Log only the bounded blocker classification. Detail strings can contain
@@ -227,6 +228,14 @@ export function summarizeHamiltonPreflight(result) {
       // artifact instead of the public Actions log.
       const kind = String(blocker?.kind || blocker?.code || 'unclassified').trim() || 'unclassified';
       blockerKindCounts[kind] = (blockerKindCounts[kind] || 0) + 1;
+      for (const rawReason of Array.isArray(blocker?.reasons) ? blocker.reasons : []) {
+        const reason = String(rawReason || '').trim().toLowerCase();
+        // Policy codes are deliberately machine-shaped. Never promote a prose
+        // explanation into Actions output: it may contain a profile fact or
+        // source title. The full redacted response remains in the artifact.
+        if (!/^[a-z0-9_:-]{1,80}$/.test(reason)) continue;
+        blockerReasonCounts[reason] = (blockerReasonCounts[reason] || 0) + 1;
+      }
     }
   }
   const readyRows = rows.filter((row) => row?.ok === true);
@@ -241,6 +250,7 @@ export function summarizeHamiltonPreflight(result) {
     blocked_source_count: blockedRows.length,
     blocker_count: blockerCount,
     blocker_kind_counts: blockerKindCounts,
+    blocker_reason_counts: blockerReasonCounts,
   };
 }
 
@@ -519,7 +529,11 @@ async function main() {
         .sort(([left], [right]) => left.localeCompare(right))
         .map(([kind, count]) => `${kind}:${count}`)
         .join(', ');
-      return `${summary.outcome}; ${summary.ready_source_count}/${summary.source_count} ready source(s), ${summary.blocked_source_count} blocked source(s), ${summary.blocker_count} blocker(s)${blockerKinds ? ` [${blockerKinds}]` : ''}`;
+      const blockerReasons = Object.entries(summary.blocker_reason_counts)
+        .sort(([left], [right]) => left.localeCompare(right))
+        .map(([reason, count]) => `${reason}:${count}`)
+        .join(', ');
+      return `${summary.outcome}; ${summary.ready_source_count}/${summary.source_count} ready source(s), ${summary.blocked_source_count} blocked source(s), ${summary.blocker_count} blocker(s)${blockerKinds ? ` [kinds ${blockerKinds}]` : ''}${blockerReasons ? ` [reasons ${blockerReasons}]` : ''}`;
     });
     await step(`profile ${profileId}: portal sync runs`, async () => {
       capture.portal_sync_runs = await apiGet(`/api/hamilton/portal-sync/runs?profileId=${profileId}`, profileId);
