@@ -29,17 +29,19 @@ export function normalizeRequestedScope({ profileIds, profileNames } = {}) {
 }
 
 export function resolveUniqueProfileIds(names, rows) {
-  const byName = new Map()
-  for (const row of rows || []) {
-    const key = String(row?.display_name || '').trim().toLocaleLowerCase('en-US')
-    if (!byName.has(key)) byName.set(key, [])
-    byName.get(key).push(String(row.id))
-  }
   return names.map((name) => {
-    const matches = byName.get(name.toLocaleLowerCase('en-US')) || []
-    if (matches.length === 0) throw new Error(`No active non-synthetic profile exactly matches ${JSON.stringify(name)}.`)
-    if (matches.length > 1) throw new Error(`Profile name ${JSON.stringify(name)} is ambiguous; use an explicit profile id.`)
-    return matches[0]
+    const requested = name.toLocaleLowerCase('en-US')
+    const candidates = (rows || []).filter((row) => {
+      const displayName = String(row?.display_name || '').trim().toLocaleLowerCase('en-US')
+      return displayName === requested || displayName.split(/\s+/u)[0] === requested
+    })
+    const exact = candidates.filter((row) => (
+      String(row?.display_name || '').trim().toLocaleLowerCase('en-US') === requested
+    ))
+    const matches = exact.length > 0 ? exact : candidates
+    if (matches.length === 0) throw new Error(`No active non-synthetic profile matches ${JSON.stringify(name)}.`)
+    if (matches.length > 1) throw new Error(`Profile selector ${JSON.stringify(name)} is ambiguous; use the full display name or an explicit profile id.`)
+    return String(matches[0].id)
   })
 }
 
@@ -79,7 +81,10 @@ export async function main() {
       const result = await client.query(
         `SELECT id, display_name
            FROM profiles
-          WHERE LOWER(TRIM(display_name)) = ANY($1::text[])
+          WHERE (
+            LOWER(TRIM(display_name)) = ANY($1::text[])
+            OR LOWER(SPLIT_PART(TRIM(display_name), ' ', 1)) = ANY($1::text[])
+          )
             AND COALESCE(status, 'active') = 'active'
             AND COALESCE(created_by, '') <> 'agent:amy'`,
         [requested.names.map((name) => name.toLocaleLowerCase('en-US'))],
