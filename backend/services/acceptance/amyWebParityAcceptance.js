@@ -730,6 +730,20 @@ function parityEvidence(result, expectedIds, allowedProviders) {
   const rows = Array.isArray(result?.per_profile) ? result.per_profile : []
   const ids = rows.map((row) => String(row?.profile_id || '')).filter(Boolean)
   const provenance = summarizeProvenance(rows, allowedProviders)
+  const dispositions = rows.reduce((summary, row) => {
+    const webOnly = Math.max(0, Number(row?.web_only_count) || 0)
+    const counts = row?.disposition_counts && typeof row.disposition_counts === 'object'
+      ? row.disposition_counts
+      : {}
+    const disposed = Object.values(counts).reduce((total, value) => total + (Number(value) || 0), 0)
+    return {
+      web_only_total: summary.web_only_total + webOnly,
+      disposed_total: summary.disposed_total + disposed,
+      profiles_incomplete: disposed === webOnly
+        ? summary.profiles_incomplete
+        : [...summary.profiles_incomplete, String(row?.profile_id || '')],
+    }
+  }, { web_only_total: 0, disposed_total: 0, profiles_incomplete: [] })
   return {
     ran: result?.ran === true,
     measurement_status: result?.measurement_status ?? null,
@@ -746,9 +760,18 @@ function parityEvidence(result, expectedIds, allowedProviders) {
       error: row.error ?? null,
       overlap_count: row.overlap_count ?? null,
       web_only_count: row.web_only_count ?? null,
+      web_results: row.web_results ?? null,
+      web_real: row.web_real ?? null,
+      stored_matches: row.stored_matches ?? null,
       queries_run: row.queries_run ?? null,
       search_provider_counts: row.search_provider_counts ?? null,
+      disposition_counts: row.disposition_counts ?? {},
     })),
+    dispositions: {
+      ...dispositions,
+      complete: dispositions.profiles_incomplete.length === 0 &&
+        dispositions.disposed_total === dispositions.web_only_total,
+    },
     provenance,
     persist: false,
     qualification_proven: false,
@@ -774,6 +797,7 @@ function amyPasses(amy) {
     amy.flywheel?.planned_members === ACCEPTANCE_TARGET && amy.flywheel?.evaluation_rows === ACCEPTANCE_TARGET &&
     amy.web_lane_receipts_complete && amy.web_lane_totals.queries_attempted > 0 &&
     amy.web_lane_totals.fetched > 0 && amy.web_lane_totals.extracted > 0 &&
+    amy.web_lane_totals.stored > 0 &&
     amy.provenance.profiles_total === ACCEPTANCE_TARGET &&
     amy.provenance.profiles_with_provenance === ACCEPTANCE_TARGET && amy.provenance.ok
 }
@@ -782,6 +806,7 @@ function parityPasses(parity) {
   return parity.ran && parity.measurement_status === 'scored' &&
     parity.profiles_total === ACCEPTANCE_TARGET && parity.profiles_scored === ACCEPTANCE_TARGET &&
     parity.profiles_unscored === 0 && parity.exact_membership && Number.isFinite(parity.fleet_parity) &&
+    parity.dispositions?.complete === true &&
     parity.provenance.profiles_total === ACCEPTANCE_TARGET &&
     parity.provenance.profiles_with_provenance === ACCEPTANCE_TARGET && parity.provenance.ok
 }

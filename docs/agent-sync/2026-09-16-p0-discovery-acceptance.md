@@ -29,6 +29,11 @@ close this phase.
 - The existing acceptance service test suite remains the functional contract
   for provider preflight, exact membership, stage evidence, parity provenance,
   canonical Amy cleanup, immutable receipts, and fail-closed policy handling.
+- The acceptance gate now requires at least one candidate to survive the
+  canonical writer (`stored > 0`), not merely page fetch and extraction
+  activity. Its parity receipt also requires a closed disposition for every
+  web-only result and retains web-result, real-result, stored-match, and
+  disposition counts. This makes both quantity and quality auditable.
 
 ## Unknown / external blockers
 
