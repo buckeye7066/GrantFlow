@@ -23,21 +23,21 @@ test('production audit scope resolves one exact or unique first-name profile wit
   assert.deepEqual(resolveUniqueProfileIds(['Approved Profile Alpha'], [
     { id: 'profile-secret', display_name: 'approved profile alpha' },
   ]), ['profile-secret'])
-  assert.deepEqual(resolveUniqueProfileIds(['Anastasia'], [
-    { id: 'profile-secret', display_name: 'Anastasia Example' },
+  assert.deepEqual(resolveUniqueProfileIds(['Alexandra'], [
+    { id: 'profile-secret', display_name: 'Alexandra Example' },
   ]), ['profile-secret'])
   assert.throws(() => resolveUniqueProfileIds(['Approved Profile Alpha'], []), /No active non-synthetic profile/)
   assert.throws(() => resolveUniqueProfileIds(['Approved Profile Alpha'], [
     { id: 'one', display_name: 'Approved Profile Alpha' },
     { id: 'two', display_name: 'APPROVED PROFILE ALPHA' },
   ]), /ambiguous/)
-  assert.throws(() => resolveUniqueProfileIds(['Anastasia'], [
-    { id: 'one', display_name: 'Anastasia Example' },
-    { id: 'two', display_name: 'Anastasia Sample' },
+  assert.throws(() => resolveUniqueProfileIds(['Alexandra'], [
+    { id: 'one', display_name: 'Alexandra Example' },
+    { id: 'two', display_name: 'Alexandra Sample' },
   ]), /ambiguous/)
-  assert.deepEqual(resolveUniqueProfileIds(['Anastasia'], [
-    { id: 'exact', display_name: 'Anastasia' },
-    { id: 'longer', display_name: 'Anastasia Example' },
+  assert.deepEqual(resolveUniqueProfileIds(['Alexandra'], [
+    { id: 'exact', display_name: 'Alexandra' },
+    { id: 'longer', display_name: 'Alexandra Example' },
   ]), ['exact'])
 })
 
