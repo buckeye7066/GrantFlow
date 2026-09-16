@@ -5,6 +5,7 @@
  * Env:
  *   SMOKE_BASE_URL  - e.g. https://app.axiombiolabs.org
  *   SMOKE_BASE_PATH - production app path (default /)
+ *   SMOKE_READY_URL - backend readiness URL when /readyz is on another origin
  *   SMOKE_CHECK_PROFILE_SCHEMA - default "true"; validates /api/profiles/schema
  */
 
@@ -76,6 +77,8 @@ async function run() {
   const login = joinUrl(baseUrl, joinAppPath(basePath, 'login'))
   const landing = joinUrl(baseUrl, joinAppPath(basePath, 'welcome'))
   const apiHealth = joinUrl(baseUrl, joinAppPath(basePath, 'api/health'))
+  const apiReadiness = String(process.env.SMOKE_READY_URL || '').trim()
+    || joinUrl(baseUrl, joinAppPath(basePath, 'readyz'))
   const apiProfileSchema = joinUrl(baseUrl, joinAppPath(basePath, 'api/profiles/schema'))
 
   console.log('[prod-smoke] Checking:', {
@@ -84,6 +87,7 @@ async function run() {
     login,
     landing,
     apiHealth,
+    apiReadiness,
     ...(shouldCheckSchema ? { apiProfileSchema } : {}),
   })
 
@@ -149,6 +153,14 @@ async function run() {
     throw new Error(`Unexpected /api/health status=${String(status)} (expected ok|warning)`)
   }
 
+  // Liveness is not release readiness. Production /readyz also carries the
+  // mission gate, so the smoke must fail when the catalog or another release
+  // invariant is red instead of reporting a healthy deployment from /health.
+  const readiness = await expectOk(apiReadiness, { expectJson: true })
+  if (readiness.body?.ok !== true || readiness.body?.status !== 'ready') {
+    throw new Error(`Unexpected /readyz response=${JSON.stringify(readiness.body).slice(0, 500)}`)
+  }
+
   if (shouldCheckSchema) {
     const schema = await expectOk(apiProfileSchema, { expectJson: true })
     const supported = schema.body?.supported_section_keys
@@ -163,6 +175,7 @@ async function run() {
 
   console.log('[prod-smoke] OK', {
     health_status: status,
+    readiness_status: readiness.body.status,
     request_id: requestId,
     profile_schema_checked: shouldCheckSchema,
   })

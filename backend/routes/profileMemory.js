@@ -20,7 +20,11 @@ import {
 
 const router = express.Router()
 
-router.use(requireAuthenticatedUserMiddleware)
+// This router shares the /api/profiles mount with the canonical profile router.
+// Scope the auth gate to memory URLs so an unauthenticated request for a public
+// sibling such as /api/profiles/schema can fall through to that router instead
+// of being rejected here before route matching occurs.
+router.use('/:profileId/memory', requireAuthenticatedUserMiddleware)
 
 function actorUserId(req) {
   return req.ctx?.userId ?? getAuthUserId(req.user) ?? null
