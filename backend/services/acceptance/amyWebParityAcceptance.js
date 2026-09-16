@@ -21,12 +21,16 @@ const execFile = promisify(execFileCallback)
 
 export const ACCEPTANCE_TARGET = 50
 export const ACCEPTANCE_SCHEMA_VERSION = 'grantflow-amy-web-parity-acceptance-v1'
-export const ACCEPTANCE_NODE_VERSION = '20.20.2'
+// Must match the repository runtime pin used by actions/setup-node. Keep this
+// explicit so a workflow/runtime drift fails before the disposable cohort is
+// created, but update it whenever .nvmrc changes.
+export const ACCEPTANCE_NODE_VERSION = '24.19.0'
 export const COMPETITIVENESS_POLICY_RELATIVE_PATH = 'config/web-parity-acceptance-policy.json'
 export const DEFAULT_ALLOWED_PROVIDERS = Object.freeze([
   'google_cse',
   'searxng',
   'brave',
+  'openai_web_search',
 ])
 
 export const ACCEPTANCE_EXIT = Object.freeze({
@@ -337,6 +341,7 @@ function configuredSearchProviders(env, allowedProviders) {
   if (String(env.GOOGLE_CSE_KEY || '').trim() && String(env.GOOGLE_CSE_CX || '').trim()) configured.push('google_cse')
   if (String(env.SEARXNG_URL || '').trim()) configured.push('searxng')
   if (String(env.BRAVE_SEARCH_API_KEY || '').trim()) configured.push('brave')
+  if (String(env.OPENAI_API_KEY || '').trim()) configured.push('openai_web_search')
   const allowed = new Set(allowedProviders)
   return {
     configured,

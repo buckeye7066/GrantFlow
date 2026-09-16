@@ -16,6 +16,7 @@ test('mutating geocrawl script has no live URL or credential defaults', () => {
   assert.match(source, /GF_ADMIN_TOKEN/)
   assert.match(source, /GF_ADMIN_EMAIL/)
   assert.match(source, /GF_ADMIN_PASSWORD/)
+  assert.match(source, /'x-admin-token': token/)
 })
 
 test('mutating geocrawl script fails before network access without explicit target', () => {

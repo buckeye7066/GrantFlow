@@ -1,0 +1,56 @@
+name: stripe-lifecycle-acceptance
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  lifecycle:
+    name: Isolated Stripe lifecycle matrix
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out dispatched commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - name: Set up Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Exercise subscription and entitlement transitions
+        run: |
+          node scripts/run-vitest-isolated.mjs run \
+            backend/tests/stripeSubscriptionSync.test.js \
+            backend/tests/billingEntitlementAuthority.test.js \
+            backend/tests/billingEntitlementDecision.test.js \
+            backend/tests/billingUniversalEntitlement.test.js \
+            backend/tests/entitlementsMiddleware.test.js
+
+      - name: Exercise checkout, signature, price, and purchase contracts
+        run: |
+          node --test \
+            tests/unit/tier-enforcement.test.mjs \
+            tests/unit/services-catalog-and-stripe.test.mjs \
+            tests/unit/stripe-price-verifier.test.mjs
+
+      - name: Write immutable acceptance receipt
+        run: |
+          mkdir -p audit-reports
+          node -e 'const fs=require("fs"); fs.writeFileSync(process.argv[1], JSON.stringify({schema_version:"grantflow-stripe-lifecycle-v1",sha:process.env.GITHUB_SHA,run_id:process.env.GITHUB_RUN_ID,status:"passed",matrix:["mapped_upgrade","trialing","audit_event","unmapped_price_fail_closed","cancel_to_free","pro_bono_preserved","past_due_grace","out_of_order_cancel_ignored","newer_cancel","older_recovery_ignored","newer_recovery","subscription_profile_resolution","unresolved_profile_refused","payment_failure","webhook_signature","checkout_agreement","price_amount","price_currency","inactive_price","server_entitlements"]},null,2)+"\n")' "audit-reports/stripe-lifecycle-${GITHUB_RUN_ID}.json"
+
+      - name: Upload acceptance receipt
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: stripe-lifecycle-${{ github.run_id }}
+          path: audit-reports/stripe-lifecycle-${{ github.run_id }}.json
+          if-no-files-found: error
+          retention-days: 30
