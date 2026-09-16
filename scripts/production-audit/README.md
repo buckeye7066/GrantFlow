@@ -152,6 +152,13 @@ tested as hard as "planted secrets are rejected".
 - Amy's synthetic training profiles (`profiles.created_by = 'agent:amy'`) are
   excluded from every count; including them measures her nightly rotation
   instead of production.
+- Each explicitly approved profile also receives Hamilton's canonical
+  `all_ready_sources` preflight. This is a side-effect-free POST: it selects
+  the same ready-source set shown by the product and reports readiness or the
+  exact blockers, but it never starts Autopilot or changes task authorization.
+  A blocked preflight is retained as evidence rather than misreported as an
+  audit transport failure. Every start/submit/authorize route remains denied
+  by the browser network policy.
 
 ## Schema authority
 

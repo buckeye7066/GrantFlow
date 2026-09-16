@@ -30,6 +30,7 @@ const CASES = [
   ['POST', `${B}/api/auth/password/login`, true, {}, 'nothing is visible without a session'],
   ['POST', `${B}/api/auth/refresh`, true, {}, 'session refresh'],
   ['POST', `${B}/api/auth/logout`, true, {}, 'clean logout'],
+  ['POST', `${B}/api/hamilton/automation/preflight`, true, {}, 'read-only Hamilton preflight'],
 
   // ---- the conditional route --------------------------------------------
   [
@@ -58,6 +59,7 @@ const CASES = [
   ['POST', `${B}/api/hamilton/portal-sync/write`, false, { allowPortalRead: true, allowedPortalHosts: ['x'] }, 'writes to the portal'],
   ['POST', `${B}/api/hamilton/portal-sync/sync`, false, { allowPortalRead: true, allowedPortalHosts: ['x'] }, 'direction "both" — writes'],
   ['POST', `${B}/api/hamilton/tailored/submit`, false, {}, 'submits an application'],
+  ['POST', `${B}/api/hamilton/automation/start-autopilot`, false, {}, 'starts portal automation'],
   ['POST', `${B}/api/hamilton/automation/tasks/1/approve`, false, {}, 'approval'],
   ['POST', `${B}/api/hamilton/automation/authorize`, false, {}, 'authorization'],
   ['POST', `${B}/api/hamilton/automation/payment-authorizations`, false, {}, 'money'],
