@@ -30,12 +30,15 @@ jobs:
         run: |
           node scripts/run-vitest-isolated.mjs run \
             backend/tests/stripeSubscriptionSync.test.js \
-            backend/tests/entitlementService.test.js \
-            backend/tests/tierEnforcement.test.js
+            backend/tests/billingEntitlementAuthority.test.js \
+            backend/tests/billingEntitlementDecision.test.js \
+            backend/tests/billingUniversalEntitlement.test.js \
+            backend/tests/entitlementsMiddleware.test.js
 
       - name: Exercise checkout, signature, price, and purchase contracts
         run: |
           node --test \
+            tests/unit/tier-enforcement.test.mjs \
             tests/unit/services-catalog-and-stripe.test.mjs \
             tests/unit/stripe-price-verifier.test.mjs
 

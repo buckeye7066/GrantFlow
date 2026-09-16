@@ -120,6 +120,11 @@ async function api(path, init = {}) {
     signal: AbortSignal.timeout(30_000),
     headers: {
       Authorization: `Bearer ${token}`,
+      // Admin automation historically accepted Bearer, while the canonical
+      // admin router and internal probes use x-admin-token. Send the same
+      // explicitly supplied secret through both supported authentication
+      // headers so middleware ordering cannot demote a valid service identity.
+      ...(ADMIN_TOKEN ? { 'x-admin-token': token } : {}),
       'Content-Type': 'application/json',
       ...(init.headers || {}),
     },
