@@ -45,6 +45,10 @@ close this phase.
   public identifier in the API-internal `id` field, accidentally generated a
   different canonical opportunity, and falsely reported that durable re-crawl
   dedupe/matching was broken.
+- The acceptance runtime assertion now matches the repository's `.nvmrc`
+  (`24.19.0`). Live run `35129147632` proved the workflow itself selected that
+  pin but the runner still required the retired `20.20.2`, stopping before any
+  cohort work; the assertion and workflow are coherent again.
 
 ## Unknown / external blockers
 
