@@ -84,6 +84,10 @@ function parityResult(ids = IDS, overrides = {}) {
     error: null,
     overlap_count: 4,
     web_only_count: 1,
+    web_results: 5,
+    web_real: 5,
+    stored_matches: 4,
+    disposition_counts: { incorrectly_lost_qualified_source: 1 },
     queries_run: 1,
     search_provider_counts: { google_cse: 1 },
     search_provenance: liveProvenance(),
@@ -454,7 +458,7 @@ describe('runAmyWebParityAcceptance', () => {
     expect(result.receipt.web_parity.provenance.ok).toBe(true)
   })
 
-  it('fails Amy when 50 live lane receipts fetched or extracted nothing', async () => {
+  it('fails Amy when 50 live lane receipts fetched, extracted, or stored nothing', async () => {
     const { runtime } = makeRuntime({
       discoveryProvenance: [{
         query_index: 0,
@@ -475,6 +479,33 @@ describe('runAmyWebParityAcceptance', () => {
       extracted: 0,
     })
     expect(result.receipt.amy.provenance.ok).toBe(true)
+  })
+
+  it('fails Amy when extraction returns candidates but the canonical writer stores none', async () => {
+    const { runtime } = makeRuntime({ discoveryLane: { stored: 0 } })
+    const result = await runAmyWebParityAcceptance(options(runtime))
+
+    expect(result.exitCode).toBe(ACCEPTANCE_EXIT.AMY)
+    expect(result.receipt.amy.web_lane_totals).toMatchObject({ extracted: 50, stored: 0 })
+  })
+
+  it('fails parity when any web-only result lacks a closed disposition', async () => {
+    const { runtime } = makeRuntime({
+      runParity: vi.fn(async (db, opts) => {
+        const golden = await opts.loadGolden(db)
+        const result = parityResult(golden.map((entry) => entry.profile_id))
+        result.per_profile[0].disposition_counts = {}
+        return result
+      }),
+    })
+    const result = await runAmyWebParityAcceptance(options(runtime))
+
+    expect(result.exitCode).toBe(ACCEPTANCE_EXIT.PARITY)
+    expect(result.receipt.web_parity.dispositions).toMatchObject({
+      web_only_total: 50,
+      disposed_total: 49,
+      complete: false,
+    })
   })
 
   it('fails closed on a partial benchmark with one unscored member', async () => {
