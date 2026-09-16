@@ -85,6 +85,7 @@ import {
   listAutopilotRuns,
 } from '../services/hamilton/hamiltonAuthorizationStore.js'
 import {
+  HAMILTON_READY_SOURCE_POLICY_PROOF,
   preflightSelected,
   readAuthorizations,
 } from '../services/hamilton/hamiltonPreflight.js'
@@ -1505,7 +1506,7 @@ export async function selectAutoSubmitSources(db, profileId, { assess = assessHa
         error.status = 503
         throw error
       }
-      if (assessment.ok) selected.push(source)
+      if (assessment.ok) selected.push(stampReadySourcePolicyProof(source, assessment))
     } catch (err) {
       // A ready-source census is a writer precursor. Missing policy evidence
       // cannot become permission; keep the source visible in Discovery and do
@@ -1523,6 +1524,16 @@ export async function selectAutoSubmitSources(db, profileId, { assess = assessHa
     }
   }
   return selected
+}
+
+function stampReadySourcePolicyProof(source, assessment) {
+  Object.defineProperty(source, HAMILTON_READY_SOURCE_POLICY_PROOF, {
+    value: assessment,
+    enumerable: false,
+    configurable: false,
+    writable: false,
+  })
+  return source
 }
 
 /** What "Select all sources" will pick, so the count shown is the count run. */
