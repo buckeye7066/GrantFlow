@@ -53,3 +53,8 @@ test('mutating geocrawl script requires exact host confirmation', () => {
   assert.notEqual(result.status, 0)
   assert.match(result.stderr, /must exactly match/)
 })
+
+test('mutating geocrawl script accepts the ephemeral GitHub OIDC credential path', () => {
+  assert.match(source, /!ADMIN_TOKEN && !GITHUB_OIDC_TOKEN/)
+  assert.match(source, /'x-github-oidc-token': GITHUB_OIDC_TOKEN/)
+})

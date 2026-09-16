@@ -21,6 +21,7 @@
 
 import jwt from 'jsonwebtoken'
 import { safeTokenEqual } from '../utils/safeTokenEqual.js'
+import { isZipClosureRequest, verifyZipClosureOidc } from '../services/githubActionsOidc.js'
 import { createLogger } from '../utils/logger.js'
 const qualityLog = createLogger('middleware:authIdentity')
 
@@ -48,6 +49,7 @@ export function createAuthIdentityMiddleware({ adminToken, adminName, adminEmail
     const xAdminToken = req.headers['x-admin-token']
     const xAnyaToken = req.headers['x-anya-token']
     const xHealthToken = req.headers['x-admin-health-token']
+    const githubOidcToken = req.headers['x-github-oidc-token']
     let user = { role: 'guest', profileId: null }
     let handled = false
 
@@ -79,6 +81,26 @@ export function createAuthIdentityMiddleware({ adminToken, adminName, adminEmail
         email: 'health@grantflow.app',
       }
       handled = true
+    }
+
+    // Short-lived identity bound to the repository, main ref, protected
+    // environment, and the one ZIP-closure workflow. This replaces the stale
+    // duplicated admin secret without widening any other workflow's authority.
+    if (!handled && githubOidcToken && isZipClosureRequest(req.method, req.originalUrl)) {
+      try {
+        const claims = await verifyZipClosureOidc(githubOidcToken)
+        if (claims) {
+          user = {
+            role: 'admin', is_admin: true, serviceToken: true,
+            userId: 'system_github_zip_closure', profileId: null,
+            full_name: 'GitHub ZIP Closure', email: 'actions@github.com',
+            scope: 'nationwide_zip_closure',
+          }
+          handled = true
+        }
+      } catch (error) {
+        qualityLog.warn('GitHub Actions OIDC verification failed', { error: error?.message || String(error) })
+      }
     }
 
     // 1. Check X-Admin-Token
