@@ -177,7 +177,7 @@
     "undici": "8.10.2",
     "zipcodes": "^8.0.0",
     "zipcodes-nrviens": "^8.0.6",
-    "zod": "^4.6.2"
+    "zod": "^4.6.4"
   },
   "devDependencies": {
     "@capacitor/cli": "8.5.2",
