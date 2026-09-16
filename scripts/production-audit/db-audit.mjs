@@ -437,6 +437,9 @@ export const FINDINGS = [
       GROUP BY 1
       ORDER BY 1`,
     unscoped: true,
+    // Aggregate counts only: keep the release verdict visible in Actions logs
+    // even when the sanitized artifact's Azure download is unavailable.
+    logRows: true,
   },
   {
     id: 'page_fact_provenance',
@@ -971,6 +974,9 @@ async function main() {
         `  ${entry.error ? 'ERROR' : 'ok   '}  ${f.id.padEnd(30)} ${String(entry.rowCount).padStart(5)} rows  ${ms}ms` +
           (entry.error ? `\n         ${entry.error}` : ''),
       );
+      if (f.logRows && res.ok) {
+        console.log(`         aggregate=${JSON.stringify(entry.rows)}`);
+      }
     }
 
     console.log('\nAmy:');
