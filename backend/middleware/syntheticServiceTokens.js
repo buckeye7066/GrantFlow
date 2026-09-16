@@ -1,5 +1,5 @@
 /**
- * Synthetic SERVICE tokens (ADMIN_TOKEN / bulk key, Anya API key, health token).
+ * Synthetic SERVICE tokens (ADMIN_TOKEN / bulk key, Anya API key, health token, bounded GitHub OIDC).
  *
  * These are validated by safeTokenEqual against configured secrets in the auth
  * layer and have NO real users row. They are the ONLY legitimate token-derived
@@ -15,6 +15,7 @@ export const SYNTHETIC_SERVICE_ADMIN_USER_IDS = new Set([
   'system_admin_token',
   'system_anya_token',
   'system_health_token',
+  'system_github_zip_closure',
 ])
 
 /**

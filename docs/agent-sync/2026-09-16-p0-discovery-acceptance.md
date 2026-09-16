@@ -83,6 +83,7 @@ close this phase.
   GitHub binds protected environments in the canonical `sub` claim; the guard
   now requires the exact subject
   `repo:buckeye7066/GrantFlow:environment:production-audit`.
+- Run `35142656777` then proved the corrected OIDC claim reached production, but request-context resolution rejected the new principal because its deterministic ID was absent from the canonical synthetic-service allowlist. The principal is now registered at that single identity choke point; its route/method scope remains enforced by the OIDC verifier.
 
 ## Operator sequence
 
