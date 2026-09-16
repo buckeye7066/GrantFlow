@@ -5,6 +5,7 @@ const JWKS_URL = `${ISSUER}/.well-known/jwks`
 export const ZIP_CLOSURE_AUDIENCE = 'grantflow-production-zip-closure'
 const EXPECTED_REPOSITORY = 'buckeye7066/GrantFlow'
 const EXPECTED_WORKFLOW = `${EXPECTED_REPOSITORY}/.github/workflows/nationwide-zip-closure.yml@refs/heads/main`
+const EXPECTED_SUBJECT = `repo:${EXPECTED_REPOSITORY}:environment:production-audit`
 const ALLOWED_REQUESTS = new Set([
   'GET /api/admin/geo/crawl/status',
   'GET /api/admin/geo/zip-coverage',
@@ -54,7 +55,7 @@ export async function verifyZipClosureOidc(token, { fetchImpl = fetch, now = Dat
     Number(claims.nbf || 0) <= seconds + 30 && Number(claims.exp || 0) >= seconds - 30 &&
     claims.repository === EXPECTED_REPOSITORY && claims.ref === 'refs/heads/main' &&
     claims.event_name === 'workflow_dispatch' && claims.job_workflow_ref === EXPECTED_WORKFLOW &&
-    claims.environment === 'production-audit'
+    claims.sub === EXPECTED_SUBJECT
   return authorized ? claims : null
 }
 
