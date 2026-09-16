@@ -1,5 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
+import fs from 'node:fs'
 
 import {
   normalizeRequestedScope,
@@ -27,4 +28,10 @@ test('production audit scope resolves one exact active profile without exposing 
     { id: 'one', display_name: 'Approved Profile Alpha' },
     { id: 'two', display_name: 'APPROVED PROFILE ALPHA' },
   ]), /ambiguous/)
+})
+
+test('production audit workflow uses an expression context valid at job scope', () => {
+  const workflow = fs.readFileSync('.github/workflows/production-audit.yml', 'utf8')
+  assert.match(workflow, /PROFILE_SCOPE_FILE: \$\{\{ github\.workspace \}\}\/\.grantflow-production-audit-profile-scope/)
+  assert.doesNotMatch(workflow, /PROFILE_SCOPE_FILE: \$\{\{ runner\./)
 })

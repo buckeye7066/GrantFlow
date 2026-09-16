@@ -58,7 +58,9 @@ jobs:
     env:
       GRANTFLOW_PROD_BASE_URL: ${{ vars.GRANTFLOW_PROD_BASE_URL }}
       AUDIT_OUT: ${{ github.workspace }}/audit-out
-      PROFILE_SCOPE_FILE: ${{ runner.temp }}/grantflow-production-audit-profile-scope
+      # `runner` context is unavailable in job-level env expressions. Keep the
+      # masked scope outside AUDIT_OUT so it can never enter the artifact.
+      PROFILE_SCOPE_FILE: ${{ github.workspace }}/.grantflow-production-audit-profile-scope
 
     steps:
       - name: Check out the repository
