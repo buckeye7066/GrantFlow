@@ -206,7 +206,8 @@ async function verifyExistingRowsStillMatch() {
       store,
       fetcher: makeOfflineFetcher({
         grantsGov: [{
-          id: 'OPP-7777',
+          id: 'internal-7777',
+          number: 'OPP-7777',
           title: 'Volunteer Fire Equipment Grant',
           agency: 'FEMA',
           agencyCode: 'DHS-FEMA',

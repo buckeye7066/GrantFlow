@@ -9,7 +9,7 @@ on:
       allowed_providers:
         description: 'Comma-separated reliable search providers to permit'
         required: true
-        default: 'google_cse,searxng,brave'
+        default: 'google_cse,searxng,brave,openai_web_search'
         type: string
 
 permissions:

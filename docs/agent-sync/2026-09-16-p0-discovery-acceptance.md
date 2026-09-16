@@ -34,14 +34,25 @@ close this phase.
   activity. Its parity receipt also requires a closed disposition for every
   web-only result and retains web-result, real-result, stored-match, and
   disposition counts. This makes both quantity and quality auditable.
+- The shared live-search ladder now has an official OpenAI web-search fallback.
+  Only tool-cited URLs are returned, and those URLs still go through the same
+  fetch, extraction, reality, four-truth, dedupe, and canonical match gates.
+  The exact-50 workflow permits this provider, so its already-protected
+  `OPENAI_API_KEY` can keep the web lane from being completely dark when no
+  separate SERP-vendor secret is configured.
+- The crawler verification fixture now supplies the Grants.gov opportunity
+  number in the adapter's actual `number` field. The old fixture placed that
+  public identifier in the API-internal `id` field, accidentally generated a
+  different canonical opportunity, and falsely reported that durable re-crawl
+  dedupe/matching was broken.
 
 ## Unknown / external blockers
 
-- At this commit, GitHub has `OPENAI_API_KEY` and `ANTHROPIC_API_KEY`, but no
-  configured `GOOGLE_CSE_KEY` + `GOOGLE_CSE_CX`, `BRAVE_SEARCH_API_KEY`, or
-  `SEARXNG_URL`. A dispatched run will therefore honestly stop at
-  `no_selected_reliable_search_provider_configured` until one reliable search
-  provider is configured.
+- GitHub has `OPENAI_API_KEY` and `ANTHROPIC_API_KEY`, while the separate Google,
+  Brave, and SearXNG credentials were absent at the last inspection. The new
+  OpenAI fallback removes the *configuration* blocker, but a fresh dispatched
+  run is still required to prove that the protected key has web-search access,
+  returns useful results, and survives the exact-50 quantity/quality gates.
 - `config/web-parity-acceptance-policy.json` is intentionally absent. Even a
   technically complete run must finish `blocked` until the owner ratifies and
   versions the fleet-parity threshold; an agent must not invent that product
