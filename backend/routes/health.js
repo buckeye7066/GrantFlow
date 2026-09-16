@@ -559,6 +559,10 @@ router.get('/readyz', async (req, res) => {
   return res.status(200).json({
     ok: true,
     status: 'ready',
+    // Public, non-secret process nonce. The read-only production audit compares
+    // this with system_kv.automation_posture.boot_id so a stale row from an old
+    // process can never authorize opening its authenticated browser lane.
+    bootId: BOOT_ID,
     dialect: dbCheck.dialect ?? null,
     pipeline_status: pipeline.overall,
     slo_status: slo.overall.status,

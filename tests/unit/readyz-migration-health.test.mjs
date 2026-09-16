@@ -6,6 +6,7 @@ import healthRouter, {
   checkApplicationTaskStatusConstraint,
   checkBootMigrationHealth,
 } from '../../backend/routes/health.js'
+import { BOOT_ID } from '../../backend/config/bootId.js'
 import { TASK_STATUSES } from '../../backend/services/hamilton/applicationTaskStore.js'
 
 function quotedStatusDefinition(statuses = TASK_STATUSES) {
@@ -143,6 +144,23 @@ test('/readyz returns 503 when the durable migration signal is unavailable', asy
     assert.equal(body.reason, 'boot_migration_health_unavailable')
     assert.equal(body.details_redacted, true)
   } finally {
+    await srv.close()
+  }
+})
+
+test('/readyz exposes the non-secret boot nonce on a ready response', async () => {
+  const previousNodeEnv = process.env.NODE_ENV
+  process.env.NODE_ENV = 'test'
+  const srv = await startReadyServer()
+  try {
+    const response = await fetch(`http://127.0.0.1:${srv.port}/readyz`)
+    assert.equal(response.status, 200)
+    const body = await response.json()
+    assert.equal(body.status, 'ready')
+    assert.equal(body.bootId, BOOT_ID)
+  } finally {
+    if (previousNodeEnv === undefined) delete process.env.NODE_ENV
+    else process.env.NODE_ENV = previousNodeEnv
     await srv.close()
   }
 })
