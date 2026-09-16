@@ -8,6 +8,7 @@ import {
   assessIdentityAndScope,
   assessProfileCaptures,
   isSuccessfulApiResponse,
+  summarizeHamiltonPreflight,
 } from '../../scripts/production-audit/app-audit.mjs'
 
 const ok = (body = {}) => ({ status: 200, ok: true, body })
@@ -36,6 +37,33 @@ test('authenticated production evidence requires a 2xx non-admin identity contai
   assert.equal(assessIdentityAndScope(exact, ['profile-a', 'profile-b', 'profile-c']).ok, false)
   assert.equal(assessIdentityAndScope(exact, ['profile-c']).reason, 'auth_me_missing_approved_profile')
   assert.equal(assessIdentityAndScope(exact, []).reason, 'approved_profile_scope_required')
+})
+
+test('Hamilton production preflight reports readiness and blockers without treating them as transport failures', () => {
+  assert.deepEqual(summarizeHamiltonPreflight(ok({
+    ok: true,
+    results: [{ ok: true, blockers: [] }, { ok: true, blockers: [] }],
+  })), {
+    http_status: 200,
+    outcome: 'ready',
+    ready_source_count: 2,
+    blocked_source_count: 0,
+    blocker_count: 0,
+  })
+
+  assert.deepEqual(summarizeHamiltonPreflight(ok({
+    ok: false,
+    results: [{ ok: false, blockers: [{ kind: 'missing_authorization' }] }],
+  })), {
+    http_status: 200,
+    outcome: 'blocked',
+    ready_source_count: 1,
+    blocked_source_count: 1,
+    blocker_count: 1,
+  })
+  assert.equal(summarizeHamiltonPreflight({
+    status: 409, ok: false, body: { error: 'no_ready_sources' },
+  }).outcome, 'no_ready_sources')
 })
 
 test('profile evidence accepts only successful responses for every requested scoped read', () => {

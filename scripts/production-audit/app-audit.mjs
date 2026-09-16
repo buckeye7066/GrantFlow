@@ -54,6 +54,11 @@ const MUTATION_ALLOWLIST = [
   { method: 'POST', pattern: /\/api\/auth\/email\/(?:start|verify)(?:\?|$)/, why: 'authentication' },
   { method: 'POST', pattern: /\/api\/auth\/refresh(?:\?|$)/, why: 'session refresh' },
   { method: 'POST', pattern: /\/api\/auth\/logout(?:\?|$)/, why: 'clean logout' },
+  // Despite using POST, this route only SELECTs the owner-approved profile's
+  // ready sources and computes Hamilton blockers. It creates no task, grant,
+  // authorization, or portal session. Keeping the exact suffix anchored makes
+  // `/start-autopilot` and every other automation mutation remain denied.
+  { method: 'POST', pattern: /\/api\/hamilton\/automation\/preflight(?:\?|$)/, why: 'read-only Hamilton preflight' },
 ];
 
 /**
@@ -203,6 +208,25 @@ export function assessProfileCaptures(profileCaptures = [], expectedProfileIds =
     expected_profile_count: new Set(expectedProfileIds.map(String)).size,
     captured_profile_count: byProfile.size,
     failures,
+  };
+}
+
+export function summarizeHamiltonPreflight(result) {
+  const status = Number(result?.status) || 0;
+  const body = result?.body && typeof result.body === 'object' ? result.body : {};
+  const rows = Array.isArray(body.results) ? body.results : [];
+  const blockerCount = rows.reduce(
+    (total, row) => total + (Array.isArray(row?.blockers) ? row.blockers.length : 0),
+    0,
+  );
+  return {
+    http_status: status,
+    outcome: status >= 200 && status < 300
+      ? (body.ok === true ? 'ready' : 'blocked')
+      : (body.error || 'request_failed'),
+    ready_source_count: rows.length,
+    blocked_source_count: rows.filter((row) => row?.ok !== true).length,
+    blocker_count: blockerCount,
   };
 }
 
@@ -359,6 +383,27 @@ async function main() {
     }, { p: pathname, pid: profileId });
   };
 
+  /** Authenticated, side-effect-free POST used only for Hamilton preflight. */
+  const apiPostRead = async (pathname, body, profileId = null) => {
+    return page.evaluate(async ({ p, payload, pid }) => {
+      try {
+        const headers = { accept: 'application/json', 'content-type': 'application/json' };
+        const token = globalThis.__GRANTFLOW_AUDIT_ACCESS_TOKEN__;
+        if (typeof token === 'string' && token) headers.authorization = `Bearer ${token}`;
+        if (pid) headers['X-Profile-Id'] = pid;
+        const res = await fetch(p, {
+          method: 'POST', credentials: 'include', headers, body: JSON.stringify(payload),
+        });
+        const text = await res.text();
+        let responseBody;
+        try { responseBody = JSON.parse(text); } catch { responseBody = { _non_json: text.slice(0, 500) }; }
+        return { status: res.status, ok: res.ok, body: responseBody };
+      } catch (err) {
+        return { status: 0, ok: false, error: String(err && err.message) };
+      }
+    }, { p: pathname, payload: body, pid: profileId });
+  };
+
   console.log('Authenticated read-only pass:');
 
   await step('load app', async () => {
@@ -441,6 +486,22 @@ async function main() {
         throw new Error(`HTTP ${capture.hamilton_readiness?.status || 0}`);
       }
       return `status ${capture.hamilton_readiness?.status}`;
+    });
+    await step(`profile ${profileId}: Hamilton submission preflight`, async () => {
+      capture.hamilton_preflight = await apiPostRead(
+        '/api/hamilton/automation/preflight',
+        { profile_id: profileId, all_ready_sources: true },
+        profileId,
+      );
+      const summary = summarizeHamiltonPreflight(capture.hamilton_preflight);
+      // A blocked preflight is valuable acceptance evidence, not an audit
+      // transport failure. Only a missing/unauthorized/server response fails
+      // this step; the report preserves the exact blocker response.
+      if (summary.http_status === 0 || [401, 403, 500].includes(summary.http_status)) {
+        throw new Error(`HTTP ${summary.http_status}`);
+      }
+      capture.hamilton_preflight_summary = summary;
+      return `${summary.outcome}; ${summary.ready_source_count} ready source(s), ${summary.blocker_count} blocker(s)`;
     });
     await step(`profile ${profileId}: portal sync runs`, async () => {
       capture.portal_sync_runs = await apiGet(`/api/hamilton/portal-sync/runs?profileId=${profileId}`, profileId);
