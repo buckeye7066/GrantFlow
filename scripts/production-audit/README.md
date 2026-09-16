@@ -58,8 +58,8 @@ authorized per profile. The audit checks two independent facts:
 1. `system_kv.automation_posture` reports
    `submission_authority: "profile_authorization"` and
    `profile_authorization_required: true`; and
-2. the posture `boot_id` equals the `bootId` from the live
-   `GET /api/health/deployment`.
+2. the posture `boot_id` equals the non-secret `bootId` from the live public
+   `GET /readyz` response.
 
 Without (2), the row could be stale. "Cannot verify" aborts the read-only audit
 before the authenticated browser lane opens. The posture contains no profile

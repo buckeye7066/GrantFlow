@@ -597,7 +597,7 @@ async function runGuard(client, { baseUrl, writePrivilegeCode }) {
  * Two facts are needed and neither is sufficient alone:
  *   1. system_kv.automation_posture names profile_authorization as the authority
  *      and says profile authorization is required; and
- *   2. the posture boot_id equals the bootId reported by the live deployment.
+ *   2. the posture boot_id equals the bootId reported by public `/readyz`.
  *
  * Without (2), the row could be stale. "Cannot verify" aborts the read-only
  * audit before an authenticated browser opens.
@@ -632,7 +632,7 @@ async function verifyAutomationPosture(client, { baseUrl, record }) {
 
   let live = null;
   try {
-    const res = await fetch(`${baseUrl.replace(/\/$/, '')}/api/health/deployment`, {
+    const res = await fetch(`${baseUrl.replace(/\/$/, '')}/readyz`, {
       signal: AbortSignal.timeout(20_000),
     });
     if (res.ok) live = await res.json();
@@ -648,7 +648,7 @@ async function verifyAutomationPosture(client, { baseUrl, record }) {
       ? bootMatches
         ? 'live bootId == posture boot_id'
         : 'MISMATCH — posture is from a previous deploy, refusing'
-      : 'live /api/health/deployment did not report a bootId — cannot verify',
+      : 'live /readyz did not report a bootId — cannot verify',
   );
 
   return {
