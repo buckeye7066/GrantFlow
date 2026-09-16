@@ -367,28 +367,33 @@ async function main() {
     await pw.waitFor({ timeout: 30_000 });
     // fill() never echoes the value; the password is not logged anywhere.
     await pw.fill(password);
-    await page.locator('button[type="submit"]').first().click();
-
-    await page.waitForLoadState('networkidle', { timeout: 45_000 }).catch(() => {});
-    // Access tokens intentionally live only in the SPA's in-memory API client.
-    // Obtain a fresh token through the HttpOnly refresh cookie, keep it inside
-    // the browser realm, and attach it only to this audit's read-only requests.
-    // Never return or serialize the token into Node, logs, screenshots, or the
-    // artifact.
-    const refreshed = await page.evaluate(async () => {
-      const response = await fetch('/api/auth/refresh', {
+    // Perform the same password-login request as the form, but retain its
+    // bearer token inside the browser realm. The SPA intentionally keeps this
+    // token in memory, and the refresh cookie is not guaranteed to traverse
+    // the frontend proxy. Never return or serialize the token into Node, logs,
+    // screenshots, or the artifact.
+    const login = await page.evaluate(async ({ auditEmail, auditPassword }) => {
+      const response = await fetch('/api/auth/password/login', {
         method: 'POST',
         credentials: 'include',
-        headers: { 'X-Requested-With': 'XMLHttpRequest' },
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ email: auditEmail, password: auditPassword }),
       });
       let body = {};
       try { body = await response.json(); } catch { /* sanitized below */ }
       if (response.ok && typeof body?.accessToken === 'string' && body.accessToken) {
         globalThis.__GRANTFLOW_AUDIT_ACCESS_TOKEN__ = body.accessToken;
       }
-      return { status: response.status, hasAccessToken: Boolean(globalThis.__GRANTFLOW_AUDIT_ACCESS_TOKEN__) };
-    });
-    if (!refreshed.hasAccessToken) throw new Error(`session_refresh_http_${refreshed.status || 0}`);
+      return {
+        status: response.status,
+        errorType: typeof body?.error_type === 'string' ? body.error_type : null,
+        hasAccessToken: Boolean(globalThis.__GRANTFLOW_AUDIT_ACCESS_TOKEN__),
+      };
+    }, { auditEmail: email, auditPassword: password });
+    if (!login.hasAccessToken) {
+      const reason = login.errorType ? `_${login.errorType}` : '';
+      throw new Error(`password_login_http_${login.status || 0}${reason}`);
+    }
     await shot('02-after-login');
     return page.url();
   });

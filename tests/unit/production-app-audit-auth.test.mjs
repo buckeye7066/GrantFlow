@@ -53,12 +53,12 @@ test('profile evidence accepts only successful responses for every requested sco
   assert.equal(isSuccessfulApiResponse({ status: 401, ok: false, body: {} }), false)
 })
 
-test('production audit keeps its refreshed bearer token in memory and uses CSRF-safe session routes', () => {
+test('production audit keeps its login bearer token in memory and uses CSRF-safe logout', () => {
   const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
   const source = fs.readFileSync(path.join(repoRoot, 'scripts/production-audit/app-audit.mjs'), 'utf8')
   assert.doesNotMatch(source, /grantflow:access-token/)
   assert.doesNotMatch(source, /localStorage\.getItem\([^)]*access-token/)
-  assert.match(source, /fetch\('\/api\/auth\/refresh',[\s\S]*?credentials: 'include'/)
+  assert.match(source, /fetch\('\/api\/auth\/password\/login',[\s\S]*?credentials: 'include'/)
   assert.match(source, /globalThis\.__GRANTFLOW_AUDIT_ACCESS_TOKEN__/)
   assert.match(source, /fetch\('\/api\/auth\/logout',[\s\S]*?'X-Requested-With': 'XMLHttpRequest'/)
 })
