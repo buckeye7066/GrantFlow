@@ -56,6 +56,11 @@
    Run `35049461469` showed the frontend proxy returns no refresh token (HTTP 204),
    so the audit now retains the access token from the canonical password-login
    response itself instead of assuming the proxy carries the backend cookie.
+   Run `35050544072` then established the remaining blocker precisely:
+   `password_login_http_401_invalid_credentials`. The protected audit secrets
+   require operator rotation; this is external configuration, not an application
+   auth transport defect. The workflow now uploads its sanitized evidence before
+   re-failing the job so database/Amy findings are not discarded by that blocker.
 4. **Hamilton confirmed submission:** UNKNOWN. The aggregate probe is healthy
    except for its intentionally denied document join; no real submission was
    attempted.
