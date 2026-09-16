@@ -29,11 +29,14 @@
 
 ## P0 status
 
-1. **Deployment identity:** VERIFIED for the starting HEAD through GitHub's
-   deployment records; this branch's corrective commit is not deployed yet.
-2. **Mission gate/catalog freshness:** UNKNOWN until this correction is merged
-   and the updated read-only smoke reports the live `/readyz` result. Do not
-   infer readiness from `/api/health`.
+1. **Deployment identity:** VERIFIED on 2026-09-16 for merge SHA
+   `53b1b70dcc6eb25075136ea3f2699a228f084a4a`: GitHub deployment records report
+   success for both Vercel production and Railway production.
+2. **Mission gate/catalog freshness:** VERIFIED on that exact deployment by
+   read-only workflow run `35039043869`. It reached the production frontend and
+   Railway backend and reported `health_status: ok`, `readiness_status: ready`,
+   and `profile_schema_checked: true`. This closes the catalog/`/readyz` P0;
+   it does not establish discovery, submission, or billing readiness.
 3. **Live discovery/Amy/parity:** NOT RUN in this pass. Requires the existing
    authenticated production audit/acceptance path and an approved profile
    cohort.
@@ -44,13 +47,9 @@
 
 ## Next operator chain
 
-1. Merge and deploy the smoke/auth-scope correction after exact-head CI.
-2. Dispatch `prod-smoke.yml`; preserve the `/readyz` body when red.
-3. If the blocker is catalog verification, run the admin asynchronous verifier,
-   poll its matching `run_id` to a terminal state, and repeat until the canonical
-   95% complete-visible / 100% visible-direct thresholds pass. Never lower the
-   thresholds.
-4. Run the authenticated discovery/Amy/parity acceptance cohort and report
+1. Run the authenticated discovery/Amy/parity acceptance cohort and report
    extracted → admitted → surfaced counts, not activity counts.
-5. Use an owner-authorized real opportunity for Hamilton end-to-end submission;
+2. Use an owner-authorized real opportunity for Hamilton end-to-end submission;
    the read-only probe is not submission proof.
+3. Run the Stripe lifecycle matrix against an isolated test customer before any
+   live billing transition.
