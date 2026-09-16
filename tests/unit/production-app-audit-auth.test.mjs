@@ -12,14 +12,14 @@ import {
 
 const ok = (body = {}) => ({ status: 200, ok: true, body })
 
-test('authenticated production evidence requires a 2xx non-admin identity with exact profile scope', () => {
+test('authenticated production evidence requires a 2xx non-admin identity containing the approved scope', () => {
   const exact = ok({
     user: { id: 'audit-user', is_admin: false },
     profiles: [{ id: 'profile-b' }, { id: 'profile-a' }],
   })
   assert.deepEqual(assessIdentityAndScope(exact, ['profile-a', 'profile-b']), {
     ok: true,
-    reason: 'exact_non_admin_profile_scope',
+    reason: 'approved_non_admin_profile_scope',
     expected_profile_count: 2,
     actual_profile_count: 2,
   })
@@ -27,8 +27,15 @@ test('authenticated production evidence requires a 2xx non-admin identity with e
   assert.equal(assessIdentityAndScope({ status: 401, ok: false }, ['profile-a']).ok, false)
   assert.equal(assessIdentityAndScope({ status: 403, ok: false }, ['profile-a']).ok, false)
   assert.equal(assessIdentityAndScope(ok({ user: { id: 'u', is_admin: true }, profiles: [] }), []).ok, false)
-  assert.equal(assessIdentityAndScope(exact, ['profile-a']).reason, 'auth_me_profile_scope_mismatch')
+  assert.deepEqual(assessIdentityAndScope(exact, ['profile-a']), {
+    ok: true,
+    reason: 'approved_non_admin_profile_scope',
+    expected_profile_count: 1,
+    actual_profile_count: 2,
+  })
   assert.equal(assessIdentityAndScope(exact, ['profile-a', 'profile-b', 'profile-c']).ok, false)
+  assert.equal(assessIdentityAndScope(exact, ['profile-c']).reason, 'auth_me_missing_approved_profile')
+  assert.equal(assessIdentityAndScope(exact, []).reason, 'approved_profile_scope_required')
 })
 
 test('profile evidence accepts only successful responses for every requested scoped read', () => {

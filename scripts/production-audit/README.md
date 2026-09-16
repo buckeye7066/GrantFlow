@@ -26,6 +26,11 @@ Start with `run_portal_reads=false`. Only enable it for portals that already
 have a captured Hamilton session — the lane reports `needs_session` honestly
 rather than trying to establish one.
 
+The selected profile IDs are the audit boundary: every database and application
+read is issued only for that explicit set. The dedicated non-admin account may
+manage additional profiles, but the audit fails closed unless every selected
+profile is present in the account's authorized scope.
+
 ## The safety model
 
 The audit is not trusted to behave; it is *prevented* from misbehaving, and each
