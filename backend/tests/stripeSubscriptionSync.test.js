@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import Database from 'better-sqlite3'
 import {
+  applyStripePaymentFailure,
   applyStripeSubscription,
   resolveTierIdFromStripePrice,
   freeTierId,
@@ -35,6 +36,7 @@ function schema(sqlite) {
       custom_monthly_cents INTEGER, custom_hourly_cents INTEGER, metadata TEXT,
       stripe_customer_id TEXT, stripe_subscription_id TEXT, stripe_price_id TEXT,
       subscription_status TEXT, subscription_current_period_end DATETIME,
+      stripe_event_created_at DATETIME,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
       updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
     );
@@ -171,6 +173,38 @@ describe('applyStripeSubscription', () => {
     expect(row.subscription_status).toBe('past_due')
   })
 
+
+  it('ignores a delayed cancellation after a newer active upgrade', async () => {
+    await applyStripeSubscription(sqlite, subscription(), { eventCreated: 200 })
+    const result = await applyStripeSubscription(
+      sqlite,
+      subscription({ status: 'canceled' }),
+      { eventCreated: 100 },
+    )
+    expect(result.reason).toBe('stale_event_ignored')
+    expect(result.stale).toBe(true)
+    expect(accountRow().tier_id).toBe('growth')
+    expect(accountRow().subscription_status).toBe('active')
+  })
+
+  it('applies a newer cancellation and ignores an older recovery', async () => {
+    await applyStripeSubscription(sqlite, subscription(), { eventCreated: 100 })
+    await applyStripeSubscription(sqlite, subscription({ status: 'canceled' }), { eventCreated: 300 })
+    const result = await applyStripeSubscription(sqlite, subscription(), { eventCreated: 200 })
+    expect(result.reason).toBe('stale_event_ignored')
+    expect(accountRow().tier_id).toBe('foundation')
+    expect(accountRow().subscription_status).toBe('canceled')
+  })
+
+  it('allows a newer recovery after payment failure grace', async () => {
+    await applyStripeSubscription(sqlite, subscription(), { eventCreated: 100 })
+    await applyStripeSubscription(sqlite, subscription({ status: 'past_due' }), { eventCreated: 200 })
+    const recovered = await applyStripeSubscription(sqlite, subscription(), { eventCreated: 300 })
+    expect(recovered.reason).toBe('stripe_subscription_active')
+    expect(accountRow().tier_id).toBe('growth')
+    expect(accountRow().subscription_status).toBe('active')
+  })
+
   it('resolves the profile from an existing subscription link when metadata is absent', async () => {
     await applyStripeSubscription(sqlite, subscription())
     const result = await applyStripeSubscription(
@@ -187,5 +221,24 @@ describe('applyStripeSubscription', () => {
     expect(result.ok).toBe(false)
     expect(result.reason).toBe('unresolved_profile')
     expect(accountRow().tier_id).toBe('foundation')
+  })
+})
+
+
+describe('applyStripePaymentFailure', () => {
+  it('records a current failure but cannot overwrite a newer recovery', async () => {
+    await applyStripeSubscription(sqlite, subscription(), { eventCreated: 200 })
+    const current = await applyStripePaymentFailure(sqlite, {
+      subscriptionId: 'sub_123', eventCreated: 300,
+    })
+    expect(current.changed).toBe(true)
+    expect(accountRow().subscription_status).toBe('past_due')
+
+    await applyStripeSubscription(sqlite, subscription(), { eventCreated: 400 })
+    const delayed = await applyStripePaymentFailure(sqlite, {
+      subscriptionId: 'sub_123', eventCreated: 350,
+    })
+    expect(delayed.reason).toBe('stale_event_ignored')
+    expect(accountRow().subscription_status).toBe('active')
   })
 })

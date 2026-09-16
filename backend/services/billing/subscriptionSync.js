@@ -115,7 +115,38 @@ async function resolveProfileId(db, subscription) {
  * @returns {Promise<{ok:boolean, reason?:string, profile_id?:string,
  *   previous_tier_id?:string, new_tier_id?:string, status?:string, changed?:boolean}>}
  */
-export async function applyStripeSubscription(db, subscription, { source = 'stripe_webhook' } = {}) {
+
+/** Record payment failure without allowing an older invoice event to overwrite newer state. */
+export async function applyStripePaymentFailure(db, { subscriptionId, eventCreated = null } = {}) {
+  const sid = String(subscriptionId || '').trim()
+  if (!db || !sid) return { ok: false, reason: 'missing_input' }
+  const account = await db.prepare(
+    'SELECT id, stripe_event_created_at FROM billing_accounts WHERE stripe_subscription_id = ? LIMIT 1',
+  ).get(sid)
+  if (!account) return { ok: false, reason: 'unresolved_subscription' }
+
+  const incomingEventAt = toIsoOrNull(eventCreated)
+  const incomingMs = Date.parse(incomingEventAt || '')
+  const appliedMs = Date.parse(account.stripe_event_created_at || '')
+  if (Number.isFinite(incomingMs) && Number.isFinite(appliedMs) && incomingMs < appliedMs) {
+    return { ok: true, changed: false, stale: true, reason: 'stale_event_ignored' }
+  }
+
+  await db.prepare(
+    `UPDATE billing_accounts
+       SET subscription_status = 'past_due',
+           stripe_event_created_at = COALESCE(?, stripe_event_created_at),
+           updated_at = CURRENT_TIMESTAMP
+     WHERE id = ?`,
+  ).run(incomingEventAt, account.id)
+  return { ok: true, changed: true, reason: 'invoice_payment_failed' }
+}
+
+export async function applyStripeSubscription(
+  db,
+  subscription,
+  { source = 'stripe_webhook', eventCreated = null } = {},
+) {
   if (!db || !subscription) return { ok: false, reason: 'missing_input' }
 
   const status = String(subscription.status || '').trim()
@@ -143,6 +174,22 @@ export async function applyStripeSubscription(db, subscription, { source = 'stri
   }
 
   const previousTierId = account.tier_id ? String(account.tier_id) : null
+  const incomingEventAt = toIsoOrNull(eventCreated)
+  const appliedEventMs = Date.parse(account.stripe_event_created_at || '')
+  const incomingEventMs = Date.parse(incomingEventAt || '')
+
+  // Stripe retries and delivers events out of order. Event ids prevent exact
+  // duplicates at the webhook edge, while this account-local watermark prevents
+  // a distinct but older event from undoing a newer tier/status transition.
+  if (Number.isFinite(incomingEventMs) && Number.isFinite(appliedEventMs) && incomingEventMs < appliedEventMs) {
+    log.warn('stale Stripe subscription event ignored', {
+      profileId, subscriptionId, status, incomingEventAt, appliedEventAt: account.stripe_event_created_at,
+    })
+    return {
+      ok: true, profile_id: profileId, previous_tier_id: previousTierId,
+      new_tier_id: previousTierId, status, changed: false, reason: 'stale_event_ignored', stale: true,
+    }
+  }
   const paidTierId = resolveTierIdFromStripePrice(priceId)
 
   let nextTierId = previousTierId
@@ -190,6 +237,7 @@ export async function applyStripeSubscription(db, subscription, { source = 'stri
              stripe_price_id = COALESCE(?, stripe_price_id),
              subscription_status = ?,
              subscription_current_period_end = ?,
+             stripe_event_created_at = COALESCE(?, stripe_event_created_at),
              assigned_by = CASE WHEN ? = 1 THEN ? ELSE assigned_by END,
              assigned_reason = CASE WHEN ? = 1 THEN ? ELSE assigned_reason END,
              updated_at = CURRENT_TIMESTAMP
@@ -202,6 +250,7 @@ export async function applyStripeSubscription(db, subscription, { source = 'stri
       priceId,
       status || null,
       toIsoOrNull(subscription.current_period_end),
+      incomingEventAt,
       changed ? 1 : 0,
       source,
       changed ? 1 : 0,
