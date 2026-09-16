@@ -37,9 +37,11 @@
    Railway backend and reported `health_status: ok`, `readiness_status: ready`,
    and `profile_schema_checked: true`. This closes the catalog/`/readyz` P0;
    it does not establish discovery, submission, or billing readiness.
-3. **Live discovery/Amy/parity:** NOT RUN in this pass. Requires the existing
-   authenticated production audit/acceptance path and an approved profile
-   cohort.
+3. **Live discovery/Amy/parity:** APPROVED, NOT YET RUN. On 2026-09-16 the owner
+   selected Anastasia's profile. The protected audit previously accepted only
+   opaque profile IDs; the follow-up adds an exact-name resolver inside the
+   read-only GitHub environment. It fails closed on zero/multiple active matches,
+   masks the resolved ID, and never broadens the audit beyond that one profile.
 4. **Hamilton confirmed submission:** UNKNOWN. The aggregate probe is healthy
    except for its intentionally denied document join; no real submission was
    attempted.
