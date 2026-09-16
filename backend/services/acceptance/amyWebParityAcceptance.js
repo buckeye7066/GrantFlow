@@ -27,6 +27,7 @@ export const DEFAULT_ALLOWED_PROVIDERS = Object.freeze([
   'google_cse',
   'searxng',
   'brave',
+  'openai_web_search',
 ])
 
 export const ACCEPTANCE_EXIT = Object.freeze({
@@ -337,6 +338,7 @@ function configuredSearchProviders(env, allowedProviders) {
   if (String(env.GOOGLE_CSE_KEY || '').trim() && String(env.GOOGLE_CSE_CX || '').trim()) configured.push('google_cse')
   if (String(env.SEARXNG_URL || '').trim()) configured.push('searxng')
   if (String(env.BRAVE_SEARCH_API_KEY || '').trim()) configured.push('brave')
+  if (String(env.OPENAI_API_KEY || '').trim()) configured.push('openai_web_search')
   const allowed = new Set(allowedProviders)
   return {
     configured,

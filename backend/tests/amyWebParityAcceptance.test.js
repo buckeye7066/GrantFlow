@@ -230,7 +230,7 @@ describe('bounded live dependency preflight', () => {
   })
 
   it('the default acceptance universe excludes the unreliable DuckDuckGo datacenter fallback', () => {
-    expect(DEFAULT_ALLOWED_PROVIDERS).toEqual(['google_cse', 'searxng', 'brave'])
+    expect(DEFAULT_ALLOWED_PROVIDERS).toEqual(['google_cse', 'searxng', 'brave', 'openai_web_search'])
     expect(DEFAULT_ALLOWED_PROVIDERS).not.toContain('duckduckgo')
   })
 })
