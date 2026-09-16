@@ -574,7 +574,7 @@ export async function preflightSelected(db, { profile, profileId, selectedSource
   for (const source of selectedSources) {
     const scopedProfileId = profileId || profile?.id || null
     const opportunity = source.opportunity_id
-      ? await loadOpportunity(db, source.opportunity_id, scopedProfileId)
+      ? await loadOpportunityForPreflight(db, source.opportunity_id)
       : null
     const grant = source.grant_id
       ? await loadGrant(db, source.grant_id)
@@ -592,16 +592,18 @@ export async function preflightSelected(db, { profile, profileId, selectedSource
   return out
 }
 
-async function loadOpportunity(db, id, profileId = null) {
+export async function loadOpportunityForPreflight(db, id) {
   if (!db || !id) return null
   try {
-    const row = profileId
-      ? await db.prepare(
-          'SELECT * FROM funding_opportunities WHERE id = ? AND (profile_id IS NULL OR profile_id = ?) LIMIT 1',
-        ).get(String(id), String(profileId))
-      : await db.prepare(
-          'SELECT * FROM funding_opportunities WHERE id = ? AND profile_id IS NULL LIMIT 1',
-        ).get(String(id))
+    // funding_opportunities is a shared catalog. Its legacy profile_id column
+    // records discovery provenance, not ownership. The selected grant/source
+    // has already been scoped to the requesting profile; filtering the catalog
+    // row by provenance here made the same source pass ready-source selection
+    // and then lose its eligibility evidence during preflight. That degraded a
+    // canonical ACCEPT to REVIEW and produced six false Hamilton blockers.
+    const row = await db.prepare(
+      'SELECT * FROM funding_opportunities WHERE id = ? LIMIT 1',
+    ).get(String(id))
     return row || null
   } catch { return null }
 }
