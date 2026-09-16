@@ -250,6 +250,15 @@ Hard rules:
 - **Do not fake production proof.** A deterministic test, fixture, or offline routing check may prove code behavior, but it must be labeled as such. It must not be described as a live crawl, live award lookup, deployed health check, or production data verification unless it actually used that live path.
 - **Do not blur release states.** A clean local tree, a pushed branch, green CI, current production health, and proof that a specific commit is deployed are separate claims. GrantFlow must label each one separately and must not imply a branch commit is live unless the deployment system verifies that exact commit.
 - **Do not bypass guardrails to make a result look green.** Auth, admin checks, tenant/profile scoping, the reality gate, the canonical matcher, source verification, Hamilton hard stops, and release gates must not be skipped, weakened, or hidden to pass a demo or deadline.
+- **Complete Autonomy authorizes real submission.** On an eligible tier, a
+  user's active Complete Autonomy grant is permission for Hamilton to use the
+  profile's vault-backed credentials, configured CAPTCHA/verification helpers,
+  matching standing attestations, and a server browser to submit on real portal
+  domains. The irreversible click still goes through the single canonical
+  submission decision immediately before execution: active
+  `submit_applications`, `allow_auto_submit`, no human-review veto, durable task
+  intent, and no revocation. An unresolved gate stops honestly; a successful run
+  is not `submitted` until new durable portal confirmation is captured.
 - **Missing evidence is a gap, not a license to invent.** If a source, foundation grant list, portal, award amount, document field, profile answer, or live endpoint cannot be verified, GrantFlow must say so and either ask Anya/Hamilton/the admin for the missing proof or mark the item as unverified.
 - **Mocks, fakes, and fixtures are allowed only inside tests and clearly labeled tooling.** They must never seed production, masquerade as crawler output, or be used as the sole basis for declaring a live workflow production-ready.
 - **AI may summarize, classify, and draft from supplied facts; it may not invent facts, relationships, amounts, eligibility, deadlines, portal access, funder history, or prior contact.**

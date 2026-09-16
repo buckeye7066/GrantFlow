@@ -4,10 +4,12 @@ Hamilton is the GrantFlow agent that takes over a funding opportunity once a
 discovered match has reached the "ready for application" stage in the
 pipeline. She links the opportunity to the right student-portal record,
 drafts the application from profile + document data, detects missing
-information, and either prepares a final review or, when explicitly
-authorised in the reserved synthetic fixture, exercises the submit state
-machine. In the current controlled beta, every real-domain final submission is
-completed by the owner in the official portal.
+information, and either prepares a final review or completes the application
+end to end. On an eligible tier, a user who enables Complete Autonomy grants
+Hamilton standing permission to use the profile's vault-backed credentials,
+solve supported CAPTCHA/verification challenges, fill the application, and
+perform the final submission on a real portal. The persisted authorization —
+not an environment flag or an operator shortcut — is the submission authority.
 
 This document is the contract for what Hamilton **will** and **will not**
 do, and how to extend her safely.
@@ -48,19 +50,23 @@ Hamilton **never**:
 
 - invents answers to required questions (missing info is recorded and
   surfaced — never fabricated);
-- bypasses CAPTCHAs, 2FA, SSO security, paywalls, ToS gates, manual
-  signatures, legal attestations, or final-submission consent boxes;
-- logs into a school portal on behalf of the student — institutional
-  portals always require either a stored credential reference (no plain
-  passwords are ever stored) or a manual user-initiated login;
-- launches a server browser or performs final submission on a real portal
-  domain during controlled beta. Saved submit intent, environment flags,
-  provider metadata, and host allow-lists do not expand this boundary;
-- treats login, 2FA, CAPTCHA, a signature, an attestation, an owner approval, or
-  portal confirmation as bypassable. The owner completes those steps directly
-  in the official portal.
+- invents or silently assumes consent. Real-domain submission requires an
+  active `submit_applications` authorization, `allow_auto_submit`, an eligible
+  tier, no `require_human_review` veto, and the task's own durable submit intent;
+- stores raw portal passwords outside the profile vault or uses credentials
+  that the user did not authorize Hamilton to use;
+- treats an unresolved login, 2FA, CAPTCHA, signature, attestation, payment,
+  terms/policy gate, or portal confirmation as success. Complete Autonomy may
+  use the configured CAPTCHA helper, vault credentials, Hamilton-owned
+  verification channels, and matching standing attestations; if a supported
+  helper cannot clear the gate, Hamilton stops and asks for the precise missing
+  human action;
+- clicks Submit without re-reading the canonical authorization immediately at
+  the irreversible boundary, or ignores a revocation received mid-run;
+- reports `submitted` without new, durable portal confirmation evidence.
 
-When Hamilton reaches a required human boundary, it stops in
+When Hamilton reaches a required human boundary that the user's authorization
+and configured helpers cannot lawfully or reliably clear, it stops in
 `waiting_for_user`, `waiting_for_admin`, `blocked_login_required`,
 `blocked_missing_info`, `blocked_2fa`, `blocked_captcha`, or
 `blocked_terms_or_policy` and emits the matching notification.
@@ -219,22 +225,24 @@ Every Hamilton entry point is scoped:
 
 ## Browser automation
 
-Disabled by default. Set `HAMILTON_ENABLE_BROWSER_AUTOMATION=true` to
-opt in. The flag is read inside `hamiltonApplicationAgent.js`
-(`isBrowserAutomationEnabled()`) and is passed to adapters via
-`ctx.options.browserAutomation`. The current adapters never trigger
-real browser automation — they call `applyEngine.js` for drafting and
-defer all interactive steps to the user. Controlled-beta policy also rejects
-real-domain browser launch even when flags or allow-lists are present. The only
-executable browser path is the reserved synthetic fixture; changing that
-boundary requires a separately reviewed release, not configuration alone.
+The operational browser posture remains fail-closed, but it is not the user's
+submission authority. For a safe public HTTPS portal, an eligible profile's
+active Complete Autonomy grant permits the reviewed server-browser pathway to
+use vault-backed credentials, supported CAPTCHA/verification helpers, and
+matching standing attestations. The canonical decision is re-read immediately
+before Submit; a disabled task, revoked grant, human-review veto, unsafe target,
+or unresolved challenge stops the run. The reserved synthetic fixture remains
+the deterministic test path, not the only executable browser target.
 
 ## Manual submission evidence
 
-For a real portal, Hamilton's handoff ends before login/2FA/signature/
-attestation/final Submit. After the owner completes those steps in their own
-browser, the task drawer accepts a genuine PDF, PNG, or JPEG portal
-confirmation (maximum 10 MiB) together with the owner's explicit attestation.
+When Complete Autonomy is absent or a hard stop remains, Hamilton hands the real
+portal back before the blocked action. The task drawer then accepts a genuine
+PDF, PNG, or JPEG portal confirmation (maximum 10 MiB) together with the owner's
+explicit attestation after the owner completes the remaining steps. Under a
+valid Complete Autonomy decision, Hamilton may instead complete the real-domain
+Submit and must retain newly captured durable portal confirmation before the
+task can claim external submission.
 The API requires an idempotency key and derives the real HTTPS portal origin
 from the server-recorded task.
 
@@ -275,10 +283,10 @@ The full unit suite is invoked by:
 npm run unit
 ```
 
-End-to-end smoke (Playwright) tests are not yet wired for Hamilton — they
-are intentionally **not** allowed to perform live institutional
-logins. Add new fixtures under `tests/e2e/` that swap the adapter
-registry for a mock adapter implementing the same contract.
+Deterministic Playwright tests must use controlled fixtures and must not perform
+live institutional submissions. Live acceptance is a separate, explicitly
+scoped production operation against an eligible, consenting profile and a real
+opportunity; it must preserve the authorization decision and durable receipt.
 
 ## Security limitations
 
@@ -316,7 +324,10 @@ registry for a mock adapter implementing the same contract.
    audit log in `application_task_events` matches.
 7. As a different user (or different profile), confirm the data is
    not visible — profile scoping is enforced at the API layer.
-8. For a real portal, confirm GrantFlow opens a visible manual handoff and does
-   not launch a server browser or cross login/2FA/signature/attestation gates.
-9. Complete the final steps yourself, retain the genuine receipt, and confirm
-   the task says owner-attested and not independently verified by a funder API.
+8. With Complete Autonomy disabled, confirm GrantFlow opens a visible manual
+   handoff and does not cross an unresolved login/2FA/CAPTCHA/attestation gate.
+9. With Complete Autonomy enabled on an eligible test profile, confirm the
+   reviewed server-browser path rechecks task intent and authorization directly
+   before Submit, then retains newly captured durable portal confirmation.
+10. Disable auto-submit for one task and confirm the profile-wide grant cannot
+    re-arm or submit that task.
