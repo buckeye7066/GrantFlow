@@ -16,7 +16,10 @@
  *      GrantFlow's "own Brave"; see docs/SEARXNG_SELF_HOST.md for the runbook.
  *   2. Brave Search API (fallback, only when BRAVE_SEARCH_API_KEY is set) —
  *      higher quality but a metered/capped paid plan, so it's a backstop.
- *   3. DuckDuckGo HTML scraping (last resort, no key) — DEAD from cloud IPs
+ *   3. OpenAI web search (official API fallback when OPENAI_API_KEY is set) —
+ *      contributes only URLs cited by the search tool; it does not bypass any
+ *      crawler admission or matching gate.
+ *   4. DuckDuckGo HTML scraping (last resort, no key) — DEAD from cloud IPs
  *      (202 anti-bot challenge), so in prod it no-ops; kept for local/dev.
  *
  * Every back-end is failure-tolerant: any error or non-OK response yields `[]`,
@@ -33,6 +36,7 @@ import { getWithRetry } from './httpClient.js'
 import { makeBraveSearchProvider } from '../yana/webSearchProvider.js'
 import { makeSearxngProvider } from './searxngProvider.js'
 import { makeGoogleCseProvider } from './googleCseProvider.js'
+import { makeOpenAIWebSearchProvider } from './openaiWebSearchProvider.js'
 import { tryConsumeGoogleQuery } from './googleBudget.js'
 import { distinctiveTerms, coveredTerms } from './queryRelevance.js'
 import { getCachedSearch, putCachedSearch } from './webSearchCache.js'
@@ -130,6 +134,23 @@ function getBraveProvider() {
   return _brave
 }
 
+let _openai = null
+let _openaiResolved = false
+function getOpenAIProvider() {
+  if (_openaiResolved) return _openai
+  _openaiResolved = true
+  if (process.env.OPENAI_API_KEY) {
+    try {
+      _openai = makeOpenAIWebSearchProvider({ count: 8 })
+      log.info('[webSearchEngine] OpenAI web search provider active (official-API fallback)')
+    } catch (err) {
+      log.warn(`[webSearchEngine] OpenAI web search provider unavailable: ${err?.message ?? err}`)
+      _openai = null
+    }
+  }
+  return _openai
+}
+
 // ── Cross-query identity breaker (the collapse's unfakeable signature) ──────
 // A degraded SearXNG returns the IDENTICAL result set for DIFFERENT queries
 // (its surviving scraped engine answers only the leading token, so every
@@ -168,6 +189,8 @@ export function _resetWebSearchEngineForTests() {
   _searxngResolved = false
   _brave = null
   _braveResolved = false
+  _openai = null
+  _openaiResolved = false
   _ddgBlocked = false
   _recentSerps = []
   _searxngDegradedUntil = 0
@@ -549,6 +572,29 @@ export async function searchWeb(query, { count = 8, timeoutMs = 8000 } = {}) {
     }
   }
 
+  // 3. Official OpenAI web search. This uses the extraction key already
+  // deployed by GrantFlow, preventing a completely dark web lane when the
+  // separate SERP vendors are absent or exhausted. The provider contributes
+  // cited URLs only; fetch, extraction, reality, four-truth, dedupe, and match
+  // gates still decide whether any opportunity is stored.
+  const openai = getOpenAIProvider()
+  if (openai) {
+    try {
+      const results = await openai({ query: q, count })
+      const cleaned = (Array.isArray(results) ? results : [])
+        .filter((r) => r?.url && !shouldSkip(r.url))
+        .slice(0, count)
+        .map((r) => ({ url: r.url, title: r.title || '', snippet: r.snippet || '' }))
+      if (cleaned.length && !looksDegenerateSerp(q, cleaned)) {
+        return cacheAndReturn(cleaned, {
+          provider: 'openai_web_search', provenance: 'live', status: 'ok', provider_mode: 'official_api',
+        })
+      }
+    } catch (err) {
+      log.warn(`[webSearchEngine] OpenAI web search failed for "${q}": ${err?.message ?? err}`)
+    }
+  }
+
   // Brave could not improve on a held degenerate set — return it unchanged
   // (status quo ante: the gate must never LOSE results, only reroute).
   if (heldDegenerate) {
@@ -560,7 +606,7 @@ export async function searchWeb(query, { count = 8, timeoutMs = 8000 } = {}) {
     })
   }
 
-  // 3. DuckDuckGo HTML (last resort, no key): dead from cloud IPs, kept for dev.
+  // 4. DuckDuckGo HTML (last resort, no key): dead from cloud IPs, kept for dev.
   // Once the block is observed once, every later query no-ops instantly so a
   // full discovery run never burns its budget re-probing a dead backend.
   if (_ddgBlocked) {

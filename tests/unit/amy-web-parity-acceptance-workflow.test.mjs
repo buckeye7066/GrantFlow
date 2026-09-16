@@ -10,6 +10,7 @@ test('manual Amy/parity acceptance runs the hermetic exact-50 command', () => {
   assert.match(workflow, /scripts\/grantflow-acceptance-50\.mjs/)
   assert.match(workflow, /--expected-sha="\$\(git rev-parse HEAD\)"/)
   assert.doesNotMatch(workflow, /GRANTFLOW_PROD_AUDIT_DATABASE_URL|DATABASE_URL:/)
+  assert.match(workflow, /openai_web_search/)
 })
 
 test('failed acceptance uploads its receipt before keeping the workflow red', () => {

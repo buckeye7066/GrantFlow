@@ -904,6 +904,20 @@ async function collectAmy(client) {
   return out;
 }
 
+export function safeAmyFindingTypeCounts(findingTypes) {
+  if (!findingTypes || typeof findingTypes !== 'object' || Array.isArray(findingTypes)) return {}
+  const safe = {}
+  for (const [rawKey, rawValue] of Object.entries(findingTypes)) {
+    const key = String(rawKey || '').trim().toLowerCase()
+    const value = Number(rawValue)
+    // Finding classes are aggregate machine labels. Never put examples, profile
+    // identifiers, queries, or arbitrary prose into public workflow output.
+    if (!/^[a-z0-9_:-]{1,64}$/.test(key) || !Number.isSafeInteger(value) || value < 0) continue
+    safe[key] = value
+  }
+  return safe
+}
+
 // ---------------------------------------------------------------------------
 
 async function main() {
@@ -986,6 +1000,10 @@ async function main() {
         `clean=${amy.counts.clean ?? '?'} issues(derived)=${amy.counts.issues_derived ?? '?'} ` +
         `runs=${amy.recent_runs?.length ?? 0} duplicate_runs=${amy.duplicate_runs.length}`,
     );
+    const amyFindingTypes = safeAmyFindingTypeCounts(amy.flywheel?.finding_types)
+    if (Object.keys(amyFindingTypes).length > 0) {
+      console.log(`         finding_types=${JSON.stringify(amyFindingTypes)}`)
+    }
 
     await client.query('COMMIT');
 
