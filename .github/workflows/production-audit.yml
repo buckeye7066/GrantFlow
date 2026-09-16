@@ -136,6 +136,8 @@ jobs:
         run: npx playwright install --with-deps chromium
 
       - name: Run authenticated application audit
+        id: application_audit
+        continue-on-error: true
         env:
           GRANTFLOW_PROD_AUDIT_DATABASE_URL: ${{ secrets.GRANTFLOW_PROD_AUDIT_DATABASE_URL }}
           GRANTFLOW_AUDIT_EMAIL: ${{ secrets.GRANTFLOW_AUDIT_EMAIL }}
@@ -173,3 +175,11 @@ jobs:
           path: ${{ env.AUDIT_OUT }}
           if-no-files-found: error
           retention-days: 14
+
+      # Preserve sanitized database/application evidence even when the browser
+      # lane finds a release blocker, then keep the overall audit red.
+      - name: Enforce application audit result
+        if: ${{ steps.application_audit.outcome != 'success' }}
+        run: |
+          echo 'Authenticated application audit failed; sanitized evidence was uploaded.' >&2
+          exit 1
