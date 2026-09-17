@@ -1,3 +1,5 @@
+import { resolveApplicationUrl } from '../../../shared/applicationTarget.js'
+import { classifyApplicationTargetRefusal } from '../../config/applicationTargetPolicy.js'
 /**
  * profilePortalIndex.js
  *
@@ -325,8 +327,9 @@ async function collectFromPipeline(db, profileId, acc, mailFax) {
   for (const r of rows || []) {
     const candidate = firstNonEmpty(
       r.application_url, r.portal_url, r.url,
-      r.fo_application_url, r.fo_apply_url, r.fo_apply_guidelines_url, r.fo_source_url,
+      resolveApplicationUrl({ apply_url: r.fo_apply_url, application_url: r.fo_application_url }), r.fo_apply_guidelines_url, r.fo_source_url,
     )
+    if (classifyApplicationTargetRefusal(candidate)) continue
     if (!candidate) continue // no URL → not a "real" funding source per the rule.
     const { verdict, host } = classifyCandidate(candidate, r.application_method)
     if (verdict === 'junk' || !host) continue

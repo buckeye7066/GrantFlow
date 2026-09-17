@@ -10,3 +10,16 @@ export function resolveApplicationUrl(row) {
   }
   return null
 }
+
+/** Read a recorded refusal; presentation must never invent an eligibility verdict. */
+export function readApplicationTargetRefusal(row) {
+  for (const raw of [row, row?.match_explain, row?.match_explain_json]) {
+    let value = raw
+    if (typeof raw === 'string') {
+      try { value = JSON.parse(raw) } catch { continue }
+    }
+    const marker = value?.application_target
+    if (marker?.status === 'non_application') return marker
+  }
+  return null
+}

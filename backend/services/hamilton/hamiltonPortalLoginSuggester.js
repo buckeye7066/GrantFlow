@@ -1,3 +1,5 @@
+import { resolveApplicationUrl } from '../../../shared/applicationTarget.js'
+import { classifyApplicationTargetRefusal } from '../../config/applicationTargetPolicy.js'
 /**
  * hamiltonPortalLoginSuggester
  *
@@ -102,7 +104,8 @@ async function resolveOpportunityLinks(db, opportunityId) {
       .prepare('SELECT * FROM funding_opportunities WHERE id = ? LIMIT 1')
       .get(String(opportunityId))
     if (!opp) return null
-    const applicationUrl = firstNonEmpty(opp.application_url, opp.apply_url, opp.apply_guidelines_url)
+    const applicationUrl = firstNonEmpty(resolveApplicationUrl(opp), opp.apply_guidelines_url)
+    if (classifyApplicationTargetRefusal(applicationUrl)) return null
     return {
       applicationUrl,
       host: normalizeHost(applicationUrl),

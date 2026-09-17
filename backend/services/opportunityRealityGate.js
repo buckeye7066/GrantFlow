@@ -1,3 +1,4 @@
+import { resolveApplicationUrl } from '../../shared/applicationTarget.js'
 /**
  * opportunityRealityGate.js
  *
@@ -363,7 +364,7 @@ export function assessReality(opp, opts = {}) {
   //   * Direct grants must have a real apply path → reject when allowSocialDirect=false.
   //   * Referrals/directories may legitimately point to a social presence as
   //     a contact channel, so we only soft-downgrade them.
-  const primaryUrl = opp?.application_url || opp?.apply_url || opp?.url || opp?.source_url || ''
+  const primaryUrl = resolveApplicationUrl(opp) || opp?.url || opp?.source_url || ''
   const primaryIsSocial = primaryUrl && isNonActionableUrl(primaryUrl)
   if (primaryIsSocial && isDirect && !allowSocialDirect) {
     reasons.push('social_only_url_for_direct')

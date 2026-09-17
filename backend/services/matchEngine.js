@@ -186,7 +186,7 @@ function _extractDomain(url) {
  */
 export function calculateSourceTrust(opportunity) {
   if (!opportunity) return 20
-  const url = opportunity.application_url || opportunity.apply_url ||
+  const url = resolveApplicationUrl(opportunity) ||
     opportunity.source_url || opportunity.evidence_url || opportunity.url || ''
   const urlLower = String(url).toLowerCase()
   if (!url || urlLower.trim() === '') return 10
@@ -315,7 +315,7 @@ export function calculateConfidence(opportunity, oppNorm = null) {
       : localTrust >= 75 ? 'verified'
         : localTrust >= 60 ? 'directory'
           : localTrust >= 35 ? 'community' : 'unknown'
-    const url = opportunity?.application_url || opportunity?.apply_url ||
+    const url = resolveApplicationUrl(opportunity) ||
       opportunity?.source_url || opportunity?.url || ''
     actionable = Boolean(String(url).trim())
   }

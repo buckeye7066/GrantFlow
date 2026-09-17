@@ -16,7 +16,7 @@
  * Lightweight + pure → safe to call inside render.
  */
 
-import { resolveApplicationUrl } from '../../../shared/applicationTarget.js'
+import { resolveApplicationUrl, readApplicationTargetRefusal } from '../../../shared/applicationTarget.js'
 
 const VALID_DECISIONS = new Set(['ACCEPT', 'REVIEW', 'REJECT'])
 
@@ -213,6 +213,7 @@ export function toCanonicalResult(opp) {
     sponsor: pickString(opp.sponsor, opp.funder, opp.organization, opp.agency) || '',
     description: pickString(opp.description, opp.descriptionMd, opp.summary) || '',
     application_url: applicationUrl,
+    ...(readApplicationTargetRefusal(opp) ? { application_target: readApplicationTargetRefusal(opp) } : {}),
     source_url: sourceUrl,
     source: pickString(opp.source, opp.crawler_type, opp.record_origin) || 'unknown',
     kind,

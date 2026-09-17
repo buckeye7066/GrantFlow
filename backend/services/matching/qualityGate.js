@@ -1,3 +1,4 @@
+import { resolveApplicationUrl } from '../../../shared/applicationTarget.js'
 import { correctedCanonicalUsScope } from '../../config/canonicalUsJurisdiction.js'
 
 const ARTICLE_PATH_RX = /(?:^|[/?#&._-])(?:blog|news|article|story|opinion|press-release|insights|knowledge|guide|how-to|tips|basics)(?:[/?#&._-]|$)/i
@@ -5,7 +6,7 @@ const NON_GRANT_TYPES = new Set(['directory', 'program', 'benefit', 'referral'])
 const QUERY_TEMPLATE_PARAMS = new Set(['zip', 'zipcode', 'postal', 'postal_code', 'state'])
 
 function pickUrl(record) {
-  return record?.application_url ?? record?.apply_url ?? record?.url ?? record?.source_url ?? record?.evidence_url ?? null
+  return resolveApplicationUrl(record) ?? record?.url ?? record?.source_url ?? record?.evidence_url ?? null
 }
 
 function parseUrl(record) {
