@@ -1,3 +1,5 @@
+import { resolveApplicationUrl } from '../../shared/applicationTarget.js'
+
 /**
  * Centralized URL validation rules.
  *
@@ -453,8 +455,7 @@ export function portalUrlFunderPlausibility(url, funderName) {
 export function pickRealUrl(opportunity) {
   if (!opportunity) return null
   const candidates = [
-    opportunity.application_url,
-    opportunity.apply_url,
+    resolveApplicationUrl(opportunity),
     opportunity.url,
     opportunity.source_url,
     opportunity.evidence_url,

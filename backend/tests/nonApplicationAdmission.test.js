@@ -134,3 +134,14 @@ it('an explicit application target outranks a legacy reference URL at every appl
     expect(db.prepare('SELECT application_url FROM grants').get().application_url).toBe(REAL)
   } finally { db.close() }
 })
+
+it.each([
+  { selected: 'https://www.hud.gov/grants', stale: VENDOR },
+  { selected: VENDOR, stale: 'https://www.hud.gov/grants' },
+])('confidence is based on the selected application target, not a stale alias: $selected', ({ selected, stale }) => {
+  const single = computeMatchDecision(PROFILE, { ...BASE, apply_url: selected })
+  const conflicting = computeMatchDecision(PROFILE, { ...BASE, apply_url: selected, application_url: stale })
+  expect(conflicting.confidence).toBe(single.confidence)
+  expect(conflicting.match_explain.confidence).toBe(single.match_explain.confidence)
+  expect(conflicting.decision).toBe(single.decision)
+})

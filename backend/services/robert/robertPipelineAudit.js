@@ -1,3 +1,6 @@
+import { resolveApplicationUrl } from '../../../shared/applicationTarget.js'
+import { classifyNonApplicationSurface } from '../../config/applicationSurfaceHosts.js'
+
 /**
  * robertPipelineAudit.js — Robert's FOUR-GATE pipeline verifier.
  *
@@ -149,6 +152,23 @@ export function gateEngine(row, scored) {
       detail: 'canonical_engine_reject',
     },
   }
+}
+
+/**
+ * Repair only known-bad denormalized targets from the current ACCEPT catalog
+ * target. This chooses no new URL and never changes grant identity. The boot
+ * caller owns protection checks and conditional persistence.
+ */
+export function pipelineApplicationTargetRepair(row, scored) {
+  if (String(scored?.decision?.decision ?? '').toUpperCase() !== 'ACCEPT') return null
+  const target = resolveApplicationUrl(scored?.opportunity)
+  if (!target || classifyNonApplicationSurface(target)) return null
+  const changes = [
+    ['application_url', row?.grant_application_url],
+    ['url', row?.grant_url],
+  ].filter(([, previous]) => classifyNonApplicationSurface(previous))
+    .map(([column, previous]) => ({ column, previous, value: target }))
+  return changes.length ? changes : null
 }
 
 /** Load the catalog row behind a pipeline row and run the canonical engine on it. */
@@ -451,7 +471,7 @@ export async function loadPipelineRows(db, profileId) {
       sponsor,
       funder: sponsor,
       deadline: r.opp_deadline || r.grant_deadline || null,
-      application_url: r.opp_application_url || r.apply_url || r.grant_application_url || null,
+      application_url: resolveApplicationUrl({ application_url: r.opp_application_url, apply_url: r.apply_url }) || r.grant_application_url || null,
       source_url: r.source_url || r.final_url || r.evidence_url || r.grant_url || null,
       entity_types_allowed: r.entity_types_allowed,
     }

@@ -258,7 +258,8 @@ export async function runStaleMatchExplainRefresh(db, opts = {}) {
     // preference. Historical linker admission cannot keep a software login
     // labeled ACCEPT after the canonical engine disproves its application
     // target. Preserve the row and lane, but converge the stored verdict too.
-    const structuralTargetRefusal = decision?.match_explain?.application_target?.status === 'non_application'
+    const structuralTargetRefusal = storedDecision === 'accept' && verdictToWrite === 'review' &&
+      decision?.match_explain?.application_target?.status === 'non_application'
     if (structuralTargetRefusal && storedDecision === 'accept') summary.structural_target_holds += 1
 
     // Other linker scoring/provenance rules retain their existing behavior.

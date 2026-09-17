@@ -378,3 +378,28 @@ it.each(['web-llm', 'institution-link', 'catalog-rescore-link', 'county-crisis-n
     expect((await runStaleMatchExplainRefresh(wrap(raw))).refreshed).toBe(0)
   } finally { raw.close() }
 })
+
+it('a target marker on an unrelated REJECT does not bypass linker retention or delete the pair', async () => {
+  const raw = makeDb()
+  try {
+    seedPair(raw, { matcherVersion: 'catalog-rescore-link', explain: PROVEN })
+    const db = wrap(raw)
+    const rejecting = stubProvingEngine({ decision: 'reject', eligible: false, matchedNeeds: [] })
+    const summary = await runStaleMatchExplainRefresh(db, {
+      pairBudget: 10, writeEnabled: true,
+      deps: { thesisNeedsDefaulted: async () => false, computeMatchDecision: (...args) => {
+        const result = rejecting(...args)
+        result.match_explain.application_target = { status: 'non_application', reason: 'non_application_vendor_content' }
+        return result
+      } },
+    })
+    expect(summary.refreshed).toBe(1)
+    const row = raw.prepare('SELECT * FROM profile_opportunity_matches WHERE id=?').get('m1')
+    expect(row.match_decision).toBe('accept')
+    expect(JSON.parse(row.match_explain_json).four_truth_proof.all_passed).toBe(false)
+    expect(qualifiesForDisplay({ ...row, opportunity_kind: 'SCHOLARSHIP' })).toBe(false)
+    const { normalizePersistedMatchDecisionIntegrity } = await import('../services/matching/matchDecisionIntegrity.js')
+    await normalizePersistedMatchDecisionIntegrity(db, { profileId: 'p1' })
+    expect(raw.prepare('SELECT id FROM profile_opportunity_matches WHERE id=?').get('m1')).toBeTruthy()
+  } finally { raw.close() }
+})

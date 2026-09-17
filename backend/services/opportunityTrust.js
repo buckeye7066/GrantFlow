@@ -1,3 +1,5 @@
+import { resolveApplicationUrl } from '../../shared/applicationTarget.js'
+
 /**
  * opportunityTrust.js
  *
@@ -117,8 +119,7 @@ function pickUsableUrl(opp) {
   if (primary && !isNonActionableUrl(primary)) return primary
 
   const candidates = [
-    opp?.application_url,
-    opp?.apply_url,
+    resolveApplicationUrl(opp),
     opp?.url,
     opp?.source_url,
     opp?.evidence_url,
