@@ -35,3 +35,6 @@ Codex review of fbed5f18 identified three real gaps. Each was reproduced before 
 3. Lost rejection provenance: the extractor also writes a validated application_target_refusal entry into the existing field_provenance contract. Its rejected URL, reason, policy source and evaluation time survive the actual web-lane memory store and real catalog persistence. The end-to-end storage regression failed before the fix and now passes.
 
 Combined local regression after the review fixes: 285 tests across 22 files passed (exit 0). Live baseline display gate inspection found seven of the nine pairs displayable before deployment, one already unproven and one already lifecycle-hidden. The exact baseline pairs remain the verification cohort. The live golden sentinel separately passed 12/12 required source assertions on two profiles at 2026-09-17T18:45:26Z on the old main; that recovery is not caused by this target patch.
+
+## CI boundary follow-through
+The revised CI run caught the new dependency-free shared/applicationTarget.js contract missing from the explicit Crawler OS allowlist. The local boundary test reproduced the failure. Registered that exact module (no wildcard exception) and added a test that it remains dependency-free. The exact report-regression command now passes 38/38 and the complete Crawler OS suite passes 528/528, zero skips/failures.

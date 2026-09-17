@@ -54,6 +54,10 @@ const ALLOWED_SHARED_IMPORTS = new Set([
   // Dependency-free Grants.gov protocol + identity contract. All Search2
   // adapters and the direct transformer use this same source-id rule.
   'shared/grantsGovProtocol.js',
+  // One explicit application-URL alias precedence for the OS, canonical
+  // engine, writer, card and Hamilton. Pure and dependency-free; the test
+  // below prevents this shared contract from acquiring runtime dependencies.
+  'shared/applicationTarget.js',
   'backend/services/matchEngine.js',
   // Pure, dependency-free whole-word term matcher — the shared contract that
   // keeps need/keyword scanning precision identical across the OS thesis
@@ -227,4 +231,9 @@ test('crawlerOsService.js (the seam) imports no legacy crawler module', () => {
     if (LEGACY_DENYLIST.some((banned) => spec.includes(banned))) hits.push(spec);
   }
   assert.deepEqual(hits, [], `service seam must not import legacy crawler modules; found:\n${hits.join('\n')}`);
+});
+
+test('the shared application-target contract remains dependency-free', () => {
+  const targetContract = path.resolve(backendRoot, '..', 'shared', 'applicationTarget.js');
+  assert.deepEqual(specifiersOf(targetContract), []);
 });
