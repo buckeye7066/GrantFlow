@@ -16,6 +16,8 @@
  * Lightweight + pure → safe to call inside render.
  */
 
+import { resolveApplicationUrl } from '../../../shared/applicationTarget.js'
+
 const VALID_DECISIONS = new Set(['ACCEPT', 'REVIEW', 'REJECT'])
 
 /**
@@ -174,7 +176,7 @@ export function toCanonicalResult(opp) {
     opp.unknown_eligibility_fields,
   )
 
-  const applicationUrl = pickString(opp.application_url, opp.apply_url, opp.applicationUrl, opp.applyUrl)
+  const applicationUrl = resolveApplicationUrl(opp)
   const sourceUrl = pickString(opp.source_url, opp.sourceUrl, opp.url, applicationUrl)
 
   const score = pickNumber(opp.match_score, opp.match, opp.score)

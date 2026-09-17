@@ -73,6 +73,7 @@ export const PROFILE_SIGNAL_DERIVATION_FILES = Object.freeze([
   'backend/services/matching/needFirstScoringAdapter.js',
   'backend/services/matchEngine.js',
   'backend/config/applicationSurfaceHosts.js',
+  'shared/applicationTarget.js',
   'backend/services/applicantTypeGate.js',
   'backend/config/applicantBucketTokens.js',
   'backend/crawler-os/fundingTruthPolicy.js',
@@ -85,6 +86,6 @@ export const PROFILE_SIGNAL_DERIVATION_FILES = Object.freeze([
  * sha256 over the LF-normalized concatenation of the files above, pinned by
  * `scripts/pin-signal-version.mjs`. The test recomputes it.
  */
-export const PROFILE_SIGNAL_DERIVATION_HASH = 'cf03e2cd1f68f2566b654ff281d31ab423bb9730b8ea1788f26b1f33a3e3b72c'
+export const PROFILE_SIGNAL_DERIVATION_HASH = '96c55baca6805447ee443f93caf2ef1661f3187ff78a9b19d4eb833770a0b23d'
 
 export default { PROFILE_SIGNAL_VERSION, PROFILE_SIGNAL_DERIVATION_FILES, PROFILE_SIGNAL_DERIVATION_HASH }

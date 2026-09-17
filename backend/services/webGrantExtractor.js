@@ -383,6 +383,19 @@ export async function extractOpportunitiesFromPage(
       ...candidate,
       apply_url: null,
       info_url: candidate.raw?.page_url || candidate.info_url || pageUrl,
+      // The OS and live catalog deliberately omit raw. Put this policy
+      // observation in their existing durable provenance contract as well.
+      field_provenance: {
+        ...(candidate.field_provenance || {}),
+        application_target_refusal: {
+          value: candidate.apply_url,
+          status: 'non_application',
+          reason: refusal.reason,
+          source: 'application_surface_policy',
+          source_url: candidate.raw?.page_url || pageUrl,
+          evaluated_at: new Date().toISOString(),
+        },
+      },
       raw: {
         ...(candidate.raw || {}),
         application_target_refusal: { ...refusal, url: candidate.apply_url },

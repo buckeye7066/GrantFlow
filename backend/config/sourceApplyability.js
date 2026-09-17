@@ -50,6 +50,7 @@
 import { classifyFundingSource } from '../services/hamilton/hamiltonAutomationClassifier.js'
 import { isPointerKind } from './opportunityKindClasses.js'
 import { classifyNonApplicationSurface } from './applicationSurfaceHosts.js'
+import { resolveApplicationUrl } from '../../shared/applicationTarget.js'
 import { isSearchEngineUrl } from './urlRules.js'
 
 export const APPLYABILITY_TIERS = Object.freeze({
@@ -168,8 +169,7 @@ function firstNonEmpty(...values) {
 
 function resolveUrl(source) {
   return firstNonEmpty(
-    source?.application_url,
-    source?.apply_url,
+    resolveApplicationUrl(source),
     source?.portal_url,
     source?.url,
     source?.source_url,

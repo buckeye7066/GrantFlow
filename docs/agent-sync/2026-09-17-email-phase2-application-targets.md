@@ -27,3 +27,11 @@ Remaining separate work: source-grounded school-origin eligibility, historical a
 
 ## Prior phase delivery
 The Factory Deck QA repair in #1746 was subsequently installed and run. The signed production result evarun_f39d3032274d916b947ffa36 recorded four passing journeys and resolved the six-occurrence finding at 2026-09-17T18:08:58.103Z. This does not prove app generation.
+
+## Independent review corrections
+Codex review of fbed5f18 identified three real gaps. Each was reproduced before repair.
+1. URL alias conflict: engine, crawler, applyability, pipeline application write, card and Hamilton now share shared/applicationTarget.js (apply_url then application_url, including camel-case aliases). The identity/fingerprint URL contract is unchanged and its existing tests still pass. Three coexistence/reference-URL tests failed before correction and now pass through the real pipeline write/readback.
+2. Stale linker ACCEPTs: the refresh now makes a narrowly scoped exception for a canonical non-application target refusal. It writes REVIEW even for a historical linker ACCEPT, retains the row and matcher lane, and leaves all other linker provenance/scoring rules unchanged. Four real-engine/database tests failed before the fix and now pass, including an idempotent second drain.
+3. Lost rejection provenance: the extractor also writes a validated application_target_refusal entry into the existing field_provenance contract. Its rejected URL, reason, policy source and evaluation time survive the actual web-lane memory store and real catalog persistence. The end-to-end storage regression failed before the fix and now passes.
+
+Combined local regression after the review fixes: 285 tests across 22 files passed (exit 0). Live baseline display gate inspection found seven of the nine pairs displayable before deployment, one already unproven and one already lifecycle-hidden. The exact baseline pairs remain the verification cohort. The live golden sentinel separately passed 12/12 required source assertions on two profiles at 2026-09-17T18:45:26Z on the old main; that recovery is not caused by this target patch.

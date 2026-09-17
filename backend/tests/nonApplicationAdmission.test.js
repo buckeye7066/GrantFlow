@@ -100,3 +100,37 @@ describe('live extraction retains the source without a false apply target', () =
     } else { expect(out[0].apply_url).toBe(REAL) }
   })
 })
+
+// Review regression: two aliases can coexist after a catalog update.
+import { toCanonicalResult } from '../../src/components/funding/toCanonicalResult.js'
+import { resolveApplicationUrl } from '../../shared/applicationTarget.js'
+import { classifyFundingSource } from '../services/hamilton/hamiltonAutomationClassifier.js'
+it.each([
+  { apply_url: REAL, application_url: VENDOR, expected: 'ACCEPT' },
+  { apply_url: VENDOR, application_url: REAL, expected: 'REVIEW' },
+])('engine, actionability, card and writer agree on apply_url: $expected', async ({ apply_url, application_url, expected }) => {
+  const row = { ...BASE, apply_url, application_url }
+  expect(computeMatchDecision(PROFILE, row).decision).toBe(expected)
+  expect(toCanonicalResult(row).application_url).toBe(apply_url)
+  expect(classifyFundingSource({ opportunity: row }).resolved_url).toBe(apply_url)
+  expect(resolveApplicationUrl(row)).toBe(apply_url)
+  expect(classifyApplyability(row).isApplyable).toBe(expected === 'ACCEPT')
+  const db = pipelineDb()
+  try {
+    const result = await saveToProfilePipeline(db, row, PROFILE.id, { profile: PROFILE, sections: {} })
+    expect(result.saved).toBe(expected === 'ACCEPT')
+    if (result.saved) expect(db.prepare('SELECT application_url FROM grants').get().application_url).toBe(apply_url)
+    else expect(db.prepare('SELECT count(*) AS n FROM grants').get().n).toBe(0)
+  } finally { db.close() }
+})
+it('an explicit application target outranks a legacy reference URL at every application consumer', async () => {
+  const row = { ...BASE, application_url: REAL, url: VENDOR }
+  expect(computeMatchDecision(PROFILE, row).decision).toBe('ACCEPT')
+  expect(resolveApplicationUrl(row)).toBe(REAL)
+  const db = pipelineDb()
+  try {
+    const result = await saveToProfilePipeline(db, row, PROFILE.id, { profile: PROFILE, sections: {} })
+    expect(result.saved).toBe(true)
+    expect(db.prepare('SELECT application_url FROM grants').get().application_url).toBe(REAL)
+  } finally { db.close() }
+})

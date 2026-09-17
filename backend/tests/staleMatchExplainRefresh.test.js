@@ -344,3 +344,37 @@ it('real canonical rescore preserves an unrestricted directory through integrity
     expect(match.match_score).toBeGreaterThanOrEqual(7)
   } finally { raw.close() }
 })
+
+it.each(['web-llm', 'institution-link', 'catalog-rescore-link', 'county-crisis-need-link'])('invalidates a stale %s ACCEPT for a known non-application target using the real engine', async (lane) => {
+  const raw = makeDb()
+  try {
+    raw.exec(`ALTER TABLE profiles ADD COLUMN primary_type TEXT;
+      ALTER TABLE profiles ADD COLUMN state TEXT;
+      ALTER TABLE profiles ADD COLUMN needs TEXT;
+      ALTER TABLE funding_opportunities ADD COLUMN entity_types_allowed TEXT;
+      ALTER TABLE funding_opportunities ADD COLUMN categories TEXT;
+      ALTER TABLE funding_opportunities ADD COLUMN need_types_supported TEXT;`)
+    seedPair(raw, { matcherVersion: lane, explain: PROVEN })
+    raw.prepare('UPDATE profiles SET primary_type=?, state=?, needs=? WHERE id=?')
+      .run('individual', 'OH', JSON.stringify(['housing', 'utilities']), 'p1')
+    raw.prepare('UPDATE profile_sections SET data=? WHERE profile_id=?')
+      .run(JSON.stringify({ state: 'OH', profile_category: 'individual', needs: ['housing', 'utilities'] }), 'p1')
+    raw.prepare(`UPDATE funding_opportunities SET title=?, sponsor=?, description=?, state=?, is_national=0,
+      source='web_search', opportunity_kind='PROGRAM', application_url=?, entity_types_allowed=?, categories=?, need_types_supported=? WHERE id='o1'`)
+      .run('Ohio Housing and Utility Assistance', 'Fixture Housing Foundation', 'For Ohio residents facing eviction or utility shutoff.', 'OH',
+        'https://alpha.grantable.co/login?ref=apply', JSON.stringify(['individual']), JSON.stringify(['housing', 'utilities']), JSON.stringify(['housing', 'utilities']))
+    const result = await runStaleMatchExplainRefresh(wrap(raw))
+    expect(result.ok).toBe(true)
+    expect(result.refreshed).toBe(1)
+    const row = raw.prepare('SELECT * FROM profile_opportunity_matches WHERE id=?').get('m1')
+    expect(row.match_decision).toBe('review')
+    expect(row.matcher_version).toBe(lane)
+    const explain = JSON.parse(row.match_explain_json)
+    expect(explain.signal_version).toBe(PROFILE_SIGNAL_VERSION)
+    expect(explain.application_target).toMatchObject({ status: 'non_application', reason: 'non_application_vendor_content' })
+    expect(explain.four_truth_proof.all_passed).toBe(false)
+    expect(qualifiesForDisplay(row, 0)).toBe(false)
+    expect(raw.prepare('SELECT count(*) AS n FROM funding_opportunities').get().n).toBe(1)
+    expect((await runStaleMatchExplainRefresh(wrap(raw))).refreshed).toBe(0)
+  } finally { raw.close() }
+})

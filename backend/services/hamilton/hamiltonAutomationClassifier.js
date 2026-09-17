@@ -1,4 +1,5 @@
-﻿/**
+import { resolveApplicationUrl } from '../../../shared/applicationTarget.js'
+/**
  * hamiltonAutomationClassifier.js
  *
  * Pure, deterministic classifier that maps a selected funding source
@@ -173,12 +174,10 @@ function readMode(opportunity, grant) {
 
 function readUrl(opportunity, grant) {
   const candidates = [
-    opportunity?.application_url,
-    opportunity?.apply_url,
+    resolveApplicationUrl(opportunity),
     opportunity?.url,
     opportunity?.source_url,
-    grant?.application_url,
-    grant?.apply_url,
+    resolveApplicationUrl(grant),
     grant?.url,
   ]
   for (const candidate of candidates) {

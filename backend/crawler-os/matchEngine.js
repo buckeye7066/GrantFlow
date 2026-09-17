@@ -1,3 +1,4 @@
+import { resolveApplicationUrl } from '../../shared/applicationTarget.js';
 // crawler-os/matchEngine.js
 //
 // Compatibility facade for Crawler OS callers.
@@ -239,7 +240,7 @@ export function computeMatchDecision(opportunity, thesis = {}, opts = {}) {
 
   // A program/listing with no direct apply target cannot be an apply-now ACCEPT.
   // Directory locators are exempt because their contract is the information link.
-  const hasApplyUrl = Boolean(opportunity?.apply_url ?? opportunity?.application_url);
+  const hasApplyUrl = Boolean(resolveApplicationUrl(opportunity));
   const isDirectoryLocator = String(opportunity?.kind ?? '').toUpperCase() === OPPORTUNITY_KIND.DIRECTORY;
   const isPastAwardIntel = String(opportunity?.kind ?? '').toUpperCase() === OPPORTUNITY_KIND.PAST_AWARD_INTEL;
   if (!hasApplyUrl && !isDirectoryLocator && decision === MATCH_DECISION.ACCEPT) {
@@ -413,8 +414,8 @@ function opportunityToCanonicalOpportunity(opportunity = {}) {
     requires_match: Boolean(opportunity.funding?.requires_cost_share),
     deadline: opportunity.deadline ?? null,
     deadline_type: opportunity.is_rolling ? 'rolling' : null,
-    application_url: opportunity.apply_url ?? null,
-    apply_url: opportunity.apply_url ?? null,
+    application_url: resolveApplicationUrl(opportunity),
+    apply_url: resolveApplicationUrl(opportunity),
     source_url: url,
     url,
     type: isDirectory ? 'DIRECTORY' : (opportunity.kind ?? null),

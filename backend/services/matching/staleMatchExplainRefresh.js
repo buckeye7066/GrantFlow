@@ -118,6 +118,7 @@ export async function runStaleMatchExplainRefresh(db, opts = {}) {
     convergence_errors: 0,
     proofs_carried: 0,
     held_at_review: 0,
+    structural_target_holds: 0,
     truncated: false,
   }
 
@@ -253,13 +254,20 @@ export async function runStaleMatchExplainRefresh(db, opts = {}) {
       summary.held_at_review += 1
     }
 
-    // Accept-only lanes: only allow ACCEPT to be written; keep stored decision/score otherwise
-    if (ACCEPT_ONLY_VERSIONS.has(matcherVersion) && verdictToWrite !== 'accept') {
+    // A known non-application target is a structural refusal, not a scoring
+    // preference. Historical linker admission cannot keep a software login
+    // labeled ACCEPT after the canonical engine disproves its application
+    // target. Preserve the row and lane, but converge the stored verdict too.
+    const structuralTargetRefusal = decision?.match_explain?.application_target?.status === 'non_application'
+    if (structuralTargetRefusal && storedDecision === 'accept') summary.structural_target_holds += 1
+
+    // Other linker scoring/provenance rules retain their existing behavior.
+    if (!structuralTargetRefusal && ACCEPT_ONLY_VERSIONS.has(matcherVersion) && verdictToWrite !== 'accept') {
       verdictToWrite = null
       scoreToWrite = null
     }
     // For linker lanes in general: never allow a downgrade (e.g., accept -> review/reject)
-    if (LINKER_VERSIONS.has(matcherVersion)) {
+    if (!structuralTargetRefusal && LINKER_VERSIONS.has(matcherVersion)) {
       if (rank(verdictToWrite) < rank(storedDecision)) {
         verdictToWrite = null
         // Do not lower the score alongside a downgrade; keep existing score

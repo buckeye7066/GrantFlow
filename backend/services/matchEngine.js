@@ -39,6 +39,7 @@ import { detectForeignOpportunity, declaredStateFromTitle } from '../config/oppo
 import { countyAwardMismatch } from '../config/countyDeclaration.js'
 import { resolvedUsOpportunityJurisdiction } from '../config/canonicalUsJurisdiction.js'
 import { classifyNonApplicationSurface } from '../config/applicationSurfaceHosts.js'
+import { resolveApplicationUrl } from '../../shared/applicationTarget.js'
 import {
   isLeadGenScholarship,
   institutionalPassThroughConflict,
@@ -5074,7 +5075,7 @@ export function computeMatchDecision(rawProfile, rawOpportunity, opts = {}) {
   // ("missing application URL") while the row carried a live apply_url
   // (prod 2026-09-07: a transfer student's TELS/HOPE and every MTSU
   // scholarship). A bare source_url is NOT an apply target — that stays REVIEW.
-  const applicationUrl = rawOpportunity?.application_url || rawOpportunity?.apply_url || rawOpportunity?.url
+  const applicationUrl = resolveApplicationUrl(rawOpportunity) || rawOpportunity?.url
   const hasUrl = Boolean(applicationUrl)
   // A real URL is not necessarily a funder application. Reuse the same
   // authority as Hamilton and applyability, including on old catalog rows.
