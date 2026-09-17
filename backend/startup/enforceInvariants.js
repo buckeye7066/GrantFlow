@@ -5587,6 +5587,7 @@ export async function enforcePipelinePrecision(db) {
         let failedGate = null
         let targetRepair = null
         let scored = null
+        let stampDeferred = false
         try {
           // The canonical decision is computed up front (and re-stamped);
           // the engine conjunct itself runs after the structural gates.
@@ -5596,7 +5597,9 @@ export async function enforcePipelinePrecision(db) {
           if (scored?.decision) {
             counts.rescored += 1
             try {
-              if (await stampPipelineRowFromDecision(db, row.grant_id, scored.decision, grantCols, { ...row, profile_id: profileId })) counts.restamped += 1
+              // Do not label a stale target ACCEPT before its repair succeeds.
+              stampDeferred = Boolean(pipelineStoredTargetRefusal(row) && pipelineApplicationTargetRepair(row, scored))
+              if (!stampDeferred && await stampPipelineRowFromDecision(db, row.grant_id, scored.decision, grantCols, { ...row, profile_id: profileId })) counts.restamped += 1
             } catch (err) {
               counts.failed += 1
               log.warn('pipeline_precision: re-stamp failed; row requires recheck', { grant: row.grant_id, error: String(err?.message || err) })
@@ -5682,11 +5685,19 @@ export async function enforcePipelinePrecision(db) {
                     ))
                     if (!changed) throw new Error('Application target or protection changed during reconciliation; recheck required')
                     if (changed) {
+                      if (stampDeferred) {
+                        const repairedRow = { ...row, profile_id: profileId,
+                          grant_application_url: changes.find(c => c.column === 'application_url')?.value ?? row.grant_application_url,
+                          grant_url: changes.find(c => c.column === 'url')?.value ?? row.grant_url }
+                        if (await stampPipelineRowFromDecision(db, row.grant_id, scored.decision, grantCols, repairedRow)) counts.restamped += 1
+                      }
                       writes += 1
                       counts.applicationTargetsRepaired += 1
                       affectedProfiles.add(profileId)
                     }
                   }
+                } else {
+                  throw new Error('Submission evidence appeared before target repair; recheck required')
                 }
               } catch (err) {
                 counts.failed += 1

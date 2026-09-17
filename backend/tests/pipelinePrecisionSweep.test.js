@@ -516,3 +516,30 @@ it('a protected secondary grant URL is diagnosed even when application_url is va
     expect(row.status).toBe('saved')
   } finally { sqlite.close() }
 })
+
+it('a task becoming submission-uncertain between planning and repair is not a clean keep', async () => {
+  const target='https://fixture-foundation.org/apply'
+  const vendor='https://alpha.grantable.co/login'
+  const {sqlite,db}=seed([{id:'second-check',t:'Murfreesboro Community Scholarship',s:'Rutherford County Foundation',ent:['student'],cats:['education'],url:target}])
+  try {
+    const warning='["pipeline_precision:engine:non_application_target"]'
+    sqlite.prepare("UPDATE grants SET application_url=?,url=?,match_decision='REVIEW',eligibility_status='ineligible',ineligibility_reasons=? WHERE id='g-second-check'").run(vendor,vendor,warning)
+    const prepare=db.prepare.bind(db)
+    let checks=0
+    db.prepare=sql=>{
+      if(sql.includes('SELECT id') && sql.includes('FROM application_tasks') && sql.includes('LOWER(COALESCE(status')) {
+        checks++
+        if(checks===2) sqlite.prepare('INSERT INTO application_tasks (id,profile_id,grant_id,opportunity_id,status) VALUES (?,?,?,?,?)')
+          .run('second-check-task',PROFILE_ID,'g-second-check','fo-second-check','submit_evidence_pending')
+      }
+      return prepare(sql)
+    }
+    const result=await enforcePipelinePrecision(db)
+    expect(checks).toBeGreaterThanOrEqual(2)
+    expect(result.kept).toBe(0)
+    expect(result.failed).toBe(1)
+    expect(result.applicationTargetsRepaired).toBe(0)
+    expect(sqlite.prepare("SELECT application_url,url,match_decision,eligibility_status,ineligibility_reasons FROM grants WHERE id='g-second-check'").get())
+      .toEqual({application_url:vendor,url:vendor,match_decision:'REVIEW',eligibility_status:'ineligible',ineligibility_reasons:warning})
+  } finally {sqlite.close()}
+})

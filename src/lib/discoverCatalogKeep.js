@@ -1,4 +1,4 @@
-import { resolveApplicationUrl } from '../../shared/applicationTarget.js'
+import { resolveApplicationUrl, readApplicationTargetRefusal } from '../../shared/applicationTarget.js'
 
 /**
  * Discover catalog display keep rules.
@@ -55,6 +55,7 @@ export function mapDiscoverCatalogRow(opp) {
         program_name: opp.title,
         sponsor: opp.sponsor || opp.funder,
         application_url: resolveApplicationUrl(opp),
+        ...(readApplicationTargetRefusal(opp) ? { application_target: readApplicationTargetRefusal(opp) } : {}),
         source_url: opp.source_url ?? opp.url ?? null,
         url: resolveApplicationUrl(opp) ?? opp.source_url ?? opp.url,
         deadline: opp.deadline,

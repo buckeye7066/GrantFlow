@@ -674,3 +674,18 @@ it.each([false,true])('joined catalog targets respect preferred alias and refuse
     expect(suggestion.portalHost).toBe(refused ? '' : 'fixture-foundation.org')
   } finally { db.close() }
 })
+
+it.each(['mail','fax','email'])('a declared %s source with only an informational URL remains a packet source', async method => {
+  _resetProfilePortalIndexSchemaCache()
+  const db = makeDb()
+  try {
+    db.exec('ALTER TABLE funding_opportunities ADD COLUMN source_url TEXT')
+    db.prepare('INSERT INTO profiles (id,display_name) VALUES (?,?)').run('offline-p','Offline Profile')
+    db.prepare('INSERT INTO grants (id,profile_id,title,url,application_method,contact_email,funder_address) VALUES (?,?,?,?,?,?,?)')
+      .run('offline-g','offline-p','Community assistance','https://www.facebook.com/foundation',method,'apply@foundation.test','100 Example St')
+    const out = await getProfilePortals(db,'offline-p')
+    expect(derivedOnly(out.portals)).toHaveLength(0)
+    expect(out.mailFaxSources).toHaveLength(1)
+    expect(out.mailFaxSources[0]).toMatchObject({grantId:'offline-g',applicationMethod:method})
+  } finally { db.close() }
+})

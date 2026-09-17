@@ -48,3 +48,14 @@ it('a valid unrefused application keeps its existing action and callback', () =>
   fireEvent.click(action)
   expect(callback).toHaveBeenCalledOnce()
 })
+
+it('the actual Discover mapping retains a persisted refusal through the card boundary', async () => {
+  const { mapDiscoverCatalogRow } = await import('@/lib/discoverCatalogKeep.js')
+  const mapped = mapDiscoverCatalogRow(base)
+  const canonical = toCanonicalResult(mapped)
+  expect(canonical.application_target).toEqual(refusal)
+  render(<FundingResultCard result={canonical} />)
+  const link = screen.queryByTestId('funding-result-card-action')
+  expect(link?.getAttribute('href')).not.toBe(rejected)
+  expect(link?.textContent).not.toMatch(/open application/i)
+})

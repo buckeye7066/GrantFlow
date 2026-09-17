@@ -59,3 +59,11 @@ it('Robert never verifies a selected vendor login as a funder application',async
   const result=await verifyOpportunity({opportunity:{...base,apply_url:'https://alpha.grantable.co/apply'}})
   expect(result.ok).toBe(false)
 })
+
+it('Robert returns the policy-specific reason consumed by candidate-history persistence', async () => {
+  const target='https://alpha.grantable.co/apply'
+  const { classifyApplicationTargetRefusal } = await import('../config/applicationTargetPolicy.js')
+  const expected=classifyApplicationTargetRefusal(target)
+  const result=await verifyOpportunity({opportunity:{...base,apply_url:target}})
+  expect(result).toMatchObject({ok:false,stage:'application_target',reason:expected.reason})
+})

@@ -1,4 +1,4 @@
-import { resolveApplicationUrl } from '../../shared/applicationTarget.js'
+import { resolveFunderApplicationLink } from '@/lib/funderApplicationLink'
 import { GRANT_LIST_FULL_LIMIT } from '@/api/grantListLimits'
 import React, { useState, useMemo } from "react"
 import { HandCoins, Search, Mail, Phone, MapPin, Building2 } from "lucide-react"
@@ -133,7 +133,7 @@ export default function Funder() {
       if (!funder.email) funder.email = grant.contact_email || null
       if (!funder.phone) funder.phone = grant.contact_phone || null
       if (!funder.address) funder.address = grant.funder_address || null
-      if (!funder.url) funder.url = resolveApplicationUrl(grant) || grant.url || grant.portal_url || null
+      if (!funder.url) funder.url = resolveFunderApplicationLink(grant)
       const gType = grant.opportunity_type || grant.funding_type
       if (gType) funder.fundingTypes.add(gType)
       mergeAmount(funder, grant.amount_min ?? grant.amount_requested, grant.amount_max ?? grant.amount_awarded)
@@ -157,7 +157,7 @@ export default function Funder() {
       if (!funder.email) funder.email = opp.contact_email || contact?.email || null
       if (!funder.phone) funder.phone = opp.contact_phone || contact?.phone || null
       if (!funder.address) funder.address = opp.funder_address || contact?.address || null
-      if (!funder.url) funder.url = resolveApplicationUrl(opp) || opp.source_url || contact?.website || null
+      if (!funder.url) funder.url = resolveFunderApplicationLink(opp)
       const oType = opp.opportunity_type || opp.funding_type
       if (oType) funder.fundingTypes.add(oType)
       mergeAmount(funder, opp.amount_min, opp.amount_max, opp.amount_description)

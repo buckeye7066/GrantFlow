@@ -100,7 +100,7 @@ export async function verifyOpportunity({ opportunity, checkUrl = null, config =
   if (isPlaceholderUrl(url)) return { ok: false, reason: REJECTION_REASONS.PLACEHOLDER_URL, stage: 'preflight', warnings }
   if (isSearchEngineUrl(url)) return { ok: false, reason: REJECTION_REASONS.SEARCH_ENGINE_URL_FOR_DIRECT_OPP, stage: 'preflight', warnings }
   const targetRefusal = classifyApplicationTargetRefusal(resolveApplicationUrl(opportunity))
-  if (targetRefusal) return { ok: false, reason: REJECTION_REASONS.INSUFFICIENT_EVIDENCE, stage: 'application_target', raw: targetRefusal, warnings }
+  if (targetRefusal) return { ok: false, reason: targetRefusal.reason, stage: 'application_target', raw: targetRefusal, warnings }
   if (!opportunity.title) return { ok: false, reason: REJECTION_REASONS.MISSING_TITLE, stage: 'preflight', warnings }
   if (!opportunity.sponsor) return { ok: false, reason: REJECTION_REASONS.MISSING_SPONSOR, stage: 'preflight', warnings }
   if (isPlaceholderText(`${opportunity.title} ${opportunity.description || ''}`)) {

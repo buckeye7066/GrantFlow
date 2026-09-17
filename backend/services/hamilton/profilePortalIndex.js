@@ -325,13 +325,15 @@ async function collectFromPipeline(db, profileId, acc, mailFax) {
     }
   }
   for (const r of rows || []) {
-    const candidate = firstNonEmpty(
-      r.application_url, r.portal_url, r.url,
-      resolveApplicationUrl({ apply_url: r.fo_apply_url, application_url: r.fo_application_url }), r.fo_apply_guidelines_url, r.fo_source_url,
-    )
-    if (classifyApplicationTargetRefusal(candidate)) continue
-    if (!candidate) continue // no URL → not a "real" funding source per the rule.
-    const { verdict, host } = classifyCandidate(candidate, r.application_method)
+    const explicitTarget = firstNonEmpty(r.application_url, r.portal_url,
+      resolveApplicationUrl({ apply_url: r.fo_apply_url, application_url: r.fo_application_url }), r.fo_apply_guidelines_url)
+    const candidate = firstNonEmpty(explicitTarget, r.url, r.fo_source_url)
+    const declaredOffline = !explicitTarget && NONPORTAL_METHODS.has(normalizeMethod(r.application_method))
+    if (!declaredOffline && classifyApplicationTargetRefusal(candidate)) continue
+    if (!candidate) continue
+    const { verdict, host } = declaredOffline
+      ? { verdict: 'nonportal', host: portalKeyHost(candidate) }
+      : classifyCandidate(candidate, r.application_method)
     if (verdict === 'junk' || !host) continue
     const title = firstNonEmpty(r.grant_title, host)
     if (verdict === 'portal') {

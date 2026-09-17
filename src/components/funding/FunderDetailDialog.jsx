@@ -1,4 +1,4 @@
-import { resolveApplicationUrl } from '../../../shared/applicationTarget.js'
+import { resolveFunderApplicationLink } from '@/lib/funderApplicationLink'
 import React from 'react'
 import {
   Dialog,
@@ -204,7 +204,7 @@ export default function FunderDetailDialog({ funder, open, onClose }) {
             {items.length ? (
               <ul className="space-y-2 max-h-64 overflow-y-auto pr-1">
                 {items.map((item, i) => {
-                  const url = resolveApplicationUrl(item) || item.url || item.source_url
+                  const url = resolveFunderApplicationLink(item)
                   const amt = formatAmount(item.amount_min, item.amount_max, item.amount_description)
                   const dl = item.deadline ? formatDeadline(item.deadline, item.deadline_type) : null
                   const type = item.opportunity_type || item.funding_type
