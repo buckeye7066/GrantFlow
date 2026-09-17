@@ -89,6 +89,10 @@ export const CONTENT_FARM_HOST_PATTERNS = Object.freeze([
  * page is marketing, not a funder's portal.
  */
 export const VENDOR_CONTENT_HOST_PATTERNS = Object.freeze([
+  // Grantable is a grant-writing/discovery workspace, not the listed funder's
+  // submission portal. Its alpha/app login links were stored as apply targets
+  // in the 2026-09-17 admission-escape record. Discovery pages remain usable.
+  /(^|\.)grantable\.co$/i,
   /(^|\.)keela\.co$/i,
   /(^|\.)instrumentl\.com$/i,
   // Submittable: ONLY the marketing site is vendor content. Tenant portals are

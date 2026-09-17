@@ -32,6 +32,7 @@ import { extractPageFactsBlind } from '../crawler-os/blindPageFactExtractor.js';
 import { mapBlindFactsToCandidate } from '../crawler-os/blindFactsMapper.js';
 import { classifyBlindOpportunityKind } from '../crawler-os/blindOpportunityKind.js';
 import { OPPORTUNITY_KIND } from '../crawler-os/contract.js';
+import { classifyNonApplicationSurface } from '../config/applicationSurfaceHosts.js';
 import { createLogger } from '../utils/logger.js';
 
 const log = createLogger('service:webGrantExtractor');
@@ -372,7 +373,23 @@ export async function extractOpportunitiesFromPage(
   // 2026-08-23). This is the ROOT fix for the Coolidge/Live Más class — the
   // enforceSharedListingApplicationTargets boot sweep (#1324) is only the net.
   const decomposed = decomposeHubApplyTargets(classified, { pageUrl, linkInventory });
-  return tagResult(decomposed, { status: decomposed.length > 0 ? 'ok' : 'empty', provider: outcome.provider });
+  // A page-owned link can still be a software login or an editorial page.
+  // Check AFTER hub decomposition so a recovered link cannot bypass this
+  // authority. Keep every candidate and the fetched source; never guess a URL.
+  const targetChecked = decomposed.map((candidate) => {
+    const refusal = classifyNonApplicationSurface(candidate.apply_url);
+    if (!refusal) return candidate;
+    return {
+      ...candidate,
+      apply_url: null,
+      info_url: candidate.raw?.page_url || candidate.info_url || pageUrl,
+      raw: {
+        ...(candidate.raw || {}),
+        application_target_refusal: { ...refusal, url: candidate.apply_url },
+      },
+    };
+  });
+  return tagResult(targetChecked, { status: targetChecked.length > 0 ? 'ok' : 'empty', provider: outcome.provider });
 }
 
 export default {

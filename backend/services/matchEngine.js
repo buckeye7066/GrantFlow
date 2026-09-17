@@ -38,6 +38,7 @@ import { isGenericOnly } from '../config/genericTitleVocabulary.js'
 import { detectForeignOpportunity, declaredStateFromTitle } from '../config/opportunityJurisdiction.js'
 import { countyAwardMismatch } from '../config/countyDeclaration.js'
 import { resolvedUsOpportunityJurisdiction } from '../config/canonicalUsJurisdiction.js'
+import { classifyNonApplicationSurface } from '../config/applicationSurfaceHosts.js'
 import {
   isLeadGenScholarship,
   institutionalPassThroughConflict,
@@ -5073,7 +5074,23 @@ export function computeMatchDecision(rawProfile, rawOpportunity, opts = {}) {
   // ("missing application URL") while the row carried a live apply_url
   // (prod 2026-09-07: a transfer student's TELS/HOPE and every MTSU
   // scholarship). A bare source_url is NOT an apply target — that stays REVIEW.
-  const hasUrl = Boolean(rawOpportunity?.application_url || rawOpportunity?.apply_url || rawOpportunity?.url)
+  const applicationUrl = rawOpportunity?.application_url || rawOpportunity?.apply_url || rawOpportunity?.url
+  const hasUrl = Boolean(applicationUrl)
+  // A real URL is not necessarily a funder application. Reuse the same
+  // authority as Hamilton and applyability, including on old catalog rows.
+  // Preserve the source and score; REVIEW cannot be auto-admitted or acquire
+  // an ACCEPT four-truth proof. Never weaken a prior hard rejection.
+  const nonApplicationTarget = classifyNonApplicationSurface(applicationUrl)
+  if (nonApplicationTarget) {
+    match_explain.application_target = { status: 'non_application', ...nonApplicationTarget }
+    if (decision === 'ACCEPT') {
+      decision = 'REVIEW'
+      explanation = 'The listed application URL is an information or software page, not a funder application. Find and verify the funder application before applying.'
+      const reason = 'Application target needs verification: ' + nonApplicationTarget.reason
+      decisionReasons = [...decisionReasons, reason]
+      reasons.push(reason)
+    }
+  }
 
   if (decision === 'ACCEPT' && !hasUrl) {
     decision = 'REVIEW'

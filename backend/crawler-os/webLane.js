@@ -312,6 +312,7 @@ function classifyPrimaryVerdict(decision, opportunity = null) {
   const kind = String(opportunity?.kind ?? '').toUpperCase();
   const isPointer = kind === OPPORTUNITY_KIND.DIRECTORY || kind === OPPORTUNITY_KIND.PAST_AWARD_INTEL;
   const hasApplyUrl = Boolean(opportunity?.apply_url ?? opportunity?.application_url);
+  if (!isPointer && explain.application_target?.status === 'non_application') return 'apply_target_rejected';
   if (opportunity && !isPointer && !hasApplyUrl) return 'apply_target_rejected';
   if (warnings.some((w) => /no direct application URL/i.test(w))) return 'apply_target_rejected';
   const held = warnings.find((w) => /four-truth gate held at REVIEW/i.test(w)) || '';

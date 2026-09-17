@@ -289,6 +289,9 @@ export function computeMatchDecision(opportunity, thesis = {}, opts = {}) {
       matched_profile_type: Boolean(canonical?.match_explain?.matchedSignals?.includes?.('applicant_type')),
       matched_location: describeLocationMatch(canonical),
       eligibility_fit: canonical?.eligible ?? 'maybe',
+      ...(canonical?.match_explain?.application_target
+        ? { application_target: canonical.match_explain.application_target }
+        : {}),
       why: canonical?.explanation ?? `Canonical ${MATCHER_VERSION} / ${NEED_FIRST_SCORING_VERSION} decision: ${String(canonical?.decision ?? 'REVIEW')}`,
       warnings,
       matched_needs: canonical?.matchedNeeds ?? [],
