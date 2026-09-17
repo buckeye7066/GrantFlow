@@ -434,3 +434,35 @@ it.each(['discovered','submitted'])('the stored-target refusal uses full selecte
     }
   } finally {sqlite.close()}
 })
+
+
+it.each(['saved', 'submitted'])('a concurrent corrected target wins over a stale protected %s relabel', async (status) => {
+  const good = 'https://fixture-foundation.org/apply'
+  const bad = 'https://alpha.grantable.co/login'
+  const { sqlite, db } = seed([{ id: 'protected-race', t: 'Murfreesboro Community Scholarship', s: 'Rutherford County Foundation', ent: ['student'], cats: ['education'], url: good, status }])
+  try {
+    sqlite.prepare("UPDATE grants SET application_url=?, url=?, match_decision='ACCEPT', eligibility_status='true', ineligibility_reasons='[]' WHERE id='g-protected-race'").run(bad, bad)
+    let raced = false
+    const racing = { ...db, prepare(sql) {
+      const stmt = db.prepare(sql)
+      if (!/UPDATE grants SET match_decision/.test(sql)) return stmt
+      return { ...stmt, run(...args) {
+        if (!raced) {
+          raced = true
+          sqlite.prepare("UPDATE grants SET application_url=?,url=?,match_decision='ACCEPT',eligibility_status='true',ineligibility_reasons='[]' WHERE id='g-protected-race'").run(good, good)
+        }
+        return stmt.run(...args)
+      } }
+    } }
+    const result = await enforcePipelinePrecision(racing)
+    expect(raced).toBe(true)
+    const row = sqlite.prepare("SELECT * FROM grants WHERE id='g-protected-race'").get()
+    expect(row.application_url).toBe(good)
+    expect(row.status).toBe(status)
+    expect(row.match_decision).toBe('ACCEPT')
+    expect(row.eligibility_status).toBe('true')
+    expect(row.ineligibility_reasons).toBe('[]')
+    expect(result.relabeled).toBe(0)
+    expect(result.failed).toBe(1)
+  } finally { sqlite.close() }
+})

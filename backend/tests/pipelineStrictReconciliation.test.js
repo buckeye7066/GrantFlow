@@ -660,3 +660,19 @@ it.each(['submitted','submit_evidence_pending','corrected_url'])('a concurrent %
     expect(sqlite.prepare("SELECT opportunity_id FROM profile_opportunity_matches WHERE opportunity_id='fo-good'").get()).toBeTruthy()
   } finally {sqlite.close()}
 })
+
+
+it('a valid application_url cannot hide a refused portal_url still used by task consumers', async () => {
+  const { sqlite, db } = await seed()
+  try {
+    sqlite.prepare("UPDATE application_tasks SET status='completed' WHERE grant_id <> 'g-good' OR grant_id IS NULL").run()
+    const task = sqlite.prepare("SELECT id FROM application_tasks WHERE grant_id='g-good'").get()
+    sqlite.prepare("UPDATE application_tasks SET status='queued', application_url=?, portal_url=? WHERE id=?")
+      .run('https://www.mtsu.edu/financial-aid/scholarships/apply', 'https://alpha.grantable.co/login', task.id)
+    const result = await auditUnfinishedHamiltonTasks(db, { enforce: true })
+    expect(result.tasksCancelled).toBe(1)
+    expect(result.grantsRemoved).toBe(0)
+    expect(result.matchesRemoved).toBe(0)
+    expect(sqlite.prepare('SELECT status FROM application_tasks WHERE id=?').get(task.id).status).toBe('cancelled')
+  } finally { sqlite.close() }
+})

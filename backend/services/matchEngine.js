@@ -38,7 +38,7 @@ import { isGenericOnly } from '../config/genericTitleVocabulary.js'
 import { detectForeignOpportunity, declaredStateFromTitle } from '../config/opportunityJurisdiction.js'
 import { countyAwardMismatch } from '../config/countyDeclaration.js'
 import { resolvedUsOpportunityJurisdiction } from '../config/canonicalUsJurisdiction.js'
-import { classifyNonApplicationSurface } from '../config/applicationSurfaceHosts.js'
+import { classifyApplicationTargetRefusal } from '../config/applicationTargetPolicy.js'
 import { resolveApplicationUrl } from '../../shared/applicationTarget.js'
 import {
   isLeadGenScholarship,
@@ -5081,12 +5081,12 @@ export function computeMatchDecision(rawProfile, rawOpportunity, opts = {}) {
   // authority as Hamilton and applyability, including on old catalog rows.
   // Preserve the source and score; REVIEW cannot be auto-admitted or acquire
   // an ACCEPT four-truth proof. Never weaken a prior hard rejection.
-  const nonApplicationTarget = classifyNonApplicationSurface(applicationUrl)
+  const nonApplicationTarget = classifyApplicationTargetRefusal(applicationUrl)
   if (nonApplicationTarget) {
     match_explain.application_target = { status: 'non_application', ...nonApplicationTarget }
     if (decision === 'ACCEPT') {
       decision = 'REVIEW'
-      explanation = 'The listed application URL is an information or software page, not a funder application. Find and verify the funder application before applying.'
+      explanation = 'The listed application URL is not a usable funder application target. Find and verify the funder application before applying.'
       const reason = 'Application target needs verification: ' + nonApplicationTarget.reason
       decisionReasons = [...decisionReasons, reason]
       reasons.push(reason)

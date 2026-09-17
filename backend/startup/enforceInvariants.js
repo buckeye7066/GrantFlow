@@ -5754,27 +5754,56 @@ export async function enforcePipelinePrecision(db) {
 
         if (submissionUncertain || isProtectedRow(row, awarded)) {
           try {
-            if (verdict?.reason === 'non_application_target' && grantCols.has('match_decision')) {
-              await db.prepare('UPDATE grants SET match_decision = ? WHERE id = ? AND profile_id = ?')
-                .run('REVIEW', row.grant_id, profileId)
+            const targetRelabel = verdict?.reason === 'non_application_target'
+            const assignments = []
+            const values = []
+            if (targetRelabel && grantCols.has('match_decision')) {
+              assignments.push('match_decision = ?')
+              values.push('REVIEW')
             }
-            if (hasEligStatus && hasIneligReasons) {
+            if (!hasEligStatus) throw new Error('grants.eligibility_status column absent - protected row cannot be re-labeled')
+            assignments.push('eligibility_status = ?')
+            values.push('ineligible')
+            let observedReasons = null
+            if (hasIneligReasons) {
+              const cur = await db.prepare('SELECT ineligibility_reasons FROM grants WHERE id = ? AND profile_id = ?').get(row.grant_id, profileId)
+              observedReasons = cur?.ineligibility_reasons ?? null
               let existing = []
-              try {
-                const cur = await db.prepare('SELECT ineligibility_reasons FROM grants WHERE id = ?').get(row.grant_id)
-                const raw = cur?.ineligibility_reasons
-                existing = typeof raw === 'string' ? JSON.parse(raw || '[]') : (Array.isArray(raw) ? raw : [])
-              } catch { existing = [] }
+              try { existing = typeof observedReasons === 'string' ? JSON.parse(observedReasons || '[]') : observedReasons } catch { existing = [] }
               if (!Array.isArray(existing)) existing = []
               const tag = `pipeline_precision:${reasonKey}${detail ? `:${detail}` : ''}`
               if (!existing.includes(tag)) existing.push(tag)
-              await db
-                .prepare('UPDATE grants SET eligibility_status = ?, ineligibility_reasons = ? WHERE id = ?')
-                .run('ineligible', JSON.stringify(existing), row.grant_id)
-            } else if (hasEligStatus) {
-              await db.prepare('UPDATE grants SET eligibility_status = ? WHERE id = ?').run('ineligible', row.grant_id)
-            } else {
-              throw new Error('grants.eligibility_status column absent — protected row cannot be re-labeled')
+              assignments.push('ineligibility_reasons = ?')
+              values.push(JSON.stringify(existing))
+            }
+            const guards = ['id = ?', 'profile_id = ?']
+            const expected = [row.grant_id, profileId]
+            if (targetRelabel) {
+              // Label the observed protected target atomically. A user URL,
+              // status, award or label correction must win over this snapshot.
+              guards.push("COALESCE(status, '') = ?")
+              expected.push(row.grant_status ?? '')
+              for (const [column, value] of [['application_url', row.grant_application_url], ['url', row.grant_url]]) {
+                if (grantCols.has(column)) {
+                  guards.push(`COALESCE(${column}, '') = ?`)
+                  expected.push(value ?? '')
+                }
+              }
+              if (hasAwarded) {
+                guards.push('COALESCE(amount_awarded, 0) = ?')
+                expected.push(awarded.get(String(row.grant_id)) || 0)
+              }
+              if (hasIneligReasons) {
+                guards.push("COALESCE(CAST(ineligibility_reasons AS TEXT), '') = ?")
+                expected.push(typeof observedReasons === 'object' && observedReasons !== null ? JSON.stringify(observedReasons) : (observedReasons ?? ''))
+              }
+            }
+            // audit:allow dynamic-sql -- assignments/guards use hard-coded columns
+            // present in the probed grants schema; all row values remain bound.
+            const relabel = await db.prepare(`UPDATE grants SET ${assignments.join(', ')} WHERE ${guards.join(' AND ')}`)
+              .run(...values, ...expected)
+            if (Number(relabel?.changes ?? relabel?.rowCount ?? 0) === 0) {
+              throw new Error('Protected application target changed during relabel; reconciliation must retry')
             }
             writes += 1
             counts.relabeled += 1

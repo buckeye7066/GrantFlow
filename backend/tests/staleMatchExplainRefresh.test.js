@@ -403,3 +403,38 @@ it('a target marker on an unrelated REJECT does not bypass linker retention or d
     expect(raw.prepare('SELECT id FROM profile_opportunity_matches WHERE id=?').get('m1')).toBeTruthy()
   } finally { raw.close() }
 })
+
+
+it('a concurrent fresh rescore wins over a stale structural target downgrade', async () => {
+  const raw = makeDb()
+  try {
+    seedPair(raw, { matcherVersion: 'web-llm', explain: PROVEN })
+    const original = wrap(raw)
+    const fresh = JSON.stringify({ signal_version: PROFILE_SIGNAL_VERSION, scoring_policy_version: 'need_first_v2', concurrent_correction: true })
+    let raced = false
+    const db = { ...original, prepare(sql) {
+      const stmt = original.prepare(sql)
+      if (!/UPDATE profile_opportunity_matches/.test(sql)) return stmt
+      return { ...stmt, run(...args) {
+        if (!raced) {
+          raced = true
+          raw.prepare("UPDATE funding_opportunities SET application_url='https://fixture-foundation.org/apply' WHERE id='o1'").run()
+          raw.prepare("UPDATE profile_opportunity_matches SET match_decision='accept', match_score=91, match_explain_json=? WHERE id='m1'").run(fresh)
+        }
+        return stmt.run(...args)
+      } }
+    } }
+    const result = await runStaleMatchExplainRefresh(db, { deps: {
+      computeMatchDecision: () => ({ ...stubProvingEngine({ decision: 'review' })(), match_explain: { application_target: { status: 'non_application', reason: 'non_application_vendor_content' } } }),
+      loadProfileContext: async () => ({ profile: { id: 'p1' }, sections: {} }),
+      thesisNeedsDefaulted: async () => false,
+    } })
+    expect(raced).toBe(true)
+    const row = raw.prepare("SELECT * FROM profile_opportunity_matches WHERE id='m1'").get()
+    expect(row.match_decision).toBe('accept')
+    expect(row.match_explain_json).toBe(fresh)
+    expect(result.refreshed).toBe(0)
+    expect(result.concurrent_changes_skipped).toBe(1)
+    expect(result.structural_target_holds).toBe(0)
+  } finally { raw.close() }
+})

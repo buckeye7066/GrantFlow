@@ -387,8 +387,10 @@ export async function auditUnfinishedHamiltonTasks(db, {
       // Validate the task-local target used by the task drawer/executor as
       // well as the catalog. A stale task URL is a task defect, not evidence
       // that its otherwise valid grant, match or source should be deleted.
-      const taskTarget = [task.application_url, task.portal_url].find((value) => typeof value === 'string' && value.trim())
-      const taskTargetRefusal = classifyApplicationTargetRefusal(taskTarget)
+      // Both aliases remain in use by receipt/portal consumers. Neither may
+      // carry a refused target, even when the other alias is valid.
+      const taskTargetRefusal = [task.application_url, task.portal_url]
+        .map(classifyApplicationTargetRefusal).find(Boolean)
       if (assessment.ok && taskTargetRefusal) {
         out.invalid += 1
         classified = true
@@ -404,8 +406,9 @@ export async function auditUnfinishedHamiltonTasks(db, {
           if (String(after?.status).toLowerCase() === 'cancelled') out.tasksCancelled += 1
           else {
             const currentStatus = String(after?.status || '').toLowerCase()
-            const currentTarget = [after?.application_url, after?.portal_url].find((value) => typeof value === 'string' && value.trim())
-            if (!after || (!TASK_HISTORY_STATUSES.includes(currentStatus) && !SUBMISSION_UNCERTAIN_TASK_STATUSES.has(currentStatus) && classifyApplicationTargetRefusal(currentTarget))) {
+            const currentTargetRefusal = [after?.application_url, after?.portal_url]
+              .map(classifyApplicationTargetRefusal).find(Boolean)
+            if (!after || (!TASK_HISTORY_STATUSES.includes(currentStatus) && !SUBMISSION_UNCERTAIN_TASK_STATUSES.has(currentStatus) && currentTargetRefusal)) {
               throw new Error('Task target changed during cancellation; reconciliation must retry')
             }
           }

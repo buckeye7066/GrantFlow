@@ -116,6 +116,7 @@ export async function runStaleMatchExplainRefresh(db, opts = {}) {
     unscorable: 0,
     skipped_no_profile: 0,
     convergence_errors: 0,
+    concurrent_changes_skipped: 0,
     proofs_carried: 0,
     held_at_review: 0,
     structural_target_holds: 0,
@@ -260,7 +261,6 @@ export async function runStaleMatchExplainRefresh(db, opts = {}) {
     // target. Preserve the row and lane, but converge the stored verdict too.
     const structuralTargetRefusal = storedDecision === 'accept' && verdictToWrite === 'review' &&
       decision?.match_explain?.application_target?.status === 'non_application'
-    if (structuralTargetRefusal && storedDecision === 'accept') summary.structural_target_holds += 1
 
     // Other linker scoring/provenance rules retain their existing behavior.
     if (!structuralTargetRefusal && ACCEPT_ONLY_VERSIONS.has(matcherVersion) && verdictToWrite !== 'accept') {
@@ -302,7 +302,10 @@ export async function runStaleMatchExplainRefresh(db, opts = {}) {
                 updated_at = ${nowFn},
                 evaluated_at = ${nowFn}
           WHERE id = ?
-            AND matcher_version = ?`,
+            AND matcher_version = ?
+            AND COALESCE(match_decision, '') = ?
+            AND COALESCE(CAST(match_explain_json AS TEXT), '') = ?
+            AND COALESCE(match_score, -1) = ?`,
       ).run(
         JSON.stringify(explainToPersist),
         scoreToWrite,
@@ -310,8 +313,18 @@ export async function runStaleMatchExplainRefresh(db, opts = {}) {
         explanationToWrite,
         row.match_id,
         row.matcher_version,
+        row.stored_decision ?? '',
+        typeof row.existing_explain === 'object' && row.existing_explain !== null
+          ? JSON.stringify(row.existing_explain) : (row.existing_explain ?? ''),
+        row.stored_score ?? -1,
       )
-      if (changesOf(res) > 0) summary.refreshed += 1
+      if (changesOf(res) > 0) {
+        summary.refreshed += 1
+        if (structuralTargetRefusal) summary.structural_target_holds += 1
+      } else {
+        // A fresh rescore or user correction supersedes the observed pair.
+        summary.concurrent_changes_skipped += 1
+      }
     } catch (err) {
       summary.convergence_errors += 1
       log.warn('stale-match-explain update failed (non-fatal)', {

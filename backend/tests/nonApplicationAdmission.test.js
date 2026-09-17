@@ -152,8 +152,24 @@ it.each(['https://facebook.com/foo','https://example.org/apply','https://google.
     const row={...BASE,apply_url:selected,application_url:REAL,source_url:REAL}
     const result=await saveToProfilePipeline(db,row,PROFILE.id,{profile:PROFILE,sections:{}})
     expect(result.saved).toBe(false)
-    expect(result.gate).toBe('APPLICATION_TARGET')
+    expect(result.gate).toBe('DECISION_ENGINE')
     expect(db.prepare('SELECT count(*) AS n FROM grants').get().n).toBe(0)
     expect(classifyApplyability(row).isApplyable).toBe(false)
   } finally {db.close()}
+})
+
+
+it.each(['https://facebook.com/foo', 'https://example.org/apply', 'https://google.com/search?q=grant'])('the canonical engine holds the exact refused target at REVIEW: %s', (target) => {
+  const decision = computeMatchDecision(PROFILE, { ...BASE, apply_url: target, application_url: REAL, source_url: REAL })
+  expect(decision.decision).toBe('REVIEW')
+  expect(decision.match_explain.application_target.status).toBe('non_application')
+  expect(decision.eligible).toBe('maybe')
+})
+
+it('trust warnings use the selected application alias, not a stale secondary social URL', async () => {
+  const { assessOpportunityTrust } = await import('../services/opportunityTrust.js')
+  const selected = 'https://www.tn.gov/collegepays/tsaa/apply'
+  const control = assessOpportunityTrust({ ...BASE, apply_url: selected })
+  const conflicted = assessOpportunityTrust({ ...BASE, apply_url: selected, application_url: 'https://facebook.com/foo' })
+  expect(conflicted).toEqual(control)
 })

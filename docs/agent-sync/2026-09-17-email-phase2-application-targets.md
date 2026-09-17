@@ -70,3 +70,13 @@ Final second-review checks: the protected boot controls pass 141 tests; the comp
 - Current-head prepush, CI, review, exact deployed SHA, and production cohort readback remain the release gate. A passing old PR head is not evidence for these recovered changes.
 
 Fresh continuation prepush: passed (exit 0), including static/security checks, zero-warning lint, crawler boundary, typecheck and production build. Exact-head remote CI and deployment verification still required.
+
+## Fifth review: unified matcher policy and concurrent correction protection
+- All six findings from the review of 7d0b9961 were reproduced as nine failing assertions before the fixes.
+- The canonical match engine now uses the same exact selected-target refusal policy as the writer. Social, placeholder and search URLs are REVIEW with an application-target warning before persistence, rather than ACCEPT followed by a separate writer refusal. Legitimate/unknown funder portals and hard eligibility rejections retain their controls.
+- Trust risk flags use the same preferred alias as the usable-URL resolver. A stale secondary social URL no longer downgrades a valid primary application URL.
+- The strict task audit validates both task-local aliases because some receipt/portal consumers still use portal_url first. Either refused alias invalidates a cancellable task; protected history remains untouched.
+- The actual Hamilton profile-summary endpoint now delegates source and URL lookup to the shared task presentation resolver. Its HTTP regression proves the profile panel resolves the same valid target as the task list.
+- Stale-match refresh conditionally matches the observed decision, score and explanation in addition to ID and lane. A concurrent fresh rescore is skipped and counted, never overwritten; structural_target_holds counts actual writes only.
+- Protected pipeline target relabeling is one atomic write that matches the observed URLs, status, award value and existing labels. Concurrent correction produces an incomplete/retry finding instead of overwriting the corrected ACCEPT or adding an obsolete ineligibility tag.
+- Fresh verification: the eight focused suites pass 157 cases; expanded controls pass 603 cases in 21 suites, including the complete boot enforcer, stale refresh, task audit, HTTP summary and profile action-plan tests. Production is still on the previous main until this exact revision passes release gates and is deployed.

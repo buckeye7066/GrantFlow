@@ -21,7 +21,7 @@ import {
 } from './applicationTaskStore.js'
 import { getHamiltonReadiness } from './hamiltonScheduleService.js'
 import { getMasterVaultStatus } from './hamiltonPortalMasterVault.js'
-import { isSearchEngineUrl } from '../../config/urlRules.js'
+import { resolveTaskSourceRows, taskApplyUrl } from './hamiltonTaskPresentation.js'
 import { buildManualCompletionGuide } from './manualSubmissionGuide.js'
 
 // Canonical task vocabulary lives in applicationTaskStore (TASK_BLOCKED_STATUSES
@@ -80,41 +80,8 @@ function humanizeAutomationType(t) {
 // instead of raw ids, and so a blocked task can carry the REAL portal page the
 // owner must visit. Missing tables or rows simply leave the fallbacks in place.
 async function resolveTaskTitles(db, tasks, profileId) {
-  const map = new Map()
-  const urlMap = new Map()
-  const grantIds = [...new Set((tasks || []).map((t) => t.grant_id).filter(Boolean).map(String))]
-  const oppIds = [...new Set((tasks || []).map((t) => t.opportunity_id).filter(Boolean).map(String))]
-  if (grantIds.length && profileId) {
-    try {
-      const ph = grantIds.map(() => '?').join(',')
-      // TRAP (the #946/#954 schema-drift class): prod Postgres `grants` has NO
-      // source_url column (SQLite does) — selecting it here would throw, the
-      // catch would swallow it, and every task would silently lose its real
-      // TITLE too. Reference only columns that exist in BOTH dialects.
-      const rows = await db
-        .prepare(`SELECT id, title, application_url, url FROM grants WHERE profile_id = ? AND id IN (${ph})`)
-        .all(String(profileId), ...grantIds)
-      for (const r of rows || []) {
-        if (r?.title) map.set(`grant:${r.id}`, r.title)
-        const u = r?.application_url || r?.url
-        if (u) urlMap.set(`grant:${r.id}`, u)
-      }
-    } catch { /* table/shape mismatch — keep fallbacks */ }
-  }
-  if (oppIds.length) {
-    try {
-      const ph = oppIds.map(() => '?').join(',')
-      const rows = await db
-        .prepare(`SELECT id, title, application_url, source_url FROM funding_opportunities WHERE id IN (${ph})`)
-        .all(...oppIds)
-      for (const r of rows || []) {
-        if (r?.title) map.set(`opp:${r.id}`, r.title)
-        const u = r?.application_url || r?.source_url
-        if (u) urlMap.set(`opp:${r.id}`, u)
-      }
-    } catch { /* table/shape mismatch — keep fallbacks */ }
-  }
-  return { titleMap: map, urlMap }
+  // Task-list and profile-summary panels share the same source and URL authority.
+  return resolveTaskSourceRows(db, (tasks || []).map((task) => ({ ...task, profile_id: profileId })))
 }
 
 function taskTitleFromMap(task, titleMap) {
@@ -131,19 +98,7 @@ function taskTitleFromMap(task, titleMap) {
 // results page is never a portal (the enforceNoSearchEngineApplicationTargets
 // class), and returning null keeps the internal-navigation fallback honest.
 function taskPortalUrl(task, urlMap) {
-  const candidates = [
-    task.application_url,
-    task.portal_url,
-    task.grant_id ? urlMap.get(`grant:${task.grant_id}`) : null,
-    task.opportunity_id ? urlMap.get(`opp:${task.opportunity_id}`) : null,
-  ]
-  for (const raw of candidates) {
-    const u = String(raw || '').trim()
-    if (!/^https?:\/\//i.test(u)) continue
-    if (isSearchEngineUrl(u)) continue
-    return u
-  }
-  return null
+  return taskApplyUrl(task, urlMap)
 }
 
 /**
