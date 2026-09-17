@@ -162,7 +162,7 @@ export function gateEngine(row, scored) {
  * caller owns protection checks and conditional persistence.
  */
 export function pipelineStoredTargetRefusal(row) {
-  return classifyApplicationTargetRefusal(row?.grant_application_url || row?.grant_url)
+  return [row?.grant_application_url, row?.grant_url].map(classifyApplicationTargetRefusal).find(Boolean) || null
 }
 
 export function pipelineApplicationTargetRepair(row, scored) {
@@ -202,7 +202,7 @@ const STAMP_COLUMNS = Object.freeze(['match_score', 'match_decision', 'match_exp
  * Re-stamp a pipeline row with the engine's current verdict. Column-aware so
  * an older schema never breaks the sweep. Returns true when a write happened.
  */
-export async function stampPipelineRowFromDecision(db, grantId, decision, grantCols) {
+export async function stampPipelineRowFromDecision(db, grantId, decision, grantCols, expectedRow = null) {
   if (!grantId || !decision || !grantCols?.has) return false
   const explain = decision.match_explain ?? {}
   const values = {
@@ -217,9 +217,31 @@ export async function stampPipelineRowFromDecision(db, grantId, decision, grantC
   }
   const cols = STAMP_COLUMNS.filter((c) => grantCols.has(c))
   if (cols.length === 0) return false
-  const sql = `UPDATE grants SET ${cols.map((c) => `${c} = ?`).join(', ')} WHERE id = ?`
-  const res = await db.prepare(sql).run(...cols.map((c) => values[c]), String(grantId))
-  return Number(res?.changes ?? res?.rowCount ?? 0) > 0
+  const guards = ['id = ?']
+  const expected = [String(grantId)]
+  if (expectedRow) {
+    for (const [column, value] of [
+      ['profile_id', expectedRow.profile_id], ['status', expectedRow.grant_status],
+      ['application_url', expectedRow.grant_application_url], ['url', expectedRow.grant_url],
+      ['match_decision', expectedRow.match_decision],
+    ]) {
+      if (grantCols.has(column)) {
+        guards.push(`COALESCE(${column}, '') = ?`)
+        expected.push(value ?? '')
+      }
+    }
+    if (grantCols.has('match_score')) {
+      guards.push('COALESCE(match_score, -1) = ?')
+      expected.push(expectedRow.match_score ?? -1)
+    }
+  }
+  // audit:allow dynamic-sql -- names are from STAMP_COLUMNS and the fixed
+  // snapshot fields above; all values and identities remain bound.
+  const sql = `UPDATE grants SET ${cols.map((c) => `${c} = ?`).join(', ')} WHERE ${guards.join(' AND ')}`
+  const res = await db.prepare(sql).run(...cols.map((c) => values[c]), ...expected)
+  const applied = Number(res?.changes ?? res?.rowCount ?? 0) > 0
+  if (expectedRow && !applied) throw new Error('Pipeline row changed before decision re-stamp; reconciliation must retry')
+  return applied
 }
 
 /** Bounded retries for the REAL gate before a row is called `unverifiable`. */

@@ -173,3 +173,13 @@ it('trust warnings use the selected application alias, not a stale secondary soc
   const conflicted = assessOpportunityTrust({ ...BASE, apply_url: selected, application_url: 'https://facebook.com/foo' })
   expect(conflicted).toEqual(control)
 })
+
+
+it.each(['https://m.facebook.com/apply', 'https://business.facebook.com/fund', 'https://mobile.twitter.com/fund'])('social subdomains cannot pass the shared target boundary: %s', (target) => {
+  const row = { ...BASE, apply_url: target, source_url: REAL }
+  expect(computeMatchDecision(PROFILE, row).decision).toBe('REVIEW')
+  expect(classifyApplyability(row).isApplyable).toBe(false)
+})
+it.each(['https://notfacebook.com/apply', 'https://facebook.com.fixture-foundation.org/apply'])('social-domain suffix checks preserve unrelated hosts: %s', (target) => {
+  expect(computeMatchDecision(PROFILE, { ...BASE, apply_url: target }).decision).toBe('ACCEPT')
+})

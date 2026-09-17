@@ -1644,7 +1644,12 @@ export async function cancelApplicationTask(db, taskId, { actorUserId = null, ac
   // A diagnostic read must not cancel a newly submitted task or a task whose
   // target the user just corrected. No cancellation event is emitted on a
   // compare-and-set miss; the caller must recheck the returned current state.
-  if (expectedState && Number(cancelResult?.changes ?? cancelResult?.rowCount ?? 0) === 0) return task
+  const cancellationApplied = Number(cancelResult?.changes ?? cancelResult?.rowCount ?? 0) > 0
+  if (expectedState) {
+    // Internal write evidence, not a persisted task field or an API shape change.
+    Object.defineProperty(task, 'cancellation_applied', { value: cancellationApplied, enumerable: false })
+    if (!cancellationApplied) return task
+  }
   const requiresVerification = task.status === 'submission_verification_required'
   await appendTaskEvent(db, {
     taskId,

@@ -466,3 +466,53 @@ it.each(['saved', 'submitted'])('a concurrent corrected target wins over a stale
     expect(result.failed).toBe(1)
   } finally { sqlite.close() }
 })
+
+
+it.each(['saved', 'submitted'])('a corrected %s row wins before the initial decision re-stamp', async (status) => {
+  const good = 'https://fixture-foundation.org/apply'
+  const bad = 'https://alpha.grantable.co/login'
+  const { sqlite, db } = seed([{ id: 'stamp-race', t: 'Murfreesboro Community Scholarship', s: 'Rutherford County Foundation', ent: ['student'], cats: ['education'], url: bad, status }])
+  try {
+    sqlite.prepare("UPDATE grants SET application_url=?, url=?, match_decision='ACCEPT', eligibility_status='true', ineligibility_reasons='[]' WHERE id='g-stamp-race'").run(bad, bad)
+    let raced = false
+    const racing = { ...db, prepare(sql) {
+      const stmt = db.prepare(sql)
+      if (!/UPDATE grants SET match_score/.test(sql)) return stmt
+      return { ...stmt, run(...args) {
+        if (!raced) {
+          raced = true
+          sqlite.prepare("UPDATE funding_opportunities SET application_url=?,source_url=? WHERE id='fo-stamp-race'").run(good, good)
+          sqlite.prepare("UPDATE grants SET application_url=?,url=?,match_decision='ACCEPT',eligibility_status='true',ineligibility_reasons='[]' WHERE id='g-stamp-race'").run(good, good)
+        }
+        return stmt.run(...args)
+      } }
+    } }
+    const result = await enforcePipelinePrecision(racing)
+    expect(raced).toBe(true)
+    const row = sqlite.prepare("SELECT * FROM grants WHERE id='g-stamp-race'").get()
+    expect(row.match_decision).toBe('ACCEPT')
+    expect(row.eligibility_status).toBe('true')
+    expect(row.application_url).toBe(good)
+    expect(row.status).toBe(status)
+    expect(result.restamped).toBe(0)
+    expect(result.relabeled).toBe(0)
+    expect(result.failed).toBe(1)
+  } finally { sqlite.close() }
+})
+
+it('a protected secondary grant URL is diagnosed even when application_url is valid', async () => {
+  const good = 'https://fixture-foundation.org/apply'
+  const bad = 'https://alpha.grantable.co/login'
+  const { sqlite, db } = seed([{ id: 'secondary', t: 'Murfreesboro Community Scholarship', s: 'Rutherford County Foundation', ent: ['student'], cats: ['education'], url: good, status: 'saved' }])
+  try {
+    sqlite.prepare("UPDATE grants SET application_url=?,url=? WHERE id='g-secondary'").run(good, bad)
+    const result = await enforcePipelinePrecision(db)
+    const row = sqlite.prepare("SELECT * FROM grants WHERE id='g-secondary'").get()
+    expect(result.relabeled).toBe(1)
+    expect(result.applicationTargetsRepaired).toBe(0)
+    expect(row.match_decision).toBe('REVIEW')
+    expect(row.application_url).toBe(good)
+    expect(row.url).toBe(bad)
+    expect(row.status).toBe('saved')
+  } finally { sqlite.close() }
+})

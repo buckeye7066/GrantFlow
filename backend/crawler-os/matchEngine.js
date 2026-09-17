@@ -243,7 +243,12 @@ export function computeMatchDecision(opportunity, thesis = {}, opts = {}) {
   const hasApplyUrl = Boolean(resolveApplicationUrl(opportunity));
   const isDirectoryLocator = String(opportunity?.kind ?? '').toUpperCase() === OPPORTUNITY_KIND.DIRECTORY;
   const isPastAwardIntel = String(opportunity?.kind ?? '').toUpperCase() === OPPORTUNITY_KIND.PAST_AWARD_INTEL;
-  if (!hasApplyUrl && !isDirectoryLocator && decision === MATCH_DECISION.ACCEPT) {
+  // The canonical engine or four-truth boundary may already have held this
+  // strong match at REVIEW. Keep the missing-target explanation observable
+  // regardless of which guard ran first; never promote a REJECT or a pointer.
+  if (!hasApplyUrl && !isDirectoryLocator && !isPastAwardIntel &&
+      (decision === MATCH_DECISION.ACCEPT ||
+       (decision === MATCH_DECISION.REVIEW && isAcceptLevelScore(score)))) {
     decision = MATCH_DECISION.REVIEW;
     warnings.push('no direct application URL — strong fit held at REVIEW until an apply target is known');
   }

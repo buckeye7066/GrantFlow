@@ -403,7 +403,7 @@ export async function auditUnfinishedHamiltonTasks(db, {
             actorRole: 'system', reason: 'Invalid application target on task: ' + taskTargetRefusal.reason,
             expectedState: { status: task.status, application_url: task.application_url, portal_url: task.portal_url },
           })
-          if (String(after?.status).toLowerCase() === 'cancelled') out.tasksCancelled += 1
+          if (after?.cancellation_applied === true) out.tasksCancelled += 1
           else {
             const currentStatus = String(after?.status || '').toLowerCase()
             const currentTargetRefusal = [after?.application_url, after?.portal_url]

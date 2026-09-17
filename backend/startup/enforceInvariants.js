@@ -5596,9 +5596,11 @@ export async function enforcePipelinePrecision(db) {
           if (scored?.decision) {
             counts.rescored += 1
             try {
-              if (await stampPipelineRowFromDecision(db, row.grant_id, scored.decision, grantCols)) counts.restamped += 1
+              if (await stampPipelineRowFromDecision(db, row.grant_id, scored.decision, grantCols, { ...row, profile_id: profileId })) counts.restamped += 1
             } catch (err) {
-              log.warn('pipeline_precision: re-stamp failed (non-fatal)', { grant: row.grant_id, error: String(err?.message || err) })
+              counts.failed += 1
+              log.warn('pipeline_precision: re-stamp failed; row requires recheck', { grant: row.grant_id, error: String(err?.message || err) })
+              continue
             }
           } else {
             counts.unscorable += 1

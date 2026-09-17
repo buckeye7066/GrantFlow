@@ -129,3 +129,14 @@ describe('deriveProfilePortalHosts', () => {
     expect(hosts.size).toBe(0)
   })
 })
+
+
+it('the selected application alias authorizes its host, never the stale secondary host', () => {
+  const selected = 'https://fixture-foundation.org/apply'
+  const hosts = deriveProfilePortalHosts({ opportunity: { apply_url: selected, application_url: 'https://alpha.grantable.co/login' } })
+  expect(hosts.has('fixture-foundation.org')).toBe(true)
+  expect(hosts.has('alpha.grantable.co')).toBe(false)
+  expect(browserAutomationPermittedForUrl(selected, { extraAllowedHosts: [...hosts] })).toBe(true)
+  const refused = deriveProfilePortalHosts({ opportunity: { apply_url: 'https://m.facebook.com/apply', application_url: selected } })
+  expect(refused.size).toBe(0)
+})

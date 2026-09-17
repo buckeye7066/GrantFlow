@@ -285,7 +285,8 @@ export function isPlaceholderUrl(url) {
 export function isNonActionableUrl(url) {
   if (!url) return false
   const hostname = extractHostname(url)
-  return NON_ACTIONABLE_DOMAINS.has(hostname)
+  if (!hostname) return false
+  return [...NON_ACTIONABLE_DOMAINS].some((domain) => hostname === domain || hostname.endsWith('.' + domain))
 }
 
 /**

@@ -631,7 +631,7 @@ it.each(['submitted','submit_evidence_pending','completed'])('a stale task targe
   } finally {sqlite.close()}
 })
 
-it.each(['submitted','submit_evidence_pending','corrected_url'])('a concurrent %s change wins over stale task cancellation and emits no false cancellation event', async (change) => {
+it.each(['submitted','submit_evidence_pending','corrected_url','cancelled'])('a concurrent %s change wins over stale task cancellation and emits no false cancellation event', async (change) => {
   const {sqlite,db}=await seed()
   try {
     sqlite.prepare("UPDATE application_tasks SET status='completed' WHERE grant_id <> 'g-good' OR grant_id IS NULL").run()
