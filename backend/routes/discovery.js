@@ -1,17 +1,15 @@
 import express from 'express';
 import { ensureProfileAccess, isAdminUserWithDb, requireAuthenticatedUser } from '../utils/accessControl.js'
 import { trustedOriginClause, trustedSourceClause } from '../utils/recordOrigins.js'
-import { isJunkOpportunity } from '../services/contentFilter.js'
-import { scoreOpportunity } from '../services/matchEngine.js'
-import { DEFAULT_MIN_SCORE, RELAX_THRESHOLDS, FALLBACK_TOP_N } from '../config/matchThresholds.js'
-import { loadProfileContext, buildProfileSignalAudit } from '../services/profileHelpers.js'
+import { DEFAULT_MIN_SCORE } from '../config/matchThresholds.js'
+import { loadProfileContext } from '../services/profileHelpers.js'
 import { buildProfileFacets } from '../services/profile/profileTaxonomy.js'
 import { deduplicateOpportunities, decorateOpportunityFreshness } from '../services/opportunityMatcher.js'
 import { filterOutPipelineMembers } from '../services/pipelineExclusion.js'
-import { resolveGeoCoverage, buildGeoCoverageClause } from '../services/geo/geoCoverageService.js'
 import { assessOpportunityTrust } from '../services/opportunityTrust.js'
 import { assembleFundingResults } from '../services/zeroResultLadder.js'
 import { canonicalizeOpportunityList, isFiniteNumberLike } from '../services/matching/resultEnricher.js'
+import { tallyDisplayRefusals, buildRemovalLedger } from '../services/matching/removalLedger.js'
 import { loadVnextGuidanceByOpportunity } from '../services/matching/vnextApplicationGuidance.js'
 import { SURFACED_MATCHER_VERSIONS_SQL, qualifiesForDisplay } from '../config/matchSurfacing.js'
 
@@ -105,13 +103,20 @@ function formatProfileSearchResult(opp) {
   }
 }
 
-async function loadProfileOsResults(req, profileId, {
+/**
+ * The ONE selector for "what does this profile see". Both discovery entry
+ * points (GET /discover-grants and POST /comprehensiveMatch) read the
+ * profile's PERSISTED canonical matches through this function so there is a
+ * single funnel: surfaced lanes → canonical funnel → display gate → G2 recovery
+ * ladder → four-truth boundary → dedupe → pipeline exclusion. Every removal is
+ * counted by reason into `ledger` (canonical_rules G2: an evaluated candidate
+ * that is not shown must be accounted for, never silently dropped).
+ */
+async function selectProfileOsResults(req, profileId, {
   minScore = DEFAULT_MIN_SCORE,
   includePipeline = false,
   filters = {},
   searchTerms = [],
-  page = 1,
-  perPage = 50,
 } = {}) {
   const baseContext = await loadProfileContext(req.db, profileId)
   const profileContext = buildProfileFacets(baseContext)
@@ -136,6 +141,7 @@ async function loadProfileOsResults(req, profileId, {
         ORDER BY m.match_score DESC`,
     )
     .all(profileId)
+  const loadedCount = osRows.length
 
   const vnextGuidance = await loadVnextGuidanceByOpportunity(
     req.db,
@@ -172,6 +178,7 @@ async function loadProfileOsResults(req, profileId, {
   })
   mapped = canonical.kept
 
+  const beforeFilters = mapped.length
   const normalizedTerms = normalizeSearchTerms(searchTerms)
   if (normalizedTerms.length > 0) {
     mapped = mapped.filter((opp) => {
@@ -197,8 +204,10 @@ async function loadProfileOsResults(req, profileId, {
     const max = Number(filters.max_award)
     if (Number.isFinite(max)) mapped = mapped.filter((opp) => opp.amount_min === null || opp.amount_min === undefined || Number(opp.amount_min) <= max)
   }
+  const filterRemoved = beforeFilters - mapped.length
 
   const preScoreCount = mapped.length
+  const displayRefused = tallyDisplayRefusals(mapped, minScore)
   let qualified = mapped.filter((opp) => qualifiesForDisplay(opp, minScore))
   let relaxation = null
 
@@ -220,7 +229,7 @@ async function loadProfileOsResults(req, profileId, {
     if (preScoreCount > 0) {
       ladder = assembleFundingResults(toLadderInput(mapped), {
         minScore,
-        maxResults: Math.max(100, Number(perPage) || 50),
+        maxResults: 100,
         strictMinScore: false,
       })
       recovered = Array.isArray(ladder.opportunities) ? ladder.opportunities : []
@@ -241,7 +250,7 @@ async function loadProfileOsResults(req, profileId, {
       if (softKept.length > 0) {
         ladder = assembleFundingResults(toLadderInput(softKept), {
           minScore,
-          maxResults: Math.max(100, Number(perPage) || 50),
+          maxResults: 100,
           strictMinScore: false,
         })
         recovered = Array.isArray(ladder.opportunities) ? ladder.opportunities : []
@@ -262,29 +271,34 @@ async function loadProfileOsResults(req, profileId, {
         tier_attempts: ladder?.tier_attempts || [],
       }
       routeLogger.info(
-        `[discover-grants] zero-result recovery for profile ${profileId}: ` +
+        `[discover] zero-result recovery for profile ${profileId}: ` +
           `pre_score=${preScoreCount} raw_candidates=${rawMapped.length} dropped=${JSON.stringify(canonical.dropped || {})} ` +
           `-> recovered=${recovered.length} tier=${ladder?.tier}`,
       )
     } else {
       routeLogger.warn(
-        `[discover-grants] suppression for profile ${profileId}: ${Math.max(preScoreCount, rawMapped.length)} candidate(s) ` +
+        `[discover] suppression for profile ${profileId}: ${Math.max(preScoreCount, rawMapped.length)} candidate(s) ` +
           `but 0 included after score floor ${minScore}. dropped=${JSON.stringify(canonical.dropped || {})}`,
       )
     }
   }
+  const readmitted = relaxation ? qualified.length : 0
 
   // Final owner-facing boundary: recovery may widen search, never the four
   // funding truths. Pointers remain research leads; direct rows must still
   // satisfy the same persisted proof policy as the primary path.
+  const beforeTruthBoundary = qualified.length
   qualified = qualified.filter(
     (o) =>
       qualifiesForDisplay(o, minScore) &&
       o.eligible !== false &&
       o.eligibility_relaxed !== true,
   )
+  const truthBoundaryRemoved = beforeTruthBoundary - qualified.length
 
+  const beforeDedupe = qualified.length
   mapped = deduplicateOpportunities(qualified).map(formatProfileSearchResult)
+  const dedupeRemoved = beforeDedupe - mapped.length
 
   let excludedAlreadyInPipeline = 0
   if (!includePipeline) {
@@ -293,23 +307,63 @@ async function loadProfileOsResults(req, profileId, {
     excludedAlreadyInPipeline = filtered.excluded
   }
 
+  const ledger = buildRemovalLedger({
+    loaded: loadedCount,
+    canonicalDropped: canonical.dropped,
+    filterRemoved,
+    displayRefused,
+    recovery: relaxation ? { tier: relaxation.tier, readmitted } : null,
+    truthBoundaryRemoved,
+    dedupeRemoved,
+    pipelineExcluded: excludedAlreadyInPipeline,
+    returned: mapped.length,
+  })
+  if (!ledger.reconciles) {
+    routeLogger.warn(
+      `[discover] removal ledger does not reconcile for profile ${profileId}: unaccounted=${ledger.unaccounted}`,
+    )
+  }
+
+  return {
+    profileContext,
+    results: mapped,
+    preScoreCount,
+    dropped: canonical.dropped,
+    relaxation,
+    excludedAlreadyInPipeline,
+    ledger,
+  }
+}
+
+async function loadProfileOsResults(req, profileId, {
+  minScore = DEFAULT_MIN_SCORE,
+  includePipeline = false,
+  filters = {},
+  searchTerms = [],
+  page = 1,
+  perPage = 50,
+} = {}) {
+  const os = await selectProfileOsResults(req, profileId, { minScore, includePipeline, filters, searchTerms })
+  const mapped = os.results
+
   const safePage = Math.max(1, Number.parseInt(String(page), 10) || 1)
   const safePerPage = Math.max(1, Math.min(Number.parseInt(String(perPage), 10) || 50, 100))
   const offset = (safePage - 1) * safePerPage
   const pageResults = mapped.slice(offset, offset + safePerPage)
 
   return {
-    profileContext,
+    profileContext: os.profileContext,
     results: pageResults,
     total: mapped.length,
-    totalFound: preScoreCount,
+    totalFound: os.preScoreCount,
     included: mapped.length,
-    excludedAlreadyInPipeline,
+    excludedAlreadyInPipeline: os.excludedAlreadyInPipeline,
     page: safePage,
     perPage: safePerPage,
     hasMore: offset + pageResults.length < mapped.length,
-    dropped: canonical.dropped,
-    relaxation,
+    dropped: os.dropped,
+    relaxation: os.relaxation,
+    ledger: os.ledger,
   }
 }
 
@@ -348,6 +402,7 @@ router.get('/discover-grants', async (req, res) => {
         threshold_relaxed: os.relaxation?.threshold_relaxed || undefined,
         threshold_relaxed_reason: os.relaxation?.threshold_relaxed_reason || undefined,
         dropped_reasons: os.dropped && Object.keys(os.dropped).length ? os.dropped : undefined,
+        removal_ledger: os.ledger,
       })
     }
 
@@ -396,20 +451,32 @@ router.get('/discover-grants', async (req, res) => {
 
 // Scoring and profile signal extraction handled by shared modules:
 // - loadProfileContext + buildProfileFacets → profile context
-// - scoreOpportunity (backend/services/matchEngine.js) → non-authoritative
-//   ranking score; matchingEngine.js is a legacy compatibility shim.
 // - computeMatchDecision (backend/services/matchEngine.js) → SOLE
 //   acceptance/rejection authority; use this before any pipeline INSERT.
-// - isJunkOpportunity (contentFilter.js) → content filtering
+//   Discovery routes compute NO decisions of their own: they read the
+//   profile's persisted canonical matches through selectProfileOsResults.
 
 /**
- * Comprehensive AI Match endpoint
- * Performs deep profile analysis and multi-source matching
+ * Comprehensive match endpoint — the Discover page's result feed
+ * (src/components/discovery/discoveryHelpers.jsx → runComprehensiveMatch).
+ *
+ * Crawler OS is the authoritative profile-scoped discovery source. This route
+ * reads the profile's PERSISTED canonical matches through the same selector as
+ * GET /discover-grants, so both entry points share one funnel and one removal
+ * ledger. It never backfills sparse OS coverage with generic catalog matches.
+ *
+ * REMOVED 2026-09-17: a catalog-wide live-scoring fallback (fit_score-only rows
+ * relaxed through RELAX_THRESHOLDS down to slice(0, FALLBACK_TOP_N)) that sat
+ * behind this branch. It was unreachable — every request with a profile id
+ * returned above it and every request without one was refused — and it carried
+ * a latent reject leak: it discarded the engine decision, so the ladder's
+ * REJECT filter had nothing to read. One selector is authoritative now; see
+ * backend/tests/comprehensiveMatchRouteAuthority.test.js.
  */
 router.post('/comprehensiveMatch', async (req, res) => {
   try {
-    const { profile_json, states = [], page = 1, freshness_days = 60 } = req.body;
-    
+    const { profile_json, page = 1 } = req.body ?? {}
+
     if (!profile_json) {
       return res.status(400).json({
         success: false,
@@ -417,88 +484,6 @@ router.post('/comprehensiveMatch', async (req, res) => {
       });
     }
 
-    const user = req.user ?? { role: 'guest' }
-
-    // Build full profile context (same path as Smart Matcher for consistent scoring)
-    let profile, profileContext, organization, profileSections = {};
-    if (typeof profile_json === 'string') {
-      if (!(await ensureProfileAccess(req, res, profile_json))) return
-      try {
-        const baseContext = await loadProfileContext(req.db, profile_json)
-        profileContext = buildProfileFacets(baseContext)
-        profile = profileContext.profile
-        organization = profileContext.organization ?? null
-        profileSections = profileContext.sections ?? {}
-      } catch (e) {
-        return res.status(404).json({ success: false, error: 'Profile not found' })
-      }
-    } else if (req.ctx?.isAdmin !== true) {
-      return res.status(403).json({
-        success: false,
-        error: 'Non-admin requests must provide a profile_id string',
-      })
-    } else {
-      profile = profile_json
-      profileContext = { profile }
-      if (profile.organization_id) {
-        organization = req.db
-          .prepare('SELECT * FROM organizations WHERE id = ?')
-          .get(profile.organization_id) ?? null
-      }
-    }
-
-    // Extract search criteria from profile
-    const searchKeywords = [];
-    const profileStates = states.length > 0 ? states : 
-      [organization?.state, profileSections?.location_focus?.state].filter(Boolean);
-    
-    // ── Geographic coverage resolution (progressive expansion) ──
-    // Extracts ZIP/state from profile signals, then expands radius until
-    // sufficient results are found: 25mi → 50mi → state → national.
-    const profileZip =
-      profileContext?.signals?.location?.zip ??
-      profileSections?.basic_information?.zip ??
-      profileSections?.location_focus?.primary_zip ??
-      profile?.postal_code ?? profile?.zip_code ?? null
-    const profileState =
-      profileContext?.signals?.location?.state ??
-      (profileStates.length > 0 ? profileStates[0] : null)
-
-    let geoCoverage = null
-    try {
-      geoCoverage = await resolveGeoCoverage(req.db, {
-        zip: profileZip,
-        state: profileState,
-      })
-    } catch (e) {
-      console.warn('[comprehensiveMatch] Geo coverage resolution failed, falling back to state filter:', e?.message)
-    }
-
-    // Build search query based on profile characteristics
-    const conditions = [];
-    const params = [];
-    
-    // Exclude fake/synthetic sources
-    conditions.push(trustedSourceClause());
-    conditions.push(trustedOriginClause());
-    
-    const isPostgres = req.db?.dialect === 'postgres'
-
-    conditions.push(
-      isPostgres
-        ? '(requires_match IS NULL OR requires_match = FALSE)'
-        : '(requires_match = 0 OR requires_match IS NULL)',
-    );
-    conditions.push(
-      isPostgres
-        ? '(is_loan IS NULL OR is_loan = FALSE)'
-        : '(is_loan = 0 OR is_loan IS NULL)',
-    );
-
-    // Crawler OS is the authoritative profile-scoped discovery source. This
-    // compatibility endpoint may not backfill sparse OS coverage with generic
-    // catalog matches.
-    const matchProfileId = typeof profile_json === 'string' ? profile_json : (profile?.id ?? null)
     if (req.query.legacy_matching === '1' || req.body?.legacy_matching === '1') {
       return res.status(410).json({
         success: false,
@@ -507,7 +492,15 @@ router.post('/comprehensiveMatch', async (req, res) => {
         message: 'Legacy catalog matching has been retired. Run Crawler OS discovery for this profile.',
       })
     }
-    if (!matchProfileId) {
+
+    if (typeof profile_json !== 'string') {
+      if (req.ctx?.isAdmin !== true) {
+        return res.status(403).json({
+          success: false,
+          error: 'Non-admin requests must provide a profile_id string',
+        })
+      }
+      // An inline profile object has no persisted match store to read from.
       return res.status(400).json({
         success: false,
         error: 'profile_required',
@@ -516,381 +509,48 @@ router.post('/comprehensiveMatch', async (req, res) => {
       })
     }
 
-    if (matchProfileId) {
-      let osRows = []
-      try {
-        osRows = await req.db
-          .prepare(
-            `SELECT o.*, m.match_score AS os_match_score, m.match_confidence AS os_match_confidence,
-                    m.match_explain_json AS os_match_explain_json, m.match_decision AS os_match_decision,
-                    m.match_explanation AS os_match_explanation, m.match_reasons AS os_match_reasons
-               FROM profile_opportunity_matches m
-               JOIN funding_opportunities o ON o.id = m.opportunity_id
-              WHERE m.profile_id = ? AND m.matcher_version IN ${SURFACED_MATCHER_VERSIONS_SQL}
-                AND (o.is_active IS NULL OR o.is_active = 1)
-                AND (o.is_hidden IS NULL OR o.is_hidden = 0)
-              ORDER BY m.match_score DESC`,
-          )
-          .all(matchProfileId)
-      } catch (osErr) {
-        routeLogger.error('comprehensive_match.os_query_failed', osErr)
-        return res.status(503).json({
-          success: false,
-          error: 'crawler_os_match_store_unavailable',
-          engine: 'crawler-os',
-          message: 'Crawler OS match data is unavailable. Generic fallback matching is disabled.',
-        })
-      }
+    const matchProfileId = profile_json
+    if (!(await ensureProfileAccess(req, res, matchProfileId))) return
 
-      const osMin = Number.isFinite(Number(req.body?.min_score)) ? Number(req.body.min_score) : DEFAULT_MIN_SCORE
-      const vnextGuidance = await loadVnextGuidanceByOpportunity(
-        req.db,
-        matchProfileId,
-        osRows.map((row) => row.id),
-        { userId: req.ctx?.userId ?? req.user?.userId ?? null, isAdmin: Boolean(req.ctx?.isAdmin) },
-      )
-      let mapped = osRows.map((o) => {
-        let reasons = []
-        try { reasons = JSON.parse(o.os_match_reasons || '[]') } catch { reasons = [] }
-        const kind = String(o.opportunity_kind ?? '').toUpperCase()
-        const isDirectory = kind === 'DIRECTORY' || kind === 'PAST_AWARD_INTEL'
-        return {
-          ...o,
-          ...vnextGuidance.get(String(o.id)),
-          match_score: Number(o.os_match_score ?? 0),
-          match_confidence: isFiniteNumberLike(o.os_match_confidence) ? Number(o.os_match_confidence) : null,
-          match_explain_json: o.os_match_explain_json,
-          match_decision: o.os_match_decision,
-          match_explanation: o.os_match_explanation,
-          match_reasons: reasons,
-          is_directory: isDirectory,
-          trust_tier: o.source_trust_tier ?? null,
-          url: o.application_url ?? o.apply_url ?? o.source_url ?? null,
-          actionable_url: o.application_url ?? o.apply_url ?? o.source_url ?? null,
-          engine: 'crawler-os',
-        }
-      })
-      const canonical = canonicalizeOpportunityList(profileContext, mapped, {
-        preserveDirectories: true,
-        rejectHardIneligible: true,
-      })
-      mapped = canonical.kept
-      if (req.body?.include_pipeline !== true && req.body?.include_pipeline !== '1') {
-        mapped = (await filterOutPipelineMembers(req.db, matchProfileId, mapped)).results
+    const osMin = Number.isFinite(Number(req.body?.min_score)) ? Number(req.body.min_score) : DEFAULT_MIN_SCORE
+    const includePipeline = req.body?.include_pipeline === true || req.body?.include_pipeline === '1'
+
+    let os
+    try {
+      os = await selectProfileOsResults(req, matchProfileId, { minScore: osMin, includePipeline })
+    } catch (osErr) {
+      if (/not found/i.test(String(osErr?.message || ''))) {
+        return res.status(404).json({ success: false, error: 'Profile not found' })
       }
-      const qualified = mapped.filter((o) => qualifiesForDisplay(o, osMin))
-      return res.json({
-        success: true,
+      routeLogger.error('comprehensive_match.os_query_failed', osErr)
+      return res.status(503).json({
+        success: false,
+        error: 'crawler_os_match_store_unavailable',
         engine: 'crawler-os',
-        opportunities: qualified,
-        total: qualified.length,
-        page,
-        threshold_used: osMin,
-        total_evaluated: mapped.length,
-        zero_result: qualified.length === 0 || undefined,
+        message: 'Crawler OS match data is unavailable. Generic fallback matching is disabled.',
       })
     }
-    if (matchProfileId) {
-      conditions.push('(profile_id IS NULL OR profile_id = ?)')
-      params.push(matchProfileId)
-    } else {
-      conditions.push('profile_id IS NULL')
-    }
-    
-    // ── Geographic filtering (radius-aware) ──
-    // Uses geo coverage when available; falls back to legacy state filter.
-    if (geoCoverage && geoCoverage.tier !== 'national') {
-      const geoClause = buildGeoCoverageClause(req.db, geoCoverage)
-      conditions.push(geoClause.clause)
-      params.push(...geoClause.params)
-    } else if (profileStates.length > 0) {
-      const statePlaceholders = profileStates.map(() => '?').join(',');
-      conditions.push(`(state IN (${statePlaceholders}) OR state IS NULL OR state = 'nationwide')`);
-      params.push(...profileStates);
-    }
-    
-    // Freshness filter
-    if (freshness_days > 0) {
-      if (isPostgres) {
-        conditions.push('(deadline IS NULL OR deadline >= (CURRENT_DATE - (?::int * INTERVAL \'1 day\')))');
-        params.push(freshness_days);
-      } else {
-        conditions.push(`(deadline IS NULL OR deadline >= date('now', '-' || ? || ' days'))`);
-        params.push(freshness_days);
-      }
-    }
 
-    // Build the query with geographic coverage.
-    const candidateLimit = 3000;
-    const geoStates = geoCoverage?.nearbyStates instanceof Set ? [...geoCoverage.nearbyStates] : profileStates
-    const statePhForOrder = geoStates.length > 0 ? geoStates.map(() => '?').join(',') : null;
-
-    let query =
-      isPostgres
-        ? 'SELECT * FROM funding_opportunities WHERE is_active = TRUE'
-        : 'SELECT * FROM funding_opportunities WHERE is_active = 1';
-    if (conditions.length > 0) {
-      query += ' AND ' + conditions.join(' AND ');
-    }
-    const deadlineNullSort =
-      isPostgres ? 'deadline IS NULL' : "deadline IS NULL OR deadline = ''";
-    const isNationalSort = isPostgres
-      ? "(is_national = TRUE OR state = 'nationwide')"
-      : "(is_national = 1 OR state = 'nationwide')";
-    const stateOrderClause = statePhForOrder
-      ? `CASE WHEN state IN (${statePhForOrder}) THEN 0 ELSE 1 END, `
-      : '';
-    query += ` ORDER BY ${stateOrderClause}CASE WHEN ${isNationalSort} THEN 0 ELSE 1 END, CASE WHEN ${deadlineNullSort} THEN 0 ELSE 1 END, deadline ASC, updated_at DESC LIMIT ${candidateLimit}`;
-
-    const opportunities = await req.db.prepare(query).all(
-      ...params,
-      ...(geoStates.length > 0 ? geoStates : []),
-    );
-    
-    const tierLabel = geoCoverage ? `tier=${geoCoverage.tier}` : 'fallback=state'
-    routeLogger.info(`[comprehensiveMatch] Query found ${opportunities.length} opportunities (${tierLabel}, zip=${profileZip || 'none'})`);
-
-    const healthSet = profileContext?.signals?.health
-    const healthFacets = profileContext?.facets?.health ?? {}
-    const kws = profileContext?.signals?.keywordSet ?? new Set()
-
-    if (kws.size > 0 || (healthSet instanceof Set && healthSet.size > 0)) {
-      routeLogger.info(`[comprehensiveMatch] Profile signals:`, JSON.stringify({
-        keywords: [...kws].slice(0, 15),
-        health: healthSet instanceof Set ? [...healthSet] : [],
-      }));
-    }
-
-    const filterHints = {
-      hasHealthNeeds:
-        (healthSet instanceof Set && healthSet.size > 0) ||
-        healthFacets.disability_types?.length > 0 ||
-        healthFacets.visual_impairment || healthFacets.hearing_impairment ||
-        healthFacets.chronic_illness || healthFacets.mental_health_condition ||
-        kws.has('disability') || kws.has('chronic') || kws.has('mental health') || kws.has('epilepsy'),
-      needsTransport: kws.has('transportation') || kws.has('ride assistance'),
-    };
-    const filteredOpportunities = opportunities.filter(opp => !isJunkOpportunity(opp, filterHints));
-    const hasBizIntent = kws.has('small business') || kws.has('startup') || kws.has('entrepreneur') || kws.has('sba');
-    routeLogger.info(`[comprehensiveMatch] Filtered ${opportunities.length - filteredOpportunities.length} irrelevant opportunities, ${filteredOpportunities.length} remaining. Business intent: ${hasBizIntent}`);
-
-    // Canonical consumer-side trust assessment. This is the single layer
-    // that decides whether a row is shown to the user, consistent with
-    // matching.js. It handles: placeholder URLs, loans leaking past SQL
-    // filters, matching-funds, expired deadlines, broken links, untrusted
-    // origins, social-only URLs, and source tier classification.
-    // Directory rows are kept (they are legitimate help) but flagged.
-    const trustDroppedReasons = {}
-    const trustKept = []
-    for (const opp of filteredOpportunities) {
-      const trust = assessOpportunityTrust(opp, {
-        allowDirectory: true,
-        allowExpired: false,
-      })
-      if (!trust.display) {
-        for (const reason of trust.reasons) {
-          trustDroppedReasons[reason] = (trustDroppedReasons[reason] || 0) + 1
-        }
-        continue
-      }
-      trustKept.push({ opp, trust })
-    }
-    const trustDroppedTotal = filteredOpportunities.length - trustKept.length
-    if (trustDroppedTotal > 0) {
-      routeLogger.info(
-        `[comprehensiveMatch] Trust layer dropped ${trustDroppedTotal}:`,
-        trustDroppedReasons,
-      )
-    }
-
-    const scoredOpportunities = trustKept.map(({ opp, trust }) => {
-      const computed = scoreOpportunity(profileContext, opp);
-
-      let eligSummary = ''
-      try {
-        const bullets = typeof opp.eligibility_bullets === 'string' ? JSON.parse(opp.eligibility_bullets) : opp.eligibility_bullets
-        eligSummary = Array.isArray(bullets) ? bullets.join('; ') : (opp.eligibility_bullets || '')
-      } catch { eligSummary = opp.eligibility_bullets || '' }
-
-      const freshness = decorateOpportunityFreshness(opp)
-      // Soft downgrade for stale/non-official sources: keep them in results
-      // but pull them behind higher-trust options of equal score.
-      const adjustedScore = trust.downgrade
-        ? Math.max(0, computed.score - 5)
-        : computed.score
-
-      return {
-        id: opp.id,
-        source_id: opp.source_id,
-        source: opp.source ?? null,
-        title: opp.title || opp.program_name,
-        program_name: opp.title || opp.program_name,
-        sponsor: opp.sponsor || opp.funder,
-        url: trust.primaryUrl || null,
-        deadline: opp.deadline,
-        state: opp.state ?? null,
-        amount_min: opp.amount_min ?? null,
-        amount_max: opp.amount_max ?? null,
-        description: opp.description || opp.summary,
-        eligibility_summary: eligSummary,
-        fit_score: adjustedScore,
-        match_score: adjustedScore,
-        match_reasons: computed.reasons,
-        matched_fields: computed.reasons.slice(0, 10),
-        trust_tier: trust.trustTier,
-        source_trust: trust.sourceTrust,
-        trust_flags: trust.flags,
-        trust_reasons: Array.isArray(trust.reasons) ? trust.reasons.slice(0, 10) : [],
-        trust_downgrade: Boolean(trust.downgrade),
-        trust_downgrade_reason: trust.downgrade
-          ? (Array.isArray(trust.reasons) ? trust.reasons : []).find((r) =>
-              r === 'link_marked_broken' ||
-              r === 'non_actionable_primary_url' ||
-              String(r).startsWith('untrusted_origin'),
-            ) || 'lower_trust_source'
-          : null,
-        actionable_url: trust.primaryUrl ?? null,
-        updated_at: opp.updated_at ?? null,
-        created_at: opp.created_at ?? null,
-        funding_source_type: opp.funding_source_type ?? null,
-        freshness: freshness.freshness,
-        days_since_verified: freshness.days_since_verified,
-        freshness_warning: freshness.freshness_warning,
-      };
-    });
-    
-    // Debug: Log score distribution
-    const scoreSummary = scoredOpportunities.reduce((acc, o) => {
-      const bucket = Math.floor(o.fit_score / 10) * 10;
-      acc[bucket] = (acc[bucket] || 0) + 1;
-      return acc;
-    }, {});
-    routeLogger.info(`[comprehensiveMatch] Score distribution:`, scoreSummary);
-    
-    if (scoredOpportunities.length > 0) {
-      const topScores = scoredOpportunities
-        .sort((a, b) => b.fit_score - a.fit_score)
-        .slice(0, 5)
-        .map(o => ({ title: o.program_name?.substring(0, 30), score: o.fit_score, matched: o.matched_fields }));
-      routeLogger.info(`[comprehensiveMatch] Top 5 scores:`, JSON.stringify(topScores));
-    }
-    
-    // Deduplicate before threshold filtering — keeps highest-trust record when same grant
-    // appears from multiple crawl sources. Display-only: no DB records are changed.
-    const dedupedOpportunities = deduplicateOpportunities(scoredOpportunities)
-    const dedupedCount = scoredOpportunities.length - dedupedOpportunities.length
-    if (dedupedCount > 0) {
-      routeLogger.info(`[comprehensiveMatch] Deduplication removed ${dedupedCount} duplicate opportunities`)
-    }
-
-    let matchThreshold = DEFAULT_MIN_SCORE;
-    let highScoring = dedupedOpportunities
-      .filter(o => o.fit_score >= matchThreshold)
-      .sort((a, b) => b.fit_score - a.fit_score);
-
-    if (highScoring.length === 0 && dedupedOpportunities.length > 0) {
-      for (const fallback of RELAX_THRESHOLDS) {
-        highScoring = dedupedOpportunities
-          .filter(o => o.fit_score >= fallback)
-          .sort((a, b) => b.fit_score - a.fit_score);
-        if (highScoring.length > 0) {
-          matchThreshold = fallback;
-          routeLogger.info(`[comprehensiveMatch] Zero results at ${DEFAULT_MIN_SCORE}; relaxed to ${fallback} (${highScoring.length} results)`);
-          break;
-        }
-      }
-      if (highScoring.length === 0) {
-        highScoring = dedupedOpportunities.sort((a, b) => b.fit_score - a.fit_score).slice(0, FALLBACK_TOP_N);
-        matchThreshold = 0;
-        routeLogger.info(`[comprehensiveMatch] All thresholds exhausted; returning top ${highScoring.length}`);
-      }
-    }
-
-    // Trust layer already filtered placeholder/loan/expired/etc. before
-    // scoring, so `highScoring` is the final actionable list. No secondary
-    // filterActionableOpportunities pass is needed.
-    let signalAudit = null
-    try {
-      signalAudit = buildProfileSignalAudit(profileContext)
-    } catch (auditErr) {
-      signalAudit = { error: auditErr?.message ?? String(auditErr) }
-    }
-
-    const wasRelaxed = matchThreshold < DEFAULT_MIN_SCORE
-    const relaxedReason = wasRelaxed
-      ? `No matches at default threshold ${DEFAULT_MIN_SCORE}; relaxed to ${matchThreshold} so you still see options. Complete your profile (location, needs, organization type) to improve match quality.`
-      : undefined
-
-    // Mission rule (Phase 6): run the canonical zero-result ladder so
-    // the discovery envelope carries the same diagnostics as matching.js
-    // and the FundingResultCard renders honest threshold/relaxed banners.
-    const ladderProfileGaps = []
-    try {
-      const sig = profileContext?.signals ?? {}
-      if (!sig?.location?.state && !sig?.location?.zip) ladderProfileGaps.push('location')
-      if (!sig?.entityType && !profileContext?.profile?.primary_type) ladderProfileGaps.push('profile_type')
-      if (!sig?.interests?.size && !sig?.demographics?.size) ladderProfileGaps.push('interests')
-    } catch { /* best-effort */ }
-
-    const ladderInput = dedupedOpportunities.map((o) => ({
-      ...o,
-      match_score: o.match_score ?? o.fit_score,
-    }))
-    const ladder = assembleFundingResults(ladderInput, {
-      minScore: DEFAULT_MIN_SCORE,
-      maxResults: Math.max(highScoring.length, 100),
-      profileGaps: ladderProfileGaps,
-    })
-
-    let finalOpportunities = highScoring
-    if (highScoring.length === 0 && Array.isArray(ladder.opportunities) && ladder.opportunities.length > 0) {
-      finalOpportunities = ladder.opportunities
-    } else if (ladder.threshold_relaxed) {
-      finalOpportunities = highScoring.map((o) => ({
-        ...o,
-        threshold_relaxed: true,
-        relaxed_reason: o.relaxed_reason || ladder.threshold_relaxed_reason,
-      }))
-    }
-
-    // Pipeline exclusion: drop anything already in THIS profile's pipeline or
-    // dismissed. Profile-scoped → no cross-profile bleed-over.
-    const profileIdForExclusion = typeof profile_json === 'string' ? profile_json : (profile?.id ?? null)
-    let excludedAlreadyInPipeline = 0
-    if (profileIdForExclusion && req.body?.include_pipeline !== true && req.body?.include_pipeline !== '1') {
-      try {
-        const filtered = await filterOutPipelineMembers(req.db, String(profileIdForExclusion), finalOpportunities)
-        finalOpportunities = filtered.results
-        excludedAlreadyInPipeline = filtered.excluded
-      } catch (exclErr) {
-        routeLogger.warn(`[comprehensiveMatch] pipeline exclusion skipped: ${exclErr?.message || exclErr}`)
-      }
-    }
-
-    res.json({
+    return res.json({
       success: true,
-      opportunities: finalOpportunities,
-      total: finalOpportunities.length,
-      excluded_already_in_pipeline: excludedAlreadyInPipeline || undefined,
+      engine: 'crawler-os',
+      opportunities: os.results,
+      total: os.results.length,
       page,
-      threshold_used: matchThreshold,
-      threshold_relaxed: wasRelaxed || ladder.threshold_relaxed ? true : undefined,
-      threshold_relaxed_reason: relaxedReason || ladder.threshold_relaxed_reason,
-      total_evaluated: scoredOpportunities.length,
-      total_after_dedupe: dedupedOpportunities.length,
-      trust_dropped: trustDroppedTotal,
-      trust_drop_reasons: trustDroppedReasons,
-      profile_signal_audit: signalAudit,
-      result_tier: ladder.tier,
-      directory_only: ladder.directory_only || undefined,
-      geo_expanded: ladder.geo_expanded || undefined,
-      profile_gaps: ladder.profile_gaps?.length ? ladder.profile_gaps : undefined,
-      tier_attempts: ladder.tier_attempts,
-      tier_explanation: ladder.explanation,
-    });
-    
+      threshold_used: osMin,
+      total_evaluated: os.preScoreCount,
+      zero_result: os.results.length === 0 || undefined,
+      excluded_already_in_pipeline: os.excludedAlreadyInPipeline || undefined,
+      relaxation: os.relaxation || undefined,
+      threshold_relaxed: os.relaxation?.threshold_relaxed || undefined,
+      threshold_relaxed_reason: os.relaxation?.threshold_relaxed_reason || undefined,
+      result_tier: os.relaxation?.tier || undefined,
+      tier_attempts: os.relaxation?.tier_attempts || undefined,
+      dropped_reasons: os.dropped && Object.keys(os.dropped).length ? os.dropped : undefined,
+      removal_ledger: os.ledger,
+    })
   } catch (error) {
-    console.error('[comprehensiveMatch] Error:', error);
+    routeLogger.error('comprehensive_match.failed', error)
     res.status(500).json({
       success: false,
       error: error.message || 'Comprehensive match failed'
