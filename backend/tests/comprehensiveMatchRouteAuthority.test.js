@@ -17,7 +17,7 @@ import { describe, it, expect, beforeEach } from 'vitest'
 
 import discoveryRouter from '../routes/discovery.js'
 import { qualifiesForDisplay } from '../config/matchSurfacing.js'
-import { loadRegressionFixture, FIXTURE_PROFILE_ID, CASE_IDS } from './fixtures/regression/anastasia-2026-09-17/index.js'
+import { loadRegressionFixture, FIXTURE_PROFILE_ID, CASE_IDS } from './fixtures/regression/tn-student-2026-09-17/index.js'
 
 const fixture = loadRegressionFixture()
 

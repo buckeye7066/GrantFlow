@@ -23,7 +23,7 @@ import { computeMatchDecision } from '../services/matchEngine.js'
 import { buildProfileSignals } from '../services/profileHelpers.js'
 import { qualifiesForDisplay, displayRefusal } from '../config/matchSurfacing.js'
 import { canonicalMatchDisplay } from '../../src/lib/matchDisplayThresholds.js'
-import { loadRegressionFixture, CASE_IDS } from './fixtures/regression/anastasia-2026-09-17/index.js'
+import { loadRegressionFixture, CASE_IDS } from './fixtures/regression/tn-student-2026-09-17/index.js'
 
 const fixture = loadRegressionFixture()
 const { profile, sectionsByKey } = fixture

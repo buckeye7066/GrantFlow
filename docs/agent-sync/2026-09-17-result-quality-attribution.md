@@ -11,8 +11,8 @@ Prod health `build.commit_sha = a91267ac…`; effective env `NODE_ENV=production
 `SEMANTIC_RECALL=1`, discovery min-score env unset (floor 7). Capture via the
 Railway public Postgres URL with `SET default_transaction_read_only = on`.
 
-Profile under study: the live TN student (`c4a92724…`, sanitized into
-`backend/tests/fixtures/regression/anastasia-2026-09-17/`). Facts that matter,
+Profile under study: the live TN student (profile id held in the vault, sanitized into
+`backend/tests/fixtures/regression/tn-student-2026-09-17/`). Facts that matter,
 verbatim from `profile_sections`: `citizenship = "US citizen"`, `us_citizen = true`,
 `nationality = American`, `disability_status = "No disability"`,
 `medicaid_enrolled = true`, `medicaid_recipient_self = true`,
@@ -72,7 +72,7 @@ CHANGED
   four-truth legs / pointer refusal).
 - `backend/services/matching/removalLedger.js` (new): reason→count ledger with
   the reconciliation identity `loaded = returned + Σremovals − readmitted`.
-- Fixtures: `backend/tests/fixtures/regression/anastasia-2026-09-17/`
+- Fixtures: `backend/tests/fixtures/regression/tn-student-2026-09-17/`
   (profile + 12 sections, 8 catalog rows, 7 match rows, capture-meta with cases).
   Identity removed; eligibility facts verbatim.
 - Tests: `comprehensiveMatchRouteAuthority` (reject-80 never returned and is

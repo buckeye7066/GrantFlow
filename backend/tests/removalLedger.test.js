@@ -5,7 +5,7 @@
 import { describe, it, expect } from 'vitest'
 import { displayRefusal, qualifiesForDisplay } from '../config/matchSurfacing.js'
 import { buildRemovalLedger, tallyDisplayRefusals } from '../services/matching/removalLedger.js'
-import { loadRegressionFixture, CASE_IDS } from './fixtures/regression/anastasia-2026-09-17/index.js'
+import { loadRegressionFixture, CASE_IDS } from './fixtures/regression/tn-student-2026-09-17/index.js'
 
 const fixture = loadRegressionFixture()
 

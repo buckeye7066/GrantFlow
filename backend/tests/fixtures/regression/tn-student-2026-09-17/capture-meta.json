@@ -12,97 +12,97 @@
   "sanitization": "identity keys removed (names, contacts, emails, phones, addresses, avatars, essays); eligibility facts preserved verbatim; profile id replaced",
   "profile_match_store_summary": [
     {
-      "profile_id": "c4a92724-9cee-416f-ba30-e91b9b5cd885",
+      "profile_id": "fixture-profile-tn-student-2026-09-17",
       "matcher_version": "canonical-rescore-link",
       "match_decision": "review",
       "n": 23
     },
     {
-      "profile_id": "c4a92724-9cee-416f-ba30-e91b9b5cd885",
+      "profile_id": "fixture-profile-tn-student-2026-09-17",
       "matcher_version": "catalog-rescore-link",
       "match_decision": "accept",
       "n": 16
     },
     {
-      "profile_id": "c4a92724-9cee-416f-ba30-e91b9b5cd885",
+      "profile_id": "fixture-profile-tn-student-2026-09-17",
       "matcher_version": "county-crisis-need-link",
       "match_decision": "accept",
       "n": 1
     },
     {
-      "profile_id": "c4a92724-9cee-416f-ba30-e91b9b5cd885",
+      "profile_id": "fixture-profile-tn-student-2026-09-17",
       "matcher_version": "crawler-os",
       "match_decision": "accept",
       "n": 5
     },
     {
-      "profile_id": "c4a92724-9cee-416f-ba30-e91b9b5cd885",
+      "profile_id": "fixture-profile-tn-student-2026-09-17",
       "matcher_version": "crawler-os",
       "match_decision": "review",
       "n": 59
     },
     {
-      "profile_id": "c4a92724-9cee-416f-ba30-e91b9b5cd885",
+      "profile_id": "fixture-profile-tn-student-2026-09-17",
       "matcher_version": "field-of-study-link",
       "match_decision": "accept",
       "n": 3
     },
     {
-      "profile_id": "c4a92724-9cee-416f-ba30-e91b9b5cd885",
+      "profile_id": "fixture-profile-tn-student-2026-09-17",
       "matcher_version": "field-of-study-link",
       "match_decision": "review",
       "n": 10
     },
     {
-      "profile_id": "c4a92724-9cee-416f-ba30-e91b9b5cd885",
+      "profile_id": "fixture-profile-tn-student-2026-09-17",
       "matcher_version": "funder-behavior-link",
       "match_decision": "review",
       "n": 5
     },
     {
-      "profile_id": "c4a92724-9cee-416f-ba30-e91b9b5cd885",
+      "profile_id": "fixture-profile-tn-student-2026-09-17",
       "matcher_version": "institution-link",
       "match_decision": "accept",
       "n": 38
     },
     {
-      "profile_id": "c4a92724-9cee-416f-ba30-e91b9b5cd885",
+      "profile_id": "fixture-profile-tn-student-2026-09-17",
       "matcher_version": "institution-link",
       "match_decision": "review",
       "n": 31
     },
     {
-      "profile_id": "c4a92724-9cee-416f-ba30-e91b9b5cd885",
+      "profile_id": "fixture-profile-tn-student-2026-09-17",
       "matcher_version": "national-assistance-link",
       "match_decision": "accept",
       "n": 11
     },
     {
-      "profile_id": "c4a92724-9cee-416f-ba30-e91b9b5cd885",
+      "profile_id": "fixture-profile-tn-student-2026-09-17",
       "matcher_version": "national-assistance-link",
       "match_decision": "review",
       "n": 8
     },
     {
-      "profile_id": "c4a92724-9cee-416f-ba30-e91b9b5cd885",
+      "profile_id": "fixture-profile-tn-student-2026-09-17",
       "matcher_version": "profile-discovery-link",
       "match_decision": "accept",
       "n": 6
     },
     {
-      "profile_id": "c4a92724-9cee-416f-ba30-e91b9b5cd885",
+      "profile_id": "fixture-profile-tn-student-2026-09-17",
       "matcher_version": "profile-discovery-link",
       "match_decision": "review",
       "n": 6
     },
     {
-      "profile_id": "c4a92724-9cee-416f-ba30-e91b9b5cd885",
+      "profile_id": "fixture-profile-tn-student-2026-09-17",
       "matcher_version": "student-aid-instate-link",
       "match_decision": "accept",
       "n": 16
     },
     {
-      "profile_id": "c4a92724-9cee-416f-ba30-e91b9b5cd885",
+      "profile_id": "fixture-profile-tn-student-2026-09-17",
       "matcher_version": "student-aid-instate-link",
       "match_decision": "review",
       "n": 5
