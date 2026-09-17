@@ -116,6 +116,70 @@ function eligibilityProse(opportunity) {
   ])
 }
 
+const ELIGIBILITY_EVIDENCE_LEVELS = new Set(['prose', 'structured_flags', 'applicant_types_only', 'none'])
+
+function isTruthy(value) {
+  return value === true || value === 1 || ['true', '1'].includes(String(value ?? '').trim().toLowerCase())
+}
+
+/**
+ * Did the source state WHERE the money is valid? Reads an OS-normalized
+ * opportunity (`geography.{national,states}`) or a catalog row (`is_national`,
+ * `state`, `geo_eligibility` JSON). 'national' | 'stated' | 'unknown'.
+ */
+function geographyEvidence(opportunity) {
+  const geo = opportunity?.geography
+  if (geo && typeof geo === 'object') {
+    if (geo.national === true) return 'national'
+    if (Array.isArray(geo.states) && geo.states.length > 0) return 'stated'
+  }
+  if (isTruthy(opportunity?.is_national)) return 'national'
+  const state = String(opportunity?.state ?? '').trim().toLowerCase()
+  if (state === 'nationwide') return 'national'
+  if (state) return 'stated'
+  const declared = parseObject(opportunity?.geo_eligibility)
+  if (declared) {
+    if (declared.national === true) return 'national'
+    if (Array.isArray(declared.states) && declared.states.length > 0) return 'stated'
+  }
+  return 'unknown'
+}
+
+/**
+ * What a proof may CLAIM about eligibility and location, next to what it
+ * proves. `passed` on the legs is unchanged (a verdict flip for silence would
+ * hide 41% of the fleet's accepts — measured 2026-09-17); this block records
+ * how much evidence stood behind `profile_qualifies` and `relatable` so the
+ * card can say "confirm before applying" instead of "eligibility and location
+ * check out" over nothing.
+ *
+ *   eligibility: prose | structured_flags | applicant_types_only | none | unknown
+ *                (the canonical engine's `eligibility_evidence`; for a decision
+ *                that predates it, derived from the row's own eligibility text
+ *                / stated applicant types, else the previous proof's basis)
+ *   geography:   national | stated | unknown
+ */
+export function proofEvidenceBasis(canonical, opportunity = null, previous = null) {
+  const recorded = String(
+    canonical?.eligibility_evidence ?? canonical?.match_explain?.eligibility_evidence ?? '',
+  ).trim().toLowerCase()
+  let eligibility = ELIGIBILITY_EVIDENCE_LEVELS.has(recorded) ? recorded : null
+  if (!eligibility) {
+    if (eligibilityProse(opportunity).length > 0) eligibility = 'prose'
+    else if (statedApplicantTypes(opportunity).length > 0) eligibility = 'applicant_types_only'
+    else {
+      const prior = String(previous?.evidence_basis?.eligibility ?? '').toLowerCase()
+      eligibility = ELIGIBILITY_EVIDENCE_LEVELS.has(prior) ? prior : 'unknown'
+    }
+  }
+  let geography = geographyEvidence(opportunity)
+  if (geography === 'unknown') {
+    const prior = String(previous?.evidence_basis?.geography ?? '').toLowerCase()
+    if (prior === 'national' || prior === 'stated') geography = prior
+  }
+  return { eligibility, geography }
+}
+
 /**
  * Re-derive the three PROFILE-side truths of an existing proof from a fresh
  * canonical decision, keeping the REAL leg exactly as captured.
@@ -185,6 +249,7 @@ export function refreshFourTruthProof(previous, { canonical, opportunity = null,
       eligibility_prose_evidence: proseFinal,
       missing_eligibility_fields: uniqueStrings(canonical?.missingEligibilityFields ?? canonical?.match_explain?.missing_eligibility_fields),
     },
+    evidence_basis: proofEvidenceBasis(canonical, opportunity, prev),
     refreshed_at: new Date().toISOString(),
     refreshed_by: refreshedBy,
   }
@@ -217,4 +282,5 @@ export default {
   isVerifiedDirectFundingRecommendation,
   refreshFourTruthProof,
   failedFourTruths,
+  proofEvidenceBasis,
 }

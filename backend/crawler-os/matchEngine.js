@@ -18,7 +18,7 @@ import {
 } from '../services/matching/needFirstScoringAdapter.js';
 import { MATCH_DECISION, OPPORTUNITY_KIND } from './contract.js';
 import { PROFILE_SIGNAL_VERSION } from '../config/profileSignalVersion.js';
-import { isGrantsGovSearchEvidence } from './fundingTruthPolicy.js';
+import { isGrantsGovSearchEvidence, proofEvidenceBasis } from './fundingTruthPolicy.js';
 import { applicantTypeEvidence } from './applicantTypeEvidence.js';
 
 export { MATCHER_VERSION };
@@ -187,6 +187,10 @@ export function buildFourTruthProof(opportunity, thesis, canonical, {
       eligibility_prose_evidence: eligibilityProseOf(opportunity),
       missing_eligibility_fields: canonical?.missingEligibilityFields ?? [],
     },
+    // What the legs above may CLAIM (see fundingTruthPolicy.proofEvidenceBasis):
+    // how much eligibility evidence stood behind profile_qualifies and whether
+    // the source stated a service area. Additive; `passed` is unchanged.
+    evidence_basis: proofEvidenceBasis(canonical, opportunity),
   };
   proof.all_passed = directFunding && proof.real.passed && proof.relatable.passed &&
     proof.meets_profile_need.passed && proof.profile_qualifies.passed;

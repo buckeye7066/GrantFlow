@@ -25,7 +25,7 @@ import React from 'react'
 import PropTypes from 'prop-types'
 import { humanizeMatchReason } from '@/utils/reasonText'
 import { amountTextFallback } from '@/lib/amountDisplay'
-import { scoreToMatchLabel } from '@/lib/matchDisplayThresholds'
+import { canonicalMatchDisplay } from '@/lib/matchDisplayThresholds'
 
 // canonicalResultShape() lives in ./canonicalResultShape.js so this file
 // can stay components-only (Vite Fast Refresh requirement).
@@ -136,6 +136,22 @@ export default function FundingResultCard({ result, onPrimaryAction, onSecondary
   const url = result.application_url || result.apply_url || result.source_url || result.url || null
   const action = hasApplicationUrl ? pickAction(result) : 'visit'
 
+  // The header label is the persisted DECISION first, score tier second — a
+  // REVIEW never reads "Excellent Match". When the adapter supplied evidence
+  // levels, an ACCEPT whose source stated no eligibility criteria (or no
+  // service area) gets a "confirm before applying" chip and a CTA that says so,
+  // instead of "Open application" implying a check nobody made.
+  const display = canonicalMatchDisplay({
+    score,
+    decision: result.match_decision,
+    eligibilityEvidence: result.eligibility_evidence,
+    geoEvidence: result.geo_evidence,
+  })
+  const needsConfirmation = display.confirm_eligibility === true
+  const actionLabel = needsConfirmation && action === 'apply'
+    ? 'Confirm eligibility, then apply'
+    : NEXT_ACTION_LABEL[action]
+
   const isBroken = linkStatus === 'broken' || linkStatus === 'unreachable'
   const isDirectory = kind === 'directory' || kind === 'referral'
 
@@ -211,10 +227,11 @@ export default function FundingResultCard({ result, onPrimaryAction, onSecondary
           <div
             className="text-right"
             data-testid="funding-result-card-score"
-            aria-label={`${scoreToMatchLabel(score)}; evidence score ${score}`}
-            title={`${scoreToMatchLabel(score)} · evidence score ${score}`}
+            data-match-tier={display.tier}
+            aria-label={`${display.label}; evidence score ${score}`}
+            title={`${display.label} · evidence score ${score}`}
           >
-            <div className="text-sm font-semibold text-slate-900">{scoreToMatchLabel(score)}</div>
+            <div className="text-sm font-semibold text-slate-900">{display.label}</div>
             <div className="text-xs text-slate-500">
               evidence score {score}{confidence !== null ? ` · ${confidence}% conf` : ''}
             </div>
@@ -224,6 +241,18 @@ export default function FundingResultCard({ result, onPrimaryAction, onSecondary
 
       {result.description && (
         <p className="text-sm text-slate-700 line-clamp-3">{result.description}</p>
+      )}
+
+      {needsConfirmation && (
+        <p
+          data-testid="funding-result-card-confirm"
+          data-eligibility-evidence={display.eligibility_evidence}
+          data-geo-evidence={display.geo_evidence}
+          className="rounded bg-amber-50 px-2 py-1 text-xs text-amber-800"
+        >
+          <span className="font-medium">Confirm eligibility first. </span>
+          {display.evidence_note}
+        </p>
       )}
 
       <dl className="grid grid-cols-2 gap-3 text-sm">
@@ -378,9 +407,14 @@ export default function FundingResultCard({ result, onPrimaryAction, onSecondary
               target="_blank"
               rel="noreferrer noopener"
               onClick={onPrimaryAction ? (e) => onPrimaryAction(e, result) : undefined}
-              className="rounded bg-slate-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-slate-800"
+              data-needs-confirmation={needsConfirmation ? 'true' : undefined}
+              className={
+                needsConfirmation
+                  ? 'rounded border border-amber-400 bg-amber-50 px-3 py-1.5 text-sm font-medium text-amber-900 hover:bg-amber-100'
+                  : 'rounded bg-slate-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-slate-800'
+              }
             >
-              {NEXT_ACTION_LABEL[action]}
+              {actionLabel}
             </a>
           )}
         </div>
@@ -416,6 +450,9 @@ FundingResultCard.propTypes = {
     match_confidence: PropTypes.number,
     matched_profile_facts: PropTypes.arrayOf(PropTypes.string),
     ineligibility_reasons: PropTypes.arrayOf(PropTypes.string),
+    missing_eligibility_fields: PropTypes.arrayOf(PropTypes.string),
+    eligibility_evidence: PropTypes.string,
+    geo_evidence: PropTypes.string,
     next_action: PropTypes.string,
     threshold_relaxed: PropTypes.bool,
     relaxed_reason: PropTypes.string,

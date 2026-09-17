@@ -50,7 +50,11 @@
 // 1-1 ZIP tie is broken by the declared state. Stored explains that said
 // "check out" over no evidence, or ACCEPTed international-only aid for a US
 // citizen, are stale and re-score on the boot drain.
-export const PROFILE_SIGNAL_VERSION = '2026.09.17-1'
+// 2026-09-17 (result-quality PR3): every four-truth proof carries
+// `evidence_basis {eligibility, geography}` so the card can say "confirm before
+// applying" where the source stated no criteria or no service area. Refreshed
+// proofs gain the block on the boot drain.
+export const PROFILE_SIGNAL_VERSION = '2026.09.17-2'
 
 /** Repo-relative files whose content decides what the engine believes about a profile. */
 export const PROFILE_SIGNAL_DERIVATION_FILES = Object.freeze([
@@ -78,6 +82,6 @@ export const PROFILE_SIGNAL_DERIVATION_FILES = Object.freeze([
  * sha256 over the LF-normalized concatenation of the files above, pinned by
  * `scripts/pin-signal-version.mjs`. The test recomputes it.
  */
-export const PROFILE_SIGNAL_DERIVATION_HASH = '34f36f7a5f7aeb293b35dc98c2ab3efe48a4f3ed2cc7af8fa5fadf8c989c977f'
+export const PROFILE_SIGNAL_DERIVATION_HASH = '36bac1f9c5c979af46c9f92457caf5db1c69a8698ede899798788f4b7578df1e'
 
 export default { PROFILE_SIGNAL_VERSION, PROFILE_SIGNAL_DERIVATION_FILES, PROFILE_SIGNAL_DERIVATION_HASH }

@@ -86,31 +86,80 @@ export function scoreToMatchTier(score) {
  * display tier after the backend decision is known. Missing/unknown decisions
  * remain visibly unrated instead of being promoted from their score alone.
  */
-export function canonicalMatchDisplay({ score, decision } = {}) {
+/**
+ * How much eligibility evidence the engine had for an ACCEPT, as persisted in
+ * `match_explain.eligibility_evidence` / the four-truth proof's
+ * `evidence_basis` (backend matchEngine.eligibilityEvidenceLevel):
+ *   prose                — the source's own eligibility text/bullets were evaluated
+ *   structured_flags     — a restriction derived from title/description, no prose
+ *   applicant_types_only — only who-may-apply types, no criteria
+ *   none                 — nothing stated
+ *   unknown              — the match predates this evidence (not recorded)
+ * An ACCEPT below `prose`, or with an unstated service area, is still a real
+ * match — but "Open application" would claim a check nobody made. Measured
+ * 2026-09-17: 41% of the fleet's accepts sat on rows with no eligibility text
+ * and every one read "eligibility and location check out".
+ */
+export const ELIGIBILITY_EVIDENCE_LEVELS = Object.freeze(['prose', 'structured_flags', 'applicant_types_only', 'none', 'unknown'])
+export const GEO_EVIDENCE_LEVELS = Object.freeze(['national', 'stated', 'unknown'])
+
+const EVIDENCE_NOTE = Object.freeze({
+  structured_flags: 'The stated audience matches, but detailed eligibility criteria are not published in this listing — confirm before applying.',
+  applicant_types_only: 'Only who may apply is stated; eligibility criteria are not published by the source — confirm before applying.',
+  none: 'Eligibility is not stated by the source — confirm before applying.',
+  unknown: 'Eligibility evidence was not recorded for this match — confirm before applying.',
+})
+const GEO_NOTE = 'The program\'s service area is not stated by the source — confirm it covers where you live.'
+
+function normalizeEvidence(value, allowed) {
+  if (value === undefined) return undefined // caller did not evaluate evidence
+  const v = String(value ?? 'unknown').trim().toLowerCase()
+  return allowed.includes(v) ? v : 'unknown'
+}
+
+export function canonicalMatchDisplay({ score, decision, eligibilityEvidence, geoEvidence } = {}) {
   const normalizedDecision = String(decision || '').trim().toUpperCase()
   const hasScore = score !== null && score !== undefined && score !== ''
     && Number.isFinite(Number(score))
   const numericScore = hasScore ? Number(score) : null
+  const eligibility = normalizeEvidence(eligibilityEvidence, ELIGIBILITY_EVIDENCE_LEVELS)
+  const geography = normalizeEvidence(geoEvidence, GEO_EVIDENCE_LEVELS)
+  // null = evidence not evaluated by the caller (legacy call sites); a boolean
+  // only when an evidence level was supplied.
+  const evidenceKnown = eligibility !== undefined || geography !== undefined
+  const base = {
+    eligibility_evidence: eligibility ?? null,
+    geo_evidence: geography ?? null,
+    confirm_eligibility: evidenceKnown ? false : null,
+    evidence_note: null,
+  }
 
   if (normalizedDecision === 'REJECT') {
-    return { label: 'Not eligible', tier: 'rejected', decision: 'REJECT', score: numericScore }
+    return { ...base, label: 'Not eligible', tier: 'rejected', decision: 'REJECT', score: numericScore }
   }
   if (normalizedDecision === 'REVIEW') {
-    return { label: 'Needs review', tier: 'review', decision: 'REVIEW', score: numericScore }
+    return { ...base, label: 'Needs review', tier: 'review', decision: 'REVIEW', score: numericScore }
   }
   if (normalizedDecision !== 'ACCEPT' || numericScore === null) {
     return {
+      ...base,
       label: 'Unrated',
       tier: 'unrated',
       decision: normalizedDecision || null,
       score: numericScore,
     }
   }
+  const notes = []
+  if (eligibility !== undefined && eligibility !== 'prose') notes.push(EVIDENCE_NOTE[eligibility])
+  if (geography === 'unknown') notes.push(GEO_NOTE)
   return {
+    ...base,
     label: scoreToMatchLabel(numericScore),
     tier: scoreToMatchTier(numericScore),
     decision: 'ACCEPT',
     score: numericScore,
+    confirm_eligibility: evidenceKnown ? notes.length > 0 : null,
+    evidence_note: notes.length > 0 ? notes.join(' ') : null,
   }
 }
 
