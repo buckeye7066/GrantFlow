@@ -22,7 +22,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import express from 'express'
 import request from 'supertest'
 
-const AUTH_USER = { id: 'user-1', user_id: 'user-1', email: 'owner@example.org', role: 'admin' }
+const AUTH_USER = { id: 'user-1', user_id: 'user-1', email: 'owner@fixture-foundation.org', role: 'admin' }
 
 vi.mock('../services/hamilton/hamiltonAutomationOrchestrator.js', async (orig) => {
   const actual = await orig()
@@ -87,7 +87,7 @@ const READY = [
     funding_opportunity_id: 'o1',
     title: 'Grant One',
     status: 'interested',
-    g_application_url: 'https://apply.example.org/grant-one',
+    g_application_url: 'https://apply.fixture-foundation.org/grant-one',
     opportunity_kind: 'direct_grant',
   },
   {
@@ -95,7 +95,7 @@ const READY = [
     funding_opportunity_id: null,
     title: 'Grant Two',
     status: 'drafting',
-    g_application_url: 'https://apply.example.org/grant-two',
+    g_application_url: 'https://apply.fixture-foundation.org/grant-two',
     opportunity_kind: 'direct_grant',
   },
 ]
@@ -210,7 +210,7 @@ describe('applyability prioritisation', () => {
       funding_opportunity_id: 'oSubmitted',
       title: 'Already sent',
       status: 'submitted',
-      g_application_url: 'https://apply.example.org/already-sent',
+      g_application_url: 'https://apply.fixture-foundation.org/already-sent',
       opportunity_kind: 'direct_grant',
     }]
     const res = await request(appWith(submitted))

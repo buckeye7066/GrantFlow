@@ -1,3 +1,5 @@
+import { resolveApplicationUrl } from '../../shared/applicationTarget.js'
+import { classifyApplicationTargetRefusal } from '../config/applicationTargetPolicy.js'
 import { createLogger } from '../utils/logger.js'
 import { cleanExtractedText } from '../utils/htmlTextHygiene.js'
 import {
@@ -47,7 +49,7 @@ function normalizePipelineRow(row) {
     funder: sponsor,
     deadline: row?.opp_deadline || row?.grant_deadline || null,
     application_url:
-      row?.opp_application_url || row?.apply_url || row?.grant_application_url || null,
+      resolveApplicationUrl({ apply_url: row?.apply_url, application_url: row?.opp_application_url }) || row?.grant_application_url || null,
     source_url:
       row?.source_url || row?.final_url || row?.evidence_url || row?.grant_url || null,
   }
@@ -380,6 +382,35 @@ export async function auditUnfinishedHamiltonTasks(db, {
       }
       if (assessment.unavailable) {
         throw new Error(`Hamilton policy unavailable: ${assessment.reasons?.[0] || assessment.code}`)
+      }
+
+      // Validate the task-local target used by the task drawer/executor as
+      // well as the catalog. A stale task URL is a task defect, not evidence
+      // that its otherwise valid grant, match or source should be deleted.
+      const taskTarget = [task.application_url, task.portal_url].find((value) => typeof value === 'string' && value.trim())
+      const taskTargetRefusal = classifyApplicationTargetRefusal(taskTarget)
+      if (assessment.ok && taskTargetRefusal) {
+        out.invalid += 1
+        classified = true
+        out.byGate.application_target = (out.byGate.application_target || 0) + 1
+        const bucket = bucketForTaskStatus(task.status)
+        out.byBucket[bucket] = (out.byBucket[bucket] || 0) + 1
+        out.byReason[taskTargetRefusal.reason] = (out.byReason[taskTargetRefusal.reason] || 0) + 1
+        if (enforce) {
+          const after = await cancelApplicationTask(db, task.id, {
+            actorRole: 'system', reason: 'Invalid application target on task: ' + taskTargetRefusal.reason,
+            expectedState: { status: task.status, application_url: task.application_url, portal_url: task.portal_url },
+          })
+          if (String(after?.status).toLowerCase() === 'cancelled') out.tasksCancelled += 1
+          else {
+            const currentStatus = String(after?.status || '').toLowerCase()
+            const currentTarget = [after?.application_url, after?.portal_url].find((value) => typeof value === 'string' && value.trim())
+            if (!after || (!TASK_HISTORY_STATUSES.includes(currentStatus) && !SUBMISSION_UNCERTAIN_TASK_STATUSES.has(currentStatus) && classifyApplicationTargetRefusal(currentTarget))) {
+              throw new Error('Task target changed during cancellation; reconciliation must retry')
+            }
+          }
+        }
+        continue
       }
 
       if (assessment.ok) {

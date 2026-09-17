@@ -57,3 +57,16 @@ Final second-review checks: the protected boot controls pass 141 tests; the comp
 - A protected pipeline copy with an invalid target is now explicitly flagged REVIEW/ineligible even when the catalog has a good replacement. Its URL and status history remain unchanged. Tests cover saved, interested, gathering_documents and submitted statuses, plus awards and pending submissions.
 - A target rewrite that loses the conditional update race is recorded as a failed/incomplete reconciliation requiring a recheck, not a clean kept row.
 - The third review's six initial regressions failed before the fixes. The expanded UI/HTTP/boot/audit/full-enforcer/strict-reconciliation control set now passes 424 tests across six files. Final prepush and current-head CI are required before release.
+
+## Fourth review and interrupted-session recovery
+- Recovered the uncommitted fourth-review changes rather than treating the older green PR head as current. No other repair process was active; the existing chatgpt-email-phase2 lock identifies this work.
+- The selected target now uses one explicit URL-refusal helper at pipeline admission, applyability, extraction, stored-pipeline repair and task presentation. A valid alternate/reference URL cannot authorize persisting a rejected selected URL.
+- The existing strict task audit invalidates queued/ready/blocked task-local non-application targets without deleting a valid grant, source or match. It uses the canonical cancellation path, disables submission permissions, and conditionally matches the previously observed status and URLs. Terminal and submission-uncertain history is preserved. Concurrent submissions or user corrections win and emit no false cancellation event.
+- Task presentation also reads the canonical apply_url alias from catalog rows and refuses invalid task-local links.
+- The interrupted full local run had 19 failures. Reproduced 18 in the four affected admission/ranking suites: their positive fixtures used example.org, which the exact-target policy correctly rejects. Only the positive fixture URLs changed; negative placeholder controls remain unchanged and passing.
+- Reproduced the remaining scope-test failure: Windows node_modules is a junction, intentionally not traversed or counted as a visited directory. The assertion now distinguishes native directories from links and explicitly rejects dependency paths in findings; the crawler itself is unchanged.
+- Reproduced and repaired the new helper's strict-equality lint violation. Re-pinned the derivation hash without changing the pending, undeployed signal version 2026.09.17-3.
+- Fresh continuation verification: 551 tests across 17 suites passed, including every changed Vitest suite, the full boot enforcer and the scope test. The earlier 174-case focused run also passed. No tests were skipped to close the 19 failures.
+- Current-head prepush, CI, review, exact deployed SHA, and production cohort readback remain the release gate. A passing old PR head is not evidence for these recovered changes.
+
+Fresh continuation prepush: passed (exit 0), including static/security checks, zero-warning lint, crawler boundary, typecheck and production build. Exact-head remote CI and deployment verification still required.

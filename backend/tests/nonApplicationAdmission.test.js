@@ -145,3 +145,15 @@ it.each([
   expect(conflicting.match_explain.confidence).toBe(single.match_explain.confidence)
   expect(conflicting.decision).toBe(single.decision)
 })
+
+it.each(['https://facebook.com/foo','https://example.org/apply','https://google.com/search?q=grant','javascript:alert(1)'])('a valid alternate URL cannot license the rejected selected application target: %s', async (selected) => {
+  const db=pipelineDb()
+  try {
+    const row={...BASE,apply_url:selected,application_url:REAL,source_url:REAL}
+    const result=await saveToProfilePipeline(db,row,PROFILE.id,{profile:PROFILE,sections:{}})
+    expect(result.saved).toBe(false)
+    expect(result.gate).toBe('APPLICATION_TARGET')
+    expect(db.prepare('SELECT count(*) AS n FROM grants').get().n).toBe(0)
+    expect(classifyApplyability(row).isApplyable).toBe(false)
+  } finally {db.close()}
+})

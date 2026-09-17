@@ -416,3 +416,21 @@ it.each(['https://facebook.com/foo', 'https://example.org/apply', 'https://googl
   expect(gateOpportunityForPipeline(opportunity).allowed).toBe(false)
   expect(pipelineApplicationTargetRepair({ grant_application_url: 'https://alpha.grantable.co/login', grant_url: 'https://alpha.grantable.co/login' }, { opportunity, decision: { decision: 'ACCEPT' } })).toBeNull()
 })
+
+it.each(['discovered','submitted'])('the stored-target refusal uses full selected-target rules for %s Facebook copies', async (status) => {
+  const target='https://fixture-foundation.org/apply'
+  const rejected='https://facebook.com/foo'
+  const {sqlite,db}=seed([{id:'social-target',t:'Murfreesboro Community Scholarship',s:'Rutherford County Foundation',ent:['student'],cats:['education'],url:target,status}])
+  try {
+    sqlite.prepare("UPDATE grants SET application_url=?,url=? WHERE id='g-social-target'").run(rejected,rejected)
+    const result=await enforcePipelinePrecision(db)
+    expect(result.ok).toBe(true)
+    const row=sqlite.prepare("SELECT * FROM grants WHERE id='g-social-target'").get()
+    expect(row.status).toBe(status)
+    expect(row.application_url).toBe(status==='discovered'?target:rejected)
+    if(status==='submitted') {
+      expect(row.match_decision).toBe('REVIEW')
+      expect(row.ineligibility_reasons).toMatch(/non_application_target/)
+    }
+  } finally {sqlite.close()}
+})

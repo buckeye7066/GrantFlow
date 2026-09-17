@@ -1,3 +1,5 @@
+import { resolveApplicationUrl } from '../../../shared/applicationTarget.js'
+import { classifyApplicationTargetRefusal } from '../../config/applicationTargetPolicy.js'
 /**
  * The ONE place a Hamilton task acquires the name a person reads.
  *
@@ -75,7 +77,7 @@ export function taskApplyUrl(task = {}, urlMap = new Map()) {
     const value = cleanText(candidate)
     if (!value) continue
     if (!/^https?:\/\//i.test(value)) continue
-    if (isSearchEngineUrl(value)) continue
+    if (isSearchEngineUrl(value) || classifyApplicationTargetRefusal(value)) continue
     return value
   }
   return null
@@ -129,7 +131,7 @@ export async function resolveTaskSourceRows(db, tasks = []) {
       const ph = oppIds.map(() => '?').join(',')
       const rows = await db
         .prepare(
-          `SELECT id, title, sponsor, application_url, source_url
+          `SELECT id, title, sponsor, apply_url, application_url, source_url
              FROM funding_opportunities
             WHERE id IN (${ph})`,
         )
@@ -139,7 +141,7 @@ export async function resolveTaskSourceRows(db, tasks = []) {
         if (title) titleMap.set(`opp:${row.id}`, title)
         const sponsor = cleanText(row?.sponsor)
         if (sponsor) funderMap.set(`opp:${row.id}`, sponsor)
-        const url = cleanText(row?.application_url) || cleanText(row?.source_url)
+        const url = resolveApplicationUrl(row) || cleanText(row?.source_url)
         if (url) urlMap.set(`opp:${row.id}`, url)
       }
     } catch { /* table/shape mismatch — keep the fallbacks */ }

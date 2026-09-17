@@ -32,7 +32,7 @@ import { extractPageFactsBlind } from '../crawler-os/blindPageFactExtractor.js';
 import { mapBlindFactsToCandidate } from '../crawler-os/blindFactsMapper.js';
 import { classifyBlindOpportunityKind } from '../crawler-os/blindOpportunityKind.js';
 import { OPPORTUNITY_KIND } from '../crawler-os/contract.js';
-import { classifyNonApplicationSurface } from '../config/applicationSurfaceHosts.js';
+import { classifyApplicationTargetRefusal } from '../config/applicationTargetPolicy.js';
 import { createLogger } from '../utils/logger.js';
 
 const log = createLogger('service:webGrantExtractor');
@@ -377,7 +377,7 @@ export async function extractOpportunitiesFromPage(
   // Check AFTER hub decomposition so a recovered link cannot bypass this
   // authority. Keep every candidate and the fetched source; never guess a URL.
   const targetChecked = decomposed.map((candidate) => {
-    const refusal = classifyNonApplicationSurface(candidate.apply_url);
+    const refusal = classifyApplicationTargetRefusal(candidate.apply_url);
     if (!refusal) return candidate;
     return {
       ...candidate,

@@ -1,3 +1,4 @@
+import { classifyApplicationTargetRefusal } from './applicationTargetPolicy.js'
 /**
  * sourceApplyability.js — classify a funding source by whether a person can
  * actually APPLY to it, and how.
@@ -222,6 +223,8 @@ export function classifyApplyability(source) {
   }
 
   const url = resolveUrl(source)
+  const targetRefusal = classifyApplicationTargetRefusal(url)
+  if (targetRefusal) return tierResult(APPLYABILITY_TIERS.INFO_ONLY, `info_only:${targetRefusal.reason}`)
   const host = hostOf(url)
   const kind = String(source?.opportunity_kind ?? '').trim().toLowerCase()
 

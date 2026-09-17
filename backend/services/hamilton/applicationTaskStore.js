@@ -1585,7 +1585,7 @@ export async function reconcileProfileAfterParse(db, { profileId } = {}) {
   })
 }
 
-export async function cancelApplicationTask(db, taskId, { actorUserId = null, actorRole = null, reason = null } = {}) {
+export async function cancelApplicationTask(db, taskId, { actorUserId = null, actorRole = null, reason = null, expectedState = null } = {}) {
   await ensureApplicationTaskSchema(db)
   const uncertainStatusSql = SUBMISSION_UNCERTAIN_STATUSES
     .map((status) => `'${String(status).replace(/'/g, "''")}'`)
@@ -1614,8 +1614,10 @@ export async function cancelApplicationTask(db, taskId, { actorUserId = null, ac
              next_retry_at = NULL,
              auto_submit_enabled = false, allow_auto_submit = false,
              updated_at = ${nowSqlLiteral(db)}
-       WHERE id = ?`
-  const cancelParams = [verificationMessage, cancelledMessage, String(taskId)]
+       WHERE id = ?${expectedState ? " AND COALESCE(status, '') = ? AND COALESCE(application_url, '') = ? AND COALESCE(portal_url, '') = ?" : ''}`
+  const cancelParams = [verificationMessage, cancelledMessage, String(taskId),
+    ...(expectedState ? [expectedState.status ?? '', expectedState.application_url ?? '', expectedState.portal_url ?? ''] : []),
+  ]
   const executeCancel = async (targetDb) => {
     try {
       return await targetDb.prepare(cancelSql).run(...cancelParams)
@@ -1626,18 +1628,23 @@ export async function cancelApplicationTask(db, taskId, { actorUserId = null, ac
       throw error
     }
   }
+  let cancelResult
   if (typeof db.withTransaction === 'function') {
-    await db.withTransaction(async (tx) => {
+    cancelResult = await db.withTransaction(async (tx) => {
       const task = await lockTaskAndAssertNoActiveManualReceipt(tx, taskId)
       if (!task) return null
       return executeCancel(tx)
     })
   } else {
-    await executeCancel(db)
+    cancelResult = await executeCancel(db)
   }
 
   const task = await getApplicationTask(db, taskId)
   if (!task) return null
+  // A diagnostic read must not cancel a newly submitted task or a task whose
+  // target the user just corrected. No cancellation event is emitted on a
+  // compare-and-set miss; the caller must recheck the returned current state.
+  if (expectedState && Number(cancelResult?.changes ?? cancelResult?.rowCount ?? 0) === 0) return task
   const requiresVerification = task.status === 'submission_verification_required'
   await appendTaskEvent(db, {
     taskId,

@@ -1,3 +1,4 @@
+import { classifyApplicationTargetRefusal } from '../config/applicationTargetPolicy.js'
 /**
  * Opportunity Matcher and Pipeline Manager
  * Evaluates opportunity matches and saves to appropriate pipelines.
@@ -78,13 +79,14 @@ function sha256Stable(value) {
 }
 
 export const PIPELINE_ADMISSION_POLICY_VERSION = sha256Stable({
-  version: 2,
+  version: 3,
   allowedSources: PIPELINE_ALLOWED_SOURCES,
   deniedSources: PIPELINE_DENIED_SOURCES,
   relevanceFloor: RELEVANCE_FLOOR,
   trustedRelevanceFloor: TRUSTED_RELEVANCE_FLOOR,
   trustedOrigins: TRUSTED_RECORD_ORIGINS,
   canonicalDecisionAuthority: true,
+  exactApplicationTargetRequired: true,
   hiddenProfileEligibilityTrials: false,
 })
 
@@ -532,6 +534,18 @@ async function admitToPipeline(db, profileContext, opportunity, ctx = {}) {
         threshold,
         decision: verdict,
       }, decision?.score ?? 0)
+    }
+
+    // Validate the exact URL that the writer will persist. A separate valid
+    // reference/application alias cannot license a rejected selected target.
+    const selectedTarget = resolveApplicationUrl(opportunity) || chooseGrantUrl(opportunity)
+    const targetRefusal = classifyApplicationTargetRefusal(selectedTarget)
+    if (targetRefusal) {
+      return denied('eligibility_unverified', {
+        saved: false, gate: 'APPLICATION_TARGET', decision: 'REVIEW',
+        reason: 'Application target needs verification: ' + targetRefusal.reason,
+        matchPercentage: decision?.score ?? null, threshold,
+      }, decision?.score ?? null)
     }
 
     // Gate 3: Exclusion engine — custom suppression rules

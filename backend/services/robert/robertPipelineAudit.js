@@ -1,8 +1,7 @@
+import { classifyApplicationTargetRefusal } from '../../config/applicationTargetPolicy.js'
 import { gateOpportunityForPipeline } from '../opportunityTrust.js'
-import { isPlaceholderUrl, isNonActionableUrl, isSearchEngineUrl } from '../../config/urlRules.js'
 
 import { resolveApplicationUrl } from '../../../shared/applicationTarget.js'
-import { classifyNonApplicationSurface } from '../../config/applicationSurfaceHosts.js'
 
 /**
  * robertPipelineAudit.js — Robert's FOUR-GATE pipeline verifier.
@@ -163,20 +162,20 @@ export function gateEngine(row, scored) {
  * caller owns protection checks and conditional persistence.
  */
 export function pipelineStoredTargetRefusal(row) {
-  return classifyNonApplicationSurface(row?.grant_application_url || row?.grant_url)
+  return classifyApplicationTargetRefusal(row?.grant_application_url || row?.grant_url)
 }
 
 export function pipelineApplicationTargetRepair(row, scored) {
   if (String(scored?.decision?.decision ?? '').toUpperCase() !== 'ACCEPT') return null
   const target = resolveApplicationUrl(scored?.opportunity)
-  if (!target || isPlaceholderUrl(target) || isNonActionableUrl(target) || isSearchEngineUrl(target) || classifyNonApplicationSurface(target)) return null
+  if (!target || classifyApplicationTargetRefusal(target)) return null
   // Apply the complete existing write-side trust policy as well. A trusted
   // reference source must not authorize an unusable replacement target.
   if (!gateOpportunityForPipeline({ ...scored.opportunity, apply_url: target, application_url: target }).allowed) return null
   const changes = [
     ['application_url', row?.grant_application_url],
     ['url', row?.grant_url],
-  ].filter(([, previous]) => classifyNonApplicationSurface(previous))
+  ].filter(([, previous]) => classifyApplicationTargetRefusal(previous))
     .map(([column, previous]) => ({ column, previous, value: target }))
   return changes.length ? changes : null
 }
