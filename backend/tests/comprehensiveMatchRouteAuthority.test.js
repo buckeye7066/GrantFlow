@@ -261,3 +261,23 @@ describe('POST /comprehensiveMatch — one selector, reject-proof', () => {
     expect((source.match(/selectProfileOsResults\(/g) || []).length).toBeGreaterThanOrEqual(3)
   })
 })
+
+it('the discovery HTTP response preserves the selected application URL when catalog aliases disagree', async () => {
+  const db=makeDb()
+  try {
+    seedCapture(db)
+    const before=await post(makeApp(db),{profile_json:FIXTURE_PROFILE_ID})
+    const selected=before.body.opportunities.find((row)=>row.application_url && !row.is_directory)
+    expect(selected).toBeTruthy()
+    const validTarget=selected.application_url
+    db.prepare('UPDATE funding_opportunities SET apply_url=?,application_url=? WHERE id=?')
+      .run(validTarget,'https://alpha.grantable.co/login?ref=apply',selected.id)
+    const after=await post(makeApp(db),{profile_json:FIXTURE_PROFILE_ID})
+    expect(after.status).toBe(200)
+    const returned=after.body.opportunities.find((row)=>row.id===selected.id)
+    expect(returned).toBeTruthy()
+    expect(returned.apply_url).toBe(validTarget)
+    expect(returned.application_url).toBe(validTarget)
+    expect(returned.url).toBe(validTarget)
+  } finally {db.close()}
+})

@@ -1,3 +1,4 @@
+import { resolveApplicationUrl } from '../../shared/applicationTarget.js'
 import React, { useMemo, useState, useEffect, useCallback } from 'react';
 import { useQuery, useQueryClient, keepPreviousData } from '@tanstack/react-query';
 import { useSearchParams, useNavigate, Link } from 'react-router-dom';
@@ -49,7 +50,7 @@ import {
 } from '@/pages/discoverResultsMerge';
 import {
   keepDiscoverCatalogRow,
-  isDirectoryDiscoverRow,
+  mapDiscoverCatalogRow,
   normalizeDiscoverResultPayload,
 } from '@/lib/discoverCatalogKeep';
 
@@ -617,39 +618,7 @@ export default function DiscoverGrants() {
     const recoveryApplied = Boolean(catalogPayload?.relaxation?.applied)
     return dedupeFundingResults(rows
       .filter((opp) => keepDiscoverCatalogRow(opp, minScoreFloor, recoveryApplied))
-      .map((opp) => ({
-        id: opp.id,
-        funding_opportunity_id: opp.funding_opportunity_id,
-        opportunity_id: opp.opportunity_id,
-        source_id: opp.source_id,
-        fingerprint: opp.fingerprint,
-        canonical_opportunity_key: opp.canonical_opportunity_key,
-        title: opp.title,
-        program_name: opp.title,
-        sponsor: opp.sponsor || opp.funder,
-        application_url: opp.application_url ?? opp.apply_url ?? null,
-        source_url: opp.source_url ?? opp.url ?? null,
-        url: opp.application_url ?? opp.apply_url ?? opp.source_url ?? opp.url,
-        deadline: opp.deadline,
-        deadlineAt: opp.deadline,
-        description: opp.description,
-        descriptionMd: opp.description,
-        match_score: opp.match_score,
-        match: opp.match_score,
-        match_decision: opp.match_decision ?? opp.decision ?? null,
-        opportunity_kind: opp.opportunity_kind ?? opp.kind ?? null,
-        matched_fields: opp.match_reasons ?? [],
-        matchReasons: opp.match_reasons ?? [],
-        source: opp.source || 'catalog',
-        record_origin: opp.record_origin ?? null,
-        usable_for_housing: opp.usable_for_housing ?? false,
-        refund_potential: opp.refund_potential ?? false,
-        funding_category: opp.funding_category ?? null,
-        is_directory: Boolean(opp.is_directory) || isDirectoryDiscoverRow(opp),
-        threshold_relaxed: opp.threshold_relaxed ?? false,
-        eligibility_relaxed: opp.eligibility_relaxed ?? false,
-        geo_expanded: opp.geo_expanded ?? false,
-      })))
+      .map(mapDiscoverCatalogRow))
   }, [catalogPayload, debouncedMinMatchScore])
 
   const catalogResultMeta = useMemo(() => {
@@ -1257,7 +1226,7 @@ export default function DiscoverGrants() {
     const orgId = selectedProfile?.organization_id;
     
     // Check for duplicates if we have an org
-    const duplicateUrl = opportunity.application_url ?? opportunity.apply_url ?? null
+    const duplicateUrl = resolveApplicationUrl(opportunity)
     if (orgId && duplicateUrl) {
       try {
         const existingGrants = await client.entities.Grant.filter({
@@ -1299,7 +1268,7 @@ export default function DiscoverGrants() {
         }
         return { status: 'failed', error: 'missing_title' }
       }
-      const applicationUrl = opportunity.application_url ?? opportunity.apply_url ?? null
+      const applicationUrl = resolveApplicationUrl(opportunity)
       if (!applicationUrl) {
         if (!silent) {
           toast({

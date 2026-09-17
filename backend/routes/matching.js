@@ -1,3 +1,5 @@
+import { resolveApplicationUrl } from '../../shared/applicationTarget.js'
+
 import express from 'express'
 import { formatError } from '../middleware/errorHandler.js'
 import { computeMatchDecision, normalizeProfile } from '../services/matchDecisionEngine.js'
@@ -501,8 +503,9 @@ router.get('/profile/:profileId/opportunities', async (req, res, next) => {
           match_reasons: reasons,
           is_directory: isDirectory,
           trust_tier: o.source_trust_tier ?? null,
-          url: o.application_url ?? o.apply_url ?? o.source_url ?? null,
-          actionable_url: o.application_url ?? o.apply_url ?? o.source_url ?? null,
+          url: resolveApplicationUrl(o) ?? o.source_url ?? null,
+          actionable_url: resolveApplicationUrl(o) ?? o.source_url ?? null,
+      application_url: resolveApplicationUrl(o),
           engine: 'crawler-os',
         }
       })

@@ -140,3 +140,20 @@ describe('SearchResults list keying (the re-render state wipe)', () => {
     expect(screen.getAllByRole('button', { name: /Add to Pipeline/i }).length).toBe(1)
   })
 })
+
+import { mapDiscoverCatalogRow } from '../../lib/discoverCatalogKeep.js'
+import { toCanonicalResult } from '../funding/toCanonicalResult.js'
+it('Discover mapping keeps the selected application link through the actual SearchResults card and add action', async () => {
+  const applyUrl = 'https://fixture-foundation.org/apply'
+  const staleUrl = 'https://alpha.grantable.co/login?ref=apply'
+  const mapped = mapDiscoverCatalogRow(makeOpp({ apply_url: applyUrl, application_url: staleUrl, url: staleUrl }))
+  expect(toCanonicalResult(mapped).application_url).toBe(applyUrl)
+  const onAdd = vi.fn().mockResolvedValue({ status: 'added' })
+  const view = render(wrap(<SearchResults results={[mapped]} profileId="p-1" onAddToPipeline={onAdd} organizationName="Org" />))
+  const links = [...view.container.querySelectorAll('a[href]')].map((link) => link.getAttribute('href'))
+  expect(links).toContain(applyUrl)
+  expect(links).not.toContain(staleUrl)
+  fireEvent.click(screen.getByRole('button', { name: /Add to Pipeline/i }))
+  await waitFor(() => expect(onAdd).toHaveBeenCalled())
+  expect(onAdd.mock.calls[0][0].application_url).toBe(applyUrl)
+})

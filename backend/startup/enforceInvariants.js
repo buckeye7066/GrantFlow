@@ -5477,7 +5477,7 @@ export async function enforcePipelinePrecision(db) {
       log.warn('pipeline_precision: verifier unavailable (non-fatal)', { error: String(err?.message || err) })
       return { scanned: 0, repaired: 0, enforced: true, skipped: 'deps' }
     }
-    const { loadProfileFacts, loadPipelineRows, gateRelatable, gateQualifies, gateCoversNeed, gateRealOffline, GATES, gateEngine, scoreRowWithEngine, stampPipelineRowFromDecision, pipelineApplicationTargetRepair } = audit
+    const { loadProfileFacts, loadPipelineRows, gateRelatable, gateQualifies, gateCoversNeed, gateRealOffline, GATES, gateEngine, scoreRowWithEngine, stampPipelineRowFromDecision, pipelineApplicationTargetRepair, pipelineStoredTargetRefusal } = audit
     // THE ENGINE CONJUNCT (owner order 2026-09-07): every pipeline row is
     // re-scored by the ONE matching authority each boot and re-stamped with
     // the fresh verdict; a REJECT fails the sweep with the engine's reasons.
@@ -5585,6 +5585,7 @@ export async function enforcePipelinePrecision(db) {
         counts.scanned += 1
         let verdict = null
         let failedGate = null
+        let targetRepair = null
         let scored = null
         try {
           // The canonical decision is computed up front (and re-stamped);
@@ -5636,13 +5637,22 @@ export async function enforcePipelinePrecision(db) {
             const real = gateRealOffline(row, { now })
             if (real && !real.pass) { verdict = real; failedGate = GATES.REAL }
           }
+          if (!failedGate) {
+            targetRepair = pipelineApplicationTargetRepair(row, scored)
+            const ownTargetRefusal = pipelineStoredTargetRefusal(row)
+            if (ownTargetRefusal && (!targetRepair || isProtectedRow(row, awarded) || await hasSubmissionUncertainTask(profileId, row))) {
+              // A valid catalog URL does not repair a protected pipeline URL.
+              // Preserve history and flag it instead of reporting a clean keep.
+              failedGate = GATES.ENGINE
+              verdict = { pass: false, reason: 'non_application_target', evidence: { gate: 'engine', detail: ownTargetRefusal.reason } }
+            }
+          }
         } catch (err) {
           counts.failed += 1
           log.warn('pipeline_precision: gate threw (non-fatal)', { grant: row.grant_id, error: String(err?.message || err) })
           continue
         }
         if (!failedGate) {
-          const targetRepair = pipelineApplicationTargetRepair(row, scored)
           if (targetRepair && !isProtectedRow(row, awarded)) {
             if (writes >= limit) {
               counts.truncated = true
@@ -5668,6 +5678,7 @@ export async function enforcePipelinePrecision(db) {
                       ...changes.map((c) => c.previous),
                       ...(hasTasks ? [profileId, row.grant_id, row.funding_opportunity_id ?? null, ...SUBMISSION_UNCERTAIN_TASK_STATUSES] : []),
                     ))
+                    if (!changed) throw new Error('Application target or protection changed during reconciliation; recheck required')
                     if (changed) {
                       writes += 1
                       counts.applicationTargetsRepaired += 1
@@ -5743,6 +5754,10 @@ export async function enforcePipelinePrecision(db) {
 
         if (submissionUncertain || isProtectedRow(row, awarded)) {
           try {
+            if (verdict?.reason === 'non_application_target' && grantCols.has('match_decision')) {
+              await db.prepare('UPDATE grants SET match_decision = ? WHERE id = ? AND profile_id = ?')
+                .run('REVIEW', row.grant_id, profileId)
+            }
             if (hasEligStatus && hasIneligReasons) {
               let existing = []
               try {

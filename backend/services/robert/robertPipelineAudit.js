@@ -1,3 +1,6 @@
+import { gateOpportunityForPipeline } from '../opportunityTrust.js'
+import { isPlaceholderUrl, isNonActionableUrl, isSearchEngineUrl } from '../../config/urlRules.js'
+
 import { resolveApplicationUrl } from '../../../shared/applicationTarget.js'
 import { classifyNonApplicationSurface } from '../../config/applicationSurfaceHosts.js'
 
@@ -159,10 +162,17 @@ export function gateEngine(row, scored) {
  * target. This chooses no new URL and never changes grant identity. The boot
  * caller owns protection checks and conditional persistence.
  */
+export function pipelineStoredTargetRefusal(row) {
+  return classifyNonApplicationSurface(row?.grant_application_url || row?.grant_url)
+}
+
 export function pipelineApplicationTargetRepair(row, scored) {
   if (String(scored?.decision?.decision ?? '').toUpperCase() !== 'ACCEPT') return null
   const target = resolveApplicationUrl(scored?.opportunity)
-  if (!target || classifyNonApplicationSurface(target)) return null
+  if (!target || isPlaceholderUrl(target) || isNonActionableUrl(target) || isSearchEngineUrl(target) || classifyNonApplicationSurface(target)) return null
+  // Apply the complete existing write-side trust policy as well. A trusted
+  // reference source must not authorize an unusable replacement target.
+  if (!gateOpportunityForPipeline({ ...scored.opportunity, apply_url: target, application_url: target }).allowed) return null
   const changes = [
     ['application_url', row?.grant_application_url],
     ['url', row?.grant_url],

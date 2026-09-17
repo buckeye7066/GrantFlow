@@ -331,7 +331,7 @@ it('the boot net removes a pre-existing unprotected pipeline copy of a non-appli
   } finally { sqlite.close() }
 })
 
-it.each(['discovered', 'submitted'])('reconciles an obsolete pipeline target only when the row is unprotected: %s', async (status) => {
+it.each(['discovered', 'saved', 'interested', 'gathering_documents', 'submitted'])('reconciles an obsolete pipeline target only when the row is unprotected: %s', async (status) => {
   const target = 'https://fixture-foundation.org/apply'
   const vendor = 'https://alpha.grantable.co/login?ref=apply'
   const { sqlite, db } = seed([{ id: 'target', t: 'Murfreesboro Community Scholarship', s: 'Rutherford County Foundation', ent: ['student'], cats: ['education'], url: target, status }])
@@ -339,13 +339,17 @@ it.each(['discovered', 'submitted'])('reconciles an obsolete pipeline target onl
     sqlite.prepare("UPDATE grants SET application_url=?, url=?, match_decision='ACCEPT' WHERE id='g-target'").run(vendor, vendor)
     const result = await enforcePipelinePrecision(db)
     expect(result.ok).toBe(true)
-    const row = sqlite.prepare("SELECT status,application_url,url,match_decision FROM grants WHERE id='g-target'").get()
+    const row = sqlite.prepare("SELECT status,application_url,url,match_decision,ineligibility_reasons FROM grants WHERE id='g-target'").get()
     expect(row).toBeTruthy()
     expect(row.status).toBe(status)
     expect(row.application_url).toBe(status === 'discovered' ? target : vendor)
     expect(row.url).toBe(status === 'discovered' ? target : vendor)
     expect(result.applicationTargetsRepaired).toBe(status === 'discovered' ? 1 : 0)
     if (status === 'discovered') expect(result.repaired).toBeGreaterThanOrEqual(1)
+    if (status !== 'discovered') {
+      expect(row.ineligibility_reasons).toMatch(/non_application_target/)
+      expect(row.match_decision).toBe('REVIEW')
+    }
     expect(sqlite.prepare("SELECT application_url FROM funding_opportunities WHERE id='fo-target'").get().application_url).toBe(target)
   } finally { sqlite.close() }
 })
@@ -403,4 +407,12 @@ it('a submission begun after the first protection check prevents the conditional
       .toEqual({application_url:vendor,url:vendor})
     expect(result.applicationTargetsRepaired).toBe(0)
   } finally {sqlite.close()}
+})
+
+it.each(['https://facebook.com/foo', 'https://example.org/apply', 'https://google.com/search?q=grant', 'javascript:alert(1)'])('target repair never substitutes a target refused by the existing pipeline trust policy: %s', async (badTarget) => {
+  const { pipelineApplicationTargetRepair } = await import('../services/robert/robertPipelineAudit.js')
+  const { gateOpportunityForPipeline } = await import('../services/opportunityTrust.js')
+  const opportunity = { id: 'target-fixture', title: 'Murfreesboro Community Scholarship', sponsor: 'Rutherford County Foundation', apply_url: badTarget, application_url: badTarget, source: 'web_search', record_origin: 'live_crawl', is_national: true, entity_types_allowed: ['student'], categories: ['education'], need_types_supported: ['education'] }
+  expect(gateOpportunityForPipeline(opportunity).allowed).toBe(false)
+  expect(pipelineApplicationTargetRepair({ grant_application_url: 'https://alpha.grantable.co/login', grant_url: 'https://alpha.grantable.co/login' }, { opportunity, decision: { decision: 'ACCEPT' } })).toBeNull()
 })

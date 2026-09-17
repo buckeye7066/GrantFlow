@@ -1,3 +1,5 @@
+import { resolveApplicationUrl } from '../../shared/applicationTarget.js'
+
 import express from 'express';
 import { ensureProfileAccess, isAdminUserWithDb, requireAuthenticatedUser } from '../utils/accessControl.js'
 import { trustedOriginClause, trustedSourceClause } from '../utils/recordOrigins.js'
@@ -80,8 +82,8 @@ function formatProfileSearchResult(opp) {
     program_name: opp.program_name || opp.title,
     sponsor: opp.sponsor || opp.funder,
     funder: opp.funder || opp.sponsor,
-    url: opp.url || opp.actionable_url || opp.application_url || opp.apply_url || opp.source_url || null,
-    application_url: opp.application_url || opp.actionable_url || opp.url || opp.apply_url || opp.source_url || null,
+    url: resolveApplicationUrl(opp) || opp.url || opp.actionable_url || opp.source_url || null,
+    application_url: resolveApplicationUrl(opp) || opp.actionable_url || opp.url || opp.source_url || null,
     deadline: opp.deadline,
     award_min: opp.amount_min ?? opp.award_min ?? null,
     award_max: opp.amount_max ?? opp.award_max ?? null,
@@ -163,8 +165,9 @@ async function selectProfileOsResults(req, profileId, {
       match_reasons: parseJsonArray(o.os_match_reasons),
       is_directory: isDirectory,
       trust_tier: o.source_trust_tier ?? o.trust_tier ?? null,
-      url: o.application_url ?? o.apply_url ?? o.source_url ?? null,
-      actionable_url: o.application_url ?? o.apply_url ?? o.source_url ?? null,
+      url: resolveApplicationUrl(o) ?? o.source_url ?? null,
+      actionable_url: resolveApplicationUrl(o) ?? o.source_url ?? null,
+      application_url: resolveApplicationUrl(o),
       engine: 'crawler-os',
     }
   })
