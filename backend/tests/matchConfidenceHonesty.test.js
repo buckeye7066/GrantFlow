@@ -20,7 +20,9 @@ import { stampMatchConfidenceProvenance } from '../services/matching/matchConfid
 
 describe('route projections — confidence always travels with provenance', () => {
   it.each([
-    ['discovery', new URL('../routes/discovery.js', import.meta.url), 2],
+    // discovery.js: ONE stored-confidence query since 2026-09-17 — both
+    // discovery entry points read through selectProfileOsResults.
+    ['discovery', new URL('../routes/discovery.js', import.meta.url), 1],
     ['matching', new URL('../routes/matching.js', import.meta.url), 1],
   ])('%s projects provenance for every stored-confidence query', (_name, sourceUrl, expected) => {
     const source = readFileSync(sourceUrl, 'utf8')

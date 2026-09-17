@@ -26,7 +26,7 @@
 
 import { REVIEW_SCORE } from './matchThresholds.js'
 import { isPointerKind } from './opportunityKindClasses.js'
-import { hasPositiveFourTruthProof } from './fundingTruthPolicy.js'
+import { hasPositiveFourTruthProof, fundingTruthProofFrom, failedFourTruths } from './fundingTruthPolicy.js'
 import { hasPositivePointerTruth, pointerTruthVerdict } from './pointerTruthPolicy.js'
 
 /**
@@ -330,6 +330,25 @@ function isPointerRow(row) {
   )
 }
 
+/**
+ * Why ANY row was refused by `qualifiesForDisplay`, for the removal ledger.
+ * Returns null when the row passes. Pointer rows defer to the pointer-specific
+ * refusal; a direct row that reached ACCEPT without a valid four-truth proof
+ * names the failed legs so an unproven recommendation is never a silent drop.
+ * @returns {{ reason: string, failed: string[] }|null}
+ */
+export function displayRefusal(row, minScore) {
+  if (!row) return { reason: 'missing_row', failed: ['row'] }
+  if (qualifiesForDisplay(row, minScore)) return null
+  if (isPointerRow(row)) return pointerDisplayRefusal(row, minScore)
+  if (!isOpportunityLifecycleVisible(row)) return { reason: 'lifecycle', failed: ['lifecycle'] }
+  const decision = String(row.match_decision || row.decision || '').toUpperCase()
+  if (decision === 'REJECT') return { reason: 'rejected', failed: ['decision'] }
+  if (decision === 'REVIEW') return { reason: 'review_not_accept', failed: ['decision'] }
+  if (decision !== 'ACCEPT') return { reason: 'unrated', failed: ['decision'] }
+  return { reason: 'four_truth_unproven', failed: failedFourTruths(fundingTruthProofFrom(row)) }
+}
+
 export function qualifiesForDisplay(row, _minScore) {
   if (!row) return false
   if (!isOpportunityLifecycleVisible(row)) return false
@@ -364,5 +383,6 @@ export default {
   opportunityLifecycleVisibilitySql,
   qualifiesForDisplay,
   pointerDisplayRefusal,
+  displayRefusal,
   CANONICAL_RESCORE_MATCHER_VERSION,
 }

@@ -8,12 +8,13 @@ Read, in order, before doing any work in this repo:
 2. `docs/agent-sync/` — dated cross-assistant session briefs; the newest file
    is the current state of in-flight work and owner directives. As of this
    pass the newest file is
-   `docs/agent-sync/2026-09-12-prodready-discovery-chain.md` (the
-   production-readiness chain: extraction-outage attribution, link-verifier
-   starvation behind the ten-day `/readyz` 503, Sam preflight naming, query
-   budget, Amy cohort, parity dispositions, Hamilton confirmation truth) — do
-   not assume this pointer stays accurate; always list the directory and sort
-   by filename date to find the true latest.
+   `docs/agent-sync/2026-09-17-result-quality-attribution.md` (result-quality
+   phase: read-only prod capture of the live TN student's bad accepts, per-case
+   attribution — international-applicant engine gap, ECF rows with no
+   eligibility text, Jacksonville no-geo + explanation overstatement — the
+   one-selector consolidation of the Discover route with a removal ledger, and
+   the PR2–PR4 plan) — do not assume this pointer stays accurate; always list
+   the directory and sort by filename date to find the true latest.
 3. `docs/canonical_rules.md` — the owner-ratified product rules.
 
 House rules that bind every assistant (Claude, Cursor, Codex/ChatGPT):

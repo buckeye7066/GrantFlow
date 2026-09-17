@@ -1,0 +1,259 @@
+{
+  "profile": {
+    "id": "fixture-profile-tn-student-2026-09-17",
+    "organization_id": "fixture-profile-tn-student-2026-09-17",
+    "primary_type": "student",
+    "status": "active",
+    "tags": "[]",
+    "created_at": "2026-04-05T12:52:38.940Z",
+    "updated_at": "2026-09-17T02:42:08.361Z"
+  },
+  "sections": [
+    {
+      "section_key": "demographics",
+      "data": {
+        "ethnicity": "White / Caucasian",
+        "heritage": "White / Caucasian",
+        "languages": [
+          "English",
+          "Russian"
+        ],
+        "geographic_qualifiers": [
+          "Rural Resident",
+          "Appalachian Region"
+        ],
+        "gender": "Female",
+        "tribal_affiliation": "",
+        "religious_affiliation": "Church of God of Prophecy",
+        "citizenship": "US citizen",
+        "disability_status": "No disability",
+        "age_group": "young adult",
+        "religious_denomination": "Church of God of Prophecy",
+        "immigration_status": "us_citizen",
+        "veteran_status": "",
+        "immigrant_status": "us_citizen",
+        "appalachian_heritage": true,
+        "us_citizen": true
+      }
+    },
+    {
+      "section_key": "military_service",
+      "data": {
+        "veteran": false,
+        "military_spouse": false,
+        "military_dependent": false,
+        "gold_star_family": false
+      }
+    },
+    {
+      "section_key": "health_medical",
+      "data": {
+        "chronic_illness": false,
+        "chronic_illness_type": "",
+        "disability_type": [
+          "No disability"
+        ],
+        "hearing_impairment": false,
+        "mental_health_condition": false,
+        "substance_recovery": false,
+        "support_needs_level": "unknown",
+        "tbi_survivor": false,
+        "visual_impairment": false,
+        "wheelchair_user": false
+      }
+    },
+    {
+      "section_key": "financial",
+      "data": {
+        "annual_income": "$56,000",
+        "household_income": 12000,
+        "household_size": "7",
+        "receives_assistance": [
+          "SSDI"
+        ],
+        "low_income": true
+      }
+    },
+    {
+      "section_key": "housing",
+      "data": {
+        "status": "With family",
+        "type": "Rural",
+        "geographic_designation": [
+          "Rural",
+          "Appalachian"
+        ],
+        "broadband_speed": "1000 Mbps"
+      }
+    },
+    {
+      "section_key": "family",
+      "data": {
+        "household_size": 1,
+        "responsibilities": "Assists grandparents with language barrier (Russian-speaking family)",
+        "support_system": ""
+      }
+    },
+    {
+      "section_key": "education",
+      "data": {
+        "highest_level": "Associates Degree",
+        "current_institution": "Middle Tennessee State University",
+        "gpa": "3.84",
+        "act_score": "28",
+        "intended_major": "Forensic Science",
+        "schools": {
+          "status": "Graduated May 2026 — Associate degree earned (dual enrollment via TVEC)",
+          "type": "Community College"
+        },
+        "target_colleges": [
+          "Middle Tennessee State University",
+          "University of Central Florida",
+          "University of New Haven",
+          "Penn State University",
+          "Trevecca Nazarene University",
+          "Austin Peay State University",
+          "Carson-Newman",
+          "Centre College",
+          "Christian Brothers University",
+          "Oberlin College",
+          "Seton Hall University",
+          "Ohio State University",
+          "University of Alabama",
+          "University of Tennessee Chattanooga",
+          "University of Tennessee Knoxville",
+          "University of Michigan",
+          "Florida International University",
+          "Harvard University",
+          "Lee University"
+        ],
+        "interests": [
+          "Forensic Science",
+          "Criminal Justice",
+          "STEM",
+          "DNA Analysis",
+          "Crime Scene Investigation"
+        ],
+        "sat_score": "",
+        "community_service_hours": "400",
+        "leadership_roles": "",
+        "valedictorian": false,
+        "pell_grant_eligible": true,
+        "fafsa_completed": true,
+        "cte_pathway": "",
+        "efc_sai_band": "",
+        "high_school_gpa": "",
+        "fafsa_status": {
+          "stage": "processed",
+          "updated_at": "2026-08-03T03:17:34.678Z"
+        },
+        "aid_types_accepted": [
+          "grant",
+          "endowment",
+          "scholarship"
+        ]
+      }
+    },
+    {
+      "section_key": "government_assistance",
+      "data": {
+        "ecf_choices_role": "",
+        "medicaid_recipient_household": false,
+        "medicaid_recipient_self": true,
+        "medicaid_waiver_program": "none",
+        "medicare_recipient_household": false,
+        "medicare_recipient_self": false,
+        "other_programs": "SSDI dependent-child benefit ENDED 2026-07-19 (aged out at 18). Parent remains an SSDI recipient, household SSDI income continues., medical, SSDI",
+        "section8_recipient_household": false,
+        "section8_recipient_self": false,
+        "snap_recipient_household": false,
+        "snap_recipient_self": false,
+        "ssdi_recipient_self": false,
+        "ssdi_recipient_household": true,
+        "ssi_recipient_household": false,
+        "ssi_recipient_self": false,
+        "tanf_recipient_household": false,
+        "tanf_recipient_self": false,
+        "medicaid_enrolled": true,
+        "medicare_recipient": false,
+        "ssi_recipient": false,
+        "ssdi_recipient": true,
+        "snap_recipient": false,
+        "tanf_recipient": false,
+        "section8_housing": false
+      }
+    },
+    {
+      "section_key": "location_focus",
+      "data": {
+        "rural_resident": true,
+        "appalachian_region": true,
+        "urban_underserved": false,
+        "geographic_focus": "Cleveland, Tennessee (Bradley County)"
+      }
+    },
+    {
+      "section_key": "financial_information",
+      "data": {
+        "household_income": 12000,
+        "household_size": 1,
+        "financial_need_level": "moderate",
+        "low_income": true,
+        "displaced_worker": false,
+        "annual_income": "",
+        "funding_needs": "",
+        "funding_purpose": "",
+        "receives_assistance": "",
+        "underemployed": false,
+        "has_medical_debt": false,
+        "has_education_debt": false,
+        "bankruptcy_foreclosure": false,
+        "first_time_homebuyer": false
+      }
+    },
+    {
+      "section_key": "family_life",
+      "data": {
+        "adopted": false,
+        "caregiver": true,
+        "disaster_survivor": false,
+        "domestic_violence_survivor": false,
+        "first_time_parent": false,
+        "foster_parent": false,
+        "foster_youth": false,
+        "homeless": false,
+        "orphan": false,
+        "single_parent": false,
+        "trafficking_survivor": false,
+        "family_caregiver": true,
+        "household_size": 1
+      }
+    },
+    {
+      "section_key": "basic_information",
+      "data": {
+        "academic_status": {
+          "act_score": 28,
+          "college_courses": "Yes",
+          "education_level": "College Freshman (incoming), Associate degree earned May 2026",
+          "gpa": 3.84,
+          "sat_score": 1230
+        },
+        "city": "Cleveland",
+        "county": "Bradley County",
+        "state": "TN",
+        "zip_code": "55402",
+        "gender": "Female",
+        "nationality": "American",
+        "current_school": "Middle Tennessee State University",
+        "location": {
+          "city": "Cleveland",
+          "county": "Bradley County",
+          "state": "TN",
+          "zip_code": "37312"
+        },
+        "profile_type": ""
+      }
+    }
+  ]
+}

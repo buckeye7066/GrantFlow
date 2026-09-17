@@ -1,0 +1,137 @@
+{
+  "captured_at": "2026-09-17T03:10:00Z",
+  "deployed_commit": "a91267ac0f025f3dfb1e49e4cb9d21b7ed6aa822",
+  "deployed_health": "https://grantflow-production.up.railway.app/api/health",
+  "effective_env": {
+    "NODE_ENV": "production",
+    "SEMANTIC_RECALL": "1",
+    "GRANTFLOW_DISCOVERY_MIN_SCORE": null,
+    "GRANTFLOW_SCORING_MODEL": null
+  },
+  "source": "read-only pg capture (SET default_transaction_read_only = on) of profiles, profile_sections, funding_opportunities, profile_opportunity_matches",
+  "sanitization": "identity keys removed (names, contacts, emails, phones, addresses, avatars, essays); eligibility facts preserved verbatim; profile id replaced",
+  "profile_match_store_summary": [
+    {
+      "profile_id": "fixture-profile-tn-student-2026-09-17",
+      "matcher_version": "canonical-rescore-link",
+      "match_decision": "review",
+      "n": 23
+    },
+    {
+      "profile_id": "fixture-profile-tn-student-2026-09-17",
+      "matcher_version": "catalog-rescore-link",
+      "match_decision": "accept",
+      "n": 16
+    },
+    {
+      "profile_id": "fixture-profile-tn-student-2026-09-17",
+      "matcher_version": "county-crisis-need-link",
+      "match_decision": "accept",
+      "n": 1
+    },
+    {
+      "profile_id": "fixture-profile-tn-student-2026-09-17",
+      "matcher_version": "crawler-os",
+      "match_decision": "accept",
+      "n": 5
+    },
+    {
+      "profile_id": "fixture-profile-tn-student-2026-09-17",
+      "matcher_version": "crawler-os",
+      "match_decision": "review",
+      "n": 59
+    },
+    {
+      "profile_id": "fixture-profile-tn-student-2026-09-17",
+      "matcher_version": "field-of-study-link",
+      "match_decision": "accept",
+      "n": 3
+    },
+    {
+      "profile_id": "fixture-profile-tn-student-2026-09-17",
+      "matcher_version": "field-of-study-link",
+      "match_decision": "review",
+      "n": 10
+    },
+    {
+      "profile_id": "fixture-profile-tn-student-2026-09-17",
+      "matcher_version": "funder-behavior-link",
+      "match_decision": "review",
+      "n": 5
+    },
+    {
+      "profile_id": "fixture-profile-tn-student-2026-09-17",
+      "matcher_version": "institution-link",
+      "match_decision": "accept",
+      "n": 38
+    },
+    {
+      "profile_id": "fixture-profile-tn-student-2026-09-17",
+      "matcher_version": "institution-link",
+      "match_decision": "review",
+      "n": 31
+    },
+    {
+      "profile_id": "fixture-profile-tn-student-2026-09-17",
+      "matcher_version": "national-assistance-link",
+      "match_decision": "accept",
+      "n": 11
+    },
+    {
+      "profile_id": "fixture-profile-tn-student-2026-09-17",
+      "matcher_version": "national-assistance-link",
+      "match_decision": "review",
+      "n": 8
+    },
+    {
+      "profile_id": "fixture-profile-tn-student-2026-09-17",
+      "matcher_version": "profile-discovery-link",
+      "match_decision": "accept",
+      "n": 6
+    },
+    {
+      "profile_id": "fixture-profile-tn-student-2026-09-17",
+      "matcher_version": "profile-discovery-link",
+      "match_decision": "review",
+      "n": 6
+    },
+    {
+      "profile_id": "fixture-profile-tn-student-2026-09-17",
+      "matcher_version": "student-aid-instate-link",
+      "match_decision": "accept",
+      "n": 16
+    },
+    {
+      "profile_id": "fixture-profile-tn-student-2026-09-17",
+      "matcher_version": "student-aid-instate-link",
+      "match_decision": "review",
+      "n": 5
+    }
+  ],
+  "cases": {
+    "jacksonville_no_geo": {
+      "opportunity_id": "390af12b5100b725e19303770e28ce0a8c94dd9d68b416fb5d65983cf6115501",
+      "captured": "accept 32, lane catalog-rescore-link, proof all_passed, row state NULL; sibling 3b0a363e has state NC (Jacksonville Board of REALTORS, NC)"
+    },
+    "ecf_caregiver_stipend_no_elig_text": {
+      "opportunity_id": "1143d9e4941dcaf3d77c39b355eb55a37979cbf4649953f2ba3f946b06068d15",
+      "captured": "accept 31, lane crawler-os, eligibility_bullets [] and stub description; profile is medicaid-enrolled family caregiver with no disability and waiver_program none"
+    },
+    "hcbs_waivers_no_elig_text": {
+      "opportunity_id": "3a0924a3f13e346cdd89b7300a42bc52b6a142cc19f9a1270580efa15663a044",
+      "captured": "accept 30, lane crawler-os, no eligibility text; program requires I/DD, profile declares no disability"
+    },
+    "ecf_parent_correct_review": {
+      "opportunity_id": "c5f66900663ecf3fa20162f13d29d287c70a7ab0d35f2c6c85fcd084452e75c9",
+      "captured": "review 10 - condition-specific gate fired because the parent row HAS a description"
+    },
+    "international_merit_us_citizen": {
+      "opportunity_ids": [
+        "2bc34ce76948e2822e5346ce54627a962cb76a169949588bfc8d0d12ef1ba4d8",
+        "3c90e9fe8dcda0333c00ac91253e729e9360ecc4e88efa95abab23dfd59e319a",
+        "628f42eca166aae3f4482c3dfd97423179429a389fa8ee25459da3e40bf090cd"
+      ],
+      "captured": "accept 79/80 in catalog-rescore-link and institution-link; row text says International students; profile citizenship = US citizen, nationality American"
+    }
+  }
+}
