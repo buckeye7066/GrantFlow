@@ -1,3 +1,4 @@
+import { resolveApplicationUrl } from '../../shared/applicationTarget.js'
 // crawlerOsCompatibility.js — compatibility entrypoints for older HTTP routes
 // after the Crawler OS cutover. The old bulk grant-crawl engine is retired:
 // profile-facing discovery routes delegate to runProfileDiscoveryLive, and
@@ -94,8 +95,8 @@ export async function loadCrawlerOsProfileResults(db, profileId, limit = 200) {
         name: row.title,
         title: row.title,
         description: row.description,
-        url: row.application_url || row.apply_url || row.source_url || null,
-        applicationUrl: row.application_url || row.apply_url || null,
+        url: resolveApplicationUrl(row) || row.source_url || null,
+        applicationUrl: resolveApplicationUrl(row),
         sourceUrl: row.source_url || null,
         matchScore: Number(row.match_score ?? 0),
         match_score: Number(row.match_score ?? 0),
