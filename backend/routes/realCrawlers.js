@@ -1,3 +1,4 @@
+import { resolveApplicationUrl } from '../../shared/applicationTarget.js'
 import express from 'express'
 import { ensureAuth, ensureAdmin } from '../middleware/auth.js'
 import { standardRateLimiter } from '../middleware/rateLimiting.js'
@@ -224,9 +225,9 @@ export async function queryNearbyOpportunities(db, analysis, curatedTitles, prof
         title: row.title,
         name: row.title,
         description: row.description,
-        url: row.application_url || row.apply_url || row.source_url || null,
-        application_url: row.application_url || row.apply_url || null,
-        source_url: row.source_url || row.application_url || null,
+        url: resolveApplicationUrl(row) || row.source_url || null,
+        application_url: resolveApplicationUrl(row),
+        source_url: row.source_url || resolveApplicationUrl(row) || null,
         // Default to the canonical floor when a row cannot be scored: unknown
         // relevance must rank last, never masquerade as an evaluated match.
         match_score: profileContext ? (scoreOpportunity(profileContext, row)?.score ?? SCORE_FLOOR) : SCORE_FLOOR,

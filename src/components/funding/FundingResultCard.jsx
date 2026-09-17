@@ -1,3 +1,4 @@
+import { resolveApplicationUrl } from '../../../shared/applicationTarget.js'
 /**
  * FundingResultCard
  *
@@ -132,8 +133,9 @@ export default function FundingResultCard({ result, onPrimaryAction, onSecondary
   const unknownFacts = Array.isArray(result.missing_eligibility_fields)
     ? result.missing_eligibility_fields
     : []
-  const hasApplicationUrl = Boolean(result.application_url || result.apply_url)
-  const url = result.application_url || result.apply_url || result.source_url || result.url || null
+  const applicationUrl = resolveApplicationUrl(result)
+  const hasApplicationUrl = Boolean(applicationUrl)
+  const url = applicationUrl || result.source_url || result.url || null
   const action = hasApplicationUrl ? pickAction(result) : 'visit'
 
   // The header label is the persisted DECISION first, score tier second — a

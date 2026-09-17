@@ -64,3 +64,17 @@ describe('hamilton packet funder resolution', () => {
     expect(packet.funder).toBe('Funder')
   })
 })
+
+it('mailing instructions use the selected application target without rewriting the source', () => {
+  const selected = 'https://www.tn.gov/collegepays/apply'
+  const stale = 'https://alpha.grantable.co/login'
+  const result = buildMailingInstructions({
+    opportunity: { title: 'Student Scholarship', sponsor: 'Student Foundation',
+      apply_url: selected, application_url: stale, source_url: 'https://www.tn.gov/collegepays' },
+    grant: null, automationType: 'mail',
+  })
+  expect(result.portal_url).toBe(selected)
+  expect(result.funder_url).toBe('https://www.tn.gov/collegepays')
+  expect(result.instructions.join(' ')).toContain(selected)
+  expect(result.instructions.join(' ')).not.toContain(stale)
+})

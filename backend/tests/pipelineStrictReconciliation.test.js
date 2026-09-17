@@ -676,3 +676,31 @@ it('a valid application_url cannot hide a refused portal_url still used by task 
     expect(sqlite.prepare('SELECT status FROM application_tasks WHERE id=?').get(task.id).status).toBe('cancelled')
   } finally { sqlite.close() }
 })
+
+it.each(['retryable', 'unavailable'])('a known bad task URL is not hidden by %s source verification', async (failure) => {
+  const { sqlite, db } = await seed()
+  try {
+    sqlite.prepare("UPDATE application_tasks SET status='completed' WHERE grant_id <> 'g-good' OR grant_id IS NULL").run()
+    const task = sqlite.prepare("SELECT id FROM application_tasks WHERE grant_id='g-good'").get()
+    sqlite.prepare("UPDATE application_tasks SET status='queued',application_url=?,portal_url=? WHERE id=?")
+      .run('https://alpha.grantable.co/login', 'https://alpha.grantable.co/login', task.id)
+    const assess = async () => ({ ok: false, [failure]: true, gate: 'real', reasons: ['verification_pending'] })
+    const diagnostic = await auditUnfinishedHamiltonTasks(db, { enforce: false, assess })
+    expect(diagnostic).toMatchObject({ invalid: 1, deferred: 0, failed: 0 })
+    expect(diagnostic.byGate.application_target).toBe(1)
+    const result = await auditUnfinishedHamiltonTasks(db, { enforce: true, assess })
+    expect(result).toMatchObject({ tasksCancelled: 1, grantsRemoved: 0, matchesRemoved: 0, failed: 0 })
+    expect(sqlite.prepare('SELECT status FROM application_tasks WHERE id=?').get(task.id).status).toBe('cancelled')
+    expect(sqlite.prepare("SELECT id FROM grants WHERE id='g-good'").get()).toBeTruthy()
+  } finally { sqlite.close() }
+})
+
+it('a valid task target awaiting verification remains deferred, never cancelled', async () => {
+  const { sqlite, db } = await seed()
+  try {
+    sqlite.prepare("UPDATE application_tasks SET status='completed' WHERE grant_id <> 'g-good' OR grant_id IS NULL").run()
+    const result = await auditUnfinishedHamiltonTasks(db, { enforce: true,
+      assess: async () => ({ ok: false, retryable: true, gate: 'real', reasons: ['verification_pending'] }) })
+    expect(result).toMatchObject({ invalid: 0, deferred: 1, tasksCancelled: 0, failed: 0 })
+  } finally { sqlite.close() }
+})

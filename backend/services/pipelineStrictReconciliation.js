@@ -369,21 +369,6 @@ export async function auditUnfinishedHamiltonTasks(db, {
         })
       }
 
-      if (assessment.retryable) {
-        out.deferred += 1
-        classified = true
-        const gate = String(assessment.gate || assessment.code || 'unknown')
-        const reason = String(assessment.reasons?.[0] || assessment.code || 'retryable_policy_check')
-        const bucket = bucketForTaskStatus(task?.status)
-        out.byGate[gate] = (out.byGate[gate] || 0) + 1
-        out.byBucket[bucket] = (out.byBucket[bucket] || 0) + 1
-        out.byReason[reason] = (out.byReason[reason] || 0) + 1
-        continue
-      }
-      if (assessment.unavailable) {
-        throw new Error(`Hamilton policy unavailable: ${assessment.reasons?.[0] || assessment.code}`)
-      }
-
       // Validate the task-local target used by the task drawer/executor as
       // well as the catalog. A stale task URL is a task defect, not evidence
       // that its otherwise valid grant, match or source should be deleted.
@@ -391,7 +376,8 @@ export async function auditUnfinishedHamiltonTasks(db, {
       // carry a refused target, even when the other alias is valid.
       const taskTargetRefusal = [task.application_url, task.portal_url]
         .map(classifyApplicationTargetRefusal).find(Boolean)
-      if (assessment.ok && taskTargetRefusal) {
+      // A deterministic refusal cannot be hidden by pending source verification.
+      if (taskTargetRefusal && (assessment.ok || assessment.retryable || assessment.unavailable)) {
         out.invalid += 1
         classified = true
         out.byGate.application_target = (out.byGate.application_target || 0) + 1
@@ -415,6 +401,22 @@ export async function auditUnfinishedHamiltonTasks(db, {
         }
         continue
       }
+
+      if (assessment.retryable) {
+        out.deferred += 1
+        classified = true
+        const gate = String(assessment.gate || assessment.code || 'unknown')
+        const reason = String(assessment.reasons?.[0] || assessment.code || 'retryable_policy_check')
+        const bucket = bucketForTaskStatus(task?.status)
+        out.byGate[gate] = (out.byGate[gate] || 0) + 1
+        out.byBucket[bucket] = (out.byBucket[bucket] || 0) + 1
+        out.byReason[reason] = (out.byReason[reason] || 0) + 1
+        continue
+      }
+      if (assessment.unavailable) {
+        throw new Error(`Hamilton policy unavailable: ${assessment.reasons?.[0] || assessment.code}`)
+      }
+
 
       if (assessment.ok) {
         out.valid += 1

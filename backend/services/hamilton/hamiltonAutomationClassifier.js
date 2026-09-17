@@ -172,7 +172,7 @@ function readMode(opportunity, grant) {
   )
 }
 
-function readUrl(opportunity, grant) {
+export function resolveFundingSourceApplicationUrl(opportunity, grant) {
   const candidates = [
     resolveApplicationUrl(opportunity),
     opportunity?.url,
@@ -315,7 +315,7 @@ export function resolveOwnInstitutionPortal({ opportunity = null, grant = null, 
 
 export function classifyFundingSource({ opportunity = null, grant = null, profile = null, portalLink = null } = {}) {
   const reasons = []
-  const rowUrl = readUrl(opportunity, grant)
+  const rowUrl = resolveFundingSourceApplicationUrl(opportunity, grant)
   const ownPortal = resolveOwnInstitutionPortal({ opportunity, grant, profile, url: rowUrl })
   if (ownPortal) reasons.push({ rule: 'own_institution.scholarship_portal', signal: ownPortal.portal_host })
   const url = ownPortal ? ownPortal.portal_url : rowUrl
@@ -465,5 +465,5 @@ export const _internal = {
   SUBMIT_EMAIL_RX, SUBMIT_FAX_RX, SUBMIT_MAIL_RX,
   PDF_DOCX_RX, FAX_NUMBER_RX,
   FAFSA_LINK_PATTERNS, STUDENT_AID_CONTEXT_RX,
-  readMode, readUrl, readContact, buildText,
+  readMode, readUrl: resolveFundingSourceApplicationUrl, readContact, buildText,
 }

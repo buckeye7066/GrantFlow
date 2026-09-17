@@ -1,5 +1,4 @@
 import { classifyApplicationTargetRefusal } from '../../config/applicationTargetPolicy.js'
-import { resolveApplicationUrl } from '../../../shared/applicationTarget.js'
 import { parseDbTimestamp } from '../../utils/dbTimestamp.js'
 /**
  * hamiltonAutomationOrchestrator.js
@@ -38,7 +37,7 @@ import { parseDbTimestamp } from '../../utils/dbTimestamp.js'
  * profileId and rejects if the caller does not own it.
  */
 
-import { classifyFundingSource } from './hamiltonAutomationClassifier.js'
+import { classifyFundingSource, resolveFundingSourceApplicationUrl } from './hamiltonAutomationClassifier.js'
 import { assessHamiltonFundingSource } from './hamiltonFundingSourcePolicy.js'
 import {
   ensureApplicationTask,
@@ -309,9 +308,8 @@ export function deriveProfilePortalHosts({ profile, opportunity, grant, portalLi
     for (const k of Object.keys(portals)) pushUrl(portals[k])
   }
   // Funding-source application URL + any saved portal link.
-  for (const applicationUrl of [resolveApplicationUrl(opportunity), grant?.application_url]) {
-    if (applicationUrl && !classifyApplicationTargetRefusal(applicationUrl)) pushUrl(applicationUrl)
-  }
+  const applicationUrl = resolveFundingSourceApplicationUrl(opportunity, grant)
+  if (applicationUrl && !classifyApplicationTargetRefusal(applicationUrl)) pushUrl(applicationUrl)
   pushUrl(portalLink?.portal_url || portalLink?.login_url)
 
   const hosts = new Set()
