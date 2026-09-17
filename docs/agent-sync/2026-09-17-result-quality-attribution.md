@@ -219,26 +219,101 @@ Stipend → `applicant_types_only` → "Only who may apply is stated … confirm
 before applying"; International Merit rows are REVIEW after PR2 and carry no
 chip — the label already says "Needs review".
 
-## Still open (Gate B — not closed by PR1–PR3)
+## PR3 outcome
 
-- **PR4 recall**: gap-seed replay through `runProfileDiscoveryLive({ extraQueries,
-  extraSeedPages })`, `SEMANTIC_RECALL` cohort, before/after scorecard on the
-  stages in the plan. Nothing in PR1–PR3 claims the crawler finds more.
+#1742 merged to `main` 2026-09-17T04:35Z (squash → `e4a39d0b`). Green first
+head (pinned the signal version before pushing this time).
+
+## PR4 — recall scorecard + skipped-query carry-over (this branch)
+
+**Gate B baseline, read-only prod probes 2026-09-17 (deployed 9580bd67),
+`system_kv web_lane_last_runs` + `crawler_source_runs`:**
+
+| profile (real, active) | queries planned → executed (skipped for budget) | candidates extracted | gate rejections | admitted | binding constraint |
+| --- | --- | --- | --- | --- | --- |
+| captured TN student | 28 → 7 (21) | 24 | apply_target 9 · eligibility 5 · reality 3 · review-held 6 | **0** | `gated_at_apply_target` |
+| senior / caregiver | 28 → 7 (21) | **0** (`extraction_failed:llm_quota`) | — | 0 | `extraction_dead` |
+| individual | 28 → 7 (21) | ~11 | eligibility 9 | 0 | `gated_at_eligibility` |
+
+The recall funnel dies at a DIFFERENT stage per profile, and the same 21
+queries are skipped every night because the plan is rebuilt identically — the
+7 that run are the 7 that already failed to fill the target. Nothing on the
+product laid these stages end to end; every prior "recall" claim was a single
+count argued in isolation. `qualified_admitted` was 0 across the cohort with a
+"healthy" web lane and nothing red anywhere.
+
+CHANGED
+- `services/coverageAudit/recallScorecard.js` (new): `stageCountsFromLane`
+  (the lane record's stage ledger, normalized, with `budget_skipped_share`);
+  `classifyRecallBlocker({lane, audit})` — ONE stage in funnel order
+  (`unconfigured` / `met_target` from the audit first, then `no_run` →
+  `search_unavailable` → `extraction_dead` → `budget_starved` → the largest
+  gate → `held_for_review` → `admitted_below_target`); `carryOverSkippedQueries`
+  (cap `CARRY_OVER_LIMIT`=4 so a 7-slot budget still executes 3 core queries;
+  empty after a dead-extraction run); `buildProfileRecallScorecard` (lane store
+  + match store by surfaced lane + proven direct accepts + coverage audit +
+  `grants` by status + `vnext_applications` by state; an absent table reads
+  `null`, never 0; `verified_external_submissions` is `null` by design — the
+  Hamilton proof predicate is per task); `buildFleetRecallScorecard` (real
+  active non-Amy profiles, shares, blocker histogram, metric envelope whose
+  `context.definition_of_better` is fixed in code); `recordRecallScorecard` /
+  `getLastRecallScorecard` / `getRecallScorecardHistory` (`system_kv
+  recall_scorecard_last_run` + `recall_scorecard_history`, cap 14).
+- `profileResultCoverageAudit.js` heal loop: `runProfileDiscoveryLive({…,
+  extraQueries: carried})` with the previous lane record's budget-skipped
+  queries; `healed[].carried_queries` records how many. The sweep result and
+  the persisted `coverage_audit_last_run` gain a `recall_scorecard` block, and
+  the fleet snapshot is recorded at the end of every nightly sweep (reuses the
+  sweep's audits).
+- `routes/admin.js`: `GET /api/admin/recall-scorecard` (persisted by default;
+  `?live=1`, `?persist=1`, `?limit`) and `GET /api/admin/recall-scorecard/:profileId`.
+- `samRegistry.js`: `recall.scorecard` — stale >48h, or ≥80% of profiles with
+  extraction alive (min 3) admitting ZERO qualified candidates → fail, naming
+  the top blockers. On today's prod numbers this check is RED, which is the
+  honest state.
+
+**Definition of "better" (fixed so it cannot be gamed):** primary =
+`surfaced.awardable` and `surfaced.applyable_typed` per profile; secondary =
+`stages.qualified_admitted` per run; `candidates_extracted` / `queries_executed`
+are diagnostic only. Two snapshots compare only with provider health
+`healthy` on both and the same `code_version` family.
+
+**What the lever does and does not claim.** It widens what is SEARCHED on
+heal runs only; every hit still faces fetch → extract → reality gate → engine.
+It cannot help a profile whose blocker is `extraction_dead` (nothing is
+carried then) or `gated_at_*` (those are precision gates on candidates already
+found). Whether it moves `qualified_admitted` / `awardable` is UNKNOWN until
+the persisted snapshots show it — no improvement is claimed here.
+
+VERIFIED (this branch, local): `recallScorecard.test.js` (25),
+`coverageSweepCarryOver.test.js` (4 — through the REAL sweep with a mocked
+`runProfileDiscoveryLive`: the call carries the first 4 skipped queries,
+carries none after a dead-extraction run, unchanged with no prior record; the
+sweep persists the snapshot), `adminRecallScorecard.test.js` (4); neighbours
+`profileResultFloorBackfill`, `coverageSweepObservability`,
+`coverageGapScoreboard`, `samDiscoveryAwareness` green; lint, typecheck,
+profile-scope, safe-sql, secret scan, profile-metadata, privacy green;
+signal-version pin unchanged (no derivation file touched).
+
+## Still open (Gate B — measured, not closed)
+
+- **Before/after**: the first persisted snapshot lands on the first nightly
+  sweep after deploy; compare `recall_scorecard_history` entries (same
+  `code_version` family, provider health healthy) on `awardable` /
+  `applyable_typed` / `qualified_admitted`. Until then nothing about recall is
+  "better" — it is measured.
+- The dominant prod blockers are BELOW the top of the funnel:
+  `gated_at_apply_target` (apply-URL rescue / source adapters) and
+  `gated_at_eligibility` (eligibility evidence on source rows) — separate
+  levers, each to be judged on the same card.
+- `runApplyableFloorBackfill` (the per-type archetype lane) does not yet carry
+  skipped queries; only the awardable heal loop does.
+- `SEMANTIC_RECALL` cohort, `extraSeedPages` replay of gap seeds — not touched.
 - Live envelope check for the captured profile after the boot drain re-scores
   its rows (the persisted International Merit accepts flip to REVIEW only when
   re-scored; the drain is bounded per boot).
 - Owner decisions recorded above: `eligible` stays decision-derived; the
   ratified 2026-09-05 "…only" rule stays stricter than G4.
-- `admin.js` HTTP dry-run modes (`:5576`, `:5704`) — separate PR.
-- **PR3 evidence contract**: additive `profile_qualifies.evidence_basis`
-  (`stated_requirements | applicant_type_only | none`) and
-  `relatable.geo_evidence` on the four-truth proof; `canonicalMatchDisplay` /
-  FundingResultCard render "Confirm eligibility" and never "Apply now" for
-  applicant-type-only or unknown-location accepts; old rows without the field
-  render conservatively. Refresh affected persisted rows.
-- **PR4 recall (Gate B)**: gap-seed replay through
-  `runProfileDiscoveryLive({ extraQueries, extraSeedPages })`, semantic recall
-  cohort, before/after scorecard per the stages in the plan.
 - Separate: `admin.js` HTTP dry-run modes (`:5576`, `:5704-5741`) violate the
   owner no-dry-runs rule for owner-facing routes; internal
   `runProfileDiscoveryLive({dryRun})` is a read-only test seam and stays.

@@ -245,6 +245,52 @@ router.get('/audit-events', async (req, res) => {
   }
 })
 
+// RECALL SCORECARD (result-quality PR4, 2026-09-17): the per-stage funnel —
+// queries generated → executed → pages → candidates → gate rejections →
+// admitted → surfaced (qualifying / actionable / awardable / applyable-typed
+// vs target) → pipeline → applications — with ONE binding constraint named per
+// profile. Fleet view reads the persisted nightly snapshot by default
+// (`?live=1` recomputes, `?persist=1` also records it); the per-profile view
+// always computes live. Read-only over profiles/matches/pipeline.
+router.get('/recall-scorecard', async (req, res) => {
+  if (!(await ensureAdminRequest(req, res))) return
+  try {
+    const { buildFleetRecallScorecard, recordRecallScorecard, getLastRecallScorecard, getRecallScorecardHistory } =
+      await import('../services/coverageAudit/recallScorecard.js')
+    const live = req.query?.live === '1' || req.query?.live === 'true'
+    const persist = req.query?.persist === '1' || req.query?.persist === 'true'
+    const limit = Math.max(1, Math.min(Number(req.query?.limit) || 50, 200))
+    let fleet = live ? null : await getLastRecallScorecard(req.db)
+    let source = fleet ? 'persisted' : 'live'
+    if (!fleet) {
+      fleet = await buildFleetRecallScorecard(req.db, { limit })
+      source = 'live'
+      if (persist) await recordRecallScorecard(req.db, fleet)
+    }
+    const history = await getRecallScorecardHistory(req.db)
+    res.json({ source, scorecard: fleet, history: history.map((h) => ({ ...h, rows: undefined, row_count: h.rows?.length ?? null })) })
+  } catch (error) {
+    routeLogger.error('recall scorecard (fleet) failed', { error: error?.message })
+    res.status(500).json({ error: error?.message || 'Failed to build recall scorecard' })
+  }
+})
+
+router.get('/recall-scorecard/:profileId', async (req, res) => {
+  if (!(await ensureAdminRequest(req, res))) return
+  try {
+    const profileId = String(req.params?.profileId || '').trim()
+    if (!profileId) return res.status(400).json({ error: 'profileId is required' })
+    const exists = await req.db.prepare('SELECT id FROM profiles WHERE id = ?').get(profileId)
+    if (!exists) return res.status(404).json({ error: 'profile not found' })
+    const { buildProfileRecallScorecard } = await import('../services/coverageAudit/recallScorecard.js')
+    const card = await buildProfileRecallScorecard(req.db, profileId)
+    res.json({ scorecard: card })
+  } catch (error) {
+    routeLogger.error('recall scorecard (profile) failed', { error: error?.message })
+    res.status(500).json({ error: error?.message || 'Failed to build recall scorecard' })
+  }
+})
+
 router.get('/matching/low-coverage-events', async (req, res) => {
   if (!(await ensureAdminRequest(req, res))) return
   try {

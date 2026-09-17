@@ -1651,6 +1651,78 @@ export const DIAGNOSTIC_CHECKS = Object.freeze([
     },
   },
   {
+    // RECALL SCORECARD (result-quality PR4, 2026-09-17). Reads the nightly
+    // per-stage funnel snapshot (system_kv recall_scorecard_last_run, written
+    // by runProfileCoverageSweep) and names the ONE fleet-level fact the owner
+    // needs: whether the crawler EXTRACTS candidates but ADMITS none. Measured
+    // on prod the day it shipped, three real profiles executed 7 of 28
+    // planned queries each and the one that extracted 24 candidates admitted
+    // 0 — so a "healthy" web lane and a zero-funding result co-existed with
+    // nothing red anywhere. Stale (>48h) means the sweep is not landing.
+    id: 'recall.scorecard',
+    label: 'Recall scorecard — candidates extracted vs admitted (per-stage funnel)',
+    category: SAM_CATEGORIES.CRAWLER_RELIABILITY,
+    kind: CHECK_KIND.INTERNAL,
+    severityOnFailure: SEVERITY.MEDIUM,
+    description: 'Reads the nightly recall scorecard (system_kv recall_scorecard_last_run) and fails when it is stale (>48h) or when, across profiles whose extraction was alive, the share admitting ZERO qualified candidates is at or above 80% (min 3 alive runs). Evidence carries per-stage totals, the blocker histogram, and the definition of "better". Fails open when no snapshot exists yet or system_kv is not queryable.',
+    async run({ db } = {}) {
+      if (!db?.prepare) return { ok: true, skipped: true, summary: 'recall scorecard: db unavailable' }
+      const STALE_MS = 48 * 60 * 60 * 1000
+      const MIN_ALIVE_RUNS = 3
+      const ADMITTED_ZERO_SHARE = 0.8
+      let row
+      try {
+        row = await db.prepare('SELECT value, updated_at FROM system_kv WHERE key = ?').get('recall_scorecard_last_run')
+      } catch (err) {
+        return { ok: true, skipped: true, summary: `system_kv not queryable yet (${err?.message || 'unknown'})` }
+      }
+      if (!row?.value) return { ok: true, summary: 'No recall scorecard snapshot yet (the nightly coverage sweep has not recorded one).' }
+      let card = null
+      try { card = JSON.parse(row.value) } catch { card = null }
+      if (!card || typeof card !== 'object') {
+        return { ok: false, summary: 'recall_scorecard_last_run exists but is unparseable JSON.', evidence: { raw: String(row.value).slice(0, 200) } }
+      }
+      const generatedMs = Date.parse(card.generated_at || card.recorded_at || row.updated_at || '') || 0
+      const ageMs = Date.now() - generatedMs
+      const evidence = {
+        generated_at: card.generated_at ?? null,
+        profiles_measured: card.profiles_measured ?? null,
+        totals: card.totals ?? null,
+        shares: card.shares ?? null,
+        blockers: card.blockers ?? null,
+        metric_envelope: card.metric_envelope ?? null,
+        definition_of_better: card.metric_envelope?.context?.definition_of_better ?? null,
+      }
+      if (!generatedMs || ageMs > STALE_MS) {
+        return {
+          ok: false,
+          summary: `The recall scorecard is STALE (${generatedMs ? Math.round(ageMs / 3600000) + 'h old' : 'no timestamp'} > 48h) — the nightly coverage sweep is not recording it.`,
+          evidence: { ...evidence, age_hours: generatedMs ? Math.round(ageMs / 3600000) : null },
+          recommended_fix: 'Confirm the nightly runProfileCoverageSweep is running (system_kv coverage_audit_last_run) — the scorecard snapshot is written at the end of that sweep; GET /api/admin/recall-scorecard?live=1&persist=1 records one immediately.',
+          confidence: 0.85,
+        }
+      }
+      const aliveRuns = Number(card.metric_envelope?.provider_health?.extraction_alive_runs ?? 0) || 0
+      const zeroShare = card.shares?.admitted_zero_while_alive
+      const blockers = card.blockers && typeof card.blockers === 'object' ? card.blockers : {}
+      const topBlockers = Object.entries(blockers).sort((x, y) => y[1] - x[1]).slice(0, 3).map(([k, n]) => `${k} ×${n}`).join(', ')
+      if (aliveRuns >= MIN_ALIVE_RUNS && typeof zeroShare === 'number' && zeroShare >= ADMITTED_ZERO_SHARE) {
+        return {
+          ok: false,
+          summary: `Recall funnel is DEAD BELOW EXTRACTION: ${Math.round(zeroShare * 100)}% of the ${aliveRuns} profile(s) whose extraction was alive admitted ZERO qualified candidates on their last web-lane run (fleet: ${card.totals?.candidates_extracted ?? '?'} extracted → ${card.totals?.qualified_admitted ?? '?'} admitted). Binding constraints: ${topBlockers || 'none recorded'}.`,
+          evidence,
+          recommended_fix: 'Open GET /api/admin/recall-scorecard/:profileId for the profiles named by the top blocker and act on THAT stage: gated_at_apply_target → apply-URL rescue / source adapters; gated_at_eligibility → eligibility evidence on the source rows; budget_starved → the skipped-query carry-over is already active on heal runs, compare qualified_admitted across the next snapshots before widening WEB_LANE_MAX_QUERIES.',
+          confidence: 0.8,
+        }
+      }
+      return {
+        ok: true,
+        summary: `Recall scorecard fresh (${Math.round(ageMs / 3600000)}h old): ${card.profiles_measured ?? 0} profile(s); ${card.totals?.candidates_extracted ?? 0} extracted → ${card.totals?.qualified_admitted ?? 0} admitted → ${card.totals?.awardable ?? 0} awardable surfaced; extraction alive on ${aliveRuns}; blockers: ${topBlockers || 'none'}.`,
+        evidence,
+      }
+    },
+  },
+  {
     // GOLDEN-OUTCOME SENTINEL (owner directive 2026-07-07: "how do mistakes
     // like this keep happening" — the 12-lost-lanes class). Owner-verified
     // expectations for REAL profiles live in system_kv
