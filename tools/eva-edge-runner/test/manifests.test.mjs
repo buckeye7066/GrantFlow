@@ -218,8 +218,15 @@ test('repaired portfolio manifests preserve their current repository contracts',
   assert.ok(factory.nightly_critical_journeys.includes('demo-mode-visible'), 'a current check must retain the historical finding id so a real pass can close it')
   assert.ok(factory.weekly_full_journeys.includes('demo-mode-visible'))
   const factoryDemo = factory.journeys.find((journey) => journey.id === 'demo-mode-visible')
-  assert.ok(factoryDemo?.steps.every((step) => ['goto', 'waitForSelector'].includes(step.action)), 'checking the offline demo control must never click or start a Factory run')
-  assert.ok(factoryDemo?.assert.some((check) => check.selector.includes('input[type=') && check.value === 'Offline demo'), 'the journey must check the actual offline-demo control')
+  assert.ok(factoryDemo?.steps.every((step) => ['goto', 'waitForSelector'].includes(step.action)), 'the current New Run contract must never click or start a Factory run')
+  for (const selector of ['#repo-name', '#idea', 'button:has-text("Start Factory Run")']) {
+    assert.ok(factoryDemo?.steps.some((step) => step.action === 'waitForSelector' && step.selector === selector && (!step.state || step.state === 'visible')), 'the current New Run controls must be visibly rendered: ' + selector)
+  }
+  const removedDemo = factoryDemo?.steps.findIndex((step) => step.action === 'waitForSelector' && step.selector.includes('Offline demo') && step.state === 'detached')
+  const renderedControl = factoryDemo?.steps.findIndex((step) => step.selector === 'button:has-text("Start Factory Run")')
+  assert.ok(removedDemo > renderedControl && renderedControl > 0, 'assert demo removal only after the real New Run UI has rendered; an empty page cannot pass')
+  assert.ok(factoryDemo?.assert.some((check) => check.selector === 'button:has-text("Start Factory Run")' && check.value === 'Start Factory Run'))
+  assert.ok(!factoryDemo?.assert.some((check) => check.value === 'Offline demo'), 'Factory Deck PR #209 removed demo mode; do not require or restore the removed control')
   assert.ok(factory.coverage.some((item) => (item.journeys || []).includes('demo-mode-visible')))
 
   const geneMap = manifestById('genemap-discovery')
