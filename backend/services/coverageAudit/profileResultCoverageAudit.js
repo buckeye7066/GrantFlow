@@ -919,6 +919,8 @@ async function runProfileCoverageSweepInner(db, { autoheal, maxHeal, limit, star
   if (autoheal && healQueue.length) {
     try {
       const { runProfileDiscoveryLive } = await import('../crawlerOsService.js')
+      const { carryOverSkippedQueries } = await import('./recallScorecard.js')
+      const { getLastWebLaneRun } = await import('./webLaneHealth.js')
       for (const [queueIndex, item] of healQueue.entries()) {
         if (providerOutage) break
         const a = item.audit
@@ -927,13 +929,31 @@ async function runProfileCoverageSweepInner(db, { autoheal, maxHeal, limit, star
         const before = a.surfaced_awardable ?? 0
         let run = null
         let ranOk = false
+        // SKIPPED-QUERY CARRY-OVER (result-quality PR4, 2026-09-17). Measured
+        // on prod: every real profile planned 28 web queries and executed 7 —
+        // 21 skipped for budget, the SAME 21 every night, because the plan is
+        // rebuilt identically each run. A heal run that re-executes the seven
+        // queries that already failed to fill the target learns nothing new.
+        // Carry a bounded slice of LAST run's budget-skipped queries in as
+        // extraQueries (the web lane puts them at the head of the plan), so
+        // consecutive heal runs walk the plan instead of re-running its head.
+        // Nothing is carried from a run whose extraction was dead — those
+        // queries were never evaluated. The lever widens what is SEARCHED;
+        // every hit still faces fetch → extract → reality gate → engine.
+        let carriedQueries = []
+        try {
+          carriedQueries = carryOverSkippedQueries(await getLastWebLaneRun(db, a.profile_id))
+        } catch { carriedQueries = [] }
         try {
           // runProfileDiscoveryLive returns { run, persisted, thesis, opportunities }
           // (or { run:{skipped:true,…}, persisted:{skipped:true} }). The lane
           // telemetry lives at run.web_lane. Reading a top-level `ok`/`skipped`/
           // `web` — a shape the function never returned — made ranOk always true
           // and every evidence field 0 (sweepheal-1 / discovery-attrib-1).
-          const outcome = await runProfileDiscoveryLive({ db, profileId: a.profile_id, trigger: 'heal' })
+          const outcome = await runProfileDiscoveryLive({
+            db, profileId: a.profile_id, trigger: 'heal',
+            extraQueries: carriedQueries.length ? carriedQueries : null,
+          })
           run = unwrapDiscoveryOutcome(outcome)
           // A run that was SKIPPED (deleted / unconfigured profile, no sources
           // selected), that reports failure, or whose open-web lane was DEAD
@@ -988,9 +1008,13 @@ async function runProfileCoverageSweepInner(db, { autoheal, maxHeal, limit, star
           ran: ranOk,
           floor_attempt_kind: floorAttemptKind,
           gaps_before: a.gaps,
+          // How many of last run's budget-skipped queries this heal carried in
+          // — recorded so a before/after can attribute a change to the lever.
+          carried_queries: carriedQueries.length,
         })
         log.info('coverage self-heal re-discovered profile', {
           profile: a.profile_id, before, after: afterAwardable, target: a.result_target, escalation: item.escalation, ran: ranOk, floorAttemptKind,
+          carriedQueries: carriedQueries.length,
         })
 
         // Fold the outcome into the ledger — only ever AFTER a successful
@@ -1116,11 +1140,34 @@ async function runProfileCoverageSweepInner(db, { autoheal, maxHeal, limit, star
     })
   } catch { /* envelope is reporting metadata; never fails the sweep */ }
 
+  // RECALL SCORECARD SNAPSHOT (result-quality PR4). One per-stage funnel card
+  // per real profile, rolled up and persisted (system_kv
+  // recall_scorecard_last_run + a bounded history) so the nightly sweep
+  // accumulates the before/after series a lever must be judged by. Reuses the
+  // audits this sweep already paid for. Reporting only — never fails the sweep.
+  let recallScorecard = null
+  try {
+    const { buildFleetRecallScorecard, recordRecallScorecard } = await import('./recallScorecard.js')
+    const fleet = await buildFleetRecallScorecard(db, { limit, audits })
+    const persisted = await recordRecallScorecard(db, fleet)
+    recallScorecard = {
+      generated_at: fleet.generated_at,
+      profiles_measured: fleet.profiles_measured,
+      totals: fleet.totals,
+      shares: fleet.shares,
+      blockers: fleet.blockers,
+      persisted: persisted?.ok === true,
+    }
+  } catch (err) {
+    log.warn('recall scorecard snapshot unavailable (non-fatal)', { error: err?.message })
+  }
+
   const result = {
     ok: true,
     status: 'completed',
     started_at: startedAt,
     summary,
+    recall_scorecard: recallScorecard,
     code_version: codeVersion,
     metric_envelope: metricEnvelope,
     autoheal: Boolean(autoheal),
