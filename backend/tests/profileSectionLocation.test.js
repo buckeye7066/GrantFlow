@@ -47,10 +47,26 @@ describe('readSectionLocation', () => {
         address: '3940 Eveningside Dr. NE \nCleveland, TN 37312',
       },
     })).toEqual({ state: 'TN', city: 'Cleveland', zip: '37312' })
-    // A one-to-one disagreement keeps the flat value.
+    // A one-to-one disagreement between two ZIPs that both sit in the declared
+    // state keeps the flat value.
     expect(readSectionLocation({
       basic_information: { zip_code: '37311', address: '1 Road\nCleveland, TN 37312' },
     })).toEqual({ state: 'TN', city: 'Cleveland', zip: '37311' })
+  })
+
+  it('breaks a 1-1 ZIP tie by the declared state (live profile 2026-09-17: a Minneapolis ZIP pasted from a form beside the real TN one)', () => {
+    expect(readSectionLocation({
+      basic_information: {
+        zip_code: '55402',
+        state: 'TN',
+        city: 'Cleveland',
+        location: { city: 'Cleveland', county: 'Bradley County', state: 'TN', zip_code: '37312' },
+      },
+    })).toEqual({ state: 'TN', city: 'Cleveland', zip: '37312' })
+    // Without a declared state there is nothing to break the tie with: flat wins.
+    expect(readSectionLocation({
+      basic_information: { zip_code: '55402', location: { zip_code: '37312' } },
+    })).toEqual({ state: null, city: null, zip: '55402' })
   })
 
   it('refuses shapes that are not a US state code or ZIP instead of guessing', () => {

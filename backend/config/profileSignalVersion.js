@@ -43,7 +43,14 @@
 // The eligibility condition check reads the full opportunity text, and an
 // applicant-type gate pass counts as the engine's applicant match (restores
 // ECF CHOICES / 1915(c) ACCEPTs for their owner-verified enrollees).
-export const PROFILE_SIGNAL_VERSION = '2026.09.12-5'
+// 2026-09-17 (result-quality PR2): an international-applicant restriction
+// (exclusive vs stated audience) read against the profile's citizenship; every
+// canonical result carries `eligibility_evidence`, and an ACCEPT explanation
+// claims "eligibility and location check out" only when both were stated; a
+// 1-1 ZIP tie is broken by the declared state. Stored explains that said
+// "check out" over no evidence, or ACCEPTed international-only aid for a US
+// citizen, are stale and re-score on the boot drain.
+export const PROFILE_SIGNAL_VERSION = '2026.09.17-1'
 
 /** Repo-relative files whose content decides what the engine believes about a profile. */
 export const PROFILE_SIGNAL_DERIVATION_FILES = Object.freeze([
@@ -71,6 +78,6 @@ export const PROFILE_SIGNAL_DERIVATION_FILES = Object.freeze([
  * sha256 over the LF-normalized concatenation of the files above, pinned by
  * `scripts/pin-signal-version.mjs`. The test recomputes it.
  */
-export const PROFILE_SIGNAL_DERIVATION_HASH = '12e358e5f66b8954d230ca257228818791c012769b7cdc7bba1d89456576b27c'
+export const PROFILE_SIGNAL_DERIVATION_HASH = '34f36f7a5f7aeb293b35dc98c2ab3efe48a4f3ed2cc7af8fa5fadf8c989c977f'
 
 export default { PROFILE_SIGNAL_VERSION, PROFILE_SIGNAL_DERIVATION_FILES, PROFILE_SIGNAL_DERIVATION_HASH }
