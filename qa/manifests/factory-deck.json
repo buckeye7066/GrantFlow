@@ -48,7 +48,7 @@
   },
   "coverage": [
     { "feature": "New Run hero identifies the app", "journeys": ["app-identifies-itself"] },
-    { "feature": "Offline demo control is visible (presence only; no run started)", "journeys": ["demo-mode-visible"] },
+    { "feature": "New Run controls are visible and the removed offline demo is absent (read-only)", "journeys": ["demo-mode-visible"] },
     { "feature": "Runs history", "unautomated_reason": "only populated by real assembly-line runs, which are blocked (no Anthropic credits) or prohibited (no real AI spend)" },
     { "feature": "Workspaces", "unautomated_reason": "workspaces are produced by runs; with runs blocked, there is nothing deterministic to assert" },
     { "feature": "Logs", "unautomated_reason": "log content depends on a completed run; blocked for the same external-service reason" },
@@ -65,19 +65,22 @@
         { "action": "waitForSelector", "selector": "body" }
       ],
       "assert": [{ "type": "text_visible", "selector": "body", "value": "Factory" }],
-      "user_impact": "If the deck UI does not load, the owner cannot start, inspect, or demo any factory run.",
+      "user_impact": "If the deck UI does not load, the owner cannot start or inspect a factory run.",
       "candidate_files": ["src/ui/App.tsx", "src/ui/components/factory/NewRunHero.tsx", "src/server/index.ts"]
     },
     {
       "id": "demo-mode-visible",
-      "name": "Offline demo control is present (read-only; no run started)",
+      "name": "New Run controls render; removed offline demo stays absent (read-only)",
       "severity": "high",
       "steps": [
         { "action": "goto", "url": "/" },
-        { "action": "waitForSelector", "selector": "label:has-text(\"Offline demo\") input[type=\"checkbox\"]", "timeout": 30000 }
+        { "action": "waitForSelector", "selector": "#repo-name", "timeout": 30000 },
+        { "action": "waitForSelector", "selector": "#idea" },
+        { "action": "waitForSelector", "selector": "button:has-text(\"Start Factory Run\")" },
+        { "action": "waitForSelector", "selector": "label:has-text(\"Offline demo\") input[type=\"checkbox\"]", "state": "detached" }
       ],
-      "assert": [{ "type": "text_visible", "selector": "label:has(input[type=\"checkbox\"]):has-text(\"Offline demo\")", "value": "Offline demo" }],
-      "user_impact": "The current New Run screen must expose its offline demo control. This check proves control presence only; it does not start a run or prove demo execution.",
+      "assert": [{ "type": "text_visible", "selector": "button:has-text(\"Start Factory Run\")", "value": "Start Factory Run" }],
+      "user_impact": "Factory Deck PR #209 deliberately removed offline demo mode. The current New Run fields and start control must render, and the removed demo checkbox must stay absent. The historical journey ID is retained for finding continuity. This read-only check never starts a run or proves app generation.",
       "candidate_files": ["src/ui/components/factory/NewRunHero.tsx"]
     }
   ]
