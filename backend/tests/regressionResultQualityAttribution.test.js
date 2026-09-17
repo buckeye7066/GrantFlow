@@ -104,40 +104,64 @@ describe('engine behavior that already holds and must keep holding', () => {
   })
 })
 
-describe('ATTRIBUTED DEFECTS — measured 2026-09-17; flip each to `it` in the change that repairs it', () => {
-  it.fails('engine gap: an "International students" program is not ACCEPT for a profile whose citizenship is US citizen', () => {
-    // Row text: "International students" / "…for international students".
-    // Profile: citizenship = US citizen, us_citizen = true, nationality American.
-    // Replay on a91267ac: ACCEPT 100, eligible=true, "eligibility … check out".
-    const decision = replay(CASE_IDS.internationalMeritCatalogRescore)
-    expect(decision.decision).not.toBe('ACCEPT')
-    expect(decision.eligible).not.toBe(true)
+describe('ATTRIBUTED DEFECTS — measured 2026-09-17 on a91267ac, repaired in PR2 (each block was `it.fails` until its repair landed)', () => {
+  it('engine gap: an "International students" program is REVIEW, not ACCEPT, for a profile whose citizenship is US citizen', () => {
+    // Row text: "…for international students" (stated AUDIENCE, not exclusive
+    // wording). Profile: citizenship = US citizen. Before: ACCEPT 100,
+    // eligible=true, "eligibility … check out". After: a soft contradiction —
+    // REVIEW with the reason named and the score capped, never REJECT (G4:
+    // only explicit exclusivity hard-gates).
+    for (const id of [CASE_IDS.internationalMeritCatalogRescore, CASE_IDS.internationalMeritInstitution, CASE_IDS.internationalMeritsProgram]) {
+      const decision = replay(id)
+      expect(decision.decision, id).toBe('REVIEW')
+      expect(decision.eligible, id).toBe('maybe')
+      expect(decision.missingEligibilityFields, id).toContain('international_audience_mismatch')
+      expect(decision.explanation, id).toMatch(/described for international students/i)
+      expect(decision.explanation, id).not.toMatch(/check out/i)
+    }
   })
 
-  it.fails('overstatement: a program row with NO eligibility text does not report eligible=true (ECF Family Caregiver Stipend)', () => {
+  it('overstatement: a program row with NO eligibility text says so instead of "eligibility checks out" (ECF Family Caregiver Stipend)', () => {
     // eligibility_bullets: [], description is a "Discovered from …" stub. The
-    // engine already scores eligibility as UNKNOWN (eligibility_factor 0.8) yet
-    // reports eligible=true and "eligibility and location check out".
+    // decision stays ACCEPT (silence is neutral, G4 — a verdict flip here would
+    // hide 41% of the fleet's accepts), but the engine now reports HOW MUCH
+    // eligibility evidence it had, and the explanation matches it.
     const decision = replay(CASE_IDS.ecfCaregiverStipend)
-    expect(decision.eligible).toBe('maybe')
+    expect(decision.decision).toBe('ACCEPT')
+    expect(decision.eligibility_evidence).toBe('structured_flags') // title says "caregiver"; no prose
+    expect(decision.match_explain.eligibility_evidence).toBe('structured_flags')
+    expect(decision.explanation).not.toMatch(/eligibility and location check out/i)
+    expect(decision.explanation).toMatch(/criteria are not published .* confirm before applying/i)
   })
 
-  it.fails('overstatement: a benefit row with NO eligibility text does not report eligible=true (TennCare 1915(c) HCBS Waivers)', () => {
+  it('overstatement: a benefit row with NO eligibility text and no restriction flags is "applicant type only" (TennCare 1915(c) HCBS Waivers)', () => {
     const decision = replay(CASE_IDS.hcbsWaivers)
-    expect(decision.eligible).toBe('maybe')
+    expect(decision.decision).toBe('ACCEPT')
+    expect(decision.eligibility_evidence).toBe('applicant_types_only')
+    expect(decision.explanation).toMatch(/eligibility criteria are not stated by the source/i)
+    expect(decision.explanation).not.toMatch(/check out\)/)
   })
 
-  it.fails('overstatement: an ACCEPT whose opportunity has no stated location does not claim "location check out"', () => {
-    // state NULL, is_national false → geo_factor 0.7 (unknown), yet the
-    // explanation asserts the location checks out.
+  it('overstatement: an ACCEPT whose opportunity has no stated location says "Service area not stated", never "location check out"', () => {
+    // state NULL, is_national false → geo_factor 0.7 (unknown).
     const decision = replay(CASE_IDS.jacksonvilleNoGeo)
     expect(decision.decision).toBe('ACCEPT')
+    expect(decision.eligibility_evidence).toBe('prose') // this row DOES carry eligibility text
+    expect(decision.explanation).toMatch(/Eligibility checks out\. Service area not stated by the source\./)
     expect(decision.explanation).not.toMatch(/location check out/i)
   })
 
-  it.fails('profile normalization: a stray ZIP does not win a 1-1 vote against the ZIP consistent with the profile state', () => {
+  it('control: a row with stated eligibility AND a stated location keeps the full "eligibility and location check out" claim', () => {
+    const opportunity = { ...fixture.opportunityById(CASE_IDS.jacksonvilleNoGeo), state: 'TN', geo_scope: 'state' }
+    const decision = computeMatchDecision(profile, opportunity, { profileSections: sectionsByKey, signals })
+    expect(decision.decision).toBe('ACCEPT')
+    expect(decision.explanation).toMatch(/eligibility and location check out/i)
+  })
+
+  it('profile normalization: a stray ZIP loses a 1-1 vote to the ZIP consistent with the declared state', () => {
     // basic_information.zip_code = 55402 (Minneapolis) vs location.zip_code =
-    // 37312 (Cleveland, TN); state resolves to TN, zip resolves to 55402.
+    // 37312 (Cleveland, TN); state is TN. Before: 55402 won as "the flat value".
     expect(signals.location.zip).toBe('37312')
+    expect(signals.location.county).toBe('Bradley')
   })
 })

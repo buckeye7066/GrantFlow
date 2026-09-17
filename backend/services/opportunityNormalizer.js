@@ -13,7 +13,7 @@
 import crypto from 'crypto'
 import { grantsGovApplicantCodesFrom } from '../../shared/grantsGovProtocol.js'
 import { normalizeNeedCategory, NEED_ALIAS_MAP } from './profileNormalizer.js'
-import { isWomenExclusiveOpportunityText } from '../config/demographicRestrictionPatterns.js'
+import { isWomenExclusiveOpportunityText, internationalStudentRestriction } from '../config/demographicRestrictionPatterns.js'
 
 // ---------------------------------------------------------------------------
 // Safe JSON parse helper
@@ -1072,6 +1072,17 @@ export function normalizeOpportunity(rawOpp) {
     // wording remain soft relevance signals.
     isWomenExclusiveOpportunityText(text)
 
+  // International-applicant restriction: 'exclusive' (hard gate against a KNOWN
+  // US citizen) or 'audience' (stated audience → soft contradiction / REVIEW).
+  // A structured `requires_international_student` stated by the source wins.
+  const rawRequiresInternational = rawOpp.requires_international_student
+  const requiresInternationalStudent =
+    rawRequiresInternational === true || String(rawRequiresInternational ?? '').toLowerCase().trim() === 'exclusive'
+      ? 'exclusive'
+      : String(rawRequiresInternational ?? '').toLowerCase().trim() === 'audience'
+        ? 'audience'
+        : internationalStudentRestriction(text)
+
   // -- Explicit identity (ethnicity / gender) restrictions --
   // Only set when EXPLICITLY exclusive (per canonical_rules G4). These are the
   // hard-gate signals the decision engine uses to reject a profile whose
@@ -1158,6 +1169,7 @@ export function normalizeOpportunity(rawOpp) {
     requiresStudent,
     requiresWomen,
     requiresGender,
+    requiresInternationalStudent,
     requiresEthnicity,
     requiresNonprofit,
     requiresBusiness,

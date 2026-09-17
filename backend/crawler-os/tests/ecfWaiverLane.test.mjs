@@ -150,6 +150,30 @@ test('ported live extraction is conservative: program-keyword anchors only, bloc
   assert.equal(loan.is_loan, true, '...but flagged is_loan so the reality gate applies the profile preference');
 });
 
+test('program rows inherit the page\'s stated population as eligibility_text with provenance (2026-09-17: child rows carried only a "Discovered from" stub)', () => {
+  const source = getSource('tn_ecf_choices');
+  const adapter = createEcfChoicesAdapter();
+  const html = `<html><body><a href="/tenncare/family-caregiver-stipend.pdf">ECF CHOICES Family Caregiver Stipend</a></body></html>`;
+  const [child] = parse('html', html, ecfLiveParseCfg()).candidates
+    .map((raw) => adapter.mapCandidate(raw, { source }))
+    .filter(Boolean);
+  assert.ok(child, 'child program candidate mapped');
+  assert.equal(child.eligibility_text, source.resource_summary, 'child carries the program page statement verbatim');
+  assert.equal(child.field_provenance.eligibility_text.value, source.resource_summary);
+  assert.equal(child.field_provenance.eligibility_text.source, 'parent_program_page');
+  assert.equal(child.field_provenance.eligibility_text.inherited, true);
+  assert.equal(child.field_provenance.eligibility_text.url, source.base_url);
+
+  const program = adapter.mapCandidate(adapter.buildRequests({}, source)[0].parseCfg.directoryCandidate, { source });
+  assert.equal(program.eligibility_text, source.resource_summary, 'the program row states it directly');
+  assert.equal(program.field_provenance.eligibility_text.inherited, false);
+
+  // Nothing is invented: a source without a statement yields no eligibility text.
+  const bare = adapter.mapCandidate({ href: '/tenncare/x.html', text: 'Some support program' }, { source: { ...source, resource_summary: null } });
+  assert.equal(bare.eligibility_text, null);
+  assert.equal(bare.field_provenance, null);
+});
+
 test('site-section anchors are refused (2026-08-22: 8 of one member\'s top 10 were TennCare nav pages sharing ONE program keyword)', () => {
   const source = getSource('tn_ecf_choices');
   const adapter = createEcfChoicesAdapter();

@@ -509,6 +509,24 @@ export function evaluateEligibility(profileNorm, oppNorm) {
     else if (isFemale === null) missingFields.push('gender')
   }
 
+  // International-applicant restriction (2026-09-17). Mirrors requiresGender:
+  // EXCLUSIVE wording + KNOWN US citizen → hard reject; exclusive + unknown
+  // citizenship → missing field (REVIEW); a stated AUDIENCE ("for international
+  // students") + known US citizen → soft contradiction (REVIEW via score cap),
+  // never a reject; a non-citizen or unknown profile is neutral.
+  if (oppNorm.requiresInternationalStudent) {
+    const citizenship = profileCitizenship(profileNorm)
+    if (oppNorm.requiresInternationalStudent === 'exclusive') {
+      if (citizenship === 'us_citizen') {
+        ineligibilityReasons.push('Restricted to international (non-US) students; profile is a US citizen')
+      } else if (citizenship === null) {
+        missingFields.push('citizenship')
+      }
+    } else if (citizenship === 'us_citizen') {
+      missingFields.push('international_audience_mismatch')
+    }
+  }
+
   // Explicit ETHNICITY restriction (canonical_rules G4 "explicitly exclusive").
   // UNCF (African-American-only), Hispanic Scholarship Fund (Hispanic-only),
   // enrolled-tribal-member scholarships, etc. HARD-REJECT only when the
@@ -1074,6 +1092,90 @@ function profileGenderIsFemale(profileNorm) {
   if (/\bfemale\b|\bwoman\b|\bwomen\b|\bgirl\b/.test(g)) return true
   if (/\bmale\b|\bman\b|\bmen\b|\bboy\b/.test(g)) return false
   return null
+}
+
+/**
+ * 'us_citizen' | 'non_citizen' | null, from the normalized immigration status
+ * (profileNormalizer: demographics.immigrant_status / immigration section) or a
+ * us_citizen demographic. Unknown stays null — neutral per canonical G4.
+ */
+function profileCitizenship(profileNorm) {
+  const status = String(profileNorm?.immigrationStatus ?? '').toLowerCase().trim()
+  if (status === 'us_citizen' || status === 'citizen') return 'us_citizen'
+  if (profileNorm?.isUsCitizen === true || (profileNorm?.demographics ?? []).includes('us_citizen')) return 'us_citizen'
+  if (status && status !== 'unknown' && status !== 'other') return 'non_citizen'
+  return null
+}
+
+/**
+ * How much eligibility EVIDENCE the engine actually had for a row, from most
+ * to least: the source's own eligibility prose/bullets; restriction flags the
+ * normalizer derived from title/description; stated applicant types alone;
+ * nothing. Additive — decisions are unchanged (silence stays neutral, G4) —
+ * but the explanation and the four-truth `profile_qualifies` leg must never
+ * claim more than this. Measured 2026-09-17: 41% of the fleet's ACCEPT rows sat
+ * on opportunities with no eligibility text and reported "eligibility checks
+ * out".
+ */
+export const ELIGIBILITY_EVIDENCE = Object.freeze({
+  PROSE: 'prose',
+  STRUCTURED_FLAGS: 'structured_flags',
+  APPLICANT_TYPES_ONLY: 'applicant_types_only',
+  NONE: 'none',
+})
+
+const RESTRICTION_FLAG_KEYS = Object.freeze([
+  'requiresVeteran', 'requiresStudent', 'requiresWomen', 'requiresGender', 'requiresNonprofit',
+  'requiresBusiness', 'requiresLowIncome', 'requiresFosterYouth', 'requiresDvSurvivor', 'requiresFarmer',
+  'requiresFaithBased', 'requiresCdc', 'requiresDisasterContext', 'requiresInternationalStudent',
+  'isCaregiverProgram', 'isSeniorProgram', 'diseaseSpecific', 'ageRestriction', 'isInstitutionalOnly', 'isResearchOnly',
+])
+
+export function eligibilityEvidenceLevel(opportunity, oppNorm) {
+  const prose = typeof opportunity?.eligibility_text === 'string' && opportunity.eligibility_text.trim().length > 0
+  const bullets = safeParseArrayField(opportunity?.eligibility_bullets, []).length > 0
+  if (prose || bullets) return ELIGIBILITY_EVIDENCE.PROSE
+  const ethnicity = Array.isArray(oppNorm?.requiresEthnicity) && oppNorm.requiresEthnicity.length > 0
+  const flagged = RESTRICTION_FLAG_KEYS.some((key) => {
+    const value = oppNorm?.[key]
+    return Boolean(value) && value !== 'none' && value !== 'unknown'
+  })
+  if (ethnicity || flagged || oppNorm?.educationLevel === 'k12') return ELIGIBILITY_EVIDENCE.STRUCTURED_FLAGS
+  if (oppNorm && !oppNorm.applicabilityUnknown && (oppNorm.entityTypesAllowed?.length ?? 0) > 0) {
+    return ELIGIBILITY_EVIDENCE.APPLICANT_TYPES_ONLY
+  }
+  return ELIGIBILITY_EVIDENCE.NONE
+}
+
+/** The source stated WHERE the money is valid (a state or nationwide). */
+export function locationStated(oppNorm) {
+  const geo = oppNorm?.geography ?? {}
+  return Boolean(geo.isNational || oppNorm?.isNational || geo.state)
+}
+
+const ELIGIBILITY_CLAUSE = Object.freeze({
+  [ELIGIBILITY_EVIDENCE.PROSE]: 'Eligibility checks out.',
+  [ELIGIBILITY_EVIDENCE.STRUCTURED_FLAGS]:
+    'Stated audience matches; detailed eligibility criteria are not published in this listing — confirm before applying.',
+  [ELIGIBILITY_EVIDENCE.APPLICANT_TYPES_ONLY]:
+    'Applicant type matches; eligibility criteria are not stated by the source — confirm before applying.',
+  [ELIGIBILITY_EVIDENCE.NONE]: 'Eligibility is not stated by the source — confirm before applying.',
+})
+
+/**
+ * The ACCEPT explanation may only say "eligibility and location check out" when
+ * the source stated eligibility AND a location. Otherwise it names what was and
+ * was not evaluated (the "Location unknown — cannot verify" reason and the
+ * "location check out" claim used to ship on the same row).
+ */
+function acceptExplanation(score, opportunity, oppNorm) {
+  const evidence = eligibilityEvidenceLevel(opportunity, oppNorm)
+  const geoKnown = locationStated(oppNorm)
+  if (evidence === ELIGIBILITY_EVIDENCE.PROSE && geoKnown) {
+    return `Covers about ${score}% of this profile's main needs (eligibility and location check out).`
+  }
+  const locationClause = geoKnown ? 'Location checks out.' : 'Service area not stated by the source.'
+  return `Covers about ${score}% of this profile's main needs. ${ELIGIBILITY_CLAUSE[evidence]} ${locationClause}`
 }
 
 function profileWantsStudentAid(profileNorm, effectiveSignals) {
@@ -4253,6 +4355,37 @@ export function makeDecision(score, profile, opportunity, normalizedProfile = nu
     return { decision: 'REJECT', explanation: 'Opportunity is for men/male applicants only.', reasons }
   }
 
+  // International-applicant restriction (mirrors evaluateEligibility): reject
+  // only an EXCLUSIVE rule against a KNOWN US citizen; a stated audience or an
+  // unknown citizenship is a REVIEW with the reason named, never a reject.
+  if (on.requiresInternationalStudent) {
+    const citizenship = profileCitizenship(np)
+    if (on.requiresInternationalStudent === 'exclusive' && citizenship === 'us_citizen') {
+      reasons.push('International-students-only program; profile is a US citizen')
+      return {
+        decision: 'REJECT',
+        explanation: 'Opportunity is for international (non-US) students only; the profile is a US citizen.',
+        reasons,
+      }
+    }
+    if (on.requiresInternationalStudent === 'exclusive' && citizenship === null) {
+      reasons.push('International-students-only program; profile citizenship unconfirmed — review (missing: citizenship)')
+      return {
+        decision: 'REVIEW',
+        explanation: 'Opportunity is for international students only; confirm citizenship or visa status before pursuing.',
+        reasons,
+      }
+    }
+    if (citizenship === 'us_citizen') {
+      reasons.push('Program is described for international students; profile is a US citizen — review')
+      return {
+        decision: 'REVIEW',
+        explanation: 'This program is described for international students and the profile is a US citizen. Confirm eligibility on the program page before pursuing.',
+        reasons,
+      }
+    }
+  }
+
   const profileTypeIsMissingOrGeneric = !profileType || profileType === 'organization'
   if (on.requiresNonprofit && !isNonprofit) {
     if (profileTypeIsMissingOrGeneric) {
@@ -4545,7 +4678,7 @@ export function makeDecision(score, profile, opportunity, normalizedProfile = nu
 
   if (score >= ACCEPT_SCORE) {
     reasons.push(`Score ${score} ≥ ${ACCEPT_SCORE} — covers at least half of the profile's main needs`)
-    return { decision: 'ACCEPT', explanation: `Covers about ${score}% of this profile's main needs (eligibility and location check out).`, reasons }
+    return { decision: 'ACCEPT', explanation: acceptExplanation(score, opp, on), reasons }
   }
 
   if (score >= REVIEW_SCORE) {
@@ -4762,6 +4895,7 @@ export function computeMatchDecision(rawProfile, rawOpportunity, opts = {}) {
       decision: 'REJECT',
       explanation: `Rejected by hard eligibility rules: ${hardEligibilityReasons.join('; ')}`,
       eligible: false,
+      eligibility_evidence: eligibilityEvidenceLevel(rawOpportunity, oppNorm),
       ineligibilityReasons: hardEligibilityReasons,
       matchedNeeds: [],
       matchedProfileTraits: [],
@@ -4880,6 +5014,10 @@ export function computeMatchDecision(rawProfile, rawOpportunity, opts = {}) {
   if (elderMissing.includes('local_award_out_of_state') && finalScore > MISMATCH_CAP) {
     finalScore = MISMATCH_CAP
     scoreCaps.push(`Capped at ${MISMATCH_CAP}: local single-district / out-of-state-county award (review geography).`)
+  }
+  if (elderMissing.includes('international_audience_mismatch') && finalScore > MISMATCH_CAP) {
+    finalScore = MISMATCH_CAP
+    scoreCaps.push(`Capped at ${MISMATCH_CAP}: program is described for international students and the profile is a US citizen (review eligibility).`)
   }
 
   if (
@@ -5030,6 +5168,11 @@ export function computeMatchDecision(rawProfile, rawOpportunity, opts = {}) {
   // (it was only ever populated on the REJECT branch). (Mission System 3.)
   const missingEligibilityFields = canonicalMissingEligibilityFields
   match_explain.applicant_type_gate = applicantTypeEval
+  // How much eligibility evidence the engine actually had (additive; the
+  // four-truth `profile_qualifies` leg and the result card read this so
+  // neither claims more than was evaluated).
+  const eligibilityEvidence = eligibilityEvidenceLevel(rawOpportunity, oppNorm)
+  match_explain.eligibility_evidence = eligibilityEvidence
   // TEMPORAL ANCHOR evidence for read paths (pointerTruthPolicy's relatable
   // leg, the result card). A stale tie never reaches here — makeDecision
   // already REJECTed it — so what lands is a positive fit (current / past /
@@ -5062,6 +5205,7 @@ export function computeMatchDecision(rawProfile, rawOpportunity, opts = {}) {
     decision,
     explanation,
     eligible,
+    eligibility_evidence: eligibilityEvidence,
     ineligibilityReasons,
     matchedNeeds,
     matchedProfileTraits,

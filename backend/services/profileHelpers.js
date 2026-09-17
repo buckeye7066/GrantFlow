@@ -360,10 +360,20 @@ export function readSectionLocation(sections = {}) {
     zipVotes.get(key).votes += 1
   }
   let zip = null
-  for (const entry of zipVotes.values()) {
-    if (!zip || entry.votes > zip.votes) zip = entry
+  const ranked = [...zipVotes.values()].sort((a, b) => b.votes - a.votes)
+  if (ranked.length > 0) {
+    const top = ranked.filter((entry) => entry.votes === ranked[0].votes)
+    // A tie between shapes is broken by the state the profile already declares:
+    // the stray form-pasted ZIP (Minneapolis 55402 beside Cleveland, TN 37312 —
+    // measured on the live profile 2026-09-17, one vote each) loses to the ZIP
+    // that resolves into that state. With no state, or when every tied ZIP
+    // agrees with it, the flat value keeps winning as before.
+    const stateForTie = state ? String(state).toUpperCase() : null
+    const consistent = stateForTie
+      ? top.filter((entry) => zipcodes.lookup(entry.value.slice(0, 5))?.state === stateForTie)
+      : []
+    zip = (consistent.length === 1 ? consistent[0] : top[0]).value
   }
-  zip = zip ? zip.value : null
   if (addressLine) {
     city = city || addressLine[1].trim()
     state = state || addressLine[2].toUpperCase()

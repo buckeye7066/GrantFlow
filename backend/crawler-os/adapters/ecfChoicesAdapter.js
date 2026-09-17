@@ -122,6 +122,33 @@ function resolveAbsoluteUrl(href, baseUrl) {
   }
 }
 
+/**
+ * Who ECF CHOICES serves, as the official program page states it (the registry
+ * `resource_summary` is that page's statement, verified live). Program rows
+ * discovered as anchors ON that page previously carried only a "Discovered
+ * from …" stub and NO eligibility text, so the canonical engine had nothing to
+ * evaluate and reported "eligibility checks out" for a profile with no
+ * disability (measured 2026-09-17: Family Caregiver Stipend and 1915(c) HCBS
+ * Waivers ACCEPT while the parent row, which carries the statement, held at
+ * REVIEW). Child rows now carry the SAME statement, labelled inherited, with
+ * provenance. Nothing is invented: no summary → no eligibility text.
+ */
+function inheritedEligibility(source, { inherited }) {
+  const statement = typeof source?.resource_summary === 'string' ? source.resource_summary.trim() : '';
+  if (!statement) return { eligibility_text: null, field_provenance: null };
+  return {
+    eligibility_text: statement,
+    field_provenance: {
+      eligibility_text: {
+        value: statement,
+        source: inherited ? 'parent_program_page' : 'program_page',
+        url: source?.base_url ?? null,
+        inherited,
+      },
+    },
+  };
+}
+
 export function ecfLiveParseCfg() {
   return {
     rowPattern: ANCHOR_ROW_PATTERN,
@@ -193,6 +220,7 @@ export function createEcfChoicesAdapter() {
           geography,
           is_loan: false,
           requires_cost_share: false,
+          ...inheritedEligibility(source, { inherited: false }),
           raw,
         };
       }
@@ -221,6 +249,7 @@ export function createEcfChoicesAdapter() {
         geography,
         is_loan: looksLikeLoan(title),
         requires_cost_share: false,
+        ...inheritedEligibility(source, { inherited: true }),
         raw,
       };
     },
