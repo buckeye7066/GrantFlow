@@ -92,7 +92,7 @@ describe('buildHamiltonTodoCategory', () => {
   })
 
   it('falls back to the linked grant/pipeline URL when the task has none', async () => {
-    await db.prepare('CREATE TABLE IF NOT EXISTS grants (id TEXT PRIMARY KEY, profile_id TEXT, title TEXT, application_url TEXT, url TEXT, source_url TEXT)').run()
+    await db.prepare('CREATE TABLE IF NOT EXISTS grants (id TEXT PRIMARY KEY, profile_id TEXT, title TEXT, funder TEXT, application_url TEXT, url TEXT, source_url TEXT)').run()
     await db.prepare(
       "INSERT INTO grants (id, profile_id, title, application_url) VALUES ('g-hous', ?, 'MTSU Off-Campus Housing & Rent Assistance', 'https://www.mtsu.edu/housing/portal')",
     ).run(PROFILE_ID)
