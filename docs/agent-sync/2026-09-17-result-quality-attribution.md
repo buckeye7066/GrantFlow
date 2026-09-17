@@ -173,14 +173,63 @@ Decisions I made and why (owner may overrule):
   crawler-os run. A targeted refresh is the post-merge step, verified by the
   live envelope for the captured profile.
 
-## Next PRs
+## PR2 outcome
 
-- **PR3 evidence contract**: `profile_qualifies.evidence_basis` (from
-  `eligibility_evidence`) and `relatable.geo_evidence` on the four-truth proof
-  (additive); `canonicalMatchDisplay` / FundingResultCard render "Confirm
-  eligibility" and never "Apply now" for `applicant_types_only|none` or
-  unknown-location accepts; rows without the field render conservatively;
-  targeted refresh of the affected persisted rows.
+#1741 merged to `main` 2026-09-17T04:14Z (squash). First head failed only the
+profile-signal hash tripwire (by design — three derivation files changed);
+bumped `PROFILE_SIGNAL_VERSION` to `2026.09.17-1` and re-pinned. The bump is the
+targeted refresh: every stored explain from the old derivation is stale and the
+boot drain re-scores it (800 pairs / 45 s per boot).
+
+## PR3 — evidence contract on the proof and the card (this branch)
+
+CHANGED
+- `crawler-os/fundingTruthPolicy.js`: `proofEvidenceBasis(canonical,
+  opportunity, previous)` → `{ eligibility: prose|structured_flags|
+  applicant_types_only|none|unknown, geography: national|stated|unknown }`.
+  Eligibility is the engine's `eligibility_evidence`; for decisions that
+  predate it, derived from the row's own eligibility text / stated applicant
+  types, else the previous proof's basis, else `unknown`. Geography reads an
+  OS opportunity (`geography.{national,states}`) or a catalog row
+  (`is_national`, `state`, `geo_eligibility`). Both proof builders
+  (`buildFourTruthProof`, `refreshFourTruthProof`) emit it as a top-level
+  `evidence_basis` block; the legs' `passed` values are unchanged (the existing
+  strict-equality tests on `relatable` still hold).
+- `src/lib/matchDisplayThresholds.js` `canonicalMatchDisplay({ score, decision,
+  eligibilityEvidence, geoEvidence })` → adds `confirm_eligibility`
+  (`true|false`, or `null` when the caller passed no evidence — legacy call
+  sites unchanged), `evidence_note`, `eligibility_evidence`, `geo_evidence`.
+  An ACCEPT below `prose`, or with an unstated service area, needs
+  confirmation; REVIEW/REJECT never carry the chip (the label already says it).
+- `src/components/funding/toCanonicalResult.js`: derives `eligibility_evidence`
+  / `geo_evidence` for every row with a fallback ladder (engine level → proof
+  `evidence_basis` → proof evidence arrays → row text/geography → `unknown`),
+  so rows scored before PR2 render conservatively rather than as verified.
+- `FundingResultCard`: header label is now decision-first
+  (`canonicalMatchDisplay`, so a REVIEW never reads "Excellent Match"); a
+  "Confirm eligibility first" chip with the evidence note; the CTA reads
+  "Confirm eligibility, then apply" (amber) instead of "Open application" when
+  confirmation is needed. Raw rows without evidence fields render as before.
+- `PROFILE_SIGNAL_VERSION` → `2026.09.17-2` (the policy file is hash-pinned);
+  refreshed proofs gain `evidence_basis` on the boot drain.
+
+For the captured profile: Jacksonville (state NULL) → `prose` / `unknown` →
+"Confirm eligibility first … service area is not stated"; ECF Caregiver
+Stipend → `applicant_types_only` → "Only who may apply is stated … confirm
+before applying"; International Merit rows are REVIEW after PR2 and carry no
+chip — the label already says "Needs review".
+
+## Still open (Gate B — not closed by PR1–PR3)
+
+- **PR4 recall**: gap-seed replay through `runProfileDiscoveryLive({ extraQueries,
+  extraSeedPages })`, `SEMANTIC_RECALL` cohort, before/after scorecard on the
+  stages in the plan. Nothing in PR1–PR3 claims the crawler finds more.
+- Live envelope check for the captured profile after the boot drain re-scores
+  its rows (the persisted International Merit accepts flip to REVIEW only when
+  re-scored; the drain is bounded per boot).
+- Owner decisions recorded above: `eligible` stays decision-derived; the
+  ratified 2026-09-05 "…only" rule stays stricter than G4.
+- `admin.js` HTTP dry-run modes (`:5576`, `:5704`) — separate PR.
 - **PR3 evidence contract**: additive `profile_qualifies.evidence_basis`
   (`stated_requirements | applicant_type_only | none`) and
   `relatable.geo_evidence` on the four-truth proof; `canonicalMatchDisplay` /

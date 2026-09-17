@@ -125,6 +125,42 @@ describe("canonicalMatchDisplay", () => {
       label: "Unrated", tier: "unrated", decision: "ACCEPT", score: null,
     })
   })
+
+  it("legacy callers that pass no evidence get confirm_eligibility: null (not evaluated), never a claim", () => {
+    const d = canonicalMatchDisplay({ score: 32, decision: "ACCEPT" })
+    expect(d.confirm_eligibility).toBeNull()
+    expect(d.evidence_note).toBeNull()
+    expect(d.label).toBe("Excellent Match")
+  })
+
+  it("an ACCEPT with stated eligibility prose and a stated area needs no confirmation", () => {
+    expect(canonicalMatchDisplay({ score: 32, decision: "ACCEPT", eligibilityEvidence: "prose", geoEvidence: "stated" }))
+      .toMatchObject({ confirm_eligibility: false, evidence_note: null, eligibility_evidence: "prose", geo_evidence: "stated" })
+  })
+
+  it.each([
+    ["structured_flags", /detailed eligibility criteria are not published/],
+    ["applicant_types_only", /Only who may apply is stated/],
+    ["none", /Eligibility is not stated/],
+    ["unknown", /not recorded/],
+    ["garbage", /not recorded/],
+  ])("an ACCEPT below prose (%s) needs confirmation with the matching note", (level, note) => {
+    const d = canonicalMatchDisplay({ score: 32, decision: "ACCEPT", eligibilityEvidence: level, geoEvidence: "stated" })
+    expect(d.confirm_eligibility).toBe(true)
+    expect(d.evidence_note).toMatch(note)
+    expect(d.label).toBe("Excellent Match") // the tier is still the tier; the claim is what changes
+  })
+
+  it("an unstated service area needs confirmation even with eligibility prose", () => {
+    const d = canonicalMatchDisplay({ score: 32, decision: "ACCEPT", eligibilityEvidence: "prose", geoEvidence: "unknown" })
+    expect(d.confirm_eligibility).toBe(true)
+    expect(d.evidence_note).toMatch(/service area is not stated/)
+  })
+
+  it("REVIEW and REJECT never carry a confirm chip — the label already says it", () => {
+    expect(canonicalMatchDisplay({ score: 85, decision: "REVIEW", eligibilityEvidence: "none", geoEvidence: "unknown" }).confirm_eligibility).toBe(false)
+    expect(canonicalMatchDisplay({ score: 85, decision: "REJECT", eligibilityEvidence: "none", geoEvidence: "unknown" }).confirm_eligibility).toBe(false)
+  })
 })
 
 

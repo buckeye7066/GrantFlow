@@ -92,6 +92,64 @@ function pickString(...candidates) {
   return null
 }
 
+function parseExplain(opp) {
+  for (const raw of [opp?.match_explain, opp?.match_explain_json]) {
+    if (!raw) continue
+    if (typeof raw === 'object') return raw
+    try {
+      const parsed = JSON.parse(String(raw))
+      if (parsed && typeof parsed === 'object') return parsed
+    } catch {
+      // not JSON — fall through
+    }
+  }
+  return null
+}
+
+function nonEmptyList(value) {
+  if (Array.isArray(value)) return value.filter((x) => typeof x === 'string' && x.trim()).length > 0
+  if (typeof value === 'string') {
+    const s = value.trim()
+    if (!s) return false
+    try { return nonEmptyList(JSON.parse(s)) } catch { return true }
+  }
+  return false
+}
+
+const ELIGIBILITY_EVIDENCE = new Set(['prose', 'structured_flags', 'applicant_types_only', 'none'])
+
+/**
+ * How much eligibility evidence backs this match, for the card's honesty chip.
+ * Ladder, most authoritative first: the engine's recorded level (PR2+), the
+ * four-truth proof's evidence_basis, the proof's own evidence arrays (rows
+ * scored before the level existed), the row's eligibility text. Anything else
+ * is `unknown` — rendered conservatively, never as a check that was made.
+ */
+function deriveEligibilityEvidence(opp, explain) {
+  const recorded = String(explain?.eligibility_evidence ?? explain?.four_truth_proof?.evidence_basis?.eligibility ?? '').toLowerCase()
+  if (ELIGIBILITY_EVIDENCE.has(recorded)) return recorded
+  const qualifies = explain?.four_truth_proof?.profile_qualifies
+  if (nonEmptyList(qualifies?.eligibility_prose_evidence)) return 'prose'
+  if (nonEmptyList(opp?.eligibility_text) || nonEmptyList(opp?.eligibility_bullets)) return 'prose'
+  if (nonEmptyList(qualifies?.applicant_type_evidence)) return 'applicant_types_only'
+  return 'unknown'
+}
+
+function truthy(value) {
+  return value === true || value === 1 || ['true', '1'].includes(String(value ?? '').toLowerCase())
+}
+
+/** Did the source state WHERE the money is valid? national | stated | unknown. */
+function deriveGeoEvidence(opp, explain) {
+  const recorded = String(explain?.four_truth_proof?.evidence_basis?.geography ?? '').toLowerCase()
+  if (['national', 'stated', 'unknown'].includes(recorded)) return recorded
+  if (truthy(opp?.is_national)) return 'national'
+  const state = pickString(opp?.state, opp?.geography_state)
+  if (state && state.toLowerCase() !== 'nationwide') return 'stated'
+  if (state && state.toLowerCase() === 'nationwide') return 'national'
+  return 'unknown'
+}
+
 /**
  * Convert any legacy/backend opportunity object into the canonical
  * FundingResultCard shape. Safe to call repeatedly — idempotent.
@@ -143,6 +201,10 @@ export function toCanonicalResult(opp) {
     rawLinkStatus ||
     (opp.last_verified_at && opp.url_status_code && opp.url_status_code < 400 ? 'verified' : 'unverified')
 
+  const explain = parseExplain(opp)
+  const eligibilityEvidence = pickString(opp.eligibility_evidence) ?? deriveEligibilityEvidence(opp, explain)
+  const geoEvidence = pickString(opp.geo_evidence) ?? deriveGeoEvidence(opp, explain)
+
   return {
     id: opp.id ?? opp.source_id ?? opp.opportunity_id ?? null,
     title: pickString(opp.title, opp.program_name, opp.name) || 'Untitled opportunity',
@@ -179,6 +241,12 @@ export function toCanonicalResult(opp) {
     matched_profile_facts: matchedFacts,
     ineligibility_reasons: ineligibility,
     missing_eligibility_fields: unknownFacts,
+    // How much the engine actually verified (prose | structured_flags |
+    // applicant_types_only | none | unknown) and whether the source stated a
+    // service area (national | stated | unknown). The card renders a "confirm
+    // before applying" chip for anything below prose / an unstated area.
+    eligibility_evidence: eligibilityEvidence,
+    geo_evidence: geoEvidence,
     next_action: pickString(opp.next_action, opp.nextAction),
     // Structured recommended next steps from nextStepGuidance (objects with
     // id/label/detail/priority) — carried verbatim, bounded by the backend.

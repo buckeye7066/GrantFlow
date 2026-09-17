@@ -11,6 +11,7 @@ export {
   isVerifiedDirectFundingRecommendation,
   refreshFourTruthProof,
   failedFourTruths,
+  proofEvidenceBasis,
 } from '../crawler-os/fundingTruthPolicy.js'
 
 export { default } from '../crawler-os/fundingTruthPolicy.js'
