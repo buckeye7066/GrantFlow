@@ -80,6 +80,7 @@ function createCanonicalDb({ withDismissals = true, withMatchConfidence = true }
       deadline TEXT,
       deadline_type TEXT,
       application_url TEXT,
+      apply_url TEXT,
       is_national INTEGER DEFAULT 0,
       state TEXT,
       categories TEXT DEFAULT '[]',
@@ -177,6 +178,7 @@ function createCanonicalDb({ withDismissals = true, withMatchConfidence = true }
   `)
   db.prepare("UPDATE profile_opportunity_matches SET match_explain_json = ? WHERE opportunity_id IN ('opp-1', 'opp-dismissed')")
     .run(verifiedFourTruthExplain({ scoring_policy_version: 'need-first-v2' }))
+  db.exec('UPDATE funding_opportunities SET apply_url = application_url')
   return db
 }
 
@@ -401,4 +403,19 @@ describe('canonical funding-source query projection', () => {
 
     await expect(readFundingSourceRows(db, 'p-1')).rejects.toBe(error)
   })
+})
+
+it.each([true, false])('the actual SQL projection preserves both distinct aliases (dismissals=%s)', async (withDismissals) => {
+  const db = createCanonicalDb({ withDismissals })
+  try {
+    const selected = 'https://www.tn.gov/collegepays/apply'
+    const stale = 'https://alpha.grantable.co/login'
+    db.prepare('UPDATE funding_opportunities SET apply_url=?,application_url=? WHERE id=?').run(selected, stale, 'opp-1')
+    const { rows } = await readFundingSourceRows(db, 'p-1')
+    expect(rows.find(row => row.id === 'opp-1')).toMatchObject({ apply_url: selected, application_url: stale })
+    const reconciliation = db.prepare(NEED_FIRST_RECONCILIATION_ROWS_SQL).all('p-1', 10)
+    expect(reconciliation.find(row => row.id === 'opp-1')).toMatchObject({ apply_url: selected, application_url: stale })
+    expect(db.prepare('SELECT apply_url,application_url FROM funding_opportunities WHERE id=?').get('opp-1'))
+      .toEqual({ apply_url: selected, application_url: stale })
+  } finally { db.close() }
 })

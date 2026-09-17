@@ -1,28 +1,42 @@
 import express from 'express'
 import request from 'supertest'
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import Database from 'better-sqlite3'
 import fundingSourcesRouter from '../routes/fundingSources.js'
 import { loadProfileContext } from '../services/profileHelpers.js'
-import { readFundingSourceRows } from '../services/matching/fundingSourceQueries.js'
 import { loadRegressionFixture, FIXTURE_PROFILE_ID, CASE_IDS } from './fixtures/regression/tn-student-2026-09-17/index.js'
 
 vi.mock('../services/profileHelpers.js', async (original) => ({ ...await original(), loadProfileContext: vi.fn() }))
-vi.mock('../services/matching/fundingSourceQueries.js', async (original) => ({ ...await original(), readFundingSourceRows: vi.fn() }))
 
 const fixture = loadRegressionFixture()
 const original = fixture.opportunityById(CASE_IDS.jacksonvilleNoGeo)
 const match = fixture.matchByOpportunityId(CASE_IDS.jacksonvilleNoGeo)
 const selected = original.apply_url || original.application_url
 
+const databases = []
+afterEach(() => { for (const db of databases.splice(0)) db.close(); vi.unstubAllEnvs() })
+function sourceDb(row) {
+  const db = new Database(':memory:'); databases.push(db)
+  const cols = 'id title sponsor description eligibility_bullets deadline deadline_type amount_min amount_max state is_national application_url apply_url source_url source source_id record_origin opportunity_kind opportunity_type type funding_type is_loan source_trust_tier categories keywords link_status link_status_code last_verified_at verification_method is_active is_hidden updated_at'.split(' ')
+  const matchCols = 'id profile_id opportunity_id match_score match_confidence match_decision match_explanation match_reasons match_explain_json matcher_version'.split(' ')
+  db.exec('CREATE TABLE funding_opportunities (' + cols.join(',') + '); CREATE TABLE profile_opportunity_matches (' + matchCols.join(',') + '); CREATE TABLE pipeline_dismissals (profile_id,opportunity_id,title);')
+  const bind = x => x === undefined || x === null ? null : typeof x === 'boolean' ? Number(x) : typeof x === 'object' ? JSON.stringify(x) : x
+  db.prepare('INSERT INTO funding_opportunities VALUES (' + cols.map(() => '?').join(',') + ')').run(...cols.map(c => bind(row[c])))
+  const stored = { ...match, ...row, id: 'fixture-match', profile_id: FIXTURE_PROFILE_ID, opportunity_id: row.id }
+  db.prepare('INSERT INTO profile_opportunity_matches VALUES (' + matchCols.map(() => '?').join(',') + ')').run(...matchCols.map(c => bind(stored[c])))
+  return db
+}
+
 function appFor(row) {
+  vi.stubEnv('SHOULDERS_VNEXT', 'false')
+  const db = sourceDb(row)
   vi.mocked(loadProfileContext).mockResolvedValue({ profile: fixture.profile,
     sections: Object.fromEntries(fixture.sections.map(s => [s.section_key, s.data])) })
-  vi.mocked(readFundingSourceRows).mockResolvedValue({ rows: [row], dismissal_filter: 'fixture' })
   const app = express()
   app.use((req, _res, next) => {
     req.user = { id: 'admin-1', role: 'admin' }
     req.ctx = { userId: 'admin-1', isAdmin: true }
-    req.db = {}
+    req.db = db
     next()
   })
   app.use('/api', fundingSourcesRouter)
