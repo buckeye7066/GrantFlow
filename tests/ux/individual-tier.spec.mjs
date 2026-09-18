@@ -43,13 +43,20 @@ test('individual tier: sign in, verify actual plan, and open every advertised wo
   expect(tools.length).toBeGreaterThan(0)
   for (const tool of tools) {
     await test.step(tool.name, async () => {
-      await page.goto('/Help')
+      // Use the same links a person uses. Reloading the entire app twice per
+      // tool made unrelated fixture accounts exhaust the shared-IP auth limit.
+      if (new URL(page.url()).pathname !== '/Help') {
+        await page.getByRole('link', { name: 'Help with this page', exact: true }).click()
+      }
+      await expect(page.getByRole('heading', { name: 'Help Center', exact: true })).toBeVisible()
       await page.getByRole('link', { name: tool.name, exact: true }).first().click()
       await page.waitForLoadState('networkidle')
-      console.log('INDIVIDUAL_PAGE', JSON.stringify({ tool: tool.name, url: page.url(), headings: await page.locator('h1,h2,h3').allTextContents(), buttons: await page.getByRole('button').allTextContents(), text: (await page.locator('body').innerText()).slice(0,9000), crashes, serverErrors }))
+      const visibleText = await page.locator('body').innerText()
+      console.log('INDIVIDUAL_PAGE', JSON.stringify({ tool: tool.name, url: page.url(), headings: await page.locator('h1,h2,h3').allTextContents(), crashes, serverErrors }))
       await page.screenshot({ path: testInfo.outputPath(tool.name.replace(/[^a-z0-9]/gi, '-') + '.png'), fullPage: true })
       await expect(page).not.toHaveURL(/login|PricingRequired|CheckoutRequired/)
       await expect(page.getByText('Something went wrong', { exact: true })).toHaveCount(0)
+      expect(visibleText, 'Structured data leaked into a user-facing explanation').not.toContain('[object Object]')
       expect(crashes, 'An advertised individual-tier tool crashed in the browser').toEqual([])
       expect(serverErrors, 'An advertised individual-tier tool returned a server error').toEqual([])
     })
