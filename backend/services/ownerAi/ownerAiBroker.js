@@ -37,12 +37,19 @@ export function createOwnerAiBroker({ env = process.env, now = Date.now } = {}) 
     let value = null
     if (r?.ok === true && r.complete === true && r.billing_mode === 'subscription' &&
         pending.providers.some(n => r.provider === 'subscription:' + n) &&
+        (r.provider !== 'subscription:codex' || (r.model_source === 'explicit_cli_argument' &&
+          ['input_tokens', 'cached_input_tokens'].every(key => Number.isSafeInteger(r.usage?.[key]) && r.usage[key] >= 0))) &&
         typeof r.model === 'string' && /^[a-zA-Z0-9._:-]{1,120}$/.test(r.model) &&
         typeof r.raw === 'string' && r.raw.trim() && Buffer.byteLength(r.raw) <= 262144 &&
         Number.isFinite(r.usage?.output_tokens) && r.usage.output_tokens > 0 && r.usage.output_tokens < pending.input.maxTokens) {
       try {
         value = { ok: true, provider: r.provider, model: r.model, billing_mode: 'subscription', raw: r.raw,
           usage: { output_tokens: r.usage.output_tokens } }
+        if (r.provider === 'subscription:codex') {
+          value.model_source = 'explicit_cli_argument'
+          value.usage.input_tokens = r.usage.input_tokens
+          value.usage.cached_input_tokens = r.usage.cached_input_tokens
+        }
         if (pending.input.format === 'json') {
           value.json = JSON.parse(r.raw)
           if (!value.json || typeof value.json !== 'object') value = null

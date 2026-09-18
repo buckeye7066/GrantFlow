@@ -69,7 +69,7 @@ test('CLI environment allowlist strips secrets/overrides; prompts never become a
   assert.equal(clean.PATH, 'bin'); assert.equal(clean.CLAUDE_CONFIG_DIR, 'C:/Local/GrantFlow/subscriptions/claude'.replaceAll('/', process.platform === 'win32' ? '\\' : '/'))
   for (const key of ['ANTHROPIC_API_KEY', 'AUTH_TOKEN', 'NODE_OPTIONS', 'OPENAI_BASE_URL', 'apiKeyHelper', 'OWNER_AI_BRIDGE_TOKEN']) assert.equal(clean[key], undefined)
   const args = cliArguments('claude'); assert.equal(args[args.indexOf('--tools') + 1], ''); assert.ok(args.includes('--safe')); assert.ok(args.includes('--strict-mcp-config')); assert.equal(args.some(x => x.includes('private input')), false)
-  assert.throws(() => cliArguments('codex'), /unavailable/)
+  assert.ok(cliArguments('codex').includes('forced_login_method=chatgpt'))
 })
 test('CLI result requires successful terminal event and known model; quotas fail', () => {
   const good = { type: 'result', subtype: 'success', is_error: false, result: '{"a":1}', stop_reason: 'end_turn', modelUsage: { 'claude-test': {} }, usage: { output_tokens: 10 } }

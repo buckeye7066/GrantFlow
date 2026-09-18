@@ -28,7 +28,8 @@ export async function runBridge({ env = process.env, signal } = {}) {
   while (!signal?.aborted) {
     try {
       const probeSignal = AbortSignal.any([AbortSignal.timeout(10000), ...(signal ? [signal] : [])])
-      const providers = { codex: 'unavailable', claude: await probeProvider('claude', { env, signal: probeSignal }) }
+      const states = await Promise.all(['codex', 'claude'].map(provider => probeProvider(provider, { env, signal: probeSignal })))
+      const providers = { codex: states[0], claude: states[1] }
       const { job } = await post('poll', { providers })
       if (job) {
         if (!Number.isFinite(job.timeoutMs) || job.timeoutMs <= 0 || job.timeoutMs > 120000 ||

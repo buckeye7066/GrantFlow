@@ -7,10 +7,31 @@ application, submission, or confirmation outcome has been established by this wo
 ## Availability and provider order
 
 Order is subscription:codex, subscription:claude, then the separately integrated
-cloud API fallback. **Codex is currently unavailable:** installed `codex exec
---help` supports read-only sandbox, ephemeral runs and ignoring user config, but
-does not establish complete disabling of execution/read/web/MCP capabilities.
-Read-only is insufficient for untrusted extraction. No Codex prompts are run.
+cloud API fallback. **Codex is implemented:** readiness requires native `exec
+--help`, every required supported feature toggle from `features list`, and exact
+`Logged in using ChatGPT` native login status (stdout or stderr). Unknown or
+failed capability/auth probes remain unavailable; API-key auth is refused.
+The local worker's `OWNER_AI_CODEX_MODEL` defaults to `gpt-6-astra`; only a bounded
+alphanumeric model identifier with dots, underscores, colons or hyphens is accepted.
+Each invocation explicitly selects that model, low reasoning effort, ChatGPT-only
+login, read-only sandbox, ephemeral mode, ignored user config and strict config.
+Web search, agents, MCP and update-plan are disabled. The supported feature toggles
+disabled individually are shell_tool, unified_exec, apps, plugins, remote_plugin,
+browser_use, browser_use_external, image_generation, view_image, multi_agent,
+tool_suggest, skill_search, skill_mcp_dependency_install, in_app_browser, memories
+and sleep_tool. Removed/unsupported toggles never trigger a weaker retry.
+
+Codex accepts bounded NDJSON containing thread/turn start, completed agent-message
+items and a final turn.completed with actual input/cached-input/output counters.
+Tool, command, file-change, MCP, browser, error, failed or unknown events fail closed.
+Empty, nonterminal or malformed output fails. Model attribution is the requested
+model with `model_source: 'explicit_cli_argument'`, not an independently reported
+server model. Output tokens must remain below the caller's cap.
+
+The worker tries the server's provider order under one deadline, including auth
+probes. Each provider gets an independent abort slice reserving time for remaining
+providers. Success stops the ladder; native failure/quota exhaustion proceeds to
+the next subscription, then returns null for the separate gateway's paid ladder.
 
 Claude requires native `auth status --json` to positively report claude.ai with a
 Pro or Max subscription and no API-key source. An unknown/null subscription plan,
@@ -24,7 +45,8 @@ CLI output must contain a successful terminal result, end_turn, exactly one
 reported model and positive token usage below the caller's cap. Quotas, truncation,
 empty output and malformed JSON are failures, never success.
 
-Official references: [Codex authentication](https://developers.openai.com/codex/auth),
+Official references: [Codex configuration](https://learn.chatgpt.com/docs/config-file/config-reference),
+[Codex authentication](https://developers.openai.com/codex/auth),
 [Claude Code compliance](https://code.claude.com/docs/en/legal-and-compliance).
 Only the unmodified native CLI owns provider credentials. The bridge does not read,
 copy, upload or configure token files. Subscription quotas and provider terms apply;
@@ -38,12 +60,13 @@ prompt, maxTokens, signal, timeoutMs }`. Allocate a bounded subscription slice f
 the gateway's existing absolute deadline. On null, calculate **remaining** API
 time from that original deadline; never reset the deadline or turn zero into a
 default. Return a successful bridge result directly, preserving provider, model,
-`billing_mode: 'subscription'`, raw, usage, and json/text. No gateway edits are
+`billing_mode: 'subscription'`, model_source when present, raw, usage, and json/text. No gateway edits are
 included here, by assignment. Do not wrap jobs/schedulers in a fabricated scope.
 
 The canonical request-context middleware establishes scope automatically. It
 requires resolved real-user identity, admin status, exact trusted stored email
-matching AGENT_CONTROL_ADMIN_EMAIL (or ADMIN_EMAIL when absent), and exact
+matching trimmed/lowercased configured AGENT_CONTROL_ADMIN_EMAIL (or ADMIN_EMAIL
+when absent); trusted ctx.email itself is not normalized here. It requires exact
 OWNER_AI_USER_ID if configured. Service/profile tokens and other admins fail.
 Response finish/close revokes the scope and cancels pending work.
 
@@ -105,8 +128,14 @@ server bridge token to revoke access. No installation was performed in this task
 
 ## Local verification
 
-`node --test tests/unit/ownerAiBridge.test.mjs tests/unit/ownerAiTransport.test.mjs`
+`node --test tests/unit/ownerAiBridge.test.mjs tests/unit/ownerAiTransport.test.mjs tests/unit/ownerAiCodex.test.mjs`
 uses fake child processes and loopback HTTP only; no provider or production calls.
-Both files are automatically discovered by `scripts/run-unit-tests.mjs` in CI.
-Live subscription completion, pending Claude login, installation, cloud integration
-and any end-to-end funding outcome remain unverified.
+These files are automatically discovered by `scripts/run-unit-tests.mjs` in CI.
+The implementation follow-up reproduced 7 failing tests and 1 passing control
+before changes. A native metadata/help-only probe then reported Codex ready.
+Parent-reported Home evidence established ChatGPT Pro, actual fixed-JSON Codex
+completion and a synthetic file-read boundary refusal with no tool events, using
+the same strict controls. Those inference calls were not repeated in this follow-up.
+This is bounded regression evidence, not universal prompt-injection immunity.
+Claude remains pending genuine login. Installation, cloud integration and any
+end-to-end funding outcome remain unverified.

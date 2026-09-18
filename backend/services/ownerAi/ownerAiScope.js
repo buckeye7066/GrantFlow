@@ -3,7 +3,7 @@ import { isReservedSyntheticUserId } from '../../middleware/syntheticServiceToke
 const scopes = new AsyncLocalStorage()
 export function isCanonicalOwner(req) {
   const c = req?.ctx
-  const email = process.env.AGENT_CONTROL_ADMIN_EMAIL || process.env.ADMIN_EMAIL
+  const email = (process.env.AGENT_CONTROL_ADMIN_EMAIL || process.env.ADMIN_EMAIL || '').trim().toLowerCase()
   return Boolean(c?.identityResolved === true && c.isAdmin === true &&
     typeof c.userId === 'string' && c.userId.trim() && !isReservedSyntheticUserId(c.userId) &&
     email && c.email === email && (!process.env.OWNER_AI_USER_ID || c.userId === process.env.OWNER_AI_USER_ID) &&
