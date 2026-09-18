@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { DatabaseSync } from 'node:sqlite'
-import { ensureBillingAccount, ensureBillingSchema } from '../services/billingAccounts.js'
+import { ensureBillingAccount, ensureBillingSchema } from '../../backend/services/billingAccounts.js'
 
 async function fixture() {
   const db = new DatabaseSync(':memory:')
