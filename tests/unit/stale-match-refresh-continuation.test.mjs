@@ -135,3 +135,19 @@ test('a thrown continuation error is caught and reported without an unhandled re
   assert.equal(f.timers.size, 0)
   assert.equal(f.receipts.at(-1).continuation_status, 'failed')
 })
+
+test('default timers use the active runtime scheduler at execution time', async () => {
+  const run = createStaleMatchRefreshRunner(async () => batch(2, 1), {
+    environment: () => ({ NODE_ENV: 'production' }),
+  })
+  const originalSchedule = globalThis.setTimeout
+  let calls = 0
+  globalThis.setTimeout = () => { calls += 1; return { unref() {} } }
+  try {
+    const result = await run({})
+    assert.equal(result.continuation_status, 'scheduled')
+    assert.equal(calls, 1)
+  } finally {
+    globalThis.setTimeout = originalSchedule
+  }
+})

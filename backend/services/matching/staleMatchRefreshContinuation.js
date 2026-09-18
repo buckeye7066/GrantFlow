@@ -6,8 +6,8 @@ export function isStaleMatchRefreshWriteEnabled(opts = {}, env = process.env) {
 
 export function createStaleMatchRefreshRunner(runBatch, {
   environment = () => process.env,
-  schedule = setTimeout,
-  cancel = clearTimeout,
+  schedule = (callback, delay) => setTimeout(callback, delay),
+  cancel = timer => clearTimeout(timer),
   report = () => {},
   delayMs = 30000,
   maxPasses = 20,
