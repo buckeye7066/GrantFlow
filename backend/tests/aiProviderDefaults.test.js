@@ -274,6 +274,24 @@ describe.each([
 
 
 describe('live extraction provider deadline', () => {
+  it('allows a healthy 15-second extraction through the default paid-provider window', async () => {
+    vi.useFakeTimers()
+    const facts = { opportunities: [{ title: 'Nashville Youth Fund Grant', funder: 'Nashville Youth Fund', summary: 'A youth grant.', eligibility_bullets: [], states: [], need_categories: [], evidence: {} }] }
+    sdk.openai.mockImplementationOnce(async () => {
+      await new Promise(resolve => setTimeout(resolve, 15000))
+      return { choices: [{ finish_reason: 'stop', message: { content: JSON.stringify(facts) } }] }
+    })
+    sdk.anthropic.mockRejectedValue(new Error('fixture alternative unavailable'))
+    const html = '<main><h1>Nashville Youth Fund Grant</h1><p>The Nashville Youth Fund offers grants to nonprofit organizations serving youth in Tennessee. Applications are due September 1, 2026. Awards are up to $10,000. Applicants may submit one proposal during the current funding cycle.</p></main>'
+    const pending = extractOpportunitiesFromPage({ pageUrl: 'https://fixture.invalid/grant', html }, { invoke: options => invokeJsonWithFallback({ ...options, freeRoutes: [] }) })
+    await vi.advanceTimersByTimeAsync(15001)
+    const result = await pending
+    expect(result).toHaveLength(1)
+    expect(result[0].title).toBe('Nashville Youth Fund Grant')
+    expect(sdk.openai).toHaveBeenCalledTimes(1)
+    expect(sdk.anthropic).not.toHaveBeenCalled()
+  })
+
   it('uses Anthropic recovery before the page deadline after OpenAI truncates then hangs', async () => {
     vi.useFakeTimers()
     sdk.openai.mockResolvedValueOnce({ choices: [{ finish_reason: 'length', message: { content: '{' } }] }).mockImplementationOnce(() => new Promise(() => {}))

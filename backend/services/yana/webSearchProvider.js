@@ -61,7 +61,8 @@ export function makeBraveSearchProvider({
   if (typeof fetchImpl !== 'function') throw new Error('makeBraveSearchProvider: no fetch implementation available')
   const throttle = makeThrottle(minIntervalMs)
 
-  return async function search({ query } = {}) {
+  return async function search({ query, signal = null } = {}) {
+    signal?.throwIfAborted()
     const q = String(query || '').trim()
     if (!q) return []
     // Circuit breaker: if the key is rate-limited/quota-exhausted, skip the call
@@ -73,6 +74,7 @@ export function makeBraveSearchProvider({
       return []
     }
     return throttle(async () => {
+      signal?.throwIfAborted()
       // Re-check inside the serialized chain: an earlier queued call may have
       // tripped the breaker while this one waited its turn.
       if (isBravePaused()) return []
@@ -87,10 +89,12 @@ export function makeBraveSearchProvider({
           return []
         }
       } catch { /* pacer must never block search — fail open */ }
+      signal?.throwIfAborted()
       const url = `${BRAVE_ENDPOINT}?q=${encodeURIComponent(q)}&count=${count}`
       let res
       try {
         res = await fetchImpl(url, {
+          ...(signal ? { signal } : {}),
           headers: {
             Accept: 'application/json',
             'Accept-Encoding': 'gzip',
@@ -98,6 +102,7 @@ export function makeBraveSearchProvider({
           },
         })
       } catch (err) {
+        signal?.throwIfAborted()
         log.warn(`Brave search request failed for "${q}": ${err?.message || err}`)
         return []
       }

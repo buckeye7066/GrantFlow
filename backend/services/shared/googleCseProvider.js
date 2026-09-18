@@ -33,7 +33,8 @@ export function makeGoogleCseProvider({ count = 8 } = {}) {
     throw new Error('GOOGLE_CSE_KEY and GOOGLE_CSE_CX are required for the Google CSE provider')
   }
 
-  return async function googleCseSearch({ query, count: perCall, timeoutMs = 8000 } = {}) {
+  return async function googleCseSearch({ query, count: perCall, timeoutMs = 8000, signal = null } = {}) {
+    signal?.throwIfAborted()
     const q = String(query || '').trim()
     if (!q) return []
     // The API caps num at 10.
@@ -47,8 +48,9 @@ export function makeGoogleCseProvider({ count = 8 } = {}) {
       // retries:0 — a quota refusal is a stable fact for the rest of the UTC
       // day, and a transient 5xx just falls through to SearXNG; retrying here
       // only spends latency the ladder will spend better on the next rung.
-      response = await getWithRetry(url, { headers: { Accept: 'application/json' } }, { timeoutMs, retries: 0 })
+      response = await getWithRetry(url, { headers: { Accept: 'application/json' }, ...(signal ? { signal } : {}) }, { timeoutMs, retries: 0 })
     } catch (err) {
+      signal?.throwIfAborted()
       // `getWithRetry` RETURNS only 2xx — every other status is thrown as an
       // Error carrying `.status` + `.response` (httpClient.requestWithRetry).
       // A quota refusal is therefore a THROW, not a resolved 403, so reading

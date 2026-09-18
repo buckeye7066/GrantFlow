@@ -34,17 +34,22 @@ export function makeOpenAIWebSearchProvider({ client = null, count = 8, model = 
   // the useful error instead of being abandoned mid-request.
   const openai = client || createOpenAIClient({ timeoutMs: 45_000, maxRetries: 1 }).openai
   const selectedModel = String(model || process.env.OPENAI_WEB_SEARCH_MODEL || DEFAULT_MODEL).trim()
-  return async function openAIWebSearch({ query, count: requestedCount = count } = {}) {
+  return async function openAIWebSearch({ query, count: requestedCount = count, signal = null } = {}) {
+    signal?.throwIfAborted()
     const q = String(query || '').trim()
     if (!q) return []
     const limit = Math.max(1, Math.min(10, Number(requestedCount) || count))
-    const response = await openai.responses.create({
+    const request = {
       model: selectedModel,
       tools: [{ type: 'web_search', search_context_size: 'low' }],
       tool_choice: { type: 'web_search' },
       include: ['web_search_call.action.sources'],
       input: `Search the live web for: ${q}\nReturn only a concise list of the most relevant source pages. Prefer official funders and program pages.`,
-    })
+    }
+    const response = signal
+      ? await openai.responses.create(request, { signal, maxRetries: 0 })
+      : await openai.responses.create(request)
+    signal?.throwIfAborted()
     return citationResults(response, limit)
   }
 }
