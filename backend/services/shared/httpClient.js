@@ -147,6 +147,7 @@ export async function requestWithRetry(config, options = {}) {
   const requestUrl = mergedConfig.url || '(unknown)'
   let lastError = null
   for (let attempt = 0; attempt <= retries; attempt += 1) {
+    mergedConfig.signal?.throwIfAborted()
     try {
       const response = ssrfSafe
         ? (await ssrfSafeAxiosRequest(mergedConfig)).response
@@ -180,6 +181,7 @@ export async function requestWithRetry(config, options = {}) {
       err.requestUrl = requestUrl
       throw err
     } catch (error) {
+      mergedConfig.signal?.throwIfAborted()
       lastError = error
       if (!error.requestUrl) error.requestUrl = requestUrl
       if (attempt < retries && isRetryableAxiosError(error)) {

@@ -100,7 +100,8 @@ export function makeSearxngProvider({
   // junk (the 2026-07-27 first-word-SERP collapse — every scraping engine
   // suspended except a broken bing), the caller retries the SAME instance with
   // a known-good allowlist instead of abandoning SearXNG entirely.
-  return async function search({ query, count: countOverride, timeoutMs: timeoutOverride, engines: enginesOverride } = {}) {
+  return async function search({ query, count: countOverride, timeoutMs: timeoutOverride, engines: enginesOverride, signal = null } = {}) {
+    signal?.throwIfAborted()
     const q = String(query || '').trim()
     if (!q) return []
     const want = Math.max(1, Number(countOverride) || count)
@@ -122,10 +123,11 @@ export function makeSearxngProvider({
     try {
       response = await getWithRetry(
         url,
-        { headers: { Accept: 'application/json' } },
+        { headers: { Accept: 'application/json' }, ...(signal ? { signal } : {}) },
         { timeoutMs: budget, retries: 1 },
       )
     } catch (err) {
+      signal?.throwIfAborted()
       log.warn(`[searxngProvider] request failed for "${q}": ${err?.message ?? err}`)
       return []
     }

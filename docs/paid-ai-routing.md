@@ -136,3 +136,9 @@ enabled, cancelling a measured healthy 14.6-second Astra extraction. Explicit
 caller deadlines and cancellation are unchanged; acceptance dependency probes
 still use their own shorter bound. This does not change grounding, eligibility,
 cohort membership, matching thresholds, or the web-parity pass policy.
+
+Interactive discovery carries its original absolute deadline and cancellation
+signal through the web lane, every search provider transport, page fetches,
+extraction, and optional blind shadow/verification. Expired work starts no
+later page or provider and does not store late results. Background discovery
+without a caller deadline retains the bounded per-page extraction default.
