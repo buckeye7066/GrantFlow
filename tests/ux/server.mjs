@@ -46,8 +46,10 @@ for (const type of ['individual', 'family', 'college_student']) {
 }
 const profiles = await db.prepare('SELECT id, primary_type FROM profiles').all()
 for (const profile of profiles) {
-  await ensureBillingAccount(db, profile.id, { defaultTier: 'large_org', assignedBy: 'local-ux-fixture' })
-  await db.prepare('UPDATE billing_accounts SET is_pro_bono=1, pro_bono_reason=? WHERE profile_id=?').run('Isolated UX fixture, never production', profile.id)
+  // Personal accounts exercise real free billing without a pro-bono waiver.
+  const personal = ['individual', 'family', 'college_student'].includes(profile.primary_type)
+  await ensureBillingAccount(db, profile.id, { defaultTier: personal ? 'individual' : 'large_org', assignedBy: 'local-ux-fixture' })
+  await db.prepare('UPDATE billing_accounts SET is_pro_bono=?, pro_bono_reason=? WHERE profile_id=?').run(personal ? 0 : 1, personal ? null : 'Isolated UX fixture, never production', profile.id)
   const sections = {
     organization_details: { organization_type: profile.primary_type === 'nonprofit' ? 'nonprofit' : 'business' },
     narrative: { mission: 'Provide community services and practical assistance.' },
