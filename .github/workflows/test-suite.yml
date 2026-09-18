@@ -29,7 +29,16 @@ jobs:
       - run: npm run lint
       - run: npm run typecheck
       - name: unit suites (node:test + vitest isolated)
-        run: npm run unit
+        shell: bash
+        run: npm run unit 2>&1 | tee unit-test-output.log
+      - name: Preserve failed unit evidence
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: unit-failure-${{ github.run_id }}
+          path: unit-test-output.log
+          retention-days: 3
+          if-no-files-found: ignore
       - name: regression / contract / security / grounding / queue suites
         run: node scripts/run-vitest-isolated.mjs run --config vitest.suite.config.js
       # The accessibility + user-journey Playwright specs added alongside this
