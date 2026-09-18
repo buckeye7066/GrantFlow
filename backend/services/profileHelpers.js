@@ -149,6 +149,14 @@ export function resolveEffectiveProfileType(profile, sections = {}) {
     }
   }
 
+  // A declared personal type is an answer, not a legacy database default.
+  // Keep stronger structured section evidence above, but never turn a person
+  // into an organization just because their name includes Church or Foundation.
+  const declaredType = normalizeProfileTypeCandidate(basic.profile_type)
+  if (declaredType && ['individual', 'individual_need', 'family'].includes(declaredType.toLowerCase())) {
+    return resolveProfileType(declaredType) ?? declaredType
+  }
+
   const inferred = inferProfileTypeFromDisplayName(profile?.display_name)
   if (inferred) return inferred
 

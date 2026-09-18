@@ -460,7 +460,7 @@ router.post('/complete', async (req, res) => {
       await req.db
         .prepare(
           `UPDATE users
-              SET has_completed_onboarding = 1,
+              SET has_completed_onboarding = TRUE,
                   onboarding_completed_at = ?,
                   guided_cycle_tour_status = 'pending'
             WHERE id = ?`,

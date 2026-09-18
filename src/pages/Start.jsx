@@ -151,19 +151,26 @@ function LocationQuestion({ question, onSubmit, busy }) {
   const [county, setCounty] = useState('')
   const countyManuallyEdited = useRef(false)
   const [zipLooking, setZipLooking] = useState(false)
-  const canSubmit = !zipLooking && /^\d{5}(-\d{4})?$/.test(zip.trim()) && /^[A-Z]{2}$/.test(stateCode.trim().toUpperCase())
+  const [settledZip, setSettledZip] = useState(null)
+  const zipValueRef = useRef('')
+  const lookupZip = /^\d{5}(?:-\d{4})?$/.test(zip.trim()) ? zip.trim().slice(0, 5) : null
+  const canSubmit = Boolean(lookupZip) && settledZip === lookupZip && !zipLooking && /^[A-Z]{2}$/.test(stateCode.trim().toUpperCase())
 
   // Auto-filled geography follows the ZIP. Only a county explicitly entered
   // by the applicant is preserved; an earlier lookup is not a manual override.
   // Clearing a manual county lets later ZIP lookups fill it again.
   useEffect(() => {
-    const z = zip.trim()
-    if (!/^\d{5}$/.test(z)) {
+    const z = lookupZip
+    if (!z) {
       setZipLooking(false)
+      setSettledZip(null)
       return
     }
     let cancelled = false
     setZipLooking(true)
+    setStateCode('')
+    setCity('')
+    if (!countyManuallyEdited.current) setCounty('')
     apiFetch(`/api/onboarding/zip/${z}`)
       .then((loc) => {
         if (cancelled || !loc) return
@@ -172,15 +179,20 @@ function LocationQuestion({ question, onSubmit, busy }) {
         if (!countyManuallyEdited.current) setCounty(loc.county || '')
       })
       .catch(() => { /* unknown ZIP — leave fields for manual entry */ })
-      .finally(() => { if (!cancelled) setZipLooking(false) })
+      .finally(() => {
+        if (cancelled) return
+        setSettledZip(z)
+        setZipLooking(false)
+      })
     return () => { cancelled = true }
-  }, [zip])
+  }, [lookupZip])
   return (
     <form
       className="space-y-3"
       onSubmit={(e) => {
         e.preventDefault()
-        if (!canSubmit) return
+        // Autofill can submit before React commits the input change.
+        if (!canSubmit || busy || zipValueRef.current.trim() !== zip.trim()) return
         onSubmit({
           zip: zip.trim(),
           state: stateCode.trim().toUpperCase(),
@@ -197,7 +209,10 @@ function LocationQuestion({ question, onSubmit, busy }) {
             <Input
               id="zip"
               value={zip}
-              onChange={(e) => setZip(e.target.value)}
+              onChange={(e) => {
+                zipValueRef.current = e.target.value
+                setZip(e.target.value)
+              }}
               placeholder="37205"
               inputMode="numeric"
               autoComplete="postal-code"
