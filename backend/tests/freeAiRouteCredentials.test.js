@@ -21,7 +21,7 @@ vi.mock('../utils/logger.js', () => ({
   createLogger: () => ({ warn: state.warn, info: vi.fn(), error: vi.fn(), debug: vi.fn() }),
 }))
 
-import { getConfiguredFreeAiRoutes, invokeFreeJsonRoutes, resolveFreeAiRoutes } from '../utils/freeAiRoutes.js'
+import { getConfiguredFreeAiRoutes, invokeFreeJsonRoutes, resolveFreeAiRoutes, resetFreeAiCircuitStateForTests } from '../utils/freeAiRoutes.js'
 
 function routesFor(key = 'FREE_AI_ROUTE_CUSTOM_API_KEY') {
   return resolveFreeAiRoutes([{
@@ -33,6 +33,7 @@ function routesFor(key = 'FREE_AI_ROUTE_CUSTOM_API_KEY') {
 }
 
 beforeEach(() => {
+  resetFreeAiCircuitStateForTests()
   state.configs.length = 0
   state.outcomes.length = 0
   state.warn.mockClear()

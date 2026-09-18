@@ -173,6 +173,31 @@ function safeError(error) {
   }
 }
 
+
+// Rate limits are model-scoped: an exhausted model must not suppress another
+// free model on the same account. Secret values stay in this private memory
+// only to invalidate a cooldown immediately when a credential is rotated.
+const sharedFreeCooldowns = new Map()
+export function resetFreeAiCircuitStateForTests() { sharedFreeCooldowns.clear() }
+function freeRouteIdentity(route) { return [route.baseURL, route.model, route.apiKeyEnv || ''].join('|') }
+function freeRouteCredential(route) { return isAllowedCredentialRef(route.apiKeyEnv) ? process.env[route.apiKeyEnv] || '' : '' }
+function activeFreeCooldown(state, route) {
+  for (const [key, entry] of state) if (entry.until <= Date.now()) state.delete(key)
+  const key = freeRouteIdentity(route)
+  const entry = state.get(key)
+  if (entry && entry.credential !== freeRouteCredential(route)) { state.delete(key); return null }
+  return entry?.failure || null
+}
+function recordFreeCooldown(state, route, error, failure) {
+  if (![401, 402, 403, 429].includes(failure.status)) return
+  const header = error?.headers?.get?.('retry-after') ?? error?.headers?.['retry-after']
+  const seconds = Number(header)
+  const requested = (header === null || header === undefined) ? 60000 : Number.isFinite(seconds) ? seconds * 1000 : Date.parse(header) - Date.now()
+  const duration = Math.max(1000, Math.min(86400000, Number.isFinite(requested) ? requested : 60000))
+  state.set(freeRouteIdentity(route), { until: Date.now() + duration, credential: freeRouteCredential(route), failure })
+  while (state.size > 256) state.delete(state.keys().next().value)
+}
+
 async function invokeRoutes({
   routes,
   clientFactory,
@@ -181,16 +206,20 @@ async function invokeRoutes({
   temperature,
   maxTokens,
   jsonOnly,
+  circuitState,
   timeoutMs,
   signal,
 }) {
   const errors = []
+  const state = circuitState ?? (clientFactory ? new Map() : sharedFreeCooldowns)
   const budgetMs = timeoutMs === null || timeoutMs === undefined ? 10_000 : Number(timeoutMs)
   const deadlineAt = Date.now() + (Number.isFinite(budgetMs) ? Math.max(0, budgetMs) : 10_000)
   for (let index = 0; index < routes.length; index += 1) {
     const remainingMs = deadlineAt - Date.now()
     if (signal?.aborted || remainingMs <= 500) break
     const route = routes[index]
+    const cooldown = activeFreeCooldown(state, route)
+    if (cooldown) { errors.push(cooldown); continue }
     try {
       const systemText = [
         system ? String(system) : null,
@@ -200,7 +229,7 @@ async function invokeRoutes({
         ...(systemText ? [{ role: 'system', content: systemText }] : []),
         { role: 'user', content: String(prompt ?? '') },
       ]
-      const routesLeft = Math.max(1, routes.length - index)
+      const routesLeft = Math.max(1, routes.slice(index).filter(candidate => !activeFreeCooldown(state, candidate)).length)
       const completion = await withLLMTimeout(
         async attemptSignal => {
           const built = await (clientFactory ? clientFactory(route) : clientFor(route))
@@ -242,6 +271,7 @@ async function invokeRoutes({
     } catch (error) {
       if (signal?.aborted) break
       const failure = safeError(error)
+      recordFreeCooldown(state, route, error, failure)
       errors.push(failure)
       log.warn(`Free AI route ${route.id} failed; trying the next configured route`, failure)
     }

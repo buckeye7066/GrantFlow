@@ -164,7 +164,7 @@ async function invokePaidLadder({
   openai = getOpenAIOptional({ maxRetries: 0 }), system = null, prompt,
   temperature, maxTokens = 1200, openaiModel = null, anthropicModel = null,
   freeRoutes = null, freeClientFactory = null, timeoutMs = null, signal: callerSignal = null,
-  paidCircuitState: injectedState,
+  paidCircuitState: injectedState, preferTaskModels = false,
 } = {}, jsonOnly) {
   const ownerScope = getOwnerAiScope({ includeAborted: true })
   const signal = ownerScope
@@ -194,7 +194,10 @@ async function invokePaidLadder({
       qualityLog.warn('owner_subscription_unavailable', { reason: 'bounded_subscription_attempt_failed' })
     }
   }
-  const routes = resolvePaidAiRoutes({ openai, openaiModel, anthropicModel })
+  // The owner's monthly allowance must not silently become metered usage.
+  // This policy affects only a canonically authenticated owner request.
+  const ownerMeteredDisabled = Boolean(ownerScope && process.env.OWNER_AI_ALLOW_PAID_FALLBACK !== 'true')
+  const routes = ownerMeteredDisabled ? [] : resolvePaidAiRoutes({ openai, openaiModel, anthropicModel, preferTaskModels })
   // Legacy calls retain request-local state; configured ladders share bounded cooldowns.
   const state = injectedState ?? (process.env.AI_PAID_ROUTES ? paidCircuitState() : new Map())
   const configuredFreeRoutes = resolveFreeAiRoutes(freeRoutes)
@@ -313,7 +316,7 @@ async function invokePaidLadder({
   })
   if (signal?.aborted) return abortedResult(signal)
   if (freeResult.ok) return { ...freeResult, billing_mode: 'free_or_local', openaiError, anthropicError,
-    fallback_reason: exhausted ? 'paid_provider_credit_or_quota_exhausted' : failed || routes.length ? 'paid_provider_failure' : 'paid_provider_not_configured' }
+    fallback_reason: ownerMeteredDisabled ? 'owner_metered_fallback_disabled' : exhausted ? 'paid_provider_credit_or_quota_exhausted' : failed || routes.length ? 'paid_provider_failure' : 'paid_provider_not_configured' }
   return { ok: false, provider: 'fallback', ...(jsonOnly ? { json: null } : { text: null }), raw: null, timedOut, transient,
     error: new Error(timedOut ? 'AI service timed out — please try again.' : 'No AI provider configured or provider failure'),
     openaiError, anthropicError, freeRouteErrors: freeResult.freeRouteErrors }

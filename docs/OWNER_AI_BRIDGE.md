@@ -1,3 +1,9 @@
+## September 18 runtime routing correction
+
+Canonical owner calls use the dedicated monthly-subscription bridge first. Metered API fallback is now off by default for those calls: only an explicit `OWNER_AI_ALLOW_PAID_FALLBACK=true` allows it. When a subscription cannot answer, the default owner route goes to configured free models or reports failure; it never silently charges an API. The owner status endpoint and admin card show this policy. Ordinary customer and scheduler requests retain the configured paid-to-free order; customer traffic never uses the owner's subscription.
+
+The bounded web extractor explicitly requests task-model priority. Its fast native extraction models precede the general-purpose model ranking without changing the shared deadline or normal callers' ranking. Free model quota cooldowns are model-scoped, respect Retry-After, are invalidated on key rotation, and never hide surviving candidates or record a failed response as a success.
+
 # Owner official-CLI subscription bridge
 
 This is an owner-only, ephemeral bridge to the owner's Home machine. It does not
@@ -13,7 +19,7 @@ Set OWNER_AI_USER_ID to the canonical owner id when an additional id binding is
 needed. The default 20000 ms subscription cap is further limited by half the
 caller's remaining whole budget. The primary retains 80% of a short worker
 window (all but two seconds of a longer window); the next subscription receives
-the actual remaining time. A short caller deadline can still force API fallback.
+the actual remaining time. A short caller deadline can force fallback to configured free models; metered fallback requires explicit owner opt-in.
 
 Order is subscription:codex, subscription:claude, then the separately integrated
 cloud API fallback. **Codex is implemented:** readiness requires native `exec
@@ -40,7 +46,7 @@ server model. Output tokens must remain below the caller's cap.
 The worker tries the server's provider order under one deadline, including auth
 probes. Each provider gets an independent abort slice reserving time for remaining
 providers. Success stops the ladder; native failure/quota exhaustion proceeds to
-the next subscription, then returns null for the separate gateway's paid ladder.
+the next subscription, then returns null for the separate gateway's configured fallback policy.
 
 Claude requires native `auth status --json` to positively report claude.ai with a
 Pro or Max subscription and no API-key source. An unknown/null subscription plan,
@@ -67,7 +73,7 @@ Both text and JSON entry points use the same owner-aware gateway. Only a live,
 canonical owner request may reach the broker. The subscription slice is bounded
 by half the original request deadline and OWNER_AI_SUBSCRIPTION_TIMEOUT_MS
 (default 20000 ms, maximum 60000 ms). An unavailable worker returns immediately.
-A subscription failure leaves only the original remaining budget for paid and
+A subscription failure leaves only the original remaining budget for permitted fallback and
 free routes; closing the owner's response cancels all later attempts too.
 Successful receipts preserve provider, model, billing_mode, model_source and usage.
 Customer, other-admin and unattended scheduler requests never acquire this scope.
@@ -103,7 +109,7 @@ Cancellation kills only the owned child process tree; broker cancellation reache
 the worker through its active lease heartbeat (normally within a second).
 
 Home offline, busy, missing auth, exhausted subscription or disabled bridge means
-no subscription success; the gateway decides its separate paid-API fallback.
+no subscription success; the gateway applies its separate owner billing policy (free fallback by default).
 The bridge itself never calls paid APIs or silently substitutes API authentication.
 
 Stop: `tools/owner-ai/manage.ps1 -Action Stop`.

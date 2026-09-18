@@ -14,7 +14,8 @@ export default function AdminOwnerAi() {
       <p>{!data.enabled ? 'Disabled' : !data.online ? 'Home unavailable' : data.busy ? 'Busy' : 'Home connected'}</p>
       <p>Order: {data.order.join(' → ')}</p>
       {Object.entries(data.providers).map(([name, state]) => <p key={name}>{name}: {state === 'auth_required' ? 'Sign-in required' : state}</p>)}
-      <p>Owner requests only. Subscription limits apply. Paid API fallback is separate.</p>
+      <p>Owner requests only. Subscription limits apply.</p>
+      <p>{data.metered_fallback_allowed === true ? 'Metered API fallback is enabled by the owner.' : 'Metered API fallback is disabled. Unavailable subscriptions fall back to configured free models.'}</p>
     </CardContent>
   </Card>
 }

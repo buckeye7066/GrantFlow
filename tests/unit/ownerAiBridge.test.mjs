@@ -84,3 +84,9 @@ test('worker mount precedes normal identity; owner status follows canonical cont
   const context = readFileSync(new URL('../../backend/middleware/requestContext.js', import.meta.url), 'utf8')
   assert.match(context, /runWithOwnerAiScope\(req,/)
 })
+
+
+test('owner status reports metered fallback as disabled unless explicitly opted in', () => {
+  assert.equal(createOwnerAiBroker({env}).status().metered_fallback_allowed, false)
+  assert.equal(createOwnerAiBroker({env:{...env,OWNER_AI_ALLOW_PAID_FALLBACK:'true'}}).status().metered_fallback_allowed, true)
+})

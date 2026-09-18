@@ -41,6 +41,8 @@ export default defineConfig(({ mode }) => {
       },
     },
     server: {
+      // Compile the app entry and lazy login before the first cold browser journey.
+      warmup: { clientFiles: ['./index.html', './src/pages/Login.jsx'] },
       host: true,
       port: 5173,
       strictPort: true,

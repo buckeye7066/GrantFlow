@@ -168,6 +168,7 @@ function makeProfileBlindLlm(deps = {}, deadlineAt, outcome) {
         prompt,
         temperature: 0.1,
         maxTokens: 1800,
+        preferTaskModels: true,
         timeoutMs,
         signal,
         anthropicModel: process.env.WEB_DISCOVERY_MODEL_ANTHROPIC || 'claude-haiku-4-5',
