@@ -1232,7 +1232,12 @@ describe('enforceInvariants — runner', () => {
     //   is re-derived from its canonical answer, and a legacy-only answer seeds
     //   the canonical field once.
     expect(summary.ran).toBe(70)
-    expect(summary.failed).toBe(0)
+    // This minimal fixture lacks the match store. Its failed candidate query
+    // must remain visible instead of being reported as successful maintenance.
+    expect(summary.failed).toBe(1)
+    expect(summary.steps.filter((step) => !step.ok)).toEqual([
+      expect.objectContaining({ name: 'stale_match_explain_refresh', ok: false, skipped: 'query', repaired: 0, scanned: 0 }),
+    ])
     expect(summary.steps.map((s) => s.name)).toEqual([
       'sticky_deletes',
       'profile_id_integrity',

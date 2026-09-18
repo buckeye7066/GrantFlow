@@ -83,9 +83,11 @@ function gateMetaFromStub(stub) {
  * @param {number} [opts.pairBudget]
  * @param {number} [opts.timeBudgetMs]
  * @param {boolean} [opts.writeEnabled]
+ * @param {AbortSignal} [opts.signal]
  * @param {object} [opts.deps]
  */
 export async function runStaleMatchExplainRefresh(db, opts = {}) {
+  opts.signal?.throwIfAborted()
   const startedAt = Date.now()
   const pairBudget = Number.isFinite(opts.pairBudget) ? opts.pairBudget
     : envInt(process.env.STALE_MATCH_EXPLAIN_PAIR_BUDGET, 800)
@@ -141,7 +143,9 @@ export async function runStaleMatchExplainRefresh(db, opts = {}) {
           AND (fo.is_active IS NULL OR fo.is_active = ${isPg ? 'TRUE' : '1'})
         ORDER BY m.profile_id, m.opportunity_id
         LIMIT ?`,
-    ).all(Math.max(pairBudget, 1))
+    // One read-only sentinel makes an unfinished bounded batch observable.
+    // The processing loop still permits at most pairBudget rows and writes.
+    ).all(Math.max(pairBudget, 1) + 1)
   } catch (err) {
     log.warn('stale-match-explain candidate query failed (non-fatal)', { error: String(err?.message || err) })
     return { ...summary, ok: false, skipped: 'query' }
@@ -150,6 +154,7 @@ export async function runStaleMatchExplainRefresh(db, opts = {}) {
   const ctxCache = new Map()
   const needsDefaultedCache = new Map()
   for (const row of rows || []) {
+    opts.signal?.throwIfAborted()
     if (summary.scanned >= pairBudget || (Date.now() - startedAt) >= timeBudgetMs) {
       summary.truncated = true
       break
@@ -163,6 +168,7 @@ export async function runStaleMatchExplainRefresh(db, opts = {}) {
       try { ctx = await loadProfileContext(db, profileId) } catch { ctx = null }
       ctxCache.set(profileId, ctx)
     }
+    opts.signal?.throwIfAborted()
     if (!ctx?.profile) { summary.skipped_no_profile += 1; continue }
 
     let decision
@@ -292,6 +298,8 @@ export async function runStaleMatchExplainRefresh(db, opts = {}) {
       explainToPersist.previous_four_truth_proof = previousProof
     }
 
+    // Do not start another write after the scheduler loses its lease.
+    opts.signal?.throwIfAborted()
     try {
       const res = await db.prepare(
         `UPDATE profile_opportunity_matches

@@ -254,6 +254,7 @@ async function runInvariant(name, fn) {
 const PERSISTED_STEP_DIAGNOSTICS = Object.freeze([
   'upserted', 'adjudicated', 'notFundable', 'rejectedByEngine', 'review',
   'convergenceErrors', 'foreignLaneSkipped', 'truncated', 'enforced',
+  'unscorable', 'skippedNoProfile', 'concurrentChangesSkipped', 'skipped', 'wouldRepair',
 ])
 
 export function projectPersistedStep(s) {
@@ -11231,21 +11232,26 @@ export async function summarizeCatalogRescore(runSweep) {
  * measured one. Linker nets used to persist gate-only stubs; this drain
  * refreshes residue IN PLACE without rebranding matcher_version.
  */
-export async function enforceStaleMatchExplainRefresh(db) {
+export async function enforceStaleMatchExplainRefresh(db, opts = {}) {
   return runInvariant('stale_match_explain_refresh', async () => {
     let runStaleMatchExplainRefresh
     try {
       ;({ runStaleMatchExplainRefresh } = await import('../services/matching/staleMatchExplainRefresh.js'))
     } catch (err) {
       log.warn('stale_match_explain_refresh: unavailable (non-fatal)', { error: String(err?.message || err) })
-      return { scanned: 0, repaired: 0, enforced: true, skipped: 'deps' }
+      return { ok: false, scanned: 0, repaired: 0, enforced: false, skipped: 'deps' }
     }
-    const res = await runStaleMatchExplainRefresh(db)
+    const res = await runStaleMatchExplainRefresh(db, opts)
     return {
+      ok: res.ok === true,
+      skipped: res.skipped,
       scanned: res.scanned ?? 0,
       repaired: res.refreshed ?? 0,
       wouldRepair: res.would_refresh ?? 0,
       unscorable: res.unscorable ?? 0,
+      convergenceErrors: res.convergence_errors ?? 0,
+      skippedNoProfile: res.skipped_no_profile ?? 0,
+      concurrentChangesSkipped: res.concurrent_changes_skipped ?? 0,
       truncated: Boolean(res.truncated),
       enforced: Boolean(res.write_enabled),
     }
