@@ -1,11 +1,24 @@
 import { registrableDomain } from '../hamiltonPortalCredentialService.js'
+/** A fallback credential for a different portal cannot redirect this portal's session. */
+export function genericCredentialLoginUrl(ctx = {}) {
+  const raw = ctx.credential?.login_url || ctx.credential?.loginUrl || null
+  if (!raw) return null
+  try {
+    const wanted = new URL('https://' + ctx.portalHost).hostname.replace(/^www\./, '')
+    const binding = ctx.credential?.portal_host
+    if (binding && new URL('https://' + binding).hostname.replace(/^www\./, '') !== wanted) return null
+    const url = new URL(raw)
+    return url.protocol === 'https:' && !url.username && !url.password ? url.href : null
+  } catch { return null }
+}
+
 /** Observe authenticated account controls; a saved session or readable page is not proof. */
 export async function observeGenericAccess(page, ctx = {}, requestedUrl) {
   let snapshot = null
   let landed = ''
   try {
     landed = page.url()
-    snapshot = await page.evaluate(() => {
+    const read = () => page.evaluate(() => {
       const visible = element => {
         const style = window.getComputedStyle(element)
         return style.visibility !== 'hidden' && style.display !== 'none' && element.getClientRects().length > 0
@@ -23,6 +36,14 @@ export async function observeGenericAccess(page, ctx = {}, requestedUrl) {
         blocked: /\b(?:access denied|request (?:was )?blocked|unusual activity|verify you are human)\b/i.test(text),
       }
     })
+    snapshot = await read()
+    // MTSU's sign-in view is a JavaScript shell at DOMContentLoaded. Wait only
+    // for an empty shell, under a fixed bound, then observe the actual controls.
+    if (snapshot?.chars === 0 && typeof page.waitForFunction === 'function') {
+      try { await page.waitForFunction(() => Boolean(document.body?.innerText?.trim()), undefined, { timeout: 3000 }) } catch { /* Empty stays unknown. */ }
+      snapshot = await read()
+    }
+    landed = page.url()
   } catch { /* A failed observation is unknown, never authenticated. */ }
   let expectedHost = ''
   let actualHost = ''
@@ -36,7 +57,7 @@ export async function observeGenericAccess(page, ctx = {}, requestedUrl) {
   const expectedDomain = registrableDomain(expectedHost)
   let savedHost = ''
   try {
-    const saved = new URL(ctx.credential?.login_url || ctx.credential?.loginUrl || '')
+    const saved = new URL(genericCredentialLoginUrl(ctx) || '')
     if (saved.protocol === 'https:' && registrableDomain(saved.hostname) === expectedDomain) savedHost = saved.hostname.replace(/^www\./,'')
   } catch { /* Missing login URL grants no additional host scope. */ }
   // Trust the requested portal and its own descendants, or its explicitly saved
@@ -73,7 +94,7 @@ export async function findGenericAccountEntry(page, requestedUrl) {
         const style = window.getComputedStyle(element)
         const text = String(element.innerText || element.getAttribute('aria-label') || '').trim()
         return style.display !== 'none' && style.visibility !== 'hidden' && element.getClientRects().length > 0 &&
-          /^(?:log\s*in|sign\s*in|my account|account home|dashboard)$/i.test(text)
+          /^(?:(?:log\s*in|sign\s*in)(?:\s+with\s+campus\s+id)?|my account|account home|dashboard)$/i.test(text)
       }).map(element => element.href).slice(0,8))
     for (const value of Array.isArray(candidates) ? candidates : []) {
       const target = new URL(value)
