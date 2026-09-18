@@ -56,6 +56,7 @@ const AMY_SYNTHETIC_NAME_PREFIX = 'Amy Synthetic'
 export const RECALL_BLOCKER = Object.freeze({
   NO_RUN: 'no_run',
   EXTRACTION_DEAD: 'extraction_dead',
+  EXTRACTION_DEGRADED: 'extraction_degraded',
   SEARCH_UNAVAILABLE: 'search_unavailable',
   BUDGET_STARVED: 'budget_starved',
   GATED_AT_REALITY: 'gated_at_reality',
@@ -140,6 +141,9 @@ export function classifyRecallBlocker({ lane = null, audit = null } = {}) {
   if (ph.llm === 'unavailable' || r.extraction_available === false || attribution.startsWith('extraction_failed:') ||
       (s.pages_fetched > 0 && s.candidates_extracted === 0 && s.extraction_failed > 0)) {
     return { blocker: RECALL_BLOCKER.EXTRACTION_DEAD, detail: s.extraction_failed_by_class }
+  }
+  if (ph.llm === 'degraded') {
+    return { blocker: RECALL_BLOCKER.EXTRACTION_DEGRADED, detail: s.extraction_failed_by_class }
   }
   if (s.candidates_extracted === 0) {
     if (s.budget_skipped_share !== null && s.budget_skipped_share >= BUDGET_STARVED_SHARE) {
@@ -383,7 +387,9 @@ export async function buildFleetRecallScorecard(db, { limit = DEFAULT_FLEET_LIMI
     totals.awardable += num(r.awardable)
     totals.proven_direct_accepts += num(r.proven_direct_accepts)
     if (r.llm !== 'unknown') llmKnown += 1
-    if (r.llm === 'healthy' || (r.candidates_extracted > 0)) {
+    // Partial/down providers cannot establish the healthy-extraction sample
+    // used to blame admission gates. Keep their raw counts and rows above.
+    if (!['degraded', 'unavailable'].includes(r.llm) && (r.llm === 'healthy' || r.candidates_extracted > 0)) {
       extractionAlive += 1
       if (r.qualified_admitted === 0) admittedZeroWhileAlive += 1
     }

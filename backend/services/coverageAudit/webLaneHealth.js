@@ -381,11 +381,12 @@ export function summarizeRecentWebLane(store, { lastN = JUDGE_LAST_N, minRuns = 
   const llmHealth = extractionDead
     ? 'unavailable'
     : llmDegraded ? 'degraded'
-      : (llmVerdicts.length && llmVerdicts.every((v) => v === 'unavailable') ? 'unavailable' : (anyLlmHealthy ? 'healthy' : 'unknown'))
+      : (anyLlmFailure ? 'unavailable' : (anyLlmHealthy ? 'healthy' : 'unknown'))
   const newest = recent[0]?.at ?? all[0]?.at ?? null
   const oldest = recent.length ? recent[recent.length - 1]?.at ?? null : null
   return {
     judged,
+    judgment_ready: judged >= minRuns,
     skipped,
     no_crawl: noCrawl,
     zero_page: zeroPage,

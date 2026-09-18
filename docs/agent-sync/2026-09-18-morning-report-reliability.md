@@ -8,7 +8,7 @@ One successful extraction made a partly failed web crawl report LLM healthy. Amy
 
 The common email footer and verification template used the marketing URL instead of the application. Fresh browser checks confirmed that app.axiombiolabs.org/login renders the login heading and email field; www.axiombiolabs.org/grantflow is a marketing page and its /login child renders the marketing home page. The shared sign-in resolver now defaults to the application login, repairs the known retired setting, preserves deployment overrides, and keeps HTML escaping. Eight new assertions failed before this repair.
 
-Combined targeted verification: 151 tests passed across 11 suites, including crawl ledgers, Amy cohort gating, retained provider-health history, live-gap attribution, recall scorecards, and owner-email reporting. Full release gates and production readback are separate requirements, not implied by those tests.
+Combined targeted verification: 157 tests passed across 11 suites, including crawl ledgers, Amy cohort gating, retained provider-health history, live-gap attribution, recall scorecards, and owner-email reporting. Full release gates and production readback are separate requirements, not implied by those tests.
 
 Automated review also identified the remaining Sam consumer: the partial-outage verdict still returned a green check. A new DB-backed regression failed before the fix. Sam now emits an actionable degraded-extraction finding while preserving successful candidate counts and retained failure evidence.
 
@@ -24,3 +24,5 @@ Automated review also identified the remaining Sam consumer: the partial-outage 
 Production logs at 18:49-18:50 UTC still showed Anthropic credit exhaustion and Groq quota failures on c45d63c. Recent exact-50 acceptance workflow runs were cancelled, not passing receipts. PR #1760 must pass its checks and deployment verification, followed by healthy live discovery and qualified-outcome measurements before closing the four crawler findings.
 
 No real applications or emails were sent by these tests. No real client records, matching thresholds, admission rules, benchmark history, or existing work were modified.
+
+Review follow-through: five further regressions reproduced cold-start alerting below the configured floor, unknown runs erasing an unavailable provider, and impaired extraction being counted as healthy in the recall scorecard. All now pass. The scorecard keeps every candidate and rejection count but separates extraction_degraded from gate defects; impaired runs cannot supply the healthy-extraction denominator. A recovery control proves the alert clears after the complete healthy judged window while older failure records remain stored.
