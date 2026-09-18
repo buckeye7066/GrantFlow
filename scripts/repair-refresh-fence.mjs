@@ -61,7 +61,17 @@ if (mode === 'red') {
     await client.connect()
     await client.query('CREATE TEMP TABLE system_kv (key text PRIMARY KEY, value text, updated_at timestamptz); CREATE TEMP TABLE agent_control_locks (lock_name text PRIMARY KEY, owner_token text, expires_at timestamptz)')
     await client.query("INSERT INTO agent_control_locks VALUES ($1, $2, clock_timestamp() + interval '10 minutes')", ['scheduler:link-verification', 'pg-owner'])
-    const db = { dialect: 'postgres', prepare(sql) { let index = 0; const query = sql.replace(/\?/g, () => '$' + (++index)); return { get: async (...args) => (await client.query(query, args)).rows[0], run: async (...args) => ({ changes: (await client.query(query, args)).rowCount }) } }
+    const db = {
+      dialect: 'postgres',
+      prepare(sql) {
+        let index = 0
+        const query = sql.replace(/\?/g, () => '$' + (++index))
+        return {
+          get: async (...args) => (await client.query(query, args)).rows[0],
+          run: async (...args) => ({ changes: (await client.query(query, args)).rowCount }),
+        }
+      },
+    }
     const lease = { lockName: 'scheduler:link-verification', ownerToken: 'pg-owner' }
     const done = { ok: true, status: 'complete', complete: true, remaining_candidates: 0, remaining_stale: 0, verification_failed: false, verification_truncated: false }
     const first = await beginStaleRefreshReceipt(db, { lease }); await finishStaleRefreshReceipt(db, first, done)
