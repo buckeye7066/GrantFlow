@@ -151,14 +151,17 @@ function LocationQuestion({ question, onSubmit, busy }) {
   const [county, setCounty] = useState('')
   const countyManuallyEdited = useRef(false)
   const [zipLooking, setZipLooking] = useState(false)
-  const canSubmit = /^\d{5}(-\d{4})?$/.test(zip.trim()) && /^[A-Z]{2}$/.test(stateCode.trim().toUpperCase())
+  const canSubmit = !zipLooking && /^\d{5}(-\d{4})?$/.test(zip.trim()) && /^[A-Z]{2}$/.test(stateCode.trim().toUpperCase())
 
   // Auto-filled geography follows the ZIP. Only a county explicitly entered
   // by the applicant is preserved; an earlier lookup is not a manual override.
   // Clearing a manual county lets later ZIP lookups fill it again.
   useEffect(() => {
     const z = zip.trim()
-    if (!/^\d{5}$/.test(z)) return
+    if (!/^\d{5}$/.test(z)) {
+      setZipLooking(false)
+      return
+    }
     let cancelled = false
     setZipLooking(true)
     apiFetch(`/api/onboarding/zip/${z}`)
@@ -177,7 +180,7 @@ function LocationQuestion({ question, onSubmit, busy }) {
       className="space-y-3"
       onSubmit={(e) => {
         e.preventDefault()
-        if (!canSubmit) return
+        if (!canSubmit || busy) return
         onSubmit({
           zip: zip.trim(),
           state: stateCode.trim().toUpperCase(),
