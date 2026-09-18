@@ -1,3 +1,4 @@
+import { withLatestStaleRefreshReceipt } from '../matching/staleMatchRefreshReceipt.js'
 /**
  * samRegistry.js
  *
@@ -1209,6 +1210,7 @@ export const DIAGNOSTIC_CHECKS = Object.freeze([
       } catch (err) {
         return { ok: true, skipped: true, summary: `sweep summary unavailable: ${err?.message || err}` }
       }
+      parsed = await withLatestStaleRefreshReceipt(db, parsed)
       if (!parsed || !Array.isArray(parsed.steps)) {
         return { ok: true, summary: 'No persisted invariant-sweep summary yet (pre-observability boot).' }
       }
@@ -1221,8 +1223,8 @@ export const DIAGNOSTIC_CHECKS = Object.freeze([
       if (failedSteps.length > 0) {
         return {
           ok: false,
-          summary: `${failedSteps.length} invariant sweep(s) FAILED on the last boot: ${failedSteps.map((s) => s.name).join(', ')}${when}`,
-          evidence: { failed: failedSteps, highlights, ran: parsed.ran, totalRepaired: parsed.totalRepaired },
+          summary: `${failedSteps.length} invariant sweep(s) need attention in latest maintenance evidence: ${failedSteps.map((s) => s.name).join(', ')}${when}`,
+          evidence: { failed: failedSteps, highlights, ran: parsed.ran, totalRepaired: parsed.totalRepaired, stale_match_refresh: parsed.recurring_stale_match_refresh ?? null },
           recommended_fix: 'Read the failed step names against backend/startup/enforceInvariants.js — each sweep is isolated (runInvariant never throws), so a failure is a real query/dependency error on that net, not a boot crash. Fix the sweep; the data class it guards is accumulating unrepaired until it runs.',
           confidence: 0.9,
         }
@@ -1232,7 +1234,7 @@ export const DIAGNOSTIC_CHECKS = Object.freeze([
         summary: highlights.length
           ? `invariant sweeps healthy${when}: ${highlights.join('; ')}`
           : `invariant sweeps healthy${when}: nothing needed repair.`,
-        evidence: { highlights, ran: parsed.ran, totalRepaired: parsed.totalRepaired },
+        evidence: { highlights, ran: parsed.ran, totalRepaired: parsed.totalRepaired, stale_match_refresh: parsed.recurring_stale_match_refresh ?? null },
       }
     },
   },

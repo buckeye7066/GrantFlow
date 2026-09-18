@@ -1,3 +1,4 @@
+import { beginStaleRefreshReceipt, finishStaleRefreshReceipt } from '../services/matching/staleMatchRefreshReceipt.js'
 /**
  * enforceInvariants.js — CANONICAL PRODUCT-INVARIANT ENFORCEMENT (boot sweep).
  *
@@ -279,7 +280,7 @@ export function projectPersistedStep(s) {
       'remaining_candidates', 'remaining_stale', 'verification_scanned',
       'verification_truncated', 'verification_failed', 'verified_at',
       'complete', 'status', 'unscorable', 'skipped_no_profile',
-      'convergence_errors', 'concurrent_changes_skipped', 'skipped',
+      'convergence_errors', 'concurrent_changes_skipped', 'skipped', 'wouldRepair', 'elapsed_ms',
     ]) {
       if (s[key] !== undefined) out[key] = s[key]
     }
@@ -11244,8 +11245,9 @@ export async function summarizeCatalogRescore(runSweep) {
  * measured one. Linker nets used to persist gate-only stubs; this drain
  * refreshes residue IN PLACE without rebranding matcher_version.
  */
-export async function enforceStaleMatchExplainRefresh(db) {
-  return runInvariant('stale_match_explain_refresh', async () => {
+export async function enforceStaleMatchExplainRefresh(db, opts = {}) {
+  const attempt = opts.persistReceipt === true ? await beginStaleRefreshReceipt(db, opts) : null
+  const result = await runInvariant('stale_match_explain_refresh', async () => {
     let runStaleMatchExplainRefresh
     try {
       ;({ runStaleMatchExplainRefresh } = await import('../services/matching/staleMatchExplainRefresh.js'))
@@ -11255,7 +11257,7 @@ export async function enforceStaleMatchExplainRefresh(db) {
         remaining_candidates: null, remaining_stale: null, verification_failed: true,
         complete: false, status: 'failed' }
     }
-    const res = await runStaleMatchExplainRefresh(db)
+    const res = await runStaleMatchExplainRefresh(db, opts)
     return {
       ...res,
       scanned: res.scanned ?? 0,
@@ -11266,6 +11268,8 @@ export async function enforceStaleMatchExplainRefresh(db) {
       enforced: Boolean(res.write_enabled),
     }
   })
+  if (attempt) await finishStaleRefreshReceipt(db, attempt, projectPersistedStep(result), opts)
+  return result
 }
 
 /**
