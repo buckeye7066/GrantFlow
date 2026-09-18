@@ -2,12 +2,12 @@
 import { normalizeStateCode } from './profileFactTimeline.js'
 import { isStudentProfileType } from '../../shared/profileSectionApplicability.js'
 
-const SOURCE_FIELDS = Object.freeze(['eligibility_text', 'eligibility_bullets', 'description', 'summary'])
+const SOURCE_FIELDS = Object.freeze(['eligibility_text', 'eligibility_bullets', 'description'])
 const SCHOOL_COUNTY = /\b(?:graduates?\s+(?:of|from)|graduated\s+from)\s+(?:(?:a|an|the|any)\s+)?(?:(public|private)\s+)?high[- ]schools?\s+(?:in|within)\s+(?:the\s+)?([a-z][a-z .'-]{0,70}?)\s+County\b/gi
 const COUNTY_GRADUATES = /\bfor\s+([a-z][a-z .'-]{0,70}?)\s+County(?:\s*,\s*([a-z]+(?:\s+[a-z]+){0,2}?))?\s+(?:(public|private)\s+)?high[- ]school\s+graduates?\b/gi
 const HISTORICAL = /\b(?:was|were|previous(?:ly)?|formerly|last\s+year|past\s+recipient|donor|founder)\b/i
 const NONEXCLUSIVE = /\b(?:not|never|preference|prefer(?:red|ence)?|priority|may|regardless|including|such\s+as)\b/i
-const REQUIRED = /\b(?:(?:is|are)\s+for|only|must\s+(?:be|have)|required\s+to\s+(?:be|have)|(?:restricted|limited|open|available|awarded|offered)\s+to|eligible\s+if\s+(?:they|you)(?:\s+are)?)\s*(?:(?:a|an|the|any)\s+)?$/i
+const REQUIRED = /\b(?:(?:is|are)\s+for|only|must\s+(?:be|have)|required\s+to\s+(?:be|have)|(?:restricted|limited|open|available|awarded|offered)\s+(?:only\s+)?to|eligible\s+if\s+(?:they|you)(?:\s+are)?)\s*(?:(?:a|an|the|any)\s+)?$/i
 const REVERSE_SUBJECT = /^\s*(?:(?:the|a|this)\s+)?(?:scholarship|award|program|fund)s?\s+(?:(?:is|are|will\s+be)\s+)?$/i
 const APPLICANT_RELATIVE = /\bonly\s+(?:applicants?|students?|candidates?|recipients?|individuals?|people)\s+(?:who|that)\s+(?:have\s+)?$/i
 const APPLICANT_MANDATE = /\b(?:applicants?|students?|candidates?|recipients?|individuals?|you)\s+(?:must|shall|are\s+required\s+to)\s+(?:be|have)\s+([^.!?;]{0,180})$/i
@@ -44,9 +44,13 @@ export function normalizeSchoolOrigin(sections, profileOrType = null) {
   const applicant = Object.fromEntries(['county', 'state', 'type', 'graduation_year'].map(suffix =>
     [`high_school_${suffix}`, basic[`applicant_high_school_${suffix}`]]))
   const populated = block => Object.values(block).some(value => value !== null && value !== undefined && String(value).trim() !== '')
+  const explicitOrLegacy = Object.fromEntries(Object.keys(applicant).map(key => {
+    const value = applicant[key]
+    return [key, value !== null && value !== undefined && String(value).trim() !== '' ? value : legacy[key]]
+  }))
   const education = household ? applicant : student
     ? (populated(Object.fromEntries(Object.entries(legacy).filter(([key]) => key.startsWith('high_school_')))) ? legacy : applicant)
-    : (populated(applicant) ? applicant : legacy)
+    : explicitOrLegacy
   const fieldPrefix = student && !household ? 'education.high_school_' : 'basic_information.applicant_high_school_'
   const type = String(education.high_school_type ?? '').trim().toLowerCase()
   const year = Number(education.high_school_graduation_year)
@@ -95,7 +99,9 @@ function applicantClause(before) {
 }
 export function schoolOriginRequirements(row) {
   const requirements = []
-  for (const field of SOURCE_FIELDS) {
+  const blindEvidenceRecord = (row?.source_id === 'web_search' || row?.source === 'web_search') && (row?.page_fact_schema_version != null || objectValue(row?.raw).blind_extraction === true)
+  const sourceFields = blindEvidenceRecord ? SOURCE_FIELDS.filter(field => field.startsWith('eligibility_')) : SOURCE_FIELDS
+  for (const field of sourceFields) {
     const sentences = sourceText(row?.[field]).split(/(?<=[.!?])\s+|\n+/)
     for (const sentence of sentences) {
       const candidates = [
