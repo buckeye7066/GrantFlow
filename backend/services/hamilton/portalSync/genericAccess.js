@@ -53,6 +53,8 @@ export async function observeGenericAccess(page, ctx = {}, requestedUrl) {
   }
   return {
     access,
+    can_follow_account_entry: Boolean(ctx.hasSession === true && samePortal && snapshot &&
+      snapshot.blocked !== true && snapshot.hasPassword !== true),
     page: { url: safeUrl(requestedUrl), landed: safeUrl(landed), title: snapshot?.title || null,
       chars: Number.isFinite(snapshot?.chars) ? snapshot.chars : null, access },
   }
@@ -63,7 +65,9 @@ export async function findGenericAccountEntry(page, requestedUrl) {
   try {
     const requested = new URL(requestedUrl)
     const current = new URL(page.url())
-    if (requested.protocol !== 'https:' || current.origin !== requested.origin) return null
+    if (requested.protocol !== 'https:' || current.protocol !== 'https:' || requested.username || requested.password ||
+        requested.hostname.replace(/^www\./,'') !== current.hostname.replace(/^www\./,'') || current.port !== requested.port) return null
+    const currentDocument = new URL(current); currentDocument.hash = ''
     const candidates = await page.evaluate(() => Array.from(document.querySelectorAll('a[href]'))
       .slice(0,2000).filter(element => {
         const style = window.getComputedStyle(element)
@@ -74,7 +78,8 @@ export async function findGenericAccountEntry(page, requestedUrl) {
     for (const value of Array.isArray(candidates) ? candidates : []) {
       const target = new URL(value)
       if (target.protocol !== 'https:' || target.origin !== current.origin || target.username || target.password) continue
-      if (target.href === current.href || /logout|signout|sign-out|submit|payment|purchase|delete|apply/i.test(target.pathname + target.search)) continue
+      target.hash = ''
+      if (target.href === currentDocument.href || /logout|signout|sign-out|submit|payment|purchase|delete|apply/i.test(target.pathname + target.search)) continue
       return target.href
     }
   } catch { /* A missing or unreadable account entry is not a successful login. */ }

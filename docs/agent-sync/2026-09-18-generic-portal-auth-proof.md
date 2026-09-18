@@ -33,3 +33,10 @@ the already-captured session, then requires the same observed authentication
 evidence. Apply, submit, payment, deletion and sign-out links remain forbidden.
 No password entry, MFA handling or external submission is added. A sign-in
 challenge still requires the owner to renew the portal session.
+
+Review continuation: canonical apex/www redirects may expose the same-origin
+account entry. Public sign-in prompts may follow that one safe link, but visible
+password forms cannot. Fragment-only anchors are skipped. Read/write syncs keep
+the observed account destination, and standalone writes use the same observed
+access gate. Five regressions failed before repair; all 47 portal tests and
+the full static prepush passed afterward. No external form was submitted.
