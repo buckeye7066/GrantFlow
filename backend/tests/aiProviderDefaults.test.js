@@ -85,8 +85,13 @@ describe('OpenAI JSON completion recovery', () => {
   })
 
   it('does not start recovery when too little deadline remains', async () => {
+    // Test the recovery deadline, not wall-clock contention during SDK/KDF setup.
+    // Neighboring cancellation and shared-budget tests use this same virtual clock.
+    vi.useFakeTimers()
     sdk.openai.mockResolvedValue(completion('{', 'length'))
-    await run({ timeoutMs: 100 })
+    const pending = run({ timeoutMs: 100 })
+    await vi.advanceTimersByTimeAsync(100)
+    await pending
     expect(sdk.openai).toHaveBeenCalledTimes(1)
   })
 
