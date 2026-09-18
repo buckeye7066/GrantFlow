@@ -25,31 +25,14 @@ jobs:
           cache: npm
       - name: Install existing locked dependencies
         run: npm ci --include=dev --include=optional
+      - name: Verify the profile regression tests
+        run: node scripts/run-vitest-isolated.mjs run src/utils/__tests__/profileLocationAliases.test.js src/utils/__tests__/profileSuggestionGuards.test.js src/components/profiles/__tests__/ProfileSectionEditor.location-roundtrip.test.jsx src/components/profiles/__tests__/ProfileSectionEditor.schoolOrigin.test.jsx src/components/profiles/__tests__/ProfileSectionEditor.test.jsx backend/tests/profileSuggestionGuards.test.js
       - name: Install browser
         run: node node_modules/playwright/cli.js install chromium --with-deps > /tmp/browser-install.log 2>&1 || { tail -80 /tmp/browser-install.log; exit 1; }
       - name: Build the real application
         run: npm run build > /tmp/journey-build.log 2>&1 || { tail -80 /tmp/journey-build.log; exit 1; }
-      - name: Initialize the disposable fixture using real verification
-        run: |
-          node --input-type=module <<'JS'
-          import fs from 'node:fs';
-          const path = 'tests/ux/server.mjs';
-          let source = fs.readFileSync(path, 'utf8');
-          if (!source.includes('await enforcePipelinePrecision(db)')) {
-            if (!source.includes('const port = 18133')) throw new Error('Fixture insertion point missing');
-            source = source.replace('const port = 18133', `
-          const { enforcePipelinePrecision } = await import('../../backend/startup/enforceInvariants.js')
-          const { readHamiltonTaskTruthSnapshot } = await import('../../backend/services/hamilton/hamiltonTaskTruthSnapshot.js')
-          await enforcePipelinePrecision(db)
-          const truth = await readHamiltonTaskTruthSnapshot(db)
-          if (!truth.queueReadable) throw new Error('Local UX task verification failed: ' + truth.status)
-          console.log('UX task verification:', truth.status)
-          const port = 18133`);
-            fs.writeFileSync(path, source);
-          }
-          JS
-      - name: Execute the individual-tier browser journey
-        run: npm run test:ux -- individual-tier.spec.mjs --max-failures=1
+      - name: Execute browser journeys against the committed application
+        run: npm run test:ux -- --max-failures=1
       - name: Save browser evidence
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
