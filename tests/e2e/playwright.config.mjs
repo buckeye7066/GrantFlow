@@ -38,6 +38,10 @@ export default defineConfig({
       // Hint to frontend + backend to suppress noisy background behavior during automation.
       SMOKE_MODE: process.env.SMOKE_MODE || 'true',
       VITE_SMOKE_MODE: process.env.VITE_SMOKE_MODE || 'true',
+      // The browser journeys navigate below `basePath`. Build the SPA with the
+      // same basename or React Router receives `/grantflow/...` while it was
+      // configured for `/`, and every authenticated route renders NotFound.
+      VITE_APP_BASE: basePath,
     },
   },
   use: {

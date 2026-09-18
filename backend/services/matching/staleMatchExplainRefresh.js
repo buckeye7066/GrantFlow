@@ -87,6 +87,7 @@ function gateMetaFromStub(stub) {
  * @param {object} [opts.deps]
  */
 export async function runStaleMatchExplainRefresh(db, opts = {}) {
+  opts.signal?.throwIfAborted()
   const startedAt = Date.now()
   const pairBudget = Number.isFinite(opts.pairBudget) ? opts.pairBudget
     : envInt(process.env.STALE_MATCH_EXPLAIN_PAIR_BUDGET, 800)
@@ -139,6 +140,7 @@ export async function runStaleMatchExplainRefresh(db, opts = {}) {
   // SQL uses marker text, so it can both over-select current rows and miss
   // malformed JSON carrying those markers. A zero needs an exact JS audit.
   const finish = async () => {
+    opts.signal?.throwIfAborted()
     // Calendar-sensitive evidence may expire while this batch is running.
     const remainingPred = staleMatchExplainSql('m')
     try {
@@ -194,6 +196,7 @@ export async function runStaleMatchExplainRefresh(db, opts = {}) {
   }
 
   let rows
+  opts.signal?.throwIfAborted()
   try {
     rows = await db.prepare(
       `SELECT
@@ -222,6 +225,7 @@ export async function runStaleMatchExplainRefresh(db, opts = {}) {
   const ctxCache = new Map()
   const needsDefaultedCache = new Map()
   for (const row of rows || []) {
+    opts.signal?.throwIfAborted()
     if (summary.scanned >= pairBudget || (Date.now() - startedAt) >= timeBudgetMs) {
       summary.truncated = true
       break
@@ -235,6 +239,7 @@ export async function runStaleMatchExplainRefresh(db, opts = {}) {
       try { ctx = await loadProfileContext(db, profileId) } catch { ctx = null }
       ctxCache.set(profileId, ctx)
     }
+    opts.signal?.throwIfAborted()
     if (!ctx?.profile) { summary.skipped_no_profile += 1; continue }
 
     let decision
@@ -263,6 +268,7 @@ export async function runStaleMatchExplainRefresh(db, opts = {}) {
         try { needsDefaulted = await needsDefaultedOf(ctx) } catch { needsDefaulted = undefined }
         needsDefaultedCache.set(profileId, needsDefaulted)
       }
+      opts.signal?.throwIfAborted()
       refreshedProof = refreshFourTruthProof(previousProof, { canonical: decision, opportunity: row, needsDefaulted })
       if (refreshedProof) summary.proofs_carried += 1
     }
@@ -364,6 +370,7 @@ export async function runStaleMatchExplainRefresh(db, opts = {}) {
       explainToPersist.previous_four_truth_proof = previousProof
     }
 
+    opts.signal?.throwIfAborted()
     try {
       const res = await db.prepare(
         `UPDATE profile_opportunity_matches

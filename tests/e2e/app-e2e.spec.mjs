@@ -137,7 +137,7 @@ test('e2e: login, admin panel, source directory, queue crawler, pipeline, opport
 
   // Organizations page renders and we can create + select a profile.
   await page.goto(`${appBase}/Organizations`, { waitUntil: 'networkidle' })
-  await expect(page.getByRole('heading', { name: 'Profiles' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Organizations' })).toBeVisible()
 
   await page.getByRole('button', { name: /quick add/i }).click()
   const quickAddDialog = page.getByRole('dialog').filter({ hasText: /quick add profile/i }).first()
@@ -146,17 +146,8 @@ test('e2e: login, admin panel, source directory, queue crawler, pipeline, opport
   const e2eProfileName = 'E2E Profile'
   await quickAddDialog.locator('#display_name').fill(e2eProfileName)
 
-  // Select profile type. The Quick Add Profile listbox no longer includes a
-  // bare "Organization" option — the canonical organisational types are
-  // "Nonprofit Organization" / "Faith-Based Organization" / etc. Select the
-  // nonprofit option so the rest of the flow exercises the same OrganizationProfile
-  // route the test originally targeted.
-  await quickAddDialog.getByText('Select profile type').click()
-  await page
-    .getByRole('option', { name: /^nonprofit organization$/i })
-    .first()
-    .click()
-
+  // Quick Add intentionally has no type selector: Anya classifies the profile
+  // from evidence later rather than forcing a premature applicant-type guess.
   await quickAddDialog.getByRole('button', { name: /create profile/i }).click()
   await page.waitForURL(/\/OrganizationProfile/i, { timeout: 60_000 })
   await dismissBlockingOverlay(page)
@@ -190,14 +181,16 @@ test('e2e: login, admin panel, source directory, queue crawler, pipeline, opport
     .filter({ hasText: /choose a profile/i })
     .first()
   const options = page.locator('[role="option"]')
+  const discoveryFixtureProfile = 'Demo Tennessee College Student'
   const noProfiles = page.getByText(/No profiles available/i).first()
 
   let selected = false
   for (let i = 0; i < 40; i += 1) {
     await discoverProfileTrigger.click({ force: true })
 
-    if (await options.first().isVisible().catch(() => false)) {
-      await options.first().click()
+    const fixtureOption = page.getByRole('option', { name: discoveryFixtureProfile }).first()
+    if (await fixtureOption.isVisible().catch(() => false)) {
+      await fixtureOption.click()
       selected = true
       break
     }
@@ -211,7 +204,7 @@ test('e2e: login, admin panel, source directory, queue crawler, pipeline, opport
   }
 
   if (!selected) {
-    throw new Error('DiscoverGrants profile picker did not render any options')
+    throw new Error(`DiscoverGrants profile picker did not render ${discoveryFixtureProfile}`)
   }
 
   const findFundingButton = page
