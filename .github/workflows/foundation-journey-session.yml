@@ -43,8 +43,6 @@ jobs:
       DB_AUTO_MIGRATE: 'false'
       ALLOW_EPHEMERAL_UPLOADS: 'true'
       UPLOADS_DIR: /tmp/grantflow-journey-uploads
-      AUTH_JWT_SECRET: grantflow-isolated-journey-secret-not-for-production
-      RUNTIME_SECRETS_KEY: '5555555555555555555555555555555555555555555555555555555555555555'
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
@@ -53,55 +51,32 @@ jobs:
         with:
           node-version: 24.19.0
           cache: npm
+      - name: Configure disposable test runtime
+        run: |
+          mkdir -p journey-evidence "$UPLOADS_DIR"
+          node --input-type=module <<'NODE'
+          import { randomBytes } from 'node:crypto';
+          import { appendFileSync } from 'node:fs';
+          for (const key of ['AUTH_JWT_SECRET', 'RUNTIME_SECRETS_KEY']) {
+            const value = randomBytes(32).toString('hex');
+            console.log(`::add-mask::${value}`);
+            appendFileSync(process.env.GITHUB_ENV, `${key}=${value}\n`);
+          }
+          NODE
       - name: Install locked application dependencies
         run: npm ci --include=dev --include=optional
       - name: Install real browser
         run: node node_modules/playwright/cli.js install chromium --with-deps
-      - name: Read-only deployed landing and login probe
+      - name: Focused location regression suite
         run: |
-          mkdir -p journey-evidence "$UPLOADS_DIR"
-          node --input-type=module <<'NODE'
-          import { chromium } from 'playwright';
-          import { writeFile } from 'node:fs/promises';
-          const browser = await chromium.launch({ headless: true });
-          const records = [];
-          try {
-            for (const path of ['/', '/grantflow/login', '/grantflow/start']) {
-              const page = await browser.newPage();
-              const errors = [];
-              page.on('pageerror', error => errors.push(error.message));
-              page.on('requestfailed', request => {
-                if (!String(request.failure()?.errorText).includes('ERR_ABORTED')) {
-                  const url = new URL(request.url());
-                  errors.push(`${url.origin}${url.pathname}: ${request.failure()?.errorText}`);
-                }
-              });
-              try {
-                const response = await page.goto(`https://app.axiombiolabs.org${path}`, { waitUntil: 'domcontentloaded', timeout: 45000 });
-                await page.waitForTimeout(3000);
-                const record = { path, status: response?.status(), url: page.url().split('?')[0], title: await page.title(), body: (await page.locator('body').innerText()).slice(0,7000), errors };
-                records.push(record);
-                console.log(JSON.stringify(record));
-                await page.screenshot({ path: `journey-evidence/public-${records.length}.png`, fullPage: true });
-              } catch (error) {
-                const record = { path, failure: error.message, errors };
-                records.push(record);
-                console.log(JSON.stringify(record));
-              }
-              await page.close();
-            }
-            await writeFile('journey-evidence/public-probe.json', JSON.stringify(records, null, 2));
-            if (records.some(record => record.failure || record.status >= 400 || record.errors.length)) process.exitCode = 1;
-          } finally {
-            await browser.close();
-          }
-          NODE
+          set -o pipefail
+          node scripts/run-vitest-isolated.mjs run src/pages/Start.location.test.jsx src/pages/Start.pendingLocation.test.jsx 2>&1 | tee journey-evidence/location-unit.log
       - name: Foundation intake desktop and phone journey
         if: ${{ !cancelled() }}
         run: |
           set -o pipefail
-          node node_modules/playwright/cli.js test -c tests/e2e/playwright.config.mjs onboarding-location.spec.mjs --workers=1 --retries=0 --max-failures=1 --reporter=list 2>&1 | tee journey-evidence/foundation-intake.log
-      - name: Retain runtime evidence only
+          node node_modules/playwright/cli.js test -c tests/e2e/playwright.config.mjs onboarding-location.spec.mjs onboarding-z-account.spec.mjs --workers=1 --retries=0 --max-failures=1 --reporter=list 2>&1 | tee journey-evidence/foundation-intake.log
+      - name: Retain isolated test evidence
         if: ${{ always() }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
