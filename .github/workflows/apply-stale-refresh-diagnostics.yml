@@ -34,6 +34,22 @@ jobs:
           cache: npm
       - name: Install locked dependencies
         run: npm ci --include=optional
+      - name: Complete the regression fixtures
+        run: |
+          node <<'NODE'
+          const fs = require('node:fs')
+          const assert = require('node:assert/strict')
+          const file = 'scripts/apply-stale-refresh-diagnostics.mjs'
+          let script = fs.readFileSync(file, 'utf8')
+          const hook = 'beforeEach(() => refresh.mockReset())'
+          assert.equal(script.split(hook).length, 2)
+          // Returning the mock makes Vitest treat it as a teardown callback.
+          script = script.replace(hook, 'beforeEach(() => { refresh.mockReset() })')
+          const green = "run(['scripts/run-vitest-isolated.mjs', 'run', paths.receiptTests,\n"
+          assert.equal(script.split(green).length, 2)
+          script = script.replace(green, "const runnerTestPath = 'backend/tests/enforceInvariants.test.js'\nlet runnerTest = read(runnerTestPath)\nassert.equal(hash(runnerTest), '0e99c534aa5cec00f113926d310c2eb44ff952c0')\nrunnerTest = exact(runnerTest, \"  it('runs every invariant, never throws, and returns a structured summary', async () => {\\n    const db = makeDb()\\n\", \"  it('runs every invariant, never throws, and returns a structured summary', async () => {\\n    const db = makeDb()\\n    // A healthy receipt requires a readable empty match/catalog scope. The\\n    // old fixture omitted it and relied on the wrapper hiding query failure.\\n    db.exec(`\\n      CREATE TABLE funding_opportunities (id TEXT PRIMARY KEY, title TEXT, is_active INTEGER);\\n      CREATE TABLE profile_opportunity_matches (\\n        id TEXT PRIMARY KEY, profile_id TEXT, opportunity_id TEXT,\\n        matcher_version TEXT, match_decision TEXT, match_score INTEGER,\\n        match_explain_json TEXT, match_explanation TEXT, updated_at TEXT, evaluated_at TEXT\\n      );\\n    `)\\n\")\nfs.writeFileSync(runnerTestPath, runnerTest)\n" + green)
+          fs.writeFileSync(file, script)
+          NODE
       - name: Reproduce failures and apply exact corrections
         run: node scripts/apply-stale-refresh-diagnostics.mjs
       - name: Verify source and diagnostic contracts
@@ -53,8 +69,9 @@ jobs:
           git add backend/services/matching/staleMatchExplainRefresh.js \
             backend/startup/enforceInvariants.js \
             tests/unit/stale-match-refresh-budget.test.mjs \
-            backend/tests/staleRefreshInvariantReceipt.test.js
-          test "$(git diff --cached --name-only | wc -l)" -eq 4
+            backend/tests/staleRefreshInvariantReceipt.test.js \
+            backend/tests/enforceInvariants.test.js
+          test "$(git diff --cached --name-only | wc -l)" -eq 5
           git -c user.name='github-actions[bot]' \
             -c user.email='41898282+github-actions[bot]@users.noreply.github.com' \
             commit -m 'fix(matching): verify exact backlog and retain durable diagnostics'
