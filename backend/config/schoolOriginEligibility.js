@@ -8,6 +8,10 @@ const HISTORICAL = /\b(?:was|were|previous(?:ly)?|formerly|last\s+year|past\s+re
 const NONEXCLUSIVE = /\b(?:not|never|preference|prefer(?:red|ence)?|priority|may|regardless|including|such\s+as)\b/i
 const REQUIRED = /\b(?:only|must\s+(?:be|have)|required\s+to\s+(?:be|have)|(?:restricted|limited|open|available|awarded|offered)\s+to|eligible\s+if\s+(?:they|you)(?:\s+are)?)\s*(?:(?:a|an|the|any)\s+)?$/i
 const REVERSE_SUBJECT = /^\s*(?:(?:the|a|this)\s+)?(?:scholarship|award|program|fund)s?\s+(?:(?:is|are|will\s+be)\s+)?$/i
+const APPLICANT_RELATIVE = /\bonly\s+(?:applicants?|students?|candidates?|recipients?|individuals?|people)\s+(?:who|that)\s+(?:have\s+)?$/i
+const APPLICANT_MANDATE = /\b(?:applicants?|students?|candidates?|recipients?|individuals?|you)\s+(?:must|shall|are\s+required\s+to)\s+(?:be|have)\s+([^.!?;]{0,180})$/i
+const BENEFICIARY_OR_ALTERNATIVE = /\b(?:or|not|never|organizations?|institutions?|providing|serving|supporting|beneficiaries)\b/i
+const HISTORICAL_REPORT_SUFFIX = /^\s*[,;:]?\s*(?:(?:in\s+)?(?:19|20)\d{2}\s+)?(?:was|were|had\s+been|last\s+year|previously|received|won)\b/i
 const CURRENT_BINDING = /\b(?:is|are|will)\b[^.!?;]*$/i
 const SOFT_SCHOOL_SUFFIX = /^\s*[,;:]?\s*(?:(?:receive|have|get|are\s+given|will\s+receive)\s+(?:a\s+)?(?:preference|priority)|(?:are\s+|will\s+be\s+)?(?:preferred|favou?red)|(?:is|are)\s+(?:not\s+(?:required|mandatory)|optional))\b/i
 const WIDENED = /^\s*(?:,\s*)?(?:or\b|(?:and\s+)?(?:surrounding|adjacent|neighbou?ring|other|nearby)\b|(?:and|,|\/|&)\s*[a-z .'-]+\s+count(?:y|ies)\b)/i
@@ -63,6 +67,17 @@ function explicitState(after) {
   }
   return { state: null, remainder: after }
 }
+/** Preserve mandatory scope across applicant-relative and conjoined conditions only. */
+function applicantClause(before) {
+  const relative = before.match(APPLICANT_RELATIVE)
+  if (relative) return before.slice(relative.index)
+  const mandate = before.match(APPLICANT_MANDATE)
+  if (!mandate) return null
+  const intervening = mandate[1]
+  if (BENEFICIARY_OR_ALTERNATIVE.test(intervening)) return null
+  if (intervening.trim() && !/\band\s+(?:(?:be|have)\s+)?$/i.test(intervening)) return null
+  return before.slice(mandate.index)
+}
 export function schoolOriginRequirements(row) {
   const requirements = []
   for (const field of SOURCE_FIELDS) {
@@ -78,11 +93,13 @@ export function schoolOriginRequirements(row) {
         const after = sentence.slice(match.index + match[0].length)
         const standaloneBullet = field.startsWith('eligibility_') && /^\s*(?:[-*]|\d+[.)])?\s*$/.test(before)
         const stateSuffix = explicitState(after)
-        const historical = HISTORICAL.test(before) && !CURRENT_BINDING.test(before)
+        const applicant = applicantClause(before)
+        const qualifierContext = applicant ?? before
+        const historical = !applicant && HISTORICAL.test(before) && !CURRENT_BINDING.test(before)
         const subjectBound = candidate.reverse
-          ? !before.trim() || REVERSE_SUBJECT.test(before)
-          : standaloneBullet || REQUIRED.test(before)
-        if (!subjectBound || NONEXCLUSIVE.test(before) || historical || SOFT_SCHOOL_SUFFIX.test(after) || SOFT_SCHOOL_SUFFIX.test(stateSuffix.remainder) || WIDENED.test(after) || WIDENED.test(stateSuffix.remainder)) continue
+          ? (field.startsWith('eligibility_') && !before.trim()) || REVERSE_SUBJECT.test(before)
+          : Boolean(applicant) || standaloneBullet || REQUIRED.test(before)
+        if (!subjectBound || NONEXCLUSIVE.test(qualifierContext) || historical || (candidate.reverse && HISTORICAL_REPORT_SUFFIX.test(after)) || SOFT_SCHOOL_SUFFIX.test(after) || SOFT_SCHOOL_SUFFIX.test(stateSuffix.remainder) || WIDENED.test(after) || WIDENED.test(stateSuffix.remainder)) continue
         const county = countyName(candidate.county)
         if (county) requirements.push({ county, state: candidate.reverse ? candidate.state : stateSuffix.state, type: candidate.type?.toLowerCase() ?? null, field, evidence: sentence.trim() })
       }

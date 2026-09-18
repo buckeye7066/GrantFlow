@@ -33,3 +33,11 @@ Codex and CodeRabbit review findings were independently reproduced. The correcti
 The claim that pipeline reconciliation was absent was not correct for this base. Existing enforcePipelinePrecision re-scores every non-exempt catalog-backed row through scoreRowWithEngine and re-stamps it; gateEngine already handles hard refusals. Three real SQLite cases verify that a known school mismatch removes an early row, flags but preserves a saved row, and changes a missing-school saved row from ACCEPT to REVIEW. No second cleanup implementation was added.
 
 The reviewed-corrections regression set passed 107 tests across school history, calendar freshness, persisted explain, real stale refresh and real pipeline reconciliation. Final current-head full gates and exact-revision production delivery remain required; initial-head green checks are not evidence for the corrected head.
+
+## Resumed after interruption: applicant-clause review
+
+Recovered exact head c2264c684970aede67a76f87e9f680668d88c2b6. Its complete unit command, all 532 crawler cases, full prepush and all reporting CI jobs had passed. The remaining current-head review findings were real: mandatory scope separated from graduation by applicant-relative/conjoined clauses, a founder-preface hiding an explicit applicant mandate, and county-first historical reporting mistaken for current eligibility.
+
+Twelve added controls reproduced eight failures, then all 127 cases in the five focused suites passed. The shared parser now carries mandatory scope only across applicant-relative/conjoined clauses, refuses organizational-beneficiary and alternative/negated scope, and lets an explicit applicant mandate outrank an incidental historical preface. County-first unsupported prose no longer becomes a requirement just because the sentence starts there; an eligibility-field declaration remains supported and a historical reporting suffix is refused.
+
+The signal version remains the unreleased 2026.09.17-4 with its derivation hash freshly pinned. No profile answers, live records, application targets, scoring thresholds or protected history were changed directly. Final corrected-head checks, review, merge and production verification are still required. Stay in Phase 2; do not restart or advance to Phase 3.

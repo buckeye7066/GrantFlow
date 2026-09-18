@@ -207,3 +207,41 @@ it('keeps a mandatory school restriction when a later independent subject prefer
   const row = { ...opportunity, description: 'Only graduates of public high schools in Raleigh County may apply; preference is given to science majors.' }
   expect(evaluate({ high_school_county: 'Bradley', high_school_type: 'public' }, row).eligible).toBe(false)
 })
+
+describe('applicant-bound school clauses across intervening words', () => {
+  it.each([
+    'Only students who graduated from a public high school in Raleigh County may apply.',
+    'Only applicants who have graduated from a public high school in Raleigh County may apply.',
+    'Applicants must be residents of West Virginia and graduates of public high schools in Raleigh County.',
+    'Applicants must have financial need and have graduated from a public high school in Raleigh County.',
+    'In memory of our founder, applicants must have graduated from a public high school in Raleigh County.',
+  ])('preserves the current mandatory applicant condition: %s', description => {
+    const row = { ...opportunity, description }
+    expect(normalizeOpportunity(row).schoolOriginRequirements).toHaveLength(1)
+    expect(evaluate({ high_school_county: 'Bradley', high_school_type: 'public' }, row).eligible).toBe(false)
+    expect(evaluate({ high_school_county: 'Raleigh', high_school_type: 'private' }, row).eligible).toBe(false)
+    expect(missing(evaluate({}, row))).toContain('education.high_school_county')
+    expect(evaluate({ high_school_county: 'Raleigh', high_school_type: 'public' }, row).eligible).toBe(true)
+  })
+  it.each([
+    'Applicants must be residents of West Virginia or graduates of public high schools in Raleigh County.',
+    'Applicants must be nonprofit organizations supporting residents of West Virginia and graduates of public high schools in Raleigh County.',
+    'Only students who did not graduate from a public high school in Raleigh County may apply.',
+    'In memory of our founder, applicants need not have graduated from a public high school in Raleigh County.',
+  ])('does not turn alternatives, beneficiaries or negation into an applicant requirement: %s', description => {
+    const row = { ...opportunity, description }
+    expect(normalizeOpportunity(row).schoolOriginRequirements).toHaveLength(0)
+    expect(missing(evaluate({}, row))).toEqual([])
+  })
+})
+
+it.each(['description', 'eligibility_text'])('does not turn county-first historical reporting in %s into applicant eligibility', field => {
+  const row = { ...opportunity, description: 'Community education support.', [field]: 'For Raleigh County high school graduates, 2024 was a record year: ten recipients received awards.' }
+  expect(normalizeOpportunity(row).schoolOriginRequirements).toHaveLength(0)
+  expect(evaluate({ high_school_county: 'Bradley', high_school_type: 'private' }, row).eligible).toBe(true)
+})
+it('keeps county-first unsupported descriptive prose separate from an eligibility-field declaration', () => {
+  const statement = 'For Raleigh County, WV high school graduates continuing their education at any accredited college.'
+  expect(normalizeOpportunity({ ...opportunity, description: statement }).schoolOriginRequirements).toHaveLength(0)
+  expect(normalizeOpportunity({ ...opportunity, description: 'Education support.', eligibility_text: statement }).schoolOriginRequirements).toHaveLength(1)
+})
