@@ -12,9 +12,20 @@ export async function beginStaleRefreshReceipt(db, { signal } = {}) {
     completed_at: null, trigger: 'recurring-link-verification', ok: false,
     status: 'running', complete: false, remaining_candidates: null, remaining_stale: null }
   const value = JSON.stringify(receipt)
-  await db.prepare(`INSERT INTO system_kv (key, value, updated_at) VALUES (?, ?, ?)
-    ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`)
-    .run(STALE_REFRESH_RECEIPT_KEY, value, at)
+  const previous = await db.prepare('SELECT value, updated_at FROM system_kv WHERE key = ?')
+    .get(STALE_REFRESH_RECEIPT_KEY)
+  signal?.throwIfAborted()
+  if (previous && Date.parse(previous.updated_at) > Date.parse(at)) {
+    throw new Error('A newer stored-match refresh receipt already exists')
+  }
+  // Claim exactly the observed record. A delayed start cannot overwrite a
+  // later attempt, even if its lease expires while the SQL is in flight.
+  const result = previous
+    ? await db.prepare("UPDATE system_kv SET value = ?, updated_at = ? WHERE key = ? AND COALESCE(value, '') = ?")
+      .run(value, at, STALE_REFRESH_RECEIPT_KEY, previous.value ?? '')
+    : await db.prepare('INSERT INTO system_kv (key, value, updated_at) VALUES (?, ?, ?) ON CONFLICT(key) DO NOTHING')
+      .run(STALE_REFRESH_RECEIPT_KEY, value, at)
+  if (changes(result) !== 1) throw new Error('Stored-match refresh claim was superseded; work not started')
   signal?.throwIfAborted()
   return { receipt, value }
 }
