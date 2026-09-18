@@ -285,6 +285,56 @@ function requireEnv(name) {
   return v.trim();
 }
 
+// The authentication realm never navigates after login. Visual captures share
+// the browser context but cannot destroy or export its in-memory credential.
+export async function createAuditPages(context) {
+  const page = await context.newPage();
+  const capturePage = await context.newPage();
+  return { page, capturePage };
+}
+
+export function assessPortalReads(results = [], { requested = false, hosts = [], profileIds = [] } = {}) {
+  if (!requested) return { ok: true, requested: false, expected_count: 0, completed_count: 0, failures: [] };
+  const expected = [...new Set(profileIds.map(String))].flatMap(profileId =>
+    [...new Set(hosts.map(String))].map(host => ({ profileId, host })));
+  const failures = [];
+  let completed = 0;
+  for (const { profileId, host } of expected) {
+    const matches = results.filter(row => row.profile_id === profileId && row.portal_host === host);
+    const row = matches[0];
+    const pass = matches.length === 1 && Number(row.http_status) >= 200 && Number(row.http_status) < 300
+      && row.body_ok === true && row.needs_session !== true && row.outcome === 'read_completed';
+    if (pass) completed++;
+    else failures.push({ profile_id: profileId, portal_host: host, http_status: Number(row?.http_status) || 0,
+      outcome: row?.outcome || 'missing_result', result_count: matches.length });
+  }
+  if (!expected.length || results.length !== expected.length) failures.push({ outcome: 'portal_scope_or_result_count_mismatch' });
+  return { ok: failures.length === 0, requested: true, expected_count: expected.length, completed_count: completed, failures };
+}
+
+export async function postAuditRead(page, pathname, body, profileId = null) {
+  if (!['/api/hamilton/automation/preflight', '/api/hamilton/portal-sync/read'].includes(pathname)) {
+    throw new Error('Audit POST must use an explicit same-origin read-only endpoint');
+  }
+  return page.evaluate(async ({ p, payload, pid }) => {
+    try {
+      const headers = { accept: 'application/json', 'content-type': 'application/json' };
+      const token = globalThis.__GRANTFLOW_AUDIT_ACCESS_TOKEN__;
+      if (typeof token === 'string' && token) headers.authorization = `Bearer ${token}`;
+      if (pid) headers['X-Profile-Id'] = pid;
+      const res = await fetch(p, {
+        method: 'POST', credentials: 'include', headers, body: JSON.stringify(payload),
+      });
+      const text = await res.text();
+      let responseBody;
+      try { responseBody = JSON.parse(text); } catch { responseBody = { _non_json: text.slice(0, 500) }; }
+      return { status: res.status, ok: res.ok, body: responseBody };
+    } catch (err) {
+      return { status: 0, ok: false, error: String(err && err.message) };
+    }
+  }, { p: pathname, payload: body, pid: profileId });
+}
+
 async function main() {
   const args = parseArgs(process.argv.slice(2));
   const baseUrl = (process.env.GRANTFLOW_PROD_BASE_URL || 'https://app.axiombiolabs.org').replace(/\/$/, '');
@@ -353,17 +403,20 @@ async function main() {
     return route.abort('blockedbyclient');
   });
 
-  const page = await context.newPage();
-  page.on('console', (msg) => {
-    if (msg.type() === 'error') consoleErrors.push(redactString(msg.text()).slice(0, 500));
-  });
-  page.on('requestfailed', (req) => {
-    const failure = req.failure()?.errorText || '';
-    // Our own aborts are already recorded as policy blocks; re-reporting them
-    // as network failures would make a working control look like breakage.
-    if (failure.includes('blockedbyclient')) return;
-    failedRequests.push({ method: req.method(), url: redactString(req.url()), error: failure });
-  });
+  const { page, capturePage } = await createAuditPages(context);
+  for (const observedPage of [page, capturePage]) {
+    observedPage.on('console', (msg) => {
+      if (msg.type() === 'error') consoleErrors.push(redactString(msg.text()).slice(0, 500));
+    });
+    observedPage.on('requestfailed', (req) => {
+      const failure = req.failure()?.errorText || '';
+      // Our own aborts are already recorded as policy blocks; re-reporting them
+      // as network failures would make a working control look like breakage.
+      if (/blockedbyclient|ERR_BLOCKED_BY_CLIENT/i.test(failure)) return;
+      failedRequests.push({ method: req.method(), url: redactString(req.url()), error: failure });
+    });
+
+  }
 
   const steps = [];
   const step = async (name, fn) => {
@@ -379,12 +432,12 @@ async function main() {
     }
   };
 
-  const shot = async (name) => {
+  const shot = async (name, targetPage = page) => {
     if (!args.screenshots) return;
-    await page.screenshot({ path: path.join(shotsDir, `${name}.png`), fullPage: true }).catch(() => {});
+    await targetPage.screenshot({ path: path.join(shotsDir, `${name}.png`), fullPage: true }).catch(() => {});
   };
 
-  /** Authenticated GET issued from inside the page using the current cookie session. */
+  /** Reads use the stable login realm, never the page that navigates for screenshots. */
   const apiGet = async (pathname, profileId = null) => {
     return page.evaluate(async ({ p, pid }) => {
       try {
@@ -407,26 +460,7 @@ async function main() {
     }, { p: pathname, pid: profileId });
   };
 
-  /** Authenticated, side-effect-free POST used only for Hamilton preflight. */
-  const apiPostRead = async (pathname, body, profileId = null) => {
-    return page.evaluate(async ({ p, payload, pid }) => {
-      try {
-        const headers = { accept: 'application/json', 'content-type': 'application/json' };
-        const token = globalThis.__GRANTFLOW_AUDIT_ACCESS_TOKEN__;
-        if (typeof token === 'string' && token) headers.authorization = `Bearer ${token}`;
-        if (pid) headers['X-Profile-Id'] = pid;
-        const res = await fetch(p, {
-          method: 'POST', credentials: 'include', headers, body: JSON.stringify(payload),
-        });
-        const text = await res.text();
-        let responseBody;
-        try { responseBody = JSON.parse(text); } catch { responseBody = { _non_json: text.slice(0, 500) }; }
-        return { status: res.status, ok: res.ok, body: responseBody };
-      } catch (err) {
-        return { status: 0, ok: false, error: String(err && err.message) };
-      }
-    }, { p: pathname, payload: body, pid: profileId });
-  };
+  const apiPostRead = (pathname, body, profileId = null) => postAuditRead(page, pathname, body, profileId);
 
   console.log('Authenticated read-only pass:');
 
@@ -554,12 +588,12 @@ async function main() {
       await page.evaluate((pid) => {
         window.localStorage.setItem('grantflow:active-profile-id', pid);
       }, profileId);
-      await page
+      await capturePage
         .goto(`${baseUrl}/FundingResults`, { waitUntil: 'domcontentloaded', timeout: 45_000 })
         .catch(() => {});
-      await page.waitForLoadState('networkidle', { timeout: 25_000 }).catch(() => {});
-      await shot(`10-funding-${String(i + 1).padStart(2, '0')}`);
-      return page.url();
+      await capturePage.waitForLoadState('networkidle', { timeout: 25_000 }).catch(() => {});
+      await shot(`10-funding-${String(i + 1).padStart(2, '0')}`, capturePage);
+      return capturePage.url();
     });
 
     profileCaptures.push(capture);
@@ -572,10 +606,10 @@ async function main() {
     ['22-hamilton', '/HamiltonProcessing'],
   ]) {
     await step(`screenshot ${route}`, async () => {
-      await page.goto(`${baseUrl}${route}`, { waitUntil: 'domcontentloaded', timeout: 45_000 }).catch(() => {});
-      await page.waitForLoadState('networkidle', { timeout: 25_000 }).catch(() => {});
-      await shot(name);
-      return page.url();
+      await capturePage.goto(`${baseUrl}${route}`, { waitUntil: 'domcontentloaded', timeout: 45_000 }).catch(() => {});
+      await capturePage.waitForLoadState('networkidle', { timeout: 25_000 }).catch(() => {});
+      await shot(name, capturePage);
+      return capturePage.url();
     });
   }
 
@@ -588,35 +622,7 @@ async function main() {
     for (const host of args.portalHosts) {
       for (const profileId of args.profiles) {
         await step(`portal READ ${host} (profile ${profileId})`, async () => {
-          const result = await page.evaluate(
-            async ({ p, h }) => {
-              try {
-                const headers = {
-                  'content-type': 'application/json',
-                  accept: 'application/json',
-                  'X-Requested-With': 'XMLHttpRequest',
-                };
-                if (p) headers['X-Profile-Id'] = p;
-                const res = await fetch('/api/hamilton/portal-sync/read', {
-                  method: 'POST',
-                  credentials: 'include',
-                  headers,
-                  body: JSON.stringify({ profileId: p, portalHost: h }),
-                });
-                const text = await res.text();
-                let body;
-                try {
-                  body = JSON.parse(text);
-                } catch {
-                  body = { _non_json: text.slice(0, 500) };
-                }
-                return { status: res.status, ok: res.ok, body };
-              } catch (err) {
-                return { status: 0, ok: false, error: String(err && err.message) };
-              }
-            },
-            { p: profileId, h: host },
-          );
+          const result = await apiPostRead('/api/hamilton/portal-sync/read', { profileId, portalHost: host }, profileId);
           // Classify on the BODY, never the HTTP status.
           //
           // This route answers HTTP 200 with `{"ok": false, "error": "no
@@ -681,6 +687,8 @@ async function main() {
   await browser.close();
   const profileCaptureAssessment = assessProfileCaptures(profileCaptures, args.profiles);
 
+  const portalReadAssessment = assessPortalReads(portalReadResults, { requested: args.portalReads, hosts: args.portalHosts, profileIds: args.profiles });
+
   const report = {
     lane: 'application',
     base_url: baseUrl,
@@ -705,6 +713,7 @@ async function main() {
       permitted: allowPortalRead,
       hosts: args.portalHosts,
       results: portalReadResults,
+      assessment: portalReadAssessment,
     },
     mutations_allowed: allowedMutations,
     mutations_blocked: blocked,
@@ -735,6 +744,10 @@ async function main() {
   if (failed.length) {
     console.error(`\n${failed.length} step(s) failed (recorded in the artifact, not fatal):`);
     failed.forEach((f) => console.error(`  - ${f.name}: ${f.error}`));
+  }
+  if (!portalReadAssessment.ok) {
+    console.error(`FAILED: ${portalReadAssessment.failures.length} requested portal read(s) did not complete; evidence retained.`);
+    process.exit(1);
   }
   if (!identityScope.ok) {
     console.error(`\nFAILED: authenticated identity/scope proof failed (${identityScope.reason}).`);
