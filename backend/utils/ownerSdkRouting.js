@@ -4,7 +4,7 @@ import { getOwnerAiScope } from '../services/ownerAi/ownerAiScope.js'
 const nativeClients = new WeakMap()
 export function unwrapOwnerSdkClient(client) { return nativeClients.get(client) || client }
 function unavailable() {
-  const error = new Error('This owner operation requires a supported subscription or free-model transport; no metered call was made')
+  const error = new Error('This operation is not supported by the subscription or free-model transport')
   error.code = 'OWNER_SUBSCRIPTION_OPERATION_UNSUPPORTED'
   error.status = 503
   return error

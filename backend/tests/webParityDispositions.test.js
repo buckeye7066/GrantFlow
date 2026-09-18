@@ -706,7 +706,7 @@ describe('recover legacy extraction failures that never received a gate verdict'
   it('reoffers only the evidenced unjudged source, without rewriting historical records on read', async () => {
     const db = makeDb()
     try {
-      const rows=[legacy,{...legacy,url:'https://example.org/rejected',gate:'eligibility'}, {...legacy,url:'https://example.org/dismissed',status:'dismissed'}, {...legacy,url:'https://example.org/exhausted',offer_count:GAP_SEED_MAX_OFFERS}, {...legacy,url:'https://example.org/foreign',profile_id:'other'}, {...legacy,url:'https://example.org/unknown',disposition:null}]
+      const rows=[legacy,{...legacy,url:'https://example.org/rejected',gate:'eligibility'}, {...legacy,url:'https://example.org/reasoned',gate_reason:'four-truth gate held at REVIEW: profile_qualifies'}, {...legacy,url:'https://example.org/dismissed',status:'dismissed'}, {...legacy,url:'https://example.org/exhausted',offer_count:GAP_SEED_MAX_OFFERS}, {...legacy,url:'https://example.org/foreign',profile_id:'other'}, {...legacy,url:'https://example.org/unknown',disposition:null}]
       seedQueue(db,rows)
       const seeds=await loadGapSeedPagesForProfile(db,'g')
       expect(seeds.map(s=>s.url)).toEqual([legacy.url])
@@ -720,7 +720,7 @@ describe('recover legacy extraction failures that never received a gate verdict'
       const offered=await loadGapSeedPagesForProfile(db,'g')
       await markGapCandidateOutcomes(db,{profileId:'g',offeredUrls:offered.map(s=>s.url),seedOutcomes:[{url:legacy.url,outcome:'gate_rejected',gate:'eligibility',reason:'applicant restriction'}]})
       const [row]=await readWebParityGapQueue(db)
-      expect(row).toMatchObject({status:'gated_out',gate:'eligibility',offer_count:1,legacy_gate_claim:{status:'gated_out',resolved_at:legacy.resolved_at}})
+      expect(row).toMatchObject({status:'gated_out',gate:'eligibility',offer_count:2,legacy_gate_claim:{status:'gated_out',resolved_at:legacy.resolved_at}})
       expect(await loadGapSeedPagesForProfile(db,'g')).toEqual([])
     } finally { db.close() }
   })
@@ -737,4 +737,17 @@ describe('recover legacy extraction failures that never received a gate verdict'
       expect(await loadGapSeedPagesForProfile(db,'g',{now:later})).toEqual([])
     } finally { db.close() }
   })
+})
+
+
+it('the historical legacy offer counts toward the existing three-offer total', async()=>{
+ const db=makeDb();const url='https://example.org/legacy-cap'
+ try {
+  seedQueue(db,[{url,profile_id:'g',source:'web_parity_benchmark',status:'gated_out',resolved_at:'2026-07-28T00:00:00Z',disposition:'extraction_failed',disposition_evidence:{source:'lane_page_ledger'}}])
+  await markGapCandidateOutcomes(db,{profileId:'g',offeredUrls:[url],seedOutcomes:[{url,outcome:'extraction_failed'}]})
+  expect((await readWebParityGapQueue(db))[0].offer_count).toBe(2)
+  await markGapCandidateOutcomes(db,{profileId:'g',offeredUrls:[url],seedOutcomes:[{url,outcome:'extraction_failed'}]})
+  expect((await readWebParityGapQueue(db))[0]).toMatchObject({offer_count:GAP_SEED_MAX_OFFERS,status:'not_evaluated:exhausted'})
+  expect(await loadGapSeedPagesForProfile(db,'g')).toEqual([])
+ } finally {db.close()}
 })

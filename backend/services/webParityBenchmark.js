@@ -836,13 +836,20 @@ export function isPendingGapStatus(value) {
 // Older queue rows called extraction failure a terminal gate decision. Only
 // the positively documented legacy case may retry; actual gates, dismissals,
 // other producers and exhausted offer budgets remain untouched.
+function gapOfferCount(candidate) {
+  const recorded = Number(candidate?.offer_count)
+  const minimum = normalizeGapStatus(candidate?.status) === 'gated_out' ? 1 : 0
+  return Number.isFinite(recorded) ? Math.max(minimum, Math.floor(recorded)) : minimum
+}
+
 function isRecoverableLegacyExtractionGap(candidate) {
   return candidate?.source === 'web_parity_benchmark' &&
     normalizeGapStatus(candidate.status) === 'gated_out' &&
-    !String(candidate.gate || '').trim() && !candidate.outcome_evidence &&
+    !String(candidate.gate || '').trim() && !String(candidate.gate_reason || '').trim() &&
+    (candidate.outcome_evidence === undefined || candidate.outcome_evidence === null) &&
     candidate.disposition === 'extraction_failed' &&
     candidate.disposition_evidence?.source === 'lane_page_ledger' &&
-    (Number(candidate.offer_count) || 0) < GAP_SEED_MAX_OFFERS
+    gapOfferCount(candidate) < GAP_SEED_MAX_OFFERS
 }
 
 export function isPendingGapCandidate(candidate) {
@@ -1238,7 +1245,7 @@ export async function markGapCandidateOutcomes(db, {
     if (profileId !== null && String(c?.profile_id) !== String(profileId)) return c
     const key = normalizeUrlKey(c?.url)
     if (!key || !offered.has(key)) return c
-    const offerCount = (Number(c?.offer_count) || 0) + 1
+    const offerCount = gapOfferCount(c) + 1
     const base = { ...c, offered_at: at, offer_count: offerCount,
       ...(isRecoverableLegacyExtractionGap(c) ? { legacy_gate_claim: { status: c.status, resolved_at: c.resolved_at ?? null, disposition: c.disposition } } : {}),
     }
