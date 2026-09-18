@@ -121,6 +121,43 @@ export async function runStaleMatchExplainRefresh(db, opts = {}) {
     held_at_review: 0,
     structural_target_holds: 0,
     truncated: false,
+    remaining_candidates: null,
+    verification_failed: false,
+    verified_at: null,
+    complete: false,
+    status: 'pending',
+  }
+
+  // A page finishing is not evidence that the backlog is empty. Count the
+  // same active-catalog SQL candidate scope after writes, not rows attempted.
+  // The predicate is deliberately conservative: this is a candidate count,
+  // not a claim that every remaining row fails the JS freshness predicate.
+  const finish = async () => {
+    try {
+      const row = await db.prepare(
+        `SELECT COUNT(*) AS remaining_candidates
+           FROM profile_opportunity_matches m
+           JOIN funding_opportunities fo ON fo.id = m.opportunity_id
+          WHERE ${stalePred}
+            AND (fo.is_active IS NULL OR fo.is_active = ${isPg ? 'TRUE' : '1'})`,
+      ).get()
+      const count = row?.remaining_candidates
+      const numeric = typeof count === 'number' || (typeof count === 'string' && /^[0-9]+$/.test(count))
+      const remaining = Number(count)
+      if (!numeric || !Number.isSafeInteger(remaining) || remaining < 0) throw new Error('Invalid remaining-candidate count')
+      summary.remaining_candidates = remaining
+      summary.verified_at = new Date().toISOString()
+    } catch {
+      summary.ok = false
+      summary.verification_failed = true
+    }
+    summary.complete = summary.ok && writeEnabled && summary.remaining_candidates === 0 &&
+      summary.unscorable === 0 && summary.skipped_no_profile === 0
+    summary.status = !summary.ok ? 'failed' : !writeEnabled ? 'disabled' : summary.complete ? 'complete' : 'pending'
+    summary.elapsed_ms = Date.now() - startedAt
+    // Aggregate-only receipt: no applicant identifiers, URLs, titles or evidence.
+    log.info('batch receipt', summary)
+    return summary
   }
 
   let rows
@@ -141,10 +178,12 @@ export async function runStaleMatchExplainRefresh(db, opts = {}) {
           AND (fo.is_active IS NULL OR fo.is_active = ${isPg ? 'TRUE' : '1'})
         ORDER BY m.profile_id, m.opportunity_id
         LIMIT ?`,
-    ).all(Math.max(pairBudget, 1))
+    ).all(Math.max(pairBudget, 1) + 1)
   } catch (err) {
     log.warn('stale-match-explain candidate query failed (non-fatal)', { error: String(err?.message || err) })
-    return { ...summary, ok: false, skipped: 'query' }
+    summary.ok = false
+    summary.skipped = 'query'
+    return finish()
   }
 
   const ctxCache = new Map()
@@ -333,9 +372,8 @@ export async function runStaleMatchExplainRefresh(db, opts = {}) {
     }
   }
 
-  summary.elapsed_ms = Date.now() - startedAt
   if (summary.convergence_errors > 0) summary.ok = false
-  return summary
+  return finish()
 }
 
 export default { runStaleMatchExplainRefresh }
