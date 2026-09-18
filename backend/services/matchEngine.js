@@ -30,6 +30,7 @@
 import zipcodes from 'zipcodes'
 import { safeParseArrayField, resolveApplicantType, buildProfileSignals } from './profileHelpers.js'
 import { normalizeProfile } from './profileNormalizer.js'
+import { evaluateSchoolOrigin } from '../config/schoolOriginEligibility.js'
 import { normalizeOpportunity, inferHousingClassification } from './opportunityNormalizer.js'
 import { haversineDistanceMiles } from './sharedGeo.js'
 import { listPresentProfileSignals } from './profileCoverage.js'
@@ -467,6 +468,10 @@ export function evaluateEligibility(profileNorm, oppNorm) {
   if (!profileNorm || !oppNorm) {
     return { eligible: 'maybe', ineligibilityReasons: [], missingFields: ['profile', 'opportunity'] }
   }
+
+  const schoolOrigin = evaluateSchoolOrigin(profileNorm.schoolOrigin, oppNorm.schoolOriginRequirements)
+  ineligibilityReasons.push(...schoolOrigin.ineligibilityReasons)
+  missingFields.push(...schoolOrigin.missingFields)
 
   if (oppNorm.isLoan) ineligibilityReasons.push('Opportunity is a loan, not a grant')
 
@@ -1142,7 +1147,7 @@ export function eligibilityEvidenceLevel(opportunity, oppNorm) {
     const value = oppNorm?.[key]
     return Boolean(value) && value !== 'none' && value !== 'unknown'
   })
-  if (ethnicity || flagged || oppNorm?.educationLevel === 'k12') return ELIGIBILITY_EVIDENCE.STRUCTURED_FLAGS
+  if (ethnicity || flagged || oppNorm?.schoolOriginRequirements?.length > 0 || oppNorm?.educationLevel === 'k12') return ELIGIBILITY_EVIDENCE.STRUCTURED_FLAGS
   if (oppNorm && !oppNorm.applicabilityUnknown && (oppNorm.entityTypesAllowed?.length ?? 0) > 0) {
     return ELIGIBILITY_EVIDENCE.APPLICANT_TYPES_ONLY
   }
@@ -4386,6 +4391,16 @@ export function makeDecision(score, profile, opportunity, normalizedProfile = nu
         reasons,
       }
     }
+  }
+
+  const schoolOrigin = evaluateSchoolOrigin(np.schoolOrigin, on.schoolOriginRequirements)
+  if (schoolOrigin.ineligibilityReasons.length) {
+    reasons.push(...schoolOrigin.ineligibilityReasons)
+    return { decision: 'REJECT', explanation: schoolOrigin.ineligibilityReasons.join('; '), reasons }
+  }
+  if (schoolOrigin.missingFields.length) {
+    reasons.push(...schoolOrigin.missingFields.map(field => `School-origin eligibility unconfirmed (missing: ${field})`))
+    return { decision: 'REVIEW', explanation: 'This scholarship requires a particular high-school graduation history. Confirm the declared school location, type and graduation year before applying; current residence is not evidence of school history.', reasons }
   }
 
   const profileTypeIsMissingOrGeneric = !profileType || profileType === 'organization'

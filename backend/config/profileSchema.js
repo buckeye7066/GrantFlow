@@ -717,6 +717,9 @@ export const PROFILE_SCHEMA = {
       // graduated; nothing else on the profile records it structurally (the
       // "High School Senior" tag is a stale claim, not a fact). Deliberately
       // `scored: false` — same deploy-denominator trap as item_needs (#1067).
+      high_school_county: { type: 'string', scored: false, default: '', description: 'County of the high school, not current residence or college. Used only for explicit school-origin eligibility; never inferred. NOT scored.' },
+      high_school_state: { type: 'string', scored: false, default: '', description: 'State of the high school, not current residence or college. Used only when the source explicitly restricts school origin. NOT scored.' },
+      high_school_type: { type: 'enum', format: 'enum', values: ['public', 'private'], options: ['public', 'private'], scored: false, default: '', description: 'Explicitly declared public or private high school. Leave blank when unknown. Eligibility only; NOT scored.' },
       high_school_name: { type: 'string', scored: false, default: '', description: 'Name of the high school attended or attending (e.g. "Cleveland High School"). Read by config/profileFactTimeline: PAST once high_school_graduation_year has passed, CURRENT before. Reaches alumni scholarships. NOT scored.' },
       high_school_graduation_year: { type: 'number|null', scored: false, default: null, description: 'Year of high school graduation (four digits). Decides whether the high school is a current or past institution. NOT scored.' },
       notes: { type: 'string', format: 'prose', scored: false, default: '', description: 'Additional education context. DRAFTING ONLY; not scored or mined.' },

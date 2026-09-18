@@ -1967,6 +1967,31 @@ export const SECTION_METADATA = {
         "help": "High school GPA when explicitly provided."
       },
       {
+        "name": "high_school_county",
+        "label": "High school county",
+        "format": "text",
+        "scored": false,
+        "help": "The county of the high school you attended, not your current residence or college. Leave blank when unknown. Used only to check explicitly stated school-history eligibility."
+      },
+      {
+        "name": "high_school_state",
+        "label": "High school state",
+        "format": "text",
+        "scored": false,
+        "help": "The state of the high school you attended. Moving to another state does not change your school history. Leave blank when unknown."
+      },
+      {
+        "name": "high_school_type",
+        "label": "High school type",
+        "format": "enum",
+        "options": [
+          "public",
+          "private"
+        ],
+        "scored": false,
+        "help": "Select public or private only when known. Some scholarships specifically require graduation from one school type; leave blank when unknown."
+      },
+      {
         "name": "high_school_name",
         "label": "High school",
         "format": "text",

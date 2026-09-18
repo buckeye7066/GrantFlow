@@ -438,3 +438,32 @@ it('a concurrent fresh rescore wins over a stale structural target downgrade', a
     expect(result.structural_target_holds).toBe(0)
   } finally { raw.close() }
 })
+
+it.each(['crawler-os', 'catalog-rescore-link'])('real school-origin rescore invalidates an old positive proof in the %s lane', async matcherVersion => {
+  const raw = makeDb()
+  try {
+    seedPair(raw, { matcherVersion, explain: PROVEN })
+    raw.prepare('UPDATE funding_opportunities SET title=?, sponsor=?, description=?, is_national=1 WHERE id=?').run(
+      'Community Education Scholarship', 'Community Foundation',
+      'Scholarships are restricted to graduates of a public high school in Raleigh County.', 'o1',
+    )
+    const { computeMatchDecision } = await import('../services/matchEngine.js')
+    const summary = await runStaleMatchExplainRefresh(wrap(raw), {
+      pairBudget: 10, writeEnabled: true,
+      deps: {
+        computeMatchDecision, thesisNeedsDefaulted: async () => false,
+        loadProfileContext: async () => ({
+          profile: { id: 'p1', primary_type: 'individual', entity_type: 'individual', state: 'TN', needs: ['education'] },
+          sections: { education: { is_student: true, high_school_name: 'Example High School', high_school_graduation_year: 2020 } },
+        }),
+      },
+    })
+    expect(summary.refreshed).toBe(1)
+    const row = raw.prepare('SELECT * FROM profile_opportunity_matches WHERE id=?').get('m1')
+    const explain = JSON.parse(row.match_explain_json)
+    expect(explain.signal_version).toBe(PROFILE_SIGNAL_VERSION)
+    expect(explain.four_truth_proof.all_passed).toBe(false)
+    expect(explain.four_truth_proof.profile_qualifies.passed).toBe(false)
+    expect(qualifiesForDisplay({ ...row, opportunity_kind: 'SCHOLARSHIP' })).toBe(false)
+  } finally { raw.close() }
+})

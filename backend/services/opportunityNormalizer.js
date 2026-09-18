@@ -11,6 +11,7 @@
  */
 
 import crypto from 'crypto'
+import { schoolOriginRequirements } from '../config/schoolOriginEligibility.js'
 import { grantsGovApplicantCodesFrom } from '../../shared/grantsGovProtocol.js'
 import { normalizeNeedCategory, NEED_ALIAS_MAP } from './profileNormalizer.js'
 import { isWomenExclusiveOpportunityText, internationalStudentRestriction } from '../config/demographicRestrictionPatterns.js'
@@ -1170,6 +1171,7 @@ export function normalizeOpportunity(rawOpp) {
     requiresWomen,
     requiresGender,
     requiresInternationalStudent,
+    schoolOriginRequirements: schoolOriginRequirements(rawOpp),
     requiresEthnicity,
     requiresNonprofit,
     requiresBusiness,
@@ -1283,6 +1285,7 @@ export function computeOpportunityFingerprint(normalizedOpp) {
     requiresNonprofit: normalizedOpp.requiresNonprofit,
     requiresBusiness: normalizedOpp.requiresBusiness,
     requiresGender: normalizedOpp.requiresGender ?? null,
+    schoolOriginRequirements: normalizedOpp.schoolOriginRequirements ?? [],
     requiresEthnicity: (normalizedOpp.requiresEthnicity ?? []).slice().sort(),
   }
   return crypto
