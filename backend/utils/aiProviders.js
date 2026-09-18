@@ -2,6 +2,7 @@ import { tryOwnerSubscription } from '../services/ownerAi/ownerAiBroker.js'
 import { getOwnerAiScope } from '../services/ownerAi/ownerAiScope.js'
 import OpenAI from 'openai'
 import { wrapOwnerSdkClient, unwrapOwnerSdkClient } from './ownerSdkRouting.js'
+import { isTransientProviderError } from './providerFailure.js'
 import { resolvePaidAiRoutes, paidCircuitState, circuitFailure, circuitBlocked, recordPaidFailure, isHardPaidFailure } from './paidAiRoutes.js'
 import { createOpenAIClient, summarizeOpenAIError } from './openaiClient.js'
 import { safeParseJSON } from './safeJson.js'
@@ -87,7 +88,7 @@ export function getOpenAIOptional({ timeoutMs = null, maxRetries = null } = {}) 
  */
 export async function getAnthropicOptional() {
   try {
-    return wrapOwnerSdkClient(await getAnthropicClient(), 'anthropic')
+    return wrapOwnerSdkClient(await getAnthropicClient(), 'anthropic', { providerSpecific: true })
   } catch {
     return null
   }
@@ -100,7 +101,7 @@ function providerFailureDiagnostics(error) {
   const summary = summarizeOpenAIError(error)
   return {
     status: summary.status,
-    transient: isLLMTimeout(error) || summary.isRateLimit || [408, 425].includes(Number(summary.status)) || Number(summary.status) >= 500 || (isHardPaidFailure(error) && !summary.isAuth),
+    transient: isTransientProviderError(error) || summary.isRateLimit || (isHardPaidFailure(error) && !summary.isAuth),
     ...(error?.jsonFinishReason ? { finish_reason: error.jsonFinishReason } : {}),
     reason: isLLMTimeout(error)
       ? 'timed_out'

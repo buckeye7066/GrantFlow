@@ -135,6 +135,8 @@ function openAnyaSession(entry) {
 }
 
 function pingReady(entry, run) {
+  // A user-requested Stop is visible in the thread, not a new-answer alert.
+  if (run?.cancelled) return
   const succeeded = run?.status === "completed" && !run?.degraded
   toast({
     duration: 12000,

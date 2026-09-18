@@ -2,12 +2,12 @@ import express from 'express'
 import request from 'supertest'
 import {afterEach,beforeEach,expect,it,vi} from 'vitest'
 import {getOwnerAiScope,runWithOwnerAiScope} from '../services/ownerAi/ownerAiScope.js'
-const calls=vi.hoisted(()=>({generate:vi.fn(),complete:vi.fn(),add:vi.fn(),cancel:vi.fn()}))
+const calls=vi.hoisted(()=>({generate:vi.fn(),complete:vi.fn(),add:vi.fn(),cancel:vi.fn(),cancelled:vi.fn()}))
 vi.mock('../services/anyaOrchestrator.js',async()=>({...await vi.importActual('../services/anyaOrchestrator.js'),generateAssistantResponse:calls.generate,addMessage:calls.add}))
-vi.mock('../services/anyaRuns.js',async()=>({...await vi.importActual('../services/anyaRuns.js'),createAnyaRun:async()=> 'background-proof',completeAnyaRun:calls.complete,appendAnyaRunLog:async()=>true,requestAnyaRunCancel:calls.cancel}))
+vi.mock('../services/anyaRuns.js',async()=>({...await vi.importActual('../services/anyaRuns.js'),createAnyaRun:async()=> 'background-proof',completeAnyaRun:calls.complete,appendAnyaRunLog:async()=>true,requestAnyaRunCancel:calls.cancel,isAnyaRunCancelRequested:calls.cancelled}))
 import router from '../routes/anya.js'
 function app(owner=true){const app=express();app.use(express.json());app.use((req,res,next)=>{req.ctx={identityResolved:true,isAdmin:owner,userId:'fixture-user',email:'owner@example.test'};req.db={};runWithOwnerAiScope(req,next)});app.use(router);return app}
-beforeEach(()=>{Object.values(calls).forEach(mock=>mock.mockReset());vi.stubEnv('ADMIN_EMAIL','owner@example.test');vi.stubEnv('AGENT_CONTROL_ADMIN_EMAIL','');vi.stubEnv('OWNER_AI_USER_ID','');calls.complete.mockResolvedValue(true);calls.add.mockImplementation(async(_db,_ctx,_sid,message)=>({id:'message',...message}));calls.cancel.mockResolvedValue({ok:true})})
+beforeEach(()=>{Object.values(calls).forEach(mock=>mock.mockReset());vi.stubEnv('ADMIN_EMAIL','owner@example.test');vi.stubEnv('AGENT_CONTROL_ADMIN_EMAIL','');vi.stubEnv('OWNER_AI_USER_ID','');calls.complete.mockResolvedValue(true);calls.add.mockImplementation(async(_db,_ctx,_sid,message)=>({id:'message',...message}));calls.cancelled.mockResolvedValue(false);calls.cancel.mockImplementation(async()=>{calls.cancelled.mockResolvedValue(true);return {ok:true}})})
 afterEach(()=>vi.unstubAllEnvs())
 it('the real background route preserves owner subscription scope after its 202 acknowledgement',async()=>{
   let state
@@ -30,6 +30,7 @@ it('authorized Stop cancels the detached owner provider request',async()=>{
   await vi.waitFor(()=>expect(signal).toBeDefined());expect(signal.aborted).toBe(false)
   expect((await request(server).post('/sessions/session/runs/background-proof/cancel')).body.ok).toBe(true)
   await vi.waitFor(()=>expect(signal.aborted).toBe(true));await vi.waitFor(()=>expect(calls.complete).toHaveBeenCalled())
+  expect(calls.complete.mock.calls.at(-1)[2].response.cancelled).toBe(true)
 })
 it('an unauthorized Stop does not cancel another job',async()=>{
   let signal;let release

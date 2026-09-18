@@ -1534,6 +1534,7 @@ export async function generateAssistantResponse(db, user, sessionId, { content, 
 
   // Owner requests enter subscription routing before any direct metered call.
   // Other callers retain native tools first, with a provider-neutral fallback.
+  const wasCancelled = async () => Boolean(runId) && (await isAnyaRunCancelRequested(db, runId))
   let useGateway = Boolean(getOwnerAiScope({ includeAborted: true })) || !openai
   if (openai || useGateway) {
     try {
@@ -1591,7 +1592,6 @@ export async function generateAssistantResponse(db, user, sessionId, { content, 
         }
         return MAP[name] || `Running ${name}`
       }
-      const wasCancelled = async () => Boolean(runId) && (await isAnyaRunCancelRequested(db, runId))
 
       for (let iter = 0; iter < MAX_TOOL_ITERATIONS; iter += 1) {
         if (await wasCancelled()) {
@@ -1735,12 +1735,16 @@ export async function generateAssistantResponse(db, user, sessionId, { content, 
         // confirmation, retry with adjusted args).
       }
 
+      if (await wasCancelled()) return CANCELLED_REPLY
       if (finalReply) {
         log.info('[Anya] Tool-capable response received', { transport: useGateway ? 'shared_provider_gateway' : 'native_openai' })
         return finalReply
       }
       log.warn('[Anya] OpenAI tool-calling loop exhausted without a textual reply')
     } catch (error) {
+      if (await wasCancelled()) return CANCELLED_REPLY
+      const ownerScope = getOwnerAiScope({ includeAborted: true })
+      if (ownerScope?.signal.aborted) throw ownerScope.signal.reason || error
       const summary = summarizeOpenAIError(error)
       console.error('[Anya] OpenAI API Error:', {
         status: summary.status,

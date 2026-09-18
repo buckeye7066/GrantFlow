@@ -2,7 +2,7 @@ import {EventEmitter} from 'node:events'
 import {beforeEach,afterEach,it,expect,vi} from 'vitest'
 import {runWithOwnerAiScope} from '../services/ownerAi/ownerAiScope.js'
 const state=vi.hoisted(()=>({native:vi.fn(),text:vi.fn(),json:vi.fn()}))
-vi.mock('openai',()=>({default:class{constructor(){this.chat={completions:{create:state.native}};this.embeddings={create:state.native};this.responses={create:state.native}}}}))
+vi.mock('openai',()=>({default:class{constructor(){this.chat={completions:{create:state.native}};this.embeddings={create:state.native};this.responses={create:state.native};this.models={list:state.native,retrieve:state.native}}}}))
 vi.mock('../utils/aiProviders.js',()=>({invokeTextWithFallback:state.text,invokeJsonWithFallback:state.json}))
 import {createOpenAIClient} from '../utils/openaiClient.js'
 const req=()=>({ctx:{identityResolved:true,isAdmin:true,userId:'owner-real',email:'owner@example.com'},res:new EventEmitter()})
@@ -62,4 +62,31 @@ it('direct Anthropic text callers receive the actual subscription response shape
   const r=await runWithOwnerAiScope(req(),()=>client.messages.create({system:'Be factual',messages:[{role:'user',content:'Explain'}],max_tokens:100}))
   expect(r).toMatchObject({role:'assistant',stop_reason:'end_turn',provider:'subscription:codex',billing_mode:'subscription',content:[{type:'text',text:'subscription result'}]})
   expect(state.native).not.toHaveBeenCalled()
+})
+
+
+it('owner API-key verification calls the native read-only model listing',async()=>{
+  state.native.mockResolvedValue({data:[{id:'verified-native-model'}]})
+  const result=await runWithOwnerAiScope(req(),()=>createOpenAIClient().openai.models.list())
+  expect(result.data[0].id).toBe('verified-native-model');expect(state.native).toHaveBeenCalledTimes(1);expect(state.text).not.toHaveBeenCalled()
+})
+it('a named adversarial provider cannot silently become another fallback model',async()=>{
+  const {wrapOwnerSdkClient}=await import('../utils/ownerSdkRouting.js')
+  state.native.mockRejectedValue(Object.assign(new Error('named provider unavailable'),{status:429}))
+  const client=wrapOwnerSdkClient({messages:{create:state.native}},'anthropic',{providerSpecific:true})
+  await expect(client.messages.create({messages:[{role:'user',content:'Author'}]})).rejects.toThrow('named provider unavailable')
+  expect(state.text).not.toHaveBeenCalled()
+})
+it('named provider roles respect the owner no-metered policy instead of charging or substituting',async()=>{
+  vi.stubEnv('OWNER_AI_ALLOW_PAID_FALLBACK','false')
+  const {wrapOwnerSdkClient}=await import('../utils/ownerSdkRouting.js')
+  const client=wrapOwnerSdkClient({messages:{create:state.native}},'anthropic',{providerSpecific:true})
+  await expect(runWithOwnerAiScope(req(),()=>client.messages.create({messages:[{role:'user',content:'Author'}]}))).rejects.toThrow(/provider|owner|metered/i)
+  expect(state.native).not.toHaveBeenCalled();expect(state.text).not.toHaveBeenCalled()
+})
+it.each([{name:'APIConnectionError'},{name:'APIConnectionTimeoutError'},{status:408},{status:425}])('transient direct SDK failures can reach a working fallback: %j',async shape=>{
+  state.native.mockRejectedValue(Object.assign(new Error('transient provider failure'),shape))
+  state.text.mockResolvedValue({ok:true,text:'free recovered',provider:'free:fixture',billing_mode:'free_or_local',model:'fixture'})
+  const result=await createOpenAIClient().openai.chat.completions.create({messages:[{role:'user',content:'Explain'}]})
+  expect(result.choices[0].message.content).toBe('free recovered')
 })

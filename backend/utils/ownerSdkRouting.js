@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { getOwnerAiScope } from '../services/ownerAi/ownerAiScope.js'
+import { isTransientProviderError } from './providerFailure.js'
 
 const nativeClients = new WeakMap()
 export function unwrapOwnerSdkClient(client) { return nativeClients.get(client) || client }
@@ -57,8 +58,9 @@ async function invokeOwnerRequest(provider, operation, request = {}, options = {
 }
 
 /** Checks identity at invocation, including clients cached before login. */
-export function wrapOwnerSdkClient(client, provider = 'openai') {
-  if (!client || nativeClients.has(client)) return client
+export function wrapOwnerSdkClient(client, provider = 'openai', { providerSpecific = false } = {}) {
+  if (!client || (nativeClients.has(client) && !providerSpecific)) return client
+  if (providerSpecific) client = unwrapOwnerSdkClient(client)
   const proxies = new WeakMap()
   const wrap = (target, parts = []) => {
     if (proxies.has(target)) return proxies.get(target)
@@ -68,15 +70,25 @@ export function wrapOwnerSdkClient(client, provider = 'openai') {
         if (typeof property !== 'string') return value
         const next = [...parts, property]
         if (typeof value === 'function') return function (...args) {
-          if (getOwnerAiScope({includeAborted:true})) return invokeOwnerRequest(provider, next.join('.'), args[0], args[1])
-          const result = Reflect.apply(value, object, args)
+          const scope = getOwnerAiScope({includeAborted:true})
           const operation = next.join('.')
+          if (scope?.signal.aborted) return Promise.reject(scope.signal.reason)
+          // Model inventory verifies a key; it does not perform model inference.
+          if (['models.list','models.retrieve'].includes(operation)) return Reflect.apply(value, object, args)
+          if (providerSpecific) {
+            if (scope && process.env.OWNER_AI_ALLOW_PAID_FALLBACK !== 'true') {
+              return Promise.reject(Object.assign(new Error('Named provider operation unavailable under owner no-metered policy'), {code:'OWNER_NAMED_PROVIDER_UNAVAILABLE'}))
+            }
+            return Reflect.apply(value, object, args)
+          }
+          if (scope) return invokeOwnerRequest(provider, operation, args[0], args[1])
+          const result = Reflect.apply(value, object, args)
           if (!['chat.completions.create','responses.create','messages.create'].includes(operation) || !result?.catch) return result
           const started = Date.now()
           return result.catch(error => {
             const status = Number(error?.status)
             const quota = /quota|credit balance|billing|rate.limit/i.test(String(error?.message || ''))
-            if (args[1]?.signal?.aborted || !([401,402,403,429].includes(status) || status >= 500 || quota)) throw error
+            if (args[1]?.signal?.aborted || !([401,402,403,429].includes(status) || isTransientProviderError(error) || quota)) throw error
             const options = {...(args[1] || {})}
             if (Number.isFinite(options.timeout)) options.timeout = Math.max(0, options.timeout - (Date.now() - started))
             return invokeOwnerRequest(provider, operation, args[0], options)

@@ -16,7 +16,7 @@ import {
   updateTask,
   listProfileTasks,
 } from '../services/anyaOrchestrator.js'
-import { createAnyaRun, appendAnyaRunLog, completeAnyaRun, getAnyaRun, requestAnyaRunCancel } from '../services/anyaRuns.js'
+import { createAnyaRun, appendAnyaRunLog, completeAnyaRun, getAnyaRun, requestAnyaRunCancel, isAnyaRunCancelRequested } from '../services/anyaRuns.js'
 import { resolveInternalSelfBaseUrl } from '../utils/internalSelfBaseUrl.js'
 
 import { createLogger } from '../utils/logger.js'
@@ -357,11 +357,12 @@ async function generateAndStoreReply(db, ctx, sessionId, runId, { content, curre
       : {}),
   })
 
+  const cancelled = await isAnyaRunCancelRequested(db, runId)
   const completion = {
     status: 'completed',
     // assistant_message_id lets the client's background poller pull the exact
     // reply when the run finishes (panel may be closed by then).
-    response: { assistantText, degraded, assistant_message_id: assistantMessage.id },
+    response: { assistantText, degraded, cancelled, assistant_message_id: assistantMessage.id },
   }
   const runFinalized = await completeAnyaRun(db, runId, completion)
   if (!runFinalized) {
