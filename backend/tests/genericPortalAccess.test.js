@@ -1,3 +1,4 @@
+import { findGenericAccountEntry } from '../services/hamilton/portalSync/genericAccess.js'
 import { beforeEach, expect, it, vi } from 'vitest'
 const extract = vi.hoisted(() => vi.fn(async () => ({ fields: [], awards: [], rejected: [], notFound: [], raw: { provider: 'fixture' } })))
 vi.mock('../services/hamilton/portalSync/llmPageExtract.js', () => ({ extractPortalDataWithLLM: extract }))
@@ -67,4 +68,35 @@ it('rejects sibling tenants and unrelated saved login hosts', async () => {
  expect((await generic.read(pageWith(authenticated, 'https://school-b.studioabroad.com/dashboard'), ctx)).access).toBe('unknown')
  ctx.credential.login_url = 'https://unrelated.example.org/dashboard'
  expect((await generic.read(pageWith(authenticated, ctx.credential.login_url), ctx)).access).toBe('unknown')
+})
+
+it('reuses the captured session through a visible login link before refusing a public landing', async () => {
+  let here = origin + '/'
+  const p = { goto: vi.fn(async url => { here = url }), url: () => here,
+    evaluate: vi.fn().mockResolvedValueOnce({ ...authenticated, hasLogout: false, hasAccountNavigation: false })
+      .mockResolvedValueOnce([origin + '/index.cfm?FuseAction=Security.Login'])
+      .mockResolvedValue(authenticated) }
+  const result = await generic.read(p, { portalHost: 'portal.fixture.invalid', hasSession: true })
+  expect(result.access).toBe('authenticated')
+  expect(p.goto.mock.calls.map(call => call[0])).toEqual([origin + '/', origin + '/index.cfm?FuseAction=Security.Login'])
+  expect(extract).toHaveBeenCalledTimes(1)
+})
+it('refuses off-site login suggestions and never starts extraction from the public page', async () => {
+  const p = pageWith({ ...authenticated, hasLogout: false })
+  p.evaluate.mockResolvedValueOnce({ ...authenticated, hasLogout: false }).mockResolvedValueOnce(['https://attacker.invalid/login'])
+  const result = await generic.read(p, context())
+  expect(result.access).toBe('unknown'); expect(p.goto).toHaveBeenCalledTimes(1); expect(extract).not.toHaveBeenCalled()
+})
+
+it.each(['/apply','/submit','/payment','/delete','/logout','/index.cfm?FuseAction=Application.Apply'])('never follows a mutating or submission entry %s', async path => {
+ const p = pageWith({}); p.evaluate.mockResolvedValue([origin + path]);
+ expect(await findGenericAccountEntry(p,origin+'/')).toBeNull()
+})
+it('an account entry that still shows a password wall stays unverified', async () => {
+ let here = origin + '/'
+ const p = { goto: vi.fn(async url => { here = url }), url: () => here,
+  evaluate: vi.fn().mockResolvedValueOnce({ ...authenticated, hasLogout: false })
+   .mockResolvedValueOnce([origin+'/login']).mockResolvedValue({ ...authenticated, hasPassword: true }) }
+ const result = await generic.read(p, { portalHost: 'portal.fixture.invalid', hasSession: true })
+ expect(result.access).toBe('signin_wall'); expect(extract).not.toHaveBeenCalled()
 })

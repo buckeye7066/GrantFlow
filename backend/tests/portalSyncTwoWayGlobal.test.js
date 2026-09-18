@@ -183,13 +183,20 @@ describe('reportOutsideAwards — the GLOBAL write path', () => {
   })
 })
 
+function capturedAccount(page, host) {
+  page.url = () => 'https://' + host + '/account'
+  page.evaluate = async () => ({ title: 'Account', chars: 200, hasLogout: true, hasAccountNavigation: true, hasPassword: false, hasSignInPrompt: false, blocked: false })
+  page.goto = async () => {}
+  return page
+}
+
 describe('generic connector — every portal now has a real write', () => {
   it('generic.write() reports accepted sources instead of the old no-op note', async () => {
     const generic = (await import('../services/hamilton/portalSync/connectors/generic.js')).default
     const page = makeFormPage()
     page.goto = async () => {}
 
-    const res = await generic.write(page, { portalHost: 'someportal.edu', log: () => {} }, {
+    const res = await generic.write(capturedAccount(page, 'someportal.edu'), { portalHost: 'someportal.edu', hasSession: true, log: () => {} }, {
       fundingSources: [{ name: 'Rotary Club Scholarship', amount: 2000 }],
     })
 
@@ -206,7 +213,7 @@ describe('manual final-submit boundary', () => {
     const page = makeFormPage()
     page.goto = async () => {}
 
-    const staged = await generic.write(page, { portalHost: 'x.edu', log: () => {} }, {
+    const staged = await generic.write(capturedAccount(page, 'x.edu'), { portalHost: 'x.edu', hasSession: true, log: () => {} }, {
       fundingSources: [{ name: 'Rotary Club Scholarship', amount: 2000 }],
     })
     expect(staged.submitted).toBe(false)
@@ -215,7 +222,7 @@ describe('manual final-submit boundary', () => {
 
     const authorizedPage = makeFormPage()
     authorizedPage.goto = async () => {}
-    const legacy = await generic.write(authorizedPage, { portalHost: 'x.edu', log: () => {} }, {
+    const legacy = await generic.write(capturedAccount(authorizedPage, 'x.edu'), { portalHost: 'x.edu', hasSession: true, log: () => {} }, {
       fundingSources: [{ name: 'Rotary Club Scholarship', amount: 2000 }],
       allowSubmit: true,
     })
