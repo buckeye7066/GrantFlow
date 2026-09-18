@@ -289,30 +289,3 @@ describe('native API options and recovery', () => {
 it('retains retryability when the final free route is rate-limited', () => {
   expect(isTransientLlmFailure({ ok: false, freeRouteErrors: [{ status: 429, message: 'rate_limited' }] })).toBe(true)
 })
-
-
-describe('bounded extraction task models retain their requested priority', () => {
-  it('uses the task-specific fast native models before the general ranking only when explicitly requested', async () => {
-    config([{ provider: 'openai', model: 'gpt-6-astra', api: 'responses', reasoning_effort: 'low' }, { provider: 'anthropic', model: 'claude-fable-5-1' }])
-    const result = await run({ preferTaskModels: true, openaiModel: 'gpt-4o-mini', anthropicModel: 'claude-haiku-4-5' })
-    expect(result).toMatchObject({ ok: true, provider: 'openai', model: 'gpt-4o-mini' })
-    expect(sdk.openai).toHaveBeenCalledTimes(1)
-    expect(sdk.responses).not.toHaveBeenCalled()
-  })
-  it('preserves general ranking when no task priority was requested', async () => {
-    config([{ provider: 'openai', model: 'gpt-4.1' }, { provider: 'anthropic', model: 'claude-sonnet-4-6' }])
-    expect(await run({ openaiModel: 'gpt-4o-mini' })).toMatchObject({ model: 'gpt-4.1' })
-  })
-  it('falls from exhausted task providers to an actual free transport without retrying their account models', async () => {
-    config([{ provider: 'openai', model: 'gpt-6-astra', api: 'responses' }, { provider: 'anthropic', model: 'claude-fable-5-1' }])
-    const quota = Object.assign(new Error('insufficient_quota'), { status: 429 })
-    sdk.openai.mockRejectedValue(quota); sdk.responses.mockRejectedValue(quota)
-    sdk.anthropic.mockRejectedValue(Object.assign(new Error('credit balance too low'), { status: 400 }))
-    const create = vi.fn(async () => completion('{"free_worked":true}'))
-    const result = await run({ preferTaskModels: true, openaiModel: 'gpt-4o-mini', anthropicModel: 'claude-haiku-4-5', freeRoutes: [{ id: 'qwen', model: 'qwen/qwen3.8-27b', base_url: 'https://fixture.invalid/v1' }], freeClientFactory: () => ({chat:{completions:{create}}}) })
-    expect(result).toMatchObject({ provider: 'free:qwen', billing_mode: 'free_or_local', json: { free_worked: true } })
-    expect(sdk.openai).toHaveBeenCalledTimes(1)
-    expect(sdk.responses).not.toHaveBeenCalled()
-    expect(sdk.anthropic).toHaveBeenCalledTimes(1)
-  })
-})

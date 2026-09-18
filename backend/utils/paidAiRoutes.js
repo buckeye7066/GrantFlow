@@ -11,7 +11,7 @@ export function resetPaidAiCircuitState() { sharedState.clear() }
 export function paidCircuitState() { return sharedState }
 
 // Configuration is server-only. Never accept route URLs or credentials from invocation options.
-export function resolvePaidAiRoutes({ openai, openaiModel, anthropicModel, preferTaskModels = false }) {
+export function resolvePaidAiRoutes({ openai, openaiModel, anthropicModel }) {
   const defaults = [
     { provider: 'openai', model: openaiModel || process.env.OPENAI_MODEL || process.env.ANYA_OPENAI_MODEL || 'gpt-4o-mini' },
     { provider: 'anthropic', model: anthropicModel || process.env.ANTHROPIC_MODEL || 'claude-haiku-4-5' },
@@ -21,13 +21,6 @@ export function resolvePaidAiRoutes({ openai, openaiModel, anthropicModel, prefe
     try { entries = JSON.parse(process.env.AI_PAID_ROUTES) } catch { entries = [] }
   }
   if (!Array.isArray(entries)) entries = []
-  // Bounded extraction has explicit task models. Keep the normal ranking for
-  // all other callers and preserve configured API options for matching models.
-  if (preferTaskModels === true) {
-    const preferred = defaults.filter(r => r.provider === 'openai' ? Boolean(openaiModel) : Boolean(anthropicModel))
-      .map(r => entries.find(e => e?.provider === r.provider && e?.model === r.model) || r)
-    entries = [...preferred, ...entries]
-  }
   // Derive once per account per routing pass, not once per model.
   const accountIds = new Map()
   const parse = candidates => candidates.slice(0, 24).flatMap(entry => {

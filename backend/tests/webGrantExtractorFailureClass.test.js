@@ -85,11 +85,3 @@ describe('webGrantExtractor — failure classes are surfaced, not swallowed', ()
     expect(classifyExtractionFailure(null).class).toBe('unknown')
   })
 })
-
-
-it('the bounded web extractor explicitly prioritizes its task models', async () => {
-  const calls = []
-  await extractOpportunitiesFromPage({ pageUrl: 'https://example.org/program', html: RICH_PAGE }, { openai: {}, invoke: async args => { calls.push(args); return { ok:true, json:{opportunities:[]} } } })
-  expect(calls).toHaveLength(1)
-  expect(calls[0]).toMatchObject({ preferTaskModels: true, openaiModel: 'gpt-4o-mini', anthropicModel: 'claude-haiku-4-5' })
-})

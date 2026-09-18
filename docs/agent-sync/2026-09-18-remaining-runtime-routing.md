@@ -6,7 +6,7 @@ Baseline: main 0ca17c3e72204ab2f47d2b0f64e3e3f00ab84eca. Work is isolated from t
 
 The bounded web extractor requests gpt-4o-mini / claude-haiku-4-5 and a 20-second shared deadline, but the configured general model ranking displaced those explicit task models. Against the same HTTP-200 Caring Place case-management page, the production ranking timed out with zero extracted candidates; a process-local comparison using the requested task model returned Getting Ahead and Access Home candidates in 5.6 seconds. Candidate extraction is not an eligibility or admission claim.
 
-The extractor now explicitly requests task-model priority. General-purpose callers retain the configured ranking; configured options for a selected model remain intact. Exhausted native accounts fall through to free models without trying every model on that same account.
+The task-model comparison was diagnostic. Concurrent PR #1763 demonstrated the strong model completing the same class of extraction in about 15 seconds and gives it a bounded 60-second page deadline. This repair defers to that approach and preserves the configured strong-model ranking; no competing task-model priority ships here.
 
 ## Owner subscriptions and free fallback
 
@@ -24,6 +24,6 @@ The original intermittent EVA login failure was not reproduced. A genuinely cold
 
 ## Verification and remaining acceptance
 
-Before repair, four new routing assertions, a repeated free-quota-call assertion, the Federal Register title assertion, the owner status policy check, and the login warmup contract failed. The combined focused suite then passed 398 tests in 22 suites; Node owner/configuration and EVA checks passed separately. Exact-head CI, review, deployment and fresh live outcome checks remain mandatory before release.
+Before repair, four new routing assertions, a repeated free-quota-call assertion, the Federal Register title assertion, the owner status policy check, and the login warmup contract failed. The candidate before removing the now-redundant task-priority change passed 398 tests in 22 suites; the final combination must be rerun. Node owner/configuration and EVA checks passed separately. Exact-head CI, review, deployment and fresh live outcome checks remain mandatory before release.
 
 The four original coverage/cohort/recall/parity findings cannot be closed from code tests or health endpoints. Fresh qualified admissions and healthy cohort/parity receipts must be evaluated on the deployed revision. Old seven-day failure totals remain historical evidence, not data to overwrite.

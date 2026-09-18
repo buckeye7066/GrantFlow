@@ -164,7 +164,7 @@ async function invokePaidLadder({
   openai = getOpenAIOptional({ maxRetries: 0 }), system = null, prompt,
   temperature, maxTokens = 1200, openaiModel = null, anthropicModel = null,
   freeRoutes = null, freeClientFactory = null, timeoutMs = null, signal: callerSignal = null,
-  paidCircuitState: injectedState, preferTaskModels = false,
+  paidCircuitState: injectedState,
 } = {}, jsonOnly) {
   const ownerScope = getOwnerAiScope({ includeAborted: true })
   const signal = ownerScope
@@ -197,7 +197,7 @@ async function invokePaidLadder({
   // The owner's monthly allowance must not silently become metered usage.
   // This policy affects only a canonically authenticated owner request.
   const ownerMeteredDisabled = Boolean(ownerScope && process.env.OWNER_AI_ALLOW_PAID_FALLBACK !== 'true')
-  const routes = ownerMeteredDisabled ? [] : resolvePaidAiRoutes({ openai, openaiModel, anthropicModel, preferTaskModels })
+  const routes = ownerMeteredDisabled ? [] : resolvePaidAiRoutes({ openai, openaiModel, anthropicModel })
   // Legacy calls retain request-local state; configured ladders share bounded cooldowns.
   const state = injectedState ?? (process.env.AI_PAID_ROUTES ? paidCircuitState() : new Map())
   const configuredFreeRoutes = resolveFreeAiRoutes(freeRoutes)
