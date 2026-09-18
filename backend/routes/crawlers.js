@@ -104,7 +104,7 @@ function getUploadDir(req) {
 function getOpenAI() {
   // Use the hardened client factory so common env-var copy/paste issues are normalized
   // and placeholder/masked keys fail fast with safe diagnostics.
-  const { openai } = createOpenAIClient({ allowMissing: false })
+  const { openai } = createOpenAIClient({ ownerInference: true, allowMissing: false })
   return openai
 }
 
@@ -1230,7 +1230,7 @@ router.post('/jobs', enforceCrawlerJobTier(), async (req, res) => {
     }
 
     // Fire-and-forget dispatch; never block the response or throw into Express.
-    setImmediate(() => {
+
       dispatchCrawlerJob({
         db: req.db,
         jobId: jobRow.id,
@@ -1243,7 +1243,7 @@ router.post('/jobs', enforceCrawlerJobTier(), async (req, res) => {
           error: dispatchError?.message || String(dispatchError),
         })
       })
-    })
+
 
     res.status(creation.existing ? 200 : 201).json(mapJob(jobRow))
   } catch (error) {
@@ -2584,14 +2584,14 @@ router.post('/profile-change', standardRateLimiter, async (req, res) => {
 
     const job = await req.db.prepare('SELECT * FROM crawler_jobs WHERE id = ?').get(creation.jobId)
 
-    setImmediate(() => {
+
       dispatchCrawlerJob({
         db: req.db,
         jobId: job.id,
         uploadDir: getUploadDir(req),
         getOpenAI
       })
-    })
+
 
     res.json({
       emit_id: emitId,
@@ -2635,14 +2635,14 @@ router.post('/foundation-990/batch', async (req, res) => {
 
     const job = await req.db.prepare('SELECT * FROM crawler_jobs WHERE id = ?').get(creation.jobId)
 
-    setImmediate(() => {
+
       dispatchCrawlerJob({
         db: req.db,
         jobId: job.id,
         uploadDir: getUploadDir(req),
         getOpenAI,
       })
-    })
+
 
     res.json({
       success: true,

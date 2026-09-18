@@ -62,10 +62,20 @@ export function captureDetachedOwnerAiRunner() {
     const controller = new AbortController()
     const active = signal ? AbortSignal.any([signal, controller.signal]) : controller.signal
     const timeout = setTimeout(() => controller.abort(new DOMException('Job time budget exhausted', 'AbortError')), Math.min(duration, 21600000))
+    let onAbort
     try {
       active.throwIfAborted()
-      return await scopes.run(inherited ? {signal:active} : null, () => work(active))
-    } finally { clearTimeout(timeout); controller.abort() }
+      const aborted = new Promise((_, reject) => {
+        onAbort = () => reject(active.reason || new DOMException('Job aborted', 'AbortError'))
+        active.addEventListener('abort', onAbort, {once:true})
+      })
+      return await scopes.run(inherited ? {signal:active} : null,
+        () => Promise.race([aborted, new Promise(resolve => resolve(work(active)))]))
+    } finally {
+      clearTimeout(timeout)
+      if (onAbort) active.removeEventListener('abort', onAbort)
+      controller.abort()
+    }
   }
 }
 

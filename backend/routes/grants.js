@@ -1005,7 +1005,7 @@ router.post('/:id/ai/draft-details', mutationRateLimiter, async (req, res) => {
 
     const needsAi = !program_description || !eligibility_summary || !selection_criteria
     if (needsAi) {
-      const { openai } = createOpenAIClient({ allowMissing: true })
+      const { openai } = createOpenAIClient({ ownerInference: true, allowMissing: true })
       const evidence = {
         title: grant.title,
         funder: grant.funder ?? null,

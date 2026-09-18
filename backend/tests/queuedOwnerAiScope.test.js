@@ -32,8 +32,8 @@ it('detached owner work respects its own timeout and rejects already-cancelled c
  runWithOwnerAiScope(req,()=>{run=captureDetachedOwnerAiRunner()});req.res.emit('finish')
  vi.useFakeTimers()
  try {
-  let active;const pending=run(signal=>{active=signal;return new Promise(resolve=>signal.addEventListener('abort',resolve,{once:true}))},{timeoutMs:1000})
-  expect(active.aborted).toBe(false);await vi.advanceTimersByTimeAsync(1001);await pending;expect(active.aborted).toBe(true)
+  let active;const pending=run(signal=>{active=signal;return new Promise(resolve=>signal.addEventListener('abort',resolve,{once:true}))},{timeoutMs:1000}).catch(error=>error)
+  expect(active.aborted).toBe(false);await vi.advanceTimersByTimeAsync(1001);expect((await pending).name).toBe('AbortError');expect(active.aborted).toBe(true)
  } finally {vi.useRealTimers()}
  const cancelled=owner();const work=vi.fn()
  await runWithOwnerAiScope(cancelled,async()=>{cancelled.res.emit('finish');const blocked=captureDetachedOwnerAiRunner();await expect(blocked(work,{timeoutMs:1000})).rejects.toThrow()})
@@ -44,4 +44,11 @@ it('an externally cancelled job cannot start detached inference',async()=>{
  const req=owner();const work=vi.fn()
  await runWithOwnerAiScope(req,async()=>{const run=captureDetachedOwnerAiRunner();await expect(run(work,{timeoutMs:1000,signal:AbortSignal.abort()})).rejects.toThrow()})
  expect(work).not.toHaveBeenCalled()
+})
+
+
+it('detached timeout settles even when the phase ignores its cancellation signal',async()=>{
+ const {captureDetachedOwnerAiRunner}=await import('../services/ownerAi/ownerAiScope.js');let run;runWithOwnerAiScope(owner(),()=>{run=captureDetachedOwnerAiRunner()});vi.useFakeTimers();let release;let settled=false
+ const pending=run(()=>new Promise(resolve=>{release=resolve}),{timeoutMs:1000}).then(()=>{settled=true},()=>{settled=true})
+ try {await vi.advanceTimersByTimeAsync(1001);expect(settled).toBe(true)}finally{release();await pending;vi.useRealTimers()}
 })

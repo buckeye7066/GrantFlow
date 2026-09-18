@@ -2975,7 +2975,7 @@ registerTool({
         continue
       }
       if (creation.created) {
-        setImmediate(() => { dispatchCrawlerJob({ db, jobId: creation.jobId }).catch(() => {}) })
+         dispatchCrawlerJob({ db, jobId: creation.jobId }).catch(() => {})
       }
       jobs.push({ type: crawlerType, profileId, jobId: creation.jobId, existing: !creation.created })
     }
@@ -4598,7 +4598,7 @@ registerTool({
       requestedBy: context?.ctx?.userId ?? 'anya_owner',
       buildSnapshot: false,
     })
-    setImmediate(() => { dispatchCrawlerJob({ db, jobId: creation.jobId }).catch(() => {}) })
+     dispatchCrawlerJob({ db, jobId: creation.jobId }).catch(() => {})
     return { ok: true, job_id: creation.jobId, type: params.type, profile_id: params.profileId }
   },
 })
@@ -5714,7 +5714,7 @@ registerTool({
         requestedBy: context?.ctx?.userId ?? 'anya_owner',
         buildSnapshot: false,
       })
-      setImmediate(() => { dispatchCrawlerJob({ db, jobId: creation.jobId }).catch(() => {}) })
+       dispatchCrawlerJob({ db, jobId: creation.jobId }).catch(() => {})
       crawl = { job_id: creation.jobId, type: String(params?.crawlType || 'comprehensive') }
     }
 

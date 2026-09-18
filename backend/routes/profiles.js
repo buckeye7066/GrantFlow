@@ -597,11 +597,11 @@ async function enrichProfileWithSummary(db, profile) {
 }
 
 function getOpenAI() {
-  return createOpenAIClient().openai
+  return createOpenAIClient({ ownerInference: true }).openai
 }
 
 function getOpenAIOptional() {
-  return createOpenAIClient({ allowMissing: true }).openai
+  return createOpenAIClient({ ownerInference: true, allowMissing: true }).openai
 }
 
 
@@ -2932,12 +2932,12 @@ router.post('/:id/avatar/ai', async (req, res) => {
 
   const job = await req.db.prepare('SELECT * FROM crawler_jobs WHERE id = ?').get(jobId)
 
-  Promise.resolve().then(() => dispatchCrawlerJob({
+  dispatchCrawlerJob({
     db: req.db,
     jobId: job.id,
     uploadDir: getUploadsDir(req),
     getOpenAI,
-  })).catch((err) => {
+  }).catch((err) => {
     console.warn('[profiles] avatar AI crawl dispatch failed:', err?.message || String(err))
   })
 

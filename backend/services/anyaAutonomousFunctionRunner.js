@@ -287,6 +287,7 @@ async function _runAutonomousCrawlerSweep({ profileIds, db, context, fleetLease 
         engine: 'crawler-os', status: 'completed', stored, matches,
       })
     } catch (error) {
+      context.signal?.throwIfAborted()
       report.jobs_failed++
       report.errors.push({ profile_id: profile.id, error: error.message })
       report.jobs.push({
@@ -296,6 +297,7 @@ async function _runAutonomousCrawlerSweep({ profileIds, db, context, fleetLease 
     }
   }
 
+  context.signal?.throwIfAborted()
   report.completed_at = new Date().toISOString()
   report.duration_seconds = Math.round((Date.now() - startTime) / 1000)
   await auditLog({

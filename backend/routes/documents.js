@@ -32,7 +32,7 @@ const routeLogger = createLogger('route:documents')
 
 // OpenAI client helper
 function getOpenAI() {
-  return createOpenAIClient().openai;
+  return createOpenAIClient({ ownerInference: true }).openai;
 }
 
 const router = express.Router();

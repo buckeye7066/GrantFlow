@@ -183,7 +183,7 @@ router.post('/interpret-intent', async (req, res) => {
     }
     let openai = null
     try {
-      const r = createOpenAIClient({ allowMissing: true })
+      const r = createOpenAIClient({ ownerInference: true, allowMissing: true })
       openai = r?.openai ?? null
     } catch {
       openai = null
