@@ -687,11 +687,11 @@ async function extractTextFromPDF(filePath) {
 
 // Helper function to get OpenAI instance
 function getOpenAI() {
-  return createOpenAIClient().openai;
+  return createOpenAIClient({ ownerInference: true }).openai;
 }
 
 function getOpenAIOptional() {
-  return createOpenAIClient({ allowMissing: true }).openai
+  return createOpenAIClient({ allowMissing: true, ownerInference: true }).openai
 }
 
 

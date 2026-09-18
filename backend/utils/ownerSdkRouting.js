@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { getOwnerAiScope } from '../services/ownerAi/ownerAiScope.js'
 import { isTransientProviderError } from './providerFailure.js'
+import { withLLMTimeout, LLMTimeoutError } from './llmTimeout.js'
 
 const nativeClients = new WeakMap()
 export function unwrapOwnerSdkClient(client) { return nativeClients.get(client) || client }
@@ -16,7 +17,7 @@ function plainText(content) {
   if (!Array.isArray(content) || content.some(part => !['text', 'input_text', 'output_text'].includes(part?.type) || typeof part.text !== 'string')) throw unavailable()
   return content.map(part => part.text).join('\n')
 }
-async function invokeOwnerRequest(provider, operation, request = {}, options = {}) {
+async function invokeOwnerRequest(provider, operation, request = {}, options = {}, excludedProviders = []) {
   getOwnerAiScope({includeAborted:true})?.signal.throwIfAborted()
   if (request.stream || !['chat.completions.create', 'responses.create', 'messages.create'].includes(operation)) throw unavailable()
   const source = operation === 'responses.create' ? request.input : request.messages
@@ -35,7 +36,7 @@ async function invokeOwnerRequest(provider, operation, request = {}, options = {
       throw unavailable()
     })
     const {invokeAnyaToolTurn} = await import('../services/anyaToolTransport.js')
-    const planned = await invokeAnyaToolTurn({messages:[{role:'system',content:system},...normalized.filter(m=>!['system','developer'].includes(m.role))],tools:functions,maxTokens:request.max_tokens ?? request.max_completion_tokens ?? request.max_output_tokens ?? 1800,timeoutMs:options.timeout ?? 30000,signal:options.signal})
+    const planned = await invokeAnyaToolTurn({messages:[{role:'system',content:system},...normalized.filter(m=>!['system','developer'].includes(m.role))],tools:functions,maxTokens:request.max_tokens ?? request.max_completion_tokens ?? request.max_output_tokens ?? 1800,timeoutMs:options.timeout ?? 30000,signal:options.signal,excludedProviders})
     toolCalls = planned.choices[0].message.tool_calls
     result = {ok:true,raw:planned.choices[0].message.content,model:planned.model,provider:planned.provider,billing_mode:planned.billing_mode,usage:planned.usage}
   } else {
@@ -46,7 +47,7 @@ async function invokeOwnerRequest(provider, operation, request = {}, options = {
     result = await (json ? gateway.invokeJsonWithFallback : gateway.invokeTextWithFallback)({
       system, prompt:JSON.stringify(normalized.filter(m=>!['system','developer'].includes(m.role))),
       maxTokens:request.max_tokens ?? request.max_completion_tokens ?? request.max_output_tokens ?? 1200,
-      temperature:request.temperature,timeoutMs:options.timeout ?? 30000,signal:options.signal,
+      temperature:request.temperature,timeoutMs:options.timeout ?? 30000,signal:options.signal,excludedProviders,
     })
     if (result?.ok) result = {...result,raw:json ? JSON.stringify(result.json) : result.text}
   }
@@ -81,17 +82,21 @@ export function wrapOwnerSdkClient(client, provider = 'openai', { providerSpecif
             }
             return Reflect.apply(value, object, args)
           }
-          if (scope) return invokeOwnerRequest(provider, operation, args[0], args[1])
-          const result = Reflect.apply(value, object, args)
-          if (!['chat.completions.create','responses.create','messages.create'].includes(operation) || !result?.catch) return result
+          const requestedTimeout = Number(args[1]?.timeout ?? client.timeout ?? 30000)
+          const budget = Number.isFinite(requestedTimeout) ? Math.max(0, requestedTimeout) : 30000
+          if (scope) return invokeOwnerRequest(provider, operation, args[0], {...(args[1] || {}), timeout:budget})
+          if (!['chat.completions.create','responses.create','messages.create'].includes(operation)) return Reflect.apply(value, object, args)
+          if (budget <= 0) return Promise.reject(new LLMTimeoutError('AI provider request', 0))
           const started = Date.now()
-          return result.catch(error => {
+          return withLLMTimeout(signal => Reflect.apply(value, object, [args[0], {
+            ...(args[1] || {}), timeout:budget, maxRetries:0, signal,
+          }]), {timeoutMs:budget, signal:args[1]?.signal, label:'AI provider request'}).catch(error => {
             const status = Number(error?.status)
             const quota = /quota|credit balance|billing|rate.limit/i.test(String(error?.message || ''))
             if (args[1]?.signal?.aborted || !([401,402,403,429].includes(status) || isTransientProviderError(error) || quota)) throw error
-            const options = {...(args[1] || {})}
-            if (Number.isFinite(options.timeout)) options.timeout = Math.max(0, options.timeout - (Date.now() - started))
-            return invokeOwnerRequest(provider, operation, args[0], options)
+            const remaining = Math.max(0, budget - (Date.now() - started))
+            if (remaining <= 0) throw error
+            return invokeOwnerRequest(provider, operation, args[0], {...(args[1] || {}), timeout:remaining}, [provider])
           })
         }
         if (value && typeof value === 'object') return wrap(value, next)

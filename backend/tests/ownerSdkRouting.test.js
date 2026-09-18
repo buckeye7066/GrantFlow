@@ -2,12 +2,12 @@ import {EventEmitter} from 'node:events'
 import {beforeEach,afterEach,it,expect,vi} from 'vitest'
 import {runWithOwnerAiScope} from '../services/ownerAi/ownerAiScope.js'
 const state=vi.hoisted(()=>({native:vi.fn(),text:vi.fn(),json:vi.fn()}))
-vi.mock('openai',()=>({default:class{constructor(){this.chat={completions:{create:state.native}};this.embeddings={create:state.native};this.responses={create:state.native};this.models={list:state.native,retrieve:state.native}}}}))
+vi.mock('openai',()=>({default:class{constructor(options={}){this.timeout=options.timeout??30000;this.chat={completions:{create:state.native}};this.embeddings={create:state.native};this.responses={create:state.native};this.models={list:state.native,retrieve:state.native}}}}))
 vi.mock('../utils/aiProviders.js',()=>({invokeTextWithFallback:state.text,invokeJsonWithFallback:state.json}))
 import {createOpenAIClient} from '../utils/openaiClient.js'
 const req=()=>({ctx:{identityResolved:true,isAdmin:true,userId:'owner-real',email:'owner@example.com'},res:new EventEmitter()})
 beforeEach(()=>{Object.values(state).forEach(mock=>mock.mockReset());vi.stubEnv('ADMIN_EMAIL','owner@example.com');vi.stubEnv('AGENT_CONTROL_ADMIN_EMAIL','');vi.stubEnv('OWNER_AI_USER_ID','');vi.stubEnv('OPENAI_API_KEY','sk-fixture-not-a-real-key');state.native.mockResolvedValue({choices:[{message:{content:'metered'}}]});state.text.mockResolvedValue({ok:true,text:'subscription result',provider:'subscription:codex',billing_mode:'subscription',model:'gpt-6-astra'});state.json.mockResolvedValue({ok:true,json:{answer:42},provider:'subscription:codex',billing_mode:'subscription',model:'gpt-6-astra'})})
-afterEach(()=>vi.unstubAllEnvs())
+afterEach(()=>{vi.useRealTimers();vi.unstubAllEnvs()})
 it('owner calls on a client created before the request still use the subscription gateway',async()=>{
   const client=createOpenAIClient().openai
   const r=await runWithOwnerAiScope(req(),()=>client.chat.completions.create({messages:[{role:'user',content:'Explain'}],max_tokens:100}))
@@ -39,7 +39,7 @@ it('direct customer text calls fall through to a free provider after paid quota 
 
 it('an owner needs no API key to use the subscription transport',async()=>{
   vi.stubEnv('OPENAI_API_KEY','')
-  const r=await runWithOwnerAiScope(req(),()=>createOpenAIClient().openai.chat.completions.create({messages:[{role:'user',content:'Explain'}],max_tokens:100}))
+  const r=await runWithOwnerAiScope(req(),()=>createOpenAIClient({ownerInference:true}).openai.chat.completions.create({messages:[{role:'user',content:'Explain'}],max_tokens:100}))
   expect(r.billing_mode).toBe('subscription');expect(state.native).not.toHaveBeenCalled()
 })
 
@@ -89,4 +89,26 @@ it.each([{name:'APIConnectionError'},{name:'APIConnectionTimeoutError'},{status:
   state.text.mockResolvedValue({ok:true,text:'free recovered',provider:'free:fixture',billing_mode:'free_or_local',model:'fixture'})
   const result=await createOpenAIClient().openai.chat.completions.create({messages:[{role:'user',content:'Explain'}]})
   expect(result.choices[0].message.content).toBe('free recovered')
+})
+
+
+it('optional native diagnostics preserve configured:false when the owner has no API key',async()=>{
+ vi.stubEnv('OPENAI_API_KEY','')
+ const client=await runWithOwnerAiScope(req(),()=>createOpenAIClient({allowMissing:true}))
+ expect(client.openai).toBeNull();expect(client.diagnostics.present).toBe(false)
+})
+it('SDK fallback gets only the remainder of the configured client timeout',async()=>{
+ vi.useFakeTimers()
+ state.native.mockImplementation(async()=>{await new Promise(resolve=>setTimeout(resolve,400));throw Object.assign(new Error('quota exhausted'),{status:429})})
+ const pending=createOpenAIClient({timeoutMs:1000}).openai.chat.completions.create({messages:[{role:'user',content:'Explain'}]})
+ await vi.advanceTimersByTimeAsync(401);await pending
+ expect(state.text.mock.calls[0][0].timeoutMs).toBe(600)
+ expect(state.text.mock.calls[0][0].excludedProviders).toEqual(['openai'])
+})
+it('a fully expired SDK budget does not restart a fallback clock',async()=>{
+ vi.useFakeTimers();state.native.mockImplementation(()=>new Promise(()=>{}))
+ const pending=createOpenAIClient({timeoutMs:1000}).openai.chat.completions.create({messages:[{role:'user',content:'Explain'}]}).catch(error=>error)
+ await vi.advanceTimersByTimeAsync(1001)
+ expect(state.native.mock.calls[0][1].signal.aborted).toBe(true)
+ expect((await pending).isTimeout).toBe(true);expect(state.text).not.toHaveBeenCalled()
 })

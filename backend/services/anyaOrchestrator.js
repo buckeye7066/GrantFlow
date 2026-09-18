@@ -33,7 +33,7 @@ const openAIBreaker = createCircuitBreaker({
 function getOpenAIClient() {
   // Resolve current runtime configuration for every request. A cached SDK client
   // would keep a revoked/cleared credential alive after an admin key change.
-  return createOpenAIClient().openai
+  return createOpenAIClient({ ownerInference: true }).openai
 }
 
 const DEFAULT_ASSISTANT_MODEL = process.env.ANYA_OPENAI_MODEL || 'gpt-4o-mini'
@@ -1828,7 +1828,7 @@ export async function invokeTool(db, user, toolName, params, { sessionId, intern
 
   const getOpenAI = () => {
     try {
-      const { openai } = createOpenAIClient({ allowMissing: true })
+      const { openai } = createOpenAIClient({ allowMissing: true, ownerInference: true })
       return openai
     } catch {
       return null

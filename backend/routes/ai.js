@@ -123,11 +123,11 @@ router.use((req, res, next) => {
 })
 
 function getOpenAI() {
-  return createOpenAIClient().openai;
+  return createOpenAIClient({ ownerInference: true }).openai;
 }
 
 function getOpenAIOptional() {
-  return createOpenAIClient({ allowMissing: true }).openai;
+  return createOpenAIClient({ allowMissing: true, ownerInference: true }).openai;
 }
 
 async function createAnthropicClient() {

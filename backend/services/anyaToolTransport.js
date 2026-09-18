@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto'
 import { invokeJsonWithFallback } from '../utils/aiProviders.js'
 
 // Produces a plan. The existing registry retains all authorization and execution.
-export async function invokeAnyaToolTurn({ messages, tools = [], maxTokens = 1800, timeoutMs = 20000, signal } = {}) {
+export async function invokeAnyaToolTurn({ messages, tools = [], maxTokens = 1800, timeoutMs = 20000, signal, excludedProviders = [] } = {}) {
   const available = new Set(tools.map(tool => tool?.function?.name).filter(Boolean))
   const system = messages.filter(message => message.role === 'system').map(message => message.content).join('\n\n')
   const result = await invokeJsonWithFallback({
@@ -12,7 +12,7 @@ export async function invokeAnyaToolTurn({ messages, tools = [], maxTokens = 180
       response_rules: 'Return a reply with an empty tool_calls array, or at most four authorized tool requests. Tool requests have not executed. Retain all confirmation requirements.',
       conversation: messages.filter(message => message.role !== 'system'), available_tools: tools,
     }),
-    temperature: 0.3, maxTokens, timeoutMs, signal,
+    temperature: 0.3, maxTokens, timeoutMs, signal, excludedProviders,
   })
   const output = result?.json
   if (!result?.ok || !output || typeof output.reply !== 'string' || !Array.isArray(output.tool_calls) ||

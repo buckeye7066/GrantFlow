@@ -50,6 +50,7 @@ export function getOpenAIKeyDiagnostics() {
 
 export function createOpenAIClient({
   allowMissing = false,
+  ownerInference = false,
   apiKeyOverride = null,
   timeoutMs = null,
   maxRetries = null,
@@ -60,7 +61,7 @@ export function createOpenAIClient({
 
   if (!apiKey || apiKey === 'YOUR_OPENAI_API_KEY' || apiKey.includes('*')) {
     // The owner subscription does not require a metered API credential.
-    if (getOwnerAiScope({includeAborted:true})) {
+    if (ownerInference && getOwnerAiScope({includeAborted:true})) {
       const unavailable = async () => { throw new Error('OpenAI API is not configured') }
       return {openai:wrapOwnerSdkClient({chat:{completions:{create:unavailable}},responses:{create:unavailable},embeddings:{create:unavailable}}),diagnostics}
     }
