@@ -1,14 +1,43 @@
-name: Foundation journey session
+name: Foundation entry regression
 
 on:
   push:
-    branches: [qa/foundation-journey-20260918]
+    branches: [main, qa/foundation-journey-20260918]
+    paths:
+      - 'src/pages/Start*'
+      - 'src/pages/SetPassword.jsx'
+      - 'src/components/auth/**'
+      - 'src/stores/authStore*'
+      - 'backend/routes/onboarding.js'
+      - 'backend/services/anyaInterviewEngine.js'
+      - 'backend/routes/auth*'
+      - 'backend/db/**'
+      - 'backend/scripts/seed-deterministic.mjs'
+      - 'tests/e2e/**'
+      - 'package*.json'
+      - 'vite.config.*'
+      - '.github/workflows/foundation-journey-session.yml'
+  pull_request:
+    paths:
+      - 'src/pages/Start*'
+      - 'src/pages/SetPassword.jsx'
+      - 'src/components/auth/**'
+      - 'src/stores/authStore*'
+      - 'backend/routes/onboarding.js'
+      - 'backend/services/anyaInterviewEngine.js'
+      - 'backend/routes/auth*'
+      - 'backend/db/**'
+      - 'backend/scripts/seed-deterministic.mjs'
+      - 'tests/e2e/**'
+      - 'package*.json'
+      - 'vite.config.*'
+      - '.github/workflows/foundation-journey-session.yml'
 
 permissions:
   contents: read
 
 concurrency:
-  group: foundation-journey-session-${{ github.ref }}
+  group: foundation-entry-${{ github.event.pull_request.head.ref || github.ref_name }}
   cancel-in-progress: true
 
 jobs:
@@ -67,10 +96,10 @@ jobs:
         run: npm ci --include=dev --include=optional
       - name: Install real browser
         run: node node_modules/playwright/cli.js install chromium --with-deps
-      - name: Focused location regression suite
+      - name: Focused onboarding regression suite
         run: |
           set -o pipefail
-          node scripts/run-vitest-isolated.mjs run src/pages/Start.location.test.jsx src/pages/Start.pendingLocation.test.jsx 2>&1 | tee journey-evidence/location-unit.log
+          node scripts/run-vitest-isolated.mjs run src/pages/Start.location.test.jsx src/pages/Start.pendingLocation.test.jsx src/pages/Start.textQuestion.test.jsx 2>&1 | tee journey-evidence/onboarding-unit.log
       - name: Foundation intake desktop and phone journey
         if: ${{ !cancelled() }}
         run: |
