@@ -22,6 +22,7 @@ import {
   ensureProfileEmailSchema,
 } from '../utils/accessControl.js'
 import { isAdminEmail } from '../config/constants.js'
+import { runWithOwnerAiScope } from '../services/ownerAi/ownerAiScope.js'
 import {
   SYNTHETIC_SERVICE_ADMIN_USER_IDS,
   isSyntheticServiceAdmin,
@@ -340,7 +341,7 @@ export function attachRequestContext() {
       req.ctx = await buildRequestContext(req.db, req.user)
       // Attach db reference to ctx for convenience (single accessor pattern)
       req.ctx.db = req.db
-      next()
+      runWithOwnerAiScope(req, next)
     } catch (error) {
       console.error('[requestContext] Failed to build request context:', error)
       // Fail safe: provide guest context to avoid breaking the request

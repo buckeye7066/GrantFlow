@@ -572,7 +572,7 @@ export async function generateMbaProposal(db, {
   if (!llm || !llm.ok || !llm.json || typeof llm.json !== 'object') {
     return {
       ...baseResult,
-      error: llm?.error?.message || llm?.anthropicError || llm?.openaiError?.message || 'LLM did not return a proposal',
+      error: llm?.error?.message || llm?.anthropicError?.message || (typeof llm?.anthropicError === 'string' ? llm.anthropicError : null) || llm?.openaiError?.message || 'LLM did not return a proposal',
     }
   }
 

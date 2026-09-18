@@ -8,6 +8,8 @@ import {
 } from '../../scripts/generate-env-examples.mjs'
 
 const EXPECTED_RUNTIME_DEFAULTS = [
+  '# OWNER_AI_BRIDGE_ENABLED=false',
+  '# OWNER_AI_SUBSCRIPTION_TIMEOUT_MS=20000',
   '# CLAMAV_HOST=',
   '# CLAMAV_PORT=3310',
   '# CLAMAV_REQUIRED=false',
@@ -23,6 +25,7 @@ const EXPECTED_RUNTIME_DEFAULTS = [
 ]
 
 const SOURCE_CONTRACTS = [
+  { path: '../../backend/services/ownerAi/ownerAiBroker.js', names: ['OWNER_AI_BRIDGE_ENABLED', 'OWNER_AI_BRIDGE_TOKEN'] },
   {
     path: '../../backend/utils/uploadFileValidation.js',
     names: ['CLAMAV_HOST', 'CLAMAV_PORT', 'CLAMAV_REQUIRED', 'CLAMAV_TIMEOUT_MS'],
