@@ -1,14 +1,34 @@
-name: Foundation journey repair
+name: Foundation user journey
 
 on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'src/**'
+      - 'backend/**'
+      - 'shared/**'
+      - 'tests/**'
+      - 'scripts/**'
+      - 'package*.json'
+      - '*config*'
+      - '.github/workflows/foundation-journey-repair.yml'
   push:
-    branches: [fix/foundation-location-submit-20260918]
+    branches: [main]
+    paths:
+      - 'src/**'
+      - 'backend/**'
+      - 'shared/**'
+      - 'tests/**'
+      - 'scripts/**'
+      - 'package*.json'
+      - '*config*'
+      - '.github/workflows/foundation-journey-repair.yml'
 
 permissions:
   contents: read
 
 concurrency:
-  group: foundation-journey-repair-${{ github.ref }}
+  group: foundation-user-journey-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -50,7 +70,7 @@ jobs:
       ADMIN_TOKEN: grantflow-ci-foundation-journey-admin-not-for-production
       RUNTIME_SECRETS_KEY: '4444444444444444444444444444444444444444444444444444444444444444'
     steps:
-      - name: Checkout isolated repair branch
+      - name: Checkout candidate
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
@@ -61,12 +81,17 @@ jobs:
           cache: npm
       - name: Install locked dependencies
         run: npm ci --include=dev --include=optional
+      - name: Check focused identity and location regression contracts
+        run: |
+          node scripts/pin-signal-version.mjs --check
+          node --test tests/unit/onboarding-explicit-profile-type.test.mjs tests/unit/resolve-effective-profile-type.test.mjs
+          node scripts/run-vitest-isolated.mjs run src/pages/Start.location.test.jsx backend/tests/profileSignalVersion.test.js
       - name: Install Chromium
         run: node ./node_modules/playwright/cli.js install chromium --with-deps
-      - name: Follow Foundation signup and retain the location regression
+      - name: Follow Foundation signup and location regression journeys
         run: |
           mkdir -p "$UPLOADS_DIR"
-          node ./node_modules/playwright/cli.js test -c tests/e2e/playwright.config.mjs foundation-location-pending.spec.mjs foundation-signup-journey.spec.mjs --workers=1 --retries=0 --max-failures=1
+          node ./node_modules/playwright/cli.js test -c tests/e2e/playwright.config.mjs foundation- --workers=1 --retries=0 --max-failures=1
       - name: Retain isolated browser evidence
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
