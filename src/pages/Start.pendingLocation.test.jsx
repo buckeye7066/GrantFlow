@@ -62,7 +62,7 @@ describe('Foundation pending geography submission', () => {
     })
   })
 
-  it('allows manual ZIP+4 entry after cancelling a lookup and ignores the old response', async () => {
+  it('keeps ZIP+4 blocked until its current base ZIP settles and preserves a manual county', async () => {
     const zip = await openExistingLocation()
     let resolveLookup
     apiFetch.mockImplementationOnce(() => new Promise((resolve) => { resolveLookup = resolve }))
@@ -70,16 +70,38 @@ describe('Foundation pending geography submission', () => {
     const submit = screen.getByRole('button', { name: 'Continue', exact: true })
     await waitFor(() => expect(submit.disabled).toBe(true))
     fireEvent.change(zip, { target: { value: '37312-1234' } })
+    fireEvent.change(screen.getByLabelText(/^County/), { target: { value: 'Manual County' } })
+    expect(submit.disabled).toBe(true)
+    fireEvent.submit(submit.closest('form'))
+    expect(submittedAnswers()).toHaveLength(0)
+    await act(async () => { resolveLookup({ state: 'TN', city: 'Cleveland', county: 'Bradley' }) })
+    await waitFor(() => expect(submit.disabled).toBe(false))
+    fireEvent.click(submit)
+    await screen.findByText('Location saved.')
+    expect(JSON.parse(submittedAnswers()[0][1].body).answer).toEqual({
+      zip: '37312-1234', state: 'TN', city: 'Cleveland', county: 'Manual County',
+    })
+  })
+
+  it('allows manual ZIP+4 geography after changing base ZIP and ignores the cancelled response', async () => {
+    const zip = await openExistingLocation()
+    let resolveLookup
+    apiFetch.mockImplementationOnce(() => new Promise((resolve) => { resolveLookup = resolve }))
+    fireEvent.change(zip, { target: { value: '37312' } })
+    const submit = screen.getByRole('button', { name: 'Continue', exact: true })
+    await waitFor(() => expect(submit.disabled).toBe(true))
+    // Changing the base ZIP cancels the obsolete lookup; adding a suffix alone must not.
+    fireEvent.change(zip, { target: { value: '37205-1234' } })
+    await waitFor(() => expect(submit.disabled).toBe(false))
     fireEvent.change(screen.getByLabelText(/^City/), { target: { value: 'Manual City' } })
     fireEvent.change(screen.getByLabelText(/^County/), { target: { value: 'Manual County' } })
-    await waitFor(() => expect(submit.disabled).toBe(false))
     await act(async () => { resolveLookup({ state: 'CA', city: 'Obsolete City', county: 'Obsolete County' }) })
     expect(screen.getByLabelText(/^City/).value).toBe('Manual City')
     expect(screen.getByLabelText(/^County/).value).toBe('Manual County')
     fireEvent.click(submit)
     await screen.findByText('Location saved.')
     expect(JSON.parse(submittedAnswers()[0][1].body).answer).toEqual({
-      zip: '37312-1234', state: 'TN', city: 'Manual City', county: 'Manual County',
+      zip: '37205-1234', state: 'TN', city: 'Manual City', county: 'Manual County',
     })
   })
 })

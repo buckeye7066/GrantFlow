@@ -13,6 +13,7 @@ for (const width of [1280, 390]) {
     const email = `foundation-journey-${width}-${Date.now()}@example.invalid`
     const password = `Test-${randomUUID()}!`
     const errors = []
+    let profileId
     page.on('pageerror', error => errors.push(error.message))
     await page.setViewportSize({ width, height: 900 })
 
@@ -52,19 +53,45 @@ for (const width of [1280, 390]) {
       { timeout: 20000 })
       await page.getByRole('button', { name: 'Send my sign-in code', exact: true }).click()
       const response = await completion
-      expect(response.ok(), 'onboarding completion creates the test account and profile').toBe(true)
+      expect(response.status(), 'onboarding completion creates the test account and profile').toBe(201)
+      profileId = (await response.json()).profile_id
+      expect(profileId).toBeTruthy()
       await page.waitForURL(/\/set-password\?/)
     })
 
-    await test.step('Set password and verify profile survives reload', async () => {
+    await test.step('Set password and complete the genuinely missing personal fact', async () => {
       await page.locator('#new-password').fill(password)
       await page.locator('#confirm-password').fill(password)
+      const setupResponse = page.waitForResponse(response =>
+        new URL(response.url()).pathname.endsWith('/api/auth/password/setup/complete') && response.request().method() === 'POST')
       await page.getByRole('button', { name: /set password/i }).click()
+      const setup = await setupResponse
+      expect(setup.status()).toBe(200)
+      const user = (await setup.json()).user
+      expect(user.is_admin).toBe(false)
+      expect(user.has_completed_onboarding).toBe(true)
+      expect(user.profile_completion.next.effective_type).toBe('individual')
+      expect(user.profile_completion.next.questions.map(question => question.id)).toEqual(['financial_need'])
       await page.waitForURL(/\/Dashboard/i)
+      const gate = page.getByTestId('profile-completion-gate')
+      await expect(gate).toBeVisible()
+      await expect(gate.getByText(/What kind of organization/)).toHaveCount(0)
+      await gate.getByRole('textbox', { name: /Roughly how urgent is your financial need/ }).fill('high')
+      const answerResponse = page.waitForResponse(response =>
+        new URL(response.url()).pathname.endsWith(`/api/profiles/${profileId}/completion-gate/answer`) && response.request().method() === 'POST')
+      await gate.getByRole('button', { name: 'Finish', exact: true }).click()
+      const answer = await answerResponse
+      expect(answer.status()).toBe(200)
+      expect((await answer.json()).complete).toBe(true)
+      await expect(gate).toBeHidden()
+    })
+
+    await test.step('Verify the saved profile card survives reload', async () => {
       await page.goto(`${appBase}/Organizations`)
-      await expect(page.getByText(profileName, { exact: true }).first()).toBeVisible()
+      await expect(page.getByRole('heading', { name: profileName, exact: true, level: 3 })).toBeVisible()
       await page.reload()
-      await expect(page.getByText(profileName, { exact: true }).first()).toBeVisible()
+      await expect(page.getByRole('heading', { name: profileName, exact: true, level: 3 })).toBeVisible()
+      await expect(page.getByTestId('profile-completion-gate')).toHaveCount(0)
       await testInfo.attach(`saved-profile-${width}`, { body: await page.screenshot({ fullPage: true }), contentType: 'image/png' })
     })
 
@@ -80,7 +107,8 @@ for (const width of [1280, 390]) {
         await returning.getByRole('button', { name: 'Sign in', exact: true }).click()
         await returning.waitForURL(/\/Dashboard/i)
         await returning.goto(`${appBase}/Organizations`)
-        await expect(returning.getByText(profileName, { exact: true }).first()).toBeVisible()
+        await expect(returning.getByRole('heading', { name: profileName, exact: true, level: 3 })).toBeVisible()
+        await expect(returning.getByTestId('profile-completion-gate')).toHaveCount(0)
       } finally {
         await context.close()
       }
