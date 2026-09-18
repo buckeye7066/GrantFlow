@@ -1,0 +1,60 @@
+name: Verify refresh lease and diagnostic boundaries
+on:
+  push:
+    branches: [fix/stale-refresh-batch-honesty]
+    paths: ['scripts/repair-refresh-fence*', '.github/workflows/repair-refresh-fence.yml']
+permissions:
+  contents: write
+concurrency:
+  group: repair-refresh-fence
+  cancel-in-progress: false
+jobs:
+  repair:
+    if: github.repository == 'buckeye7066/GrantFlow'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: grantflow_test
+          POSTGRES_PASSWORD: ephemeral_test_only
+          POSTGRES_DB: grantflow_test
+        ports: ['5432:5432']
+        options: --health-cmd "pg_isready -U grantflow_test" --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      NODE_ENV: test
+      RUNTIME_SECRETS_KEY: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+      TEST_POSTGRES_URL: postgres://grantflow_test:ephemeral_test_only@localhost:5432/grantflow_test
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+      - run: npm ci --include=dev --no-audit --no-fund
+      - name: Reproduce review findings on unchanged source
+        run: node scripts/repair-refresh-fence.mjs red
+      - name: Apply database lease fencing and unavailable-evidence handling
+        run: node scripts/repair-refresh-fence.mjs apply
+      - name: Verify preserved behavior and actual PostgreSQL predicates
+        run: node scripts/repair-refresh-fence.mjs verify
+      - name: Verify static contracts
+        run: npm run lint && npm run typecheck && npm run crawler-os:lint && node scripts/codemod/safe-sql.mjs
+      - name: Publish only the verified correction
+        env:
+          EXPECTED_HEAD: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          branch=fix/stale-refresh-batch-honesty
+          actual=$(git ls-remote origin "refs/heads/$branch" | cut -f1)
+          test "$actual" = "$EXPECTED_HEAD"
+          git diff --check
+          git config user.name buckeye7066
+          git config user.email 220653752+buckeye7066@users.noreply.github.com
+          git add backend/server.js backend/services/matching/staleMatchRefreshReceipt.js backend/services/sam/samRegistry.js backend/tests/staleRefreshLeaseEvidence.test.js backend/tests/staleRefreshClaimRace.test.js backend/tests/staleMatchRefreshContinuation.test.js backend/tests/staleMatchExplainScheduler.test.js docs/agent-sync/2026-09-18-stored-refresh-follow-through.md
+          git commit -m 'fix(matching): fence refresh writes by database lease and retain unknown boot evidence'
+          git push origin "HEAD:refs/heads/$branch"
+          git rev-parse HEAD
