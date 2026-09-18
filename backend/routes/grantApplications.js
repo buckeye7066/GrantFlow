@@ -129,16 +129,13 @@ async function fetchHamiltonApplications(db, { isAdmin, userId, filterProfileId,
   const where = clauses.length ? `WHERE ${clauses.join(' AND ')}` : ''
   let rows = []
   try {
-    // audit:allow unscoped-profile-query -- application_tasks is filtered by t.profile_id/user_id before joining grant display fields.
     rows = await db.prepare(
       `SELECT t.id, t.profile_id, t.user_id, t.opportunity_id, t.grant_id,
               t.status AS task_status, t.submitted_at, t.created_at, t.updated_at,
               t.output_document_id,
-              COALESCE(fo.title, g.title) AS title,
-              COALESCE(fo.sponsor, g.funder) AS funder_name
+              fo.title AS title, fo.sponsor AS funder_name
          FROM application_tasks t
          LEFT JOIN funding_opportunities fo ON fo.id = t.opportunity_id
-         LEFT JOIN grants g ON g.id = t.grant_id
          ${where}
         ORDER BY t.updated_at DESC LIMIT ?`,
     ).all(...params, Math.min(500, Number(limit) || 200))
@@ -151,6 +148,29 @@ async function fetchHamiltonApplications(db, { isAdmin, userId, filterProfileId,
     const msg = String(err?.message || '')
     if (/no such table|does not exist/i.test(msg)) return []
     throw err
+  }
+  // The tracker intentionally includes all of the caller's profiles. Fetch
+  // fallback display data in bounded per-profile batches instead of joining a
+  // private table without its tenant predicate. Never trust a legacy grant
+  // pointer to cross from the task's profile into another profile.
+  const byProfile = new Map()
+  for (const row of rows || []) {
+    if (!row.profile_id || !row.grant_id || (row.title !== null && row.funder_name !== null)) continue
+    const profileId = String(row.profile_id)
+    if (!byProfile.has(profileId)) byProfile.set(profileId, [])
+    byProfile.get(profileId).push(row)
+  }
+  for (const [profileId, tasks] of byProfile) {
+    const ids = [...new Set(tasks.map(task => String(task.grant_id)))]
+    const grants = await db.prepare(
+      `SELECT id, title, funder FROM grants WHERE profile_id = ? AND id IN (${ids.map(() => '?').join(', ')})`,
+    ).all(profileId, ...ids)
+    const display = new Map(grants.map(grant => [String(grant.id), grant]))
+    for (const task of tasks) {
+      const grant = display.get(String(task.grant_id))
+      task.title = task.title ?? grant?.title ?? null
+      task.funder_name = task.funder_name ?? grant?.funder ?? null
+    }
   }
   const out = []
   for (const r of rows || []) {
@@ -262,7 +282,7 @@ router.get('/', async (req, res) => {
     // manual applications and everything Hamilton has worked/submitted.
     const hamilton = await fetchHamiltonApplications(req.db, {
       isAdmin: !!req.ctx?.isAdmin, userId: String(userId), filterProfileId, filterStatus, limit,
-    }).catch((err) => { routeLogger.warn('[grant-applications] hamilton merge failed:', err?.message); return [] })
+    })
 
     const seenOpp = new Set(manual.map((r) => r.opportunity_id).filter(Boolean))
     const merged = [...manual]
