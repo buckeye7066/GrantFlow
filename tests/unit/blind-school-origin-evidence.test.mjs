@@ -1,9 +1,9 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { validateEvidenceSpans } from '../blindEvidenceValidator.js'
-import { mapBlindFactsToCandidate } from '../blindFactsMapper.js'
-import { normalize as normalizeCrawlerOpportunity } from '../normalizer.js'
-import { normalizeOpportunity } from '../../services/opportunityNormalizer.js'
+import { validateEvidenceSpans } from '../../backend/crawler-os/blindEvidenceValidator.js'
+import { mapBlindFactsToCandidate } from '../../backend/crawler-os/blindFactsMapper.js'
+import { normalize as normalizeCrawlerOpportunity } from '../../backend/crawler-os/normalizer.js'
+import { normalizeOpportunity } from '../../backend/services/opportunityNormalizer.js'
 
 const schoolRule = 'Applicants must be graduates of public high schools in Raleigh County.'
 
