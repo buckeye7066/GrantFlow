@@ -17,11 +17,17 @@ test('installed DPAPI token survives the newline written by Set-Content', { skip
       "$fixture = ConvertTo-SecureString 'synthetic-fixture-value-never-a-real-token' -AsPlainText -Force",
       '$fixture | ConvertFrom-SecureString | Set-Content -LiteralPath $secretPath',
       readLine,
-      "if ($secure.Length -ne $fixture.Length) { throw 'Fixture roundtrip failed' }",
+      "if ([System.Net.NetworkCredential]::new('', $secure).Password -cne 'synthetic-fixture-value-never-a-real-token') { throw 'Fixture roundtrip failed' }",
     ].join('\n')
     const result = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script], {
       env: { ...process.env, GF_DPAPI_TEST_DIR: dir }, encoding: 'utf8', windowsHide: true, timeout: 15000,
     })
     assert.equal(result.status, 0, result.stderr || result.error?.message || 'PowerShell fixture failed')
   } finally { rmSync(dir, { recursive: true, force: true }) }
+})
+
+test('Windows CI executes the native DPAPI roundtrip regression', () => {
+  const workflow = readFileSync(new URL('../../.github/workflows/ci.yml', import.meta.url), 'utf8')
+  const windows = workflow.split('  windows-build:')[1]?.split('  postgres-migrations:')[0]
+  assert.ok(windows?.includes('node --test tests/unit/ownerAiDpapi.test.mjs'))
 })
