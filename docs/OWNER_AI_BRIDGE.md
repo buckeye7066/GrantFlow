@@ -143,3 +143,14 @@ gpt-6-astra in 7793 ms, including metadata probes, with billing_mode subscriptio
 and explicit_cli_argument model provenance. No API key entered the CLI child.
 This is local worker proof, not a live cloud request, deployment or acceptance
 benchmark claim. Claude subscription login remains unverified.
+
+## Explicit owner account binding
+
+Set server-only `OWNER_AI_EMAIL` to the exact database-backed email of the owner
+account used to sign in to GrantFlow when it differs from `ADMIN_EMAIL`. This
+setting affects subscription routing only: it does not grant administrator
+rights or change agent-control permissions. The caller must still be a real,
+resolved database administrator; service/profile tokens remain excluded, and
+`OWNER_AI_USER_ID`, when configured, remains an additional exact-ID restriction.
+Without this setting the existing canonical administrator-email fallback remains.
+Never use a comma-separated alias list or a customer account for this binding.
