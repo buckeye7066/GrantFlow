@@ -153,3 +153,9 @@ describe('web parity background admin route', () => {
     })
   })
 })
+
+
+it('admin pending count includes only documented legacy extraction failures with no actual gate', () => {
+  const legacy={source:'web_parity_benchmark',status:'gated_out',disposition:'extraction_failed',disposition_evidence:{source:'lane_page_ledger'},url:'https://example.org/legacy'}
+  expect(pendingWebParity([legacy,{...legacy,gate:'reality'},{...legacy,status:'dismissed'}])).toEqual([legacy])
+})

@@ -2,7 +2,7 @@ import crypto from 'node:crypto'
 import express from 'express'
 
 import {
-  isPendingGapStatus,
+  isPendingGapCandidate,
   readWebParityBenchmark,
   readWebParityGapQueue,
   runWebParityBenchmark,
@@ -39,21 +39,21 @@ function snapshotState() {
 /**
  * Benchmark-owned candidates the gates have NOT judged: fresh `candidate`
  * rows and bounded `not_evaluated:<class>` rows still eligible for re-seeding
- * (the ONE predicate lives in webParityBenchmark.isPendingGapStatus). A
+ * (the ONE predicate lives in webParityBenchmark.isPendingGapCandidate). A
  * terminal verdict (adopted / gated_out / dismissed) or an exhausted page is
  * not pending.
  */
 function pendingWebParity(queue = []) {
   return (Array.isArray(queue) ? queue : []).filter(
     (entry) => String(entry?.source || '') === 'web_parity_benchmark' &&
-      isPendingGapStatus(entry?.status),
+      isPendingGapCandidate(entry),
   )
 }
 
 function pendingBreakdown(pending = []) {
   const breakdown = { candidate: 0, not_evaluated: 0 }
   for (const entry of pending) {
-    if (String(entry?.status || 'candidate').toLowerCase().startsWith('not_evaluated:')) breakdown.not_evaluated += 1
+    if (String(entry?.status || 'candidate').toLowerCase().startsWith('not_evaluated:') || entry?.status === 'gated_out') breakdown.not_evaluated += 1
     else breakdown.candidate += 1
   }
   return breakdown
