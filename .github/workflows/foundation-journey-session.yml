@@ -1,0 +1,113 @@
+name: Foundation journey session
+
+on:
+  push:
+    branches: [qa/foundation-journey-20260918]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: foundation-journey-session-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  foundation:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: grantflow_journey
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      CI: 'true'
+      NODE_ENV: development
+      SMOKE_MODE: 'true'
+      VITE_SMOKE_MODE: 'true'
+      E2E_PORT: '18081'
+      PORT: '18081'
+      DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/grantflow_journey
+      DB_PROVIDER: postgres
+      DB_DIALECT: postgres
+      MIGRATE_ON_BOOT: 'false'
+      DB_AUTO_MIGRATE: 'false'
+      ALLOW_EPHEMERAL_UPLOADS: 'true'
+      UPLOADS_DIR: /tmp/grantflow-journey-uploads
+      AUTH_JWT_SECRET: grantflow-isolated-journey-secret-not-for-production
+      RUNTIME_SECRETS_KEY: '5555555555555555555555555555555555555555555555555555555555555555'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 24.19.0
+          cache: npm
+      - name: Install locked application dependencies
+        run: npm ci --include=dev --include=optional
+      - name: Install real browser
+        run: node node_modules/playwright/cli.js install chromium --with-deps
+      - name: Read-only deployed landing and login probe
+        run: |
+          mkdir -p journey-evidence "$UPLOADS_DIR"
+          node --input-type=module <<'NODE'
+          import { chromium } from 'playwright';
+          import { writeFile } from 'node:fs/promises';
+          const browser = await chromium.launch({ headless: true });
+          const records = [];
+          try {
+            for (const path of ['/', '/grantflow/login', '/grantflow/start']) {
+              const page = await browser.newPage();
+              const errors = [];
+              page.on('pageerror', error => errors.push(error.message));
+              page.on('requestfailed', request => {
+                if (!String(request.failure()?.errorText).includes('ERR_ABORTED')) {
+                  const url = new URL(request.url());
+                  errors.push(`${url.origin}${url.pathname}: ${request.failure()?.errorText}`);
+                }
+              });
+              try {
+                const response = await page.goto(`https://app.axiombiolabs.org${path}`, { waitUntil: 'domcontentloaded', timeout: 45000 });
+                await page.waitForTimeout(3000);
+                const record = { path, status: response?.status(), url: page.url().split('?')[0], title: await page.title(), body: (await page.locator('body').innerText()).slice(0,7000), errors };
+                records.push(record);
+                console.log(JSON.stringify(record));
+                await page.screenshot({ path: `journey-evidence/public-${records.length}.png`, fullPage: true });
+              } catch (error) {
+                const record = { path, failure: error.message, errors };
+                records.push(record);
+                console.log(JSON.stringify(record));
+              }
+              await page.close();
+            }
+            await writeFile('journey-evidence/public-probe.json', JSON.stringify(records, null, 2));
+            if (records.some(record => record.failure || record.status >= 400 || record.errors.length)) process.exitCode = 1;
+          } finally {
+            await browser.close();
+          }
+          NODE
+      - name: Foundation intake desktop and phone journey
+        if: ${{ !cancelled() }}
+        run: |
+          set -o pipefail
+          node node_modules/playwright/cli.js test -c tests/e2e/playwright.config.mjs onboarding-location.spec.mjs --workers=1 --retries=0 --max-failures=1 --reporter=list 2>&1 | tee journey-evidence/foundation-intake.log
+      - name: Retain runtime evidence only
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: foundation-journey-${{ github.sha }}
+          path: |
+            journey-evidence/
+            test-results/
+          if-no-files-found: warn
+          retention-days: 3
