@@ -4393,7 +4393,7 @@ export function makeDecision(score, profile, opportunity, normalizedProfile = nu
     }
   }
 
-  const schoolOrigin = evaluateSchoolOrigin(np?.schoolOrigin ?? normalizeSchoolOrigin(sections), on.schoolOriginRequirements)
+  const schoolOrigin = evaluateSchoolOrigin(np?.schoolOrigin ?? normalizeSchoolOrigin(sections, prof), on.schoolOriginRequirements)
   if (schoolOrigin.ineligibilityReasons.length) {
     reasons.push(...schoolOrigin.ineligibilityReasons)
     return { decision: 'REJECT', explanation: schoolOrigin.ineligibilityReasons.join('; '), reasons }

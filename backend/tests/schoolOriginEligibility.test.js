@@ -3,7 +3,8 @@ import { normalizeProfile, computeProfileFingerprint } from '../services/profile
 import { normalizeOpportunity, computeOpportunityFingerprint } from '../services/opportunityNormalizer.js'
 import { evaluateEligibility, computeMatchDecision } from '../services/matchEngine.js'
 
-const profile = { id: 'school-origin-test', primary_type: 'individual', entity_type: 'individual', state: 'TN', needs: ['education'] }
+// Student education tests use the student editor; adult and household tests below cover Basic Information.
+const profile = { id: 'school-origin-test', primary_type: 'college_student', entity_type: 'individual', state: 'TN', needs: ['education'] }
 const baseEducation = { is_student: true, high_school_name: 'Example High School', high_school_graduation_year: 2020 }
 const sections = education => ({ basic_information: { state: 'TN', county: 'Bradley' }, education: { ...baseEducation, ...education } })
 const requirement = 'Scholarships are restricted to graduates of a public high school in Raleigh County.'
@@ -244,4 +245,85 @@ it('keeps county-first unsupported descriptive prose separate from an eligibilit
   const statement = 'For Raleigh County, WV high school graduates continuing their education at any accredited college.'
   expect(normalizeOpportunity({ ...opportunity, description: statement }).schoolOriginRequirements).toHaveLength(0)
   expect(normalizeOpportunity({ ...opportunity, description: 'Education support.', eligibility_text: statement }).schoolOriginRequirements).toHaveLength(1)
+})
+
+it('recognizes a current scholarship-is-for applicant restriction', () => {
+  const row = { ...opportunity, description: 'This scholarship is for graduates of public high schools in Raleigh County.' }
+  expect(evaluate({ high_school_county: 'Bradley', high_school_type: 'public' }, row).eligible).toBe(false)
+  expect(evaluate({ high_school_county: 'Raleigh', high_school_type: 'private' }, row).eligible).toBe(false)
+  expect(evaluate({ high_school_county: 'Raleigh', high_school_type: 'public' }, row).eligible).toBe(true)
+})
+it('does not treat a forward school phrase reporting earlier awards as current eligibility', () => {
+  const row = { ...opportunity, description: 'Education support.', eligibility_text: 'Graduates of public high schools in Raleigh County received ten awards in 2024.' }
+  expect(normalizeOpportunity(row).schoolOriginRequirements).toHaveLength(0)
+  expect(evaluate({ high_school_county: 'Bradley', high_school_type: 'private' }, row).eligible).toBe(true)
+})
+it.each(['family', 'homeschool_family', 'household'])('does not use children education as the %s applicant history', primary_type => {
+  const parent = { ...profile, primary_type }
+  const child = sections({ high_school_county: 'Bradley', high_school_type: 'private' })
+  const result = evaluateEligibility(normalizeProfile(parent, child), normalizeOpportunity(opportunity))
+  expect(result.ineligibilityReasons.join(' ')).not.toMatch(/school/i)
+  expect(result.missingFields).toContain('basic_information.applicant_high_school_county')
+})
+it('honors explicitly applicant-scoped parent history rather than contradictory child education', () => {
+  const parent = { ...profile, primary_type: 'family' }
+  const data = sections({ high_school_county: 'Bradley', high_school_type: 'private' })
+  data.basic_information = { ...data.basic_information, applicant_high_school_county: 'Raleigh', applicant_high_school_type: 'public', applicant_high_school_graduation_year: 2000 }
+  const result = evaluateEligibility(normalizeProfile(parent, data), normalizeOpportunity(opportunity))
+  expect(result.ineligibilityReasons.join(' ')).not.toMatch(/school/i)
+  expect(result.missingFields.some(field => /high_school/.test(field))).toBe(false)
+})
+
+it('does not infer student status or a current education need from adult applicant history', () => {
+  const adult = { primary_type: 'senior', entity_type: 'individual', needs: ['housing'] }
+  const data = { basic_information: { applicant_high_school_county: 'Raleigh', applicant_high_school_type: 'public', applicant_high_school_graduation_year: 1970 } }
+  const norm = normalizeProfile(adult, data)
+  expect(norm.isStudent).toBe(false)
+  expect(norm.needCategories).toEqual(['housing'])
+  expect(norm.schoolOrigin.county).toBe('raleigh')
+})
+it.each(['individual', 'senior', 'veteran', 'disabled_adult', 'family'])('makes applicant-history inputs editable for %s without widening the student section', async primary_type => {
+  const { PROFILE_SCHEMA } = await import('../config/profileSchema.js')
+  const { SECTION_METADATA } = await import('../../src/config/sectionMetadata.js')
+  const { sectionAppliesToProfileType, fieldAppliesToProfileType } = await import('../../shared/profileSectionApplicability.js')
+  const adult = { primary_type }
+  for (const suffix of ['county', 'state', 'type', 'graduation_year']) {
+    const name = `applicant_high_school_${suffix}`
+    const input = SECTION_METADATA.basic_information.fields.find(field => field.name === name)
+    expect(input, name).toBeTruthy()
+    expect(fieldAppliesToProfileType(input, adult)).toBe(true)
+    expect(input.scored).toBe(false)
+    expect(PROFILE_SCHEMA.basic_information.fields[name]?.scored).toBe(false)
+  }
+  expect(sectionAppliesToProfileType(SECTION_METADATA.education, adult)).toBe(false)
+})
+it('direct parent callers never use a child school record as a known applicant contradiction', async () => {
+  const { makeDecision } = await import('../services/matchEngine.js')
+  const result = makeDecision(90, { ...profile, primary_type: 'family' }, opportunity, null, null, null, sections({ high_school_county: 'Bradley', high_school_type: 'private' }))
+  expect(result.decision).toBe('REVIEW')
+})
+
+it('does not credit a parent with a child school history that happens to match', () => {
+  const parent = { ...profile, primary_type: 'family' }
+  const child = sections({ high_school_county: 'Raleigh', high_school_type: 'public' })
+  const result = evaluateEligibility(normalizeProfile(parent, child), normalizeOpportunity(opportunity))
+  expect(result.eligible).toBe('maybe')
+  expect(result.missingFields).toContain('basic_information.applicant_high_school_county')
+})
+it('does not complete a partially stated parent history with child school facts', () => {
+  const parent = { ...profile, primary_type: 'homeschool_family' }
+  const data = sections({ high_school_county: 'Raleigh', high_school_type: 'public' })
+  data.basic_information = { applicant_high_school_county: 'Raleigh' }
+  const result = evaluateEligibility(normalizeProfile(parent, data), normalizeOpportunity(opportunity))
+  expect(result.eligible).toBe('maybe')
+  expect(result.missingFields).toContain('basic_information.applicant_high_school_type')
+  expect(result.missingFields).toContain('basic_information.applicant_high_school_graduation_year')
+})
+it('preserves an adult legacy school record when new applicant fields contain only defaults', () => {
+  const adult = { ...profile, primary_type: 'veteran' }
+  const data = sections({ high_school_county: 'Raleigh', high_school_type: 'public' })
+  data.basic_information = { applicant_high_school_county: '', applicant_high_school_state: '', applicant_high_school_type: '', applicant_high_school_graduation_year: null }
+  const norm = normalizeProfile(adult, data)
+  expect(norm.schoolOrigin.county).toBe('raleigh')
+  expect(evaluateEligibility(norm, normalizeOpportunity(opportunity)).missingFields.some(field => /high_school/.test(field))).toBe(false)
 })

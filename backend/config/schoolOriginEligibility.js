@@ -1,12 +1,13 @@
 /** Source-declared school-origin restrictions, never inferred from residence. */
 import { normalizeStateCode } from './profileFactTimeline.js'
+import { isStudentProfileType } from '../../shared/profileSectionApplicability.js'
 
 const SOURCE_FIELDS = Object.freeze(['eligibility_text', 'eligibility_bullets', 'description', 'summary'])
 const SCHOOL_COUNTY = /\b(?:graduates?\s+(?:of|from)|graduated\s+from)\s+(?:(?:a|an|the|any)\s+)?(?:(public|private)\s+)?high[- ]schools?\s+(?:in|within)\s+(?:the\s+)?([a-z][a-z .'-]{0,70}?)\s+County\b/gi
 const COUNTY_GRADUATES = /\bfor\s+([a-z][a-z .'-]{0,70}?)\s+County(?:\s*,\s*([a-z]+(?:\s+[a-z]+){0,2}?))?\s+(?:(public|private)\s+)?high[- ]school\s+graduates?\b/gi
 const HISTORICAL = /\b(?:was|were|previous(?:ly)?|formerly|last\s+year|past\s+recipient|donor|founder)\b/i
 const NONEXCLUSIVE = /\b(?:not|never|preference|prefer(?:red|ence)?|priority|may|regardless|including|such\s+as)\b/i
-const REQUIRED = /\b(?:only|must\s+(?:be|have)|required\s+to\s+(?:be|have)|(?:restricted|limited|open|available|awarded|offered)\s+to|eligible\s+if\s+(?:they|you)(?:\s+are)?)\s*(?:(?:a|an|the|any)\s+)?$/i
+const REQUIRED = /\b(?:(?:is|are)\s+for|only|must\s+(?:be|have)|required\s+to\s+(?:be|have)|(?:restricted|limited|open|available|awarded|offered)\s+to|eligible\s+if\s+(?:they|you)(?:\s+are)?)\s*(?:(?:a|an|the|any)\s+)?$/i
 const REVERSE_SUBJECT = /^\s*(?:(?:the|a|this)\s+)?(?:scholarship|award|program|fund)s?\s+(?:(?:is|are|will\s+be)\s+)?$/i
 const APPLICANT_RELATIVE = /\bonly\s+(?:applicants?|students?|candidates?|recipients?|individuals?|people)\s+(?:who|that)\s+(?:have\s+)?$/i
 const APPLICANT_MANDATE = /\b(?:applicants?|students?|candidates?|recipients?|individuals?|you)\s+(?:must|shall|are\s+required\s+to)\s+(?:be|have)\s+([^.!?;]{0,180})$/i
@@ -31,12 +32,26 @@ export function schoolOriginPeriod(now = new Date()) {
 function graduationCompleted(year, now = new Date()) {
   return Boolean(year && (year < now.getUTCFullYear() || (year === now.getUTCFullYear() && now.getUTCMonth() >= 6)))
 }
-export function normalizeSchoolOrigin(sections) {
+export function normalizeSchoolOrigin(sections, profileOrType = null) {
+  const rawType = typeof profileOrType === 'string' ? profileOrType
+    : profileOrType?.primary_type ?? profileOrType?.profile_type ?? profileOrType?.applicant_type ?? ''
+  const household = /famil|household/i.test(rawType)
+  const student = !rawType || isStudentProfileType(rawType)
   const section = objectValue(sections?.education ?? sections?.education_information ?? sections?.student)
-  const education = objectValue(section.answers ?? section)
+  const legacy = objectValue(section.answers ?? section)
+  const basicSection = objectValue(sections?.basic_information ?? sections?.basic_info)
+  const basic = objectValue(basicSection.answers ?? basicSection)
+  const applicant = Object.fromEntries(['county', 'state', 'type', 'graduation_year'].map(suffix =>
+    [`high_school_${suffix}`, basic[`applicant_high_school_${suffix}`]]))
+  const populated = block => Object.values(block).some(value => value !== null && value !== undefined && String(value).trim() !== '')
+  const education = household ? applicant : student
+    ? (populated(Object.fromEntries(Object.entries(legacy).filter(([key]) => key.startsWith('high_school_')))) ? legacy : applicant)
+    : (populated(applicant) ? applicant : legacy)
+  const fieldPrefix = student && !household ? 'education.high_school_' : 'basic_information.applicant_high_school_'
   const type = String(education.high_school_type ?? '').trim().toLowerCase()
   const year = Number(education.high_school_graduation_year)
   return {
+    fieldPrefix,
     county: countyName(education.high_school_county),
     state: normalizeStateCode(education.high_school_state),
     type: ['public', 'private'].includes(type) ? type : null,
@@ -99,7 +114,7 @@ export function schoolOriginRequirements(row) {
         const subjectBound = candidate.reverse
           ? (field.startsWith('eligibility_') && !before.trim()) || REVERSE_SUBJECT.test(before)
           : Boolean(applicant) || standaloneBullet || REQUIRED.test(before)
-        if (!subjectBound || NONEXCLUSIVE.test(qualifierContext) || historical || (candidate.reverse && HISTORICAL_REPORT_SUFFIX.test(after)) || SOFT_SCHOOL_SUFFIX.test(after) || SOFT_SCHOOL_SUFFIX.test(stateSuffix.remainder) || WIDENED.test(after) || WIDENED.test(stateSuffix.remainder)) continue
+        if (!subjectBound || NONEXCLUSIVE.test(qualifierContext) || historical || (HISTORICAL_REPORT_SUFFIX.test(after) || HISTORICAL_REPORT_SUFFIX.test(stateSuffix.remainder)) || SOFT_SCHOOL_SUFFIX.test(after) || SOFT_SCHOOL_SUFFIX.test(stateSuffix.remainder) || WIDENED.test(after) || WIDENED.test(stateSuffix.remainder)) continue
         const county = countyName(candidate.county)
         if (county) requirements.push({ county, state: candidate.reverse ? candidate.state : stateSuffix.state, type: candidate.type?.toLowerCase() ?? null, field, evidence: sentence.trim() })
       }
@@ -111,18 +126,19 @@ export function schoolOriginRequirements(row) {
 /** A requirement can be unconfirmed without asserting that the applicant fails it. */
 export function evaluateSchoolOrigin(origin, requirements, now = new Date()) {
   const ineligibilityReasons = [], missingFields = []
+  const fieldPrefix = origin?.fieldPrefix ?? 'education.high_school_'
   for (const rule of requirements ?? []) {
     const year = origin?.graduationYear
     const completed = graduationCompleted(year, now)
-    if (!completed) missingFields.push('education.high_school_graduation_year')
-    if (!origin?.county) missingFields.push('education.high_school_county')
+    if (!completed) missingFields.push(fieldPrefix + 'graduation_year')
+    if (!origin?.county) missingFields.push(fieldPrefix + 'county')
     else if (completed && origin.county !== rule.county) ineligibilityReasons.push(`Requires graduation from a high school in ${rule.county} County; declared high school is in ${origin.county} County`)
     if (rule.state) {
-      if (!origin?.state) missingFields.push('education.high_school_state')
+      if (!origin?.state) missingFields.push(fieldPrefix + 'state')
       else if (completed && origin.state !== rule.state) ineligibilityReasons.push(`Requires high-school graduation in ${rule.state}; declared high school is in ${origin.state}`)
     }
     if (rule.type) {
-      if (!origin?.type) missingFields.push('education.high_school_type')
+      if (!origin?.type) missingFields.push(fieldPrefix + 'type')
       else if (completed && origin.type !== rule.type) ineligibilityReasons.push(`Requires graduation from a ${rule.type} high school; declared school type is ${origin.type}`)
     }
   }

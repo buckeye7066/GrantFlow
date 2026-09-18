@@ -9,6 +9,7 @@ import {
   NONPROFIT_COMPLIANCE_TYPES,
   SMALL_BUSINESS_DETAILS_TYPES,
   STUDENT_TYPES,
+  PEOPLE_TYPES,
   MEDICAL_PROFILE_TYPES,
   ALL_PERSON_TYPES,
   ALL_ORG_TYPES,
@@ -75,6 +76,42 @@ export const SECTION_METADATA = {
         "label": "Secondary address",
         "format": "json",
         "help": "Optional second address (e.g. home vs. school/campus, deployed/duty station, second residence). Shape: { line1, city, state, zip, type }. Its state/ZIP are included in geo matching and local crawls alongside the primary address."
+      },
+      {
+        "name": "applicant_high_school_county",
+        "label": "Applicant high school county",
+        "format": "text",
+        "scored": false,
+        "applies_to": PEOPLE_TYPES,
+        "help": "The applicant's own high-school county, not a child's school, college, or current residence. Eligibility only; NOT scored."
+      },
+      {
+        "name": "applicant_high_school_state",
+        "label": "Applicant high school state",
+        "format": "text",
+        "scored": false,
+        "applies_to": PEOPLE_TYPES,
+        "help": "State of the applicant's own high school. Leave blank when unknown. Eligibility only; NOT scored."
+      },
+      {
+        "name": "applicant_high_school_type",
+        "label": "Applicant high school type",
+        "format": "enum",
+        "scored": false,
+        "applies_to": PEOPLE_TYPES,
+        "options": [
+          "public",
+          "private"
+        ],
+        "help": "The applicant's own public or private high school, not their child's. Leave blank when unknown. NOT scored."
+      },
+      {
+        "name": "applicant_high_school_graduation_year",
+        "label": "Applicant high school graduation year",
+        "format": "text",
+        "scored": false,
+        "applies_to": PEOPLE_TYPES,
+        "help": "Four-digit year the applicant graduated from their own high school. Do not enter a child's graduation year. NOT scored."
       },
       {
         "name": "academic_status",

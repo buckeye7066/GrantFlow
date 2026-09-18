@@ -1947,7 +1947,7 @@ export function normalizeProfile(rawProfile, sections = null, signals = null, do
     affiliations,
     geographicQualifiers,
     // Structured signal groups
-    schoolOrigin: normalizeSchoolOrigin(profileSections),
+    schoolOrigin: normalizeSchoolOrigin(profileSections, rawType),
     academics,
     financial,
     occupation,
