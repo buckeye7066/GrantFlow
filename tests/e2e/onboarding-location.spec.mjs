@@ -40,3 +40,48 @@ for (const viewport of [{ width: 1280, height: 800 }, { width: 390, height: 844 
  expect(pageErrors).toEqual([])
  })
 }
+
+// Delay a real backend lookup, not a mocked geography response. A changed ZIP
+// must not be submitted together with the previous ZIP's location.
+test('Foundation cannot submit stale geography while the new ZIP lookup is pending', async ({ page }) => {
+  await page.goto(`${appBase}/start`, { waitUntil: 'domcontentloaded' })
+  const intro = page.getByRole('dialog').filter({ hasText: 'Welcome to GrantFlow!' })
+  await intro.getByRole('button', { name: 'Skip for now', exact: true }).click()
+  await page.getByRole('button', { name: /english/i }).click()
+  await page.getByRole('button', { name: /let.s do it/i }).click()
+  await page.getByRole('button', { name: /myself or my family/i }).click()
+  await page.locator('#zip').fill('37205')
+  await expect(page.locator('#city')).toHaveValue('Nashville')
+  await expect(page.locator('#county')).toHaveValue('Davidson')
+
+  let releaseLookup
+  let markLookupStarted
+  const lookupHeld = new Promise((resolve) => { releaseLookup = resolve })
+  const lookupStarted = new Promise((resolve) => { markLookupStarted = resolve })
+  const submitted = []
+  page.on('request', (request) => {
+    if (new URL(request.url()).pathname === '/api/onboarding/answer' && request.method() === 'POST') {
+      submitted.push(request.postDataJSON())
+    }
+  })
+  await page.route('**/api/onboarding/zip/37312', async (route) => {
+    markLookupStarted()
+    await lookupHeld
+    await route.continue()
+  })
+  try {
+    await page.locator('#zip').fill('37312')
+    await lookupStarted
+    await expect(page.getByRole('button', { name: 'Continue', exact: true })).toBeDisabled({ timeout: 2000 })
+    await page.locator('#zip').press('Enter')
+    expect(submitted).toEqual([])
+  } finally {
+    releaseLookup()
+  }
+  await expect(page.locator('#city')).toHaveValue('Cleveland')
+  await expect(page.locator('#county')).toHaveValue('Bradley')
+  await page.getByRole('button', { name: 'Continue', exact: true }).click()
+  await expect(page.getByRole('button', { name: /just me \(single adult\)/i })).toBeVisible()
+  expect(submitted).toHaveLength(1)
+  expect(submitted[0].answer).toEqual({ zip: '37312', state: 'TN', city: 'Cleveland', county: 'Bradley' })
+})
