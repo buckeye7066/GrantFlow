@@ -6,13 +6,14 @@ const SCHOOL_COUNTY = /\b(?:graduates?\s+(?:of|from)|graduated\s+from)\s+(?:(?:a
 const COUNTY_GRADUATES = /\bfor\s+([a-z][a-z .'-]{0,70}?)\s+County(?:\s*,\s*([a-z]+(?:\s+[a-z]+){0,2}?))?\s+(?:(public|private)\s+)?high[- ]school\s+graduates?\b/gi
 const HISTORICAL = /\b(?:was|were|previous(?:ly)?|formerly|last\s+year|past\s+recipient|donor|founder)\b/i
 const NONEXCLUSIVE = /\b(?:not|never|preference|prefer(?:red|ence)?|priority|may|regardless|including|such\s+as)\b/i
-const REQUIRED = /\b(?:must\s+(?:be|have)|required\s+to\s+(?:be|have)|(?:restricted|limited|open|available|awarded|offered)\s+to|eligible\s+if\s+(?:they|you)(?:\s+are)?)\s*(?:(?:a|an|the|any)\s+)?$/i
+const REQUIRED = /\b(?:only|must\s+(?:be|have)|required\s+to\s+(?:be|have)|(?:restricted|limited|open|available|awarded|offered)\s+to|eligible\s+if\s+(?:they|you)(?:\s+are)?)\s*(?:(?:a|an|the|any)\s+)?$/i
 const REVERSE_SUBJECT = /^\s*(?:(?:the|a|this)\s+)?(?:scholarship|award|program|fund)s?\s+(?:(?:is|are|will\s+be)\s+)?$/i
 const CURRENT_BINDING = /\b(?:is|are|will)\b[^.!?;]*$/i
+const SOFT_SCHOOL_SUFFIX = /^\s*[,;:]?\s*(?:(?:receive|have|get|are\s+given|will\s+receive)\s+(?:a\s+)?(?:preference|priority)|(?:are\s+|will\s+be\s+)?(?:preferred|favou?red)|(?:is|are)\s+(?:not\s+(?:required|mandatory)|optional))\b/i
 const WIDENED = /^\s*(?:,\s*)?(?:or\b|(?:and\s+)?(?:surrounding|adjacent|neighbou?ring|other|nearby)\b|(?:and|,|\/|&)\s*[a-z .'-]+\s+count(?:y|ies)\b)/i
 const unknown = value => !value || /^(?:unknown|unspecified|not specified|n\/?a|none|prefer not to say)$/i.test(value)
 const countyName = value => {
-  const text = typeof value === 'string' ? value.trim().replace(/\s+county$/i, '').trim().toLowerCase() : ''
+  const text = typeof value === 'string' ? value.trim().replace(/\s+/g, ' ').replace(/\s+(?:county|co)\.?$/i, '').trim().toLowerCase() : ''
   return !unknown(text) && /^[a-z][a-z .'-]{0,70}$/.test(text) ? text : null
 }
 function objectValue(value) {
@@ -81,7 +82,7 @@ export function schoolOriginRequirements(row) {
         const subjectBound = candidate.reverse
           ? !before.trim() || REVERSE_SUBJECT.test(before)
           : standaloneBullet || REQUIRED.test(before)
-        if (!subjectBound || NONEXCLUSIVE.test(before) || historical || WIDENED.test(after) || WIDENED.test(stateSuffix.remainder)) continue
+        if (!subjectBound || NONEXCLUSIVE.test(before) || historical || SOFT_SCHOOL_SUFFIX.test(after) || SOFT_SCHOOL_SUFFIX.test(stateSuffix.remainder) || WIDENED.test(after) || WIDENED.test(stateSuffix.remainder)) continue
         const county = countyName(candidate.county)
         if (county) requirements.push({ county, state: candidate.reverse ? candidate.state : stateSuffix.state, type: candidate.type?.toLowerCase() ?? null, field, evidence: sentence.trim() })
       }

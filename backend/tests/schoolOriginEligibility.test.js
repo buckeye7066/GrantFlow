@@ -183,3 +183,27 @@ it('does not apply beneficiary school history to an organizational applicant', (
   expect(missing(result)).toEqual([])
   expect(result.ineligibilityReasons.join(' ')).not.toMatch(/school/i)
 })
+
+it.each([
+  'Graduates of public high schools in Raleigh County receive preference.',
+  'Graduates of public high schools in Raleigh County are preferred, but all students may apply.',
+  'Graduates of public high schools in Raleigh County, WV receive preference.',
+])('does not turn a trailing preference into exclusive eligibility: %s', eligibility_text => {
+  const row = { ...opportunity, description: 'Education assistance.', eligibility_text }
+  expect(missing(evaluate({}, row))).toEqual([])
+  expect(evaluate({ high_school_county: 'Bradley', high_school_type: 'private' }, row).eligible).toBe(true)
+})
+it('enforces explicit leading-only eligibility without misreading may-apply as optional', () => {
+  const row = { ...opportunity, description: 'Only graduates of public high schools in Raleigh County may apply.' }
+  expect(evaluate({ high_school_county: 'Bradley', high_school_type: 'public' }, row).eligible).toBe(false)
+  expect(evaluate({ high_school_county: 'Raleigh', high_school_type: 'private' }, row).eligible).toBe(false)
+  expect(evaluate({ high_school_county: 'Raleigh', high_school_type: 'public' }, row).eligible).toBe(true)
+  expect(missing(evaluate({}, row))).toContain('education.high_school_county')
+})
+it.each(['Raleigh Co.', 'Raleigh Co', '  Raleigh   COUNTY.  '])('canonicalizes harmless county suffix formatting: %s', high_school_county => {
+  expect(evaluate({ high_school_county, high_school_type: 'public' }).eligible).toBe(true)
+})
+it('keeps a mandatory school restriction when a later independent subject preference is stated', () => {
+  const row = { ...opportunity, description: 'Only graduates of public high schools in Raleigh County may apply; preference is given to science majors.' }
+  expect(evaluate({ high_school_county: 'Bradley', high_school_type: 'public' }, row).eligible).toBe(false)
+})
