@@ -94,24 +94,37 @@ const RED_FLAG = [
  * it blocks WITHOUT launching a browser — a policy that is only ever exercised
  * live is a policy nobody has actually tested.
  */
-export function classify(method, url, { allowPortalRead = false, allowedPortalHosts = [] } = {}) {
+export function classify(method, url, {
+  allowPortalRead = false, allowedPortalHosts = [], allowedProfileIds = [], auditOrigin = null, requestBody = null,
+} = {}) {
   const m = String(method || '').toUpperCase();
   if (m === 'GET' || m === 'HEAD' || m === 'OPTIONS') return { allow: true, why: 'read' };
-
-  const hit = MUTATION_ALLOWLIST.find((r) => r.method === m && r.pattern.test(url));
-  if (hit) return { allow: true, why: hit.why };
-
-  if (m === 'POST' && PORTAL_READ_PATTERN.test(url)) {
-    if (!allowPortalRead) {
-      return { allow: false, redFlag: false, why: 'portal reads not requested for this run' };
+  const deny = (why) => ({ allow: false, redFlag: RED_FLAG.some(re => re.test(String(url))), why });
+  let target;
+  try {
+    target = new URL(url);
+    if (!auditOrigin || target.origin !== new URL(auditOrigin).origin || target.username || target.password) {
+      return deny('mutation origin is outside the selected audit site');
     }
-    if (!allowedPortalHosts.length) {
-      return { allow: false, redFlag: false, why: 'no portal host was explicitly named' };
+  } catch { return deny('invalid or missing audit origin'); }
+  // Match only the actual endpoint, never a path embedded in a query string.
+  const apiPath = target.pathname.replace(/^\/grantflow(?=\/api\/)/, '');
+  const hit = MUTATION_ALLOWLIST.find(r => r.method === m && r.pattern.exec(apiPath)?.index === 0);
+  if (hit) return { allow: true, why: hit.why };
+  if (m === 'POST' && PORTAL_READ_PATTERN.exec(apiPath)?.index === 0) {
+    if (!allowPortalRead) return deny('portal reads not requested for this run');
+    if (!requestBody || typeof requestBody !== 'object' || Array.isArray(requestBody)
+      || Object.keys(requestBody).some(key => !['profileId', 'portalHost'].includes(key))) {
+      return deny('portal read requires an exact profile and host payload');
+    }
+    const profileId = typeof requestBody.profileId === 'string' ? requestBody.profileId : null;
+    const host = typeof requestBody.portalHost === 'string' ? requestBody.portalHost : null;
+    if (!profileId || !host || !allowedProfileIds.includes(profileId) || !allowedPortalHosts.includes(host)) {
+      return deny('portal read is outside the explicitly requested profile and host scope');
     }
     return { allow: true, why: 'read-only portal sync (explicitly requested)' };
   }
-
-  return { allow: false, redFlag: RED_FLAG.some((re) => re.test(url)) };
+  return deny('not on the allowlist');
 }
 
 export function isSuccessfulApiResponse(result) {
@@ -256,7 +269,7 @@ export function summarizeHamiltonPreflight(result) {
 
 // ---------------------------------------------------------------------------
 
-function parseArgs(argv) {
+export function parseArgs(argv) {
   const get = (flag, dflt = null) => {
     const i = argv.indexOf(flag);
     return i >= 0 && argv[i + 1] ? argv[i + 1] : dflt;
@@ -268,8 +281,8 @@ function parseArgs(argv) {
       .filter(Boolean);
   return {
     outDir: get('--out', path.join(process.cwd(), 'audit-out')),
-    profiles: csv('--profiles'),
-    portalHosts: csv('--portal-hosts'),
+    profiles: [...new Set(csv('--profiles'))],
+    portalHosts: [...new Set(csv('--portal-hosts').map(host => host.toLowerCase()))],
     portalReads: argv.includes('--portal-reads'),
     screenshots: !argv.includes('--no-screenshots'),
     headed: argv.includes('--headed'),
@@ -402,9 +415,16 @@ async function main() {
 
   await context.route('**/*', async (route) => {
     const req = route.request();
+    let requestBody = null;
+    if (req.method() === 'POST') {
+      try { requestBody = req.postDataJSON(); } catch { /* malformed portal bodies fail closed */ }
+    }
     const verdict = classify(req.method(), req.url(), {
       allowPortalRead,
       allowedPortalHosts: args.portalHosts,
+      allowedProfileIds: args.profiles,
+      auditOrigin: baseUrl,
+      requestBody,
     });
     if (verdict.allow) {
       if (req.method() !== 'GET') {

@@ -45,3 +45,28 @@ test('audit report distinguishes a read-only database role from an internal port
   assert.doesNotMatch(source, /No production row was created, changed, or deleted/)
   assert.match(source, /portal pulls can update internal/)
 })
+
+test('portal network policy binds exact origin, profile, host, and a valid request body', () => {
+  const origin = 'https://audit.example.invalid'
+  const url = origin + '/api/hamilton/portal-sync/read'
+  const opts = { auditOrigin: origin, allowPortalRead: true, allowedPortalHosts: ['portal.invalid'],
+    allowedProfileIds: ['synthetic-profile'], requestBody: { profileId: 'synthetic-profile', portalHost: 'portal.invalid' } }
+  assert.equal(audit.classify('POST', url, opts).allow, true)
+  assert.equal(audit.classify('POST', 'https://other.invalid/api/hamilton/portal-sync/read', opts).allow, false)
+  for (const requestBody of [null, {}, [], 'bad-json', { profileId: 'other', portalHost: 'portal.invalid' },
+    { profileId: 'synthetic-profile', portalHost: 'unrequested.invalid' },
+    { profileId: 'synthetic-profile', portalHost: 'portal.invalid', direction: 'write' }]) {
+    assert.equal(audit.classify('POST', url, { ...opts, requestBody }).allow, false)
+  }
+  assert.equal(audit.classify('POST', url, { ...opts, auditOrigin: null }).allow, false)
+  assert.equal(audit.classify('POST', origin + '/mutate?next=/api/auth/password/login', opts).allow, false)
+  assert.equal(audit.classify('POST', 'https://other.invalid/api/auth/password/login', opts).allow, false)
+  assert.equal(audit.classify('POST', origin + '/api/auth/password/login', opts).allow, true)
+})
+
+test('audit scope is normalized once so duplicate portal inputs cannot trigger duplicate pulls', () => {
+  assert.equal(typeof audit.parseArgs, 'function')
+  const args = audit.parseArgs(['--profiles', 'p1,p1, p2', '--portal-hosts', 'Tennessee.edu,tennessee.edu, portal.invalid', '--portal-reads'])
+  assert.deepEqual(args.profiles, ['p1', 'p2'])
+  assert.deepEqual(args.portalHosts, ['tennessee.edu', 'portal.invalid'])
+})
