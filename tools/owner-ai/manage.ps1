@@ -19,10 +19,10 @@ function Invoke-SubscriptionLogin([string]$Provider) {
     if ($Provider -eq 'claude') {
       $env:CLAUDE_CONFIG_DIR = Join-Path $env:LOCALAPPDATA 'GrantFlow\subscriptions\claude'
       $env:CLAUDE_CODE_SAFE_MODE = '1'
-      & claude.exe auth login
+      & claude.exe auth login --claudeai
     } else {
       $env:CODEX_HOME = Join-Path $env:LOCALAPPDATA 'GrantFlow\subscriptions\codex'
-      & codex.exe login
+      & codex.exe -c forced_login_method=chatgpt login
     }
   } finally {
     Get-ChildItem Env: | Where-Object { -not $savedEnvironment.ContainsKey($_.Name) } | ForEach-Object { Remove-Item -LiteralPath ('Env:' + $_.Name) }

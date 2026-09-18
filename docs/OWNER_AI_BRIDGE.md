@@ -52,43 +52,20 @@ Only the unmodified native CLI owns provider credentials. The bridge does not re
 copy, upload or configure token files. Subscription quotas and provider terms apply;
 this is not unlimited service and must never route other users through the owner.
 
-## Integration contract for coordinator
+## Shared gateway integration
 
-Import `tryOwnerSubscription` from `backend/services/ownerAi/ownerAiBroker.js` at
-the top of both existing fallback gateways. Pass `{ format: 'json' | 'text', system,
-prompt, maxTokens, signal, timeoutMs }`. Allocate a bounded subscription slice from
-the gateway's existing absolute deadline. On null, calculate **remaining** API
-time from that original deadline; never reset the deadline or turn zero into a
-default. Return a successful bridge result directly, preserving provider, model,
-`billing_mode: 'subscription'`, model_source when present, raw, usage, and json/text. No gateway edits are
-included here, by assignment. Do not wrap jobs/schedulers in a fabricated scope.
+Both text and JSON entry points use the same owner-aware gateway. Only a live,
+canonical owner request may reach the broker. The subscription slice is bounded
+by half the original request deadline and OWNER_AI_SUBSCRIPTION_TIMEOUT_MS
+(default 10000 ms, maximum 60000 ms). An unavailable worker returns immediately.
+A subscription failure leaves only the original remaining budget for paid and
+free routes; closing the owner's response cancels all later attempts too.
+Successful receipts preserve provider, model, billing_mode, model_source and usage.
+Customer, other-admin and unattended scheduler requests never acquire this scope.
+Do not wrap jobs or schedulers in a fabricated owner context.
 
-The canonical request-context middleware establishes scope automatically. It
-requires resolved real-user identity, admin status, exact trusted stored email
-matching trimmed/lowercased configured AGENT_CONTROL_ADMIN_EMAIL (or ADMIN_EMAIL
-when absent); trusted ctx.email itself is not normalized here. It requires exact
-OWNER_AI_USER_ID if configured. Service/profile tokens and other admins fail.
-Response finish/close revokes the scope and cancels pending work.
-
-Configure server OWNER_AI_BRIDGE_ENABLED=true and a dedicated cryptographically
-random OWNER_AI_BRIDGE_TOKEN (at least 32 characters; use 32 random bytes encoded
-as hex). It is separate from all admin/service secrets. Environment examples are
-left to the coordinator. Keep this channel on **one persistent backend process**:
-jobs and heartbeats are process-local, so multi-instance/serverless routing without
-affinity can lose availability. There are no database migrations or durable prompts.
-
-The worker router `/api/owner-ai/worker` owns a 384 KiB authenticated JSON parser
-before the general parser and before user identity middleware. It grants no user
-or admin authority. POST /poll advertises readiness and claims one job; POST /result
-requires that job's random lease. An active-job poll checks cancellation. One job
-total is allowed; concurrent calls immediately fall back. Heartbeat freshness is
-15 seconds. Jobs last at most 120 seconds and no longer than the caller budget.
-Completion/cancel/timeout releases all broker references to prompts/results.
-Worker memory is transient (JavaScript cannot guarantee physical memory zeroing).
-
-GET `/api/admin/owner-ai/status` uses the same exact owner predicate and returns
-only readiness/order. Its card appears in the existing Admin screen only after
-this owner-only endpoint authorizes it. Customers/other admins see no card.
+Worker metadata is cached for no more than 30 seconds between heartbeats. Every
+actual execution revalidates native authentication before sending a prompt.
 
 ## Home installation (coordinator performs after review/deploy)
 
@@ -139,3 +116,13 @@ the same strict controls. Those inference calls were not repeated in this follow
 This is bounded regression evidence, not universal prompt-injection immunity.
 Claude remains pending genuine login. Installation, cloud integration and any
 end-to-end funding outcome remain unverified.
+
+## Integration verification, September 18, 2026
+
+The integrated gateway passed 110 focused tests, including subscription-first
+routing and cancellation, after four new gateway cases failed before wiring.
+The native worker completed a real fixed-JSON request via ChatGPT Pro using
+gpt-6-astra in 7793 ms, including metadata probes, with billing_mode subscription
+and explicit_cli_argument model provenance. No API key entered the CLI child.
+This is local worker proof, not a live cloud request, deployment or acceptance
+benchmark claim. Claude subscription login remains unverified.

@@ -2,6 +2,24 @@ import { setTimeout as delay } from 'node:timers/promises'
 import { pathToFileURL } from 'node:url'
 import { executeJob, probeProvider } from './officialCli.mjs'
 
+// Heartbeats do not spawn native CLIs repeatedly. Each job still rechecks auth.
+export function createProviderStatusCache({ now = Date.now, probe = probeProvider } = {}) {
+  let checkedAt = -Infinity
+  let providers = { codex: 'unavailable', claude: 'unavailable' }
+  return {
+    async read(options = {}) {
+      const time = now()
+      if (time >= checkedAt && time - checkedAt < 30000) return { ...providers }
+      const states = await Promise.all(['codex', 'claude'].map(async provider => {
+        try { return await probe(provider, options) } catch { return 'unavailable' }
+      }))
+      providers = { codex: states[0], claude: states[1] }
+      checkedAt = now()
+      return { ...providers }
+    },
+  }
+}
+
 export function bridgeConfig(env = process.env) {
   const url = new URL(env.GRANTFLOW_OWNER_AI_URL)
   if (url.protocol !== 'https:' || url.username || url.password || url.search || url.hash || url.pathname !== '/') throw new Error('invalid_configuration')
@@ -10,6 +28,7 @@ export function bridgeConfig(env = process.env) {
 }
 export async function runBridge({ env = process.env, signal } = {}) {
   const { url, token } = bridgeConfig(env)
+  const providerStatus = createProviderStatusCache()
   async function post(route, body, requestSignal = signal) {
     const response = await fetch(new URL('/api/owner-ai/worker/' + route, url), {
       method: 'POST', redirect: 'error', signal: AbortSignal.any([AbortSignal.timeout(5000), ...(requestSignal ? [requestSignal] : [])]),
@@ -28,8 +47,7 @@ export async function runBridge({ env = process.env, signal } = {}) {
   while (!signal?.aborted) {
     try {
       const probeSignal = AbortSignal.any([AbortSignal.timeout(10000), ...(signal ? [signal] : [])])
-      const states = await Promise.all(['codex', 'claude'].map(provider => probeProvider(provider, { env, signal: probeSignal })))
-      const providers = { codex: states[0], claude: states[1] }
+      const providers = await providerStatus.read({ env, signal: probeSignal })
       const { job } = await post('poll', { providers })
       if (job) {
         if (!Number.isFinite(job.timeoutMs) || job.timeoutMs <= 0 || job.timeoutMs > 120000 ||
