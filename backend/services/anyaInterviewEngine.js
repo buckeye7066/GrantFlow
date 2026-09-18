@@ -127,7 +127,8 @@ function appendTags(state, values) {
 function setPrimaryType(state, rawType) {
   const next = clone(state)
   next.patch.primary_type = canonicalizeProfileTypeId(rawType) || rawType
-  return next
+  // Persist the applicant's explicit choice separately from legacy defaults.
+  return mergeSection(next, 'basic_information', { profile_type: next.patch.primary_type })
 }
 
 function setEmail(state, email) {
@@ -376,6 +377,7 @@ export const QUESTIONS = Object.freeze({
       let next = appendTags(state, canonical)
       next = appendToList(next, 'programs_services', 'focus_areas', canonical)
       next = appendToList(next, 'programs_services', 'keywords', canonical)
+      next = appendToList(next, 'financial_information', 'assistance_needs', canonical)
       // Surface housing intent on the housing section so the matching engine
       // can read it directly without re-reading tags.
       if (canonical.includes('housing')) {

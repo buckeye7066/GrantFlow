@@ -1,0 +1,104 @@
+name: Foundation user journey
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'src/**'
+      - 'backend/**'
+      - 'shared/**'
+      - 'tests/**'
+      - 'scripts/**'
+      - 'package*.json'
+      - '*config*'
+      - '.github/workflows/foundation-journey-repair.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'src/**'
+      - 'backend/**'
+      - 'shared/**'
+      - 'tests/**'
+      - 'scripts/**'
+      - 'package*.json'
+      - '*config*'
+      - '.github/workflows/foundation-journey-repair.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: foundation-user-journey-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  foundation-journey:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: grantflow_foundation_journey
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      CI: 'true'
+      NODE_ENV: development
+      SMOKE_MODE: 'true'
+      VITE_SMOKE_MODE: 'true'
+      E2E_BASE_PATH: '/'
+      VITE_APP_BASE: '/'
+      DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/grantflow_foundation_journey
+      DB_PROVIDER: postgres
+      DB_DIALECT: postgres
+      MIGRATE_ON_BOOT: 'false'
+      DB_AUTO_MIGRATE: 'false'
+      DISABLE_BACKGROUND_SERVICES: 'true'
+      ANYA_AUTONOMOUS_ENABLED: 'false'
+      NATIONAL_PROGRAMS_CRAWLER_ENABLED: 'false'
+      ALLOW_EPHEMERAL_UPLOADS: 'true'
+      UPLOADS_DIR: /tmp/grantflow-foundation-journey-uploads
+      AUTH_JWT_SECRET: grantflow-ci-foundation-journey-not-for-production
+      ADMIN_TOKEN: grantflow-ci-foundation-journey-admin-not-for-production
+      RUNTIME_SECRETS_KEY: '4444444444444444444444444444444444444444444444444444444444444444'
+    steps:
+      - name: Checkout candidate
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Set up repository Node runtime
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 24.19.0
+          cache: npm
+      - name: Install locked dependencies
+        run: npm ci --include=dev --include=optional
+      - name: Check focused identity and location regression contracts
+        run: |
+          node scripts/pin-signal-version.mjs --check
+          node --test tests/unit/onboarding-explicit-profile-type.test.mjs tests/unit/resolve-effective-profile-type.test.mjs
+          node scripts/run-vitest-isolated.mjs run src/pages/Start.location.test.jsx backend/tests/profileSignalVersion.test.js
+      - name: Install Chromium
+        run: node ./node_modules/playwright/cli.js install chromium --with-deps
+      - name: Follow Foundation signup and location regression journeys
+        run: |
+          mkdir -p "$UPLOADS_DIR"
+          node ./node_modules/playwright/cli.js test -c tests/e2e/playwright.config.mjs foundation- --workers=1 --retries=0 --max-failures=1
+      - name: Retain isolated browser evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: foundation-journey-${{ github.sha }}
+          path: |
+            test-results
+            playwright-report
+          retention-days: 7
+          if-no-files-found: ignore

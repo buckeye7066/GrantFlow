@@ -56,7 +56,8 @@
 // proofs gain the block on the boot drain.
 // 2026-09-17 (email Phase 2): known non-application targets cannot authorize
 // ACCEPT. Rescore stored pairs and their proofs through the existing boot drain.
-export const PROFILE_SIGNAL_VERSION = '2026.09.17-4'
+// Explicit personal onboarding choices outrank display-name inference.
+export const PROFILE_SIGNAL_VERSION = '2026.09.18-1'
 
 /** Repo-relative files whose content decides what the engine believes about a profile. */
 export const PROFILE_SIGNAL_DERIVATION_FILES = Object.freeze([
@@ -90,6 +91,6 @@ export const PROFILE_SIGNAL_DERIVATION_FILES = Object.freeze([
  * sha256 over the LF-normalized concatenation of the files above, pinned by
  * `scripts/pin-signal-version.mjs`. The test recomputes it.
  */
-export const PROFILE_SIGNAL_DERIVATION_HASH = 'cf7eb5732b1cb4bd08c6994c8e513ecc36202ba28a4609d4f3148fe072cf876b'
+export const PROFILE_SIGNAL_DERIVATION_HASH = '59d1ad614c0e08a0a09e330f14ec803d5745f9db9d51c50a533d7dda6dedd808'
 
 export default { PROFILE_SIGNAL_VERSION, PROFILE_SIGNAL_DERIVATION_FILES, PROFILE_SIGNAL_DERIVATION_HASH }
