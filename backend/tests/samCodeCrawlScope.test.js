@@ -68,10 +68,18 @@ describe('the crawl reads THIS repository, not other agents\' worktrees', () => 
 
     expect(result.coverage.source_files_scanned).toBeGreaterThan(1000)
     expect(result.coverage.source_files_scanned).toBeLessThan(10_000)
-    expect(result.coverage.excluded_directory_names).toContain('node_modules')
+    // A Windows worktree may share dependencies through a junction. The
+    // crawler skips links without counting them as visited directories.
+    const dependencies = await fs.lstat(path.join(process.cwd(), 'node_modules'))
+    expect(dependencies.isDirectory() || dependencies.isSymbolicLink()).toBe(true)
+    if (dependencies.isDirectory()) {
+      expect(result.coverage.excluded_directory_names).toContain('node_modules')
+    }
 
     for (const finding of result.findings) {
-      const firstSegment = String(finding.file || '').split(/[\\/]/)[0]
+      const segments = String(finding.file || '').split(/[\\/]/)
+      expect(segments, 'dependency file leaked into a finding').not.toContain('node_modules')
+      const firstSegment = segments[0]
       expect(firstSegment.startsWith('.'), `dot-dir path leaked into a finding: ${finding.file}`).toBe(false)
     }
   }, 300_000)

@@ -1,3 +1,5 @@
+import { resolveApplicationUrl, readApplicationTargetRefusal } from '../../shared/applicationTarget.js'
+
 /**
  * Discover catalog display keep rules.
  *
@@ -38,4 +40,42 @@ export function keepDiscoverCatalogRow(opp, minScoreFloor, recoveryApplied) {
     recoveryApplied &&
       (opp?.threshold_relaxed || opp?.eligibility_relaxed || opp?.geo_expanded),
   )
+}
+
+/** The catalog-to-Discover boundary consumed by SearchResults. */
+export function mapDiscoverCatalogRow(opp) {
+  return {
+        id: opp.id,
+        funding_opportunity_id: opp.funding_opportunity_id,
+        opportunity_id: opp.opportunity_id,
+        source_id: opp.source_id,
+        fingerprint: opp.fingerprint,
+        canonical_opportunity_key: opp.canonical_opportunity_key,
+        title: opp.title,
+        program_name: opp.title,
+        sponsor: opp.sponsor || opp.funder,
+        application_url: resolveApplicationUrl(opp),
+        ...(readApplicationTargetRefusal(opp) ? { application_target: readApplicationTargetRefusal(opp) } : {}),
+        source_url: opp.source_url ?? opp.url ?? null,
+        url: resolveApplicationUrl(opp) ?? opp.source_url ?? opp.url,
+        deadline: opp.deadline,
+        deadlineAt: opp.deadline,
+        description: opp.description,
+        descriptionMd: opp.description,
+        match_score: opp.match_score,
+        match: opp.match_score,
+        match_decision: opp.match_decision ?? opp.decision ?? null,
+        opportunity_kind: opp.opportunity_kind ?? opp.kind ?? null,
+        matched_fields: opp.match_reasons ?? [],
+        matchReasons: opp.match_reasons ?? [],
+        source: opp.source || 'catalog',
+        record_origin: opp.record_origin ?? null,
+        usable_for_housing: opp.usable_for_housing ?? false,
+        refund_potential: opp.refund_potential ?? false,
+        funding_category: opp.funding_category ?? null,
+        is_directory: Boolean(opp.is_directory) || isDirectoryDiscoverRow(opp),
+        threshold_relaxed: opp.threshold_relaxed ?? false,
+        eligibility_relaxed: opp.eligibility_relaxed ?? false,
+        geo_expanded: opp.geo_expanded ?? false,
+  }
 }

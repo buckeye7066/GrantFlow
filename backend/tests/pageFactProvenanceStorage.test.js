@@ -402,3 +402,43 @@ describe('affirmative tuition amounts survive OS normalization and persistence',
     }
   })
 })
+
+import { createMemoryStore } from '../crawler-os/index.js'
+import { runWebDiscoveryLane } from '../crawler-os/webLane.js'
+import { extractOpportunitiesFromPage } from '../services/webGrantExtractor.js'
+it('retains rejected-target provenance through extraction, the real web-lane store, and live catalog persistence', async () => {
+  const pageUrl = 'https://fixture-foundation.org/award'
+  const rejectedUrl = 'https://alpha.grantable.co/login?ref=apply'
+  const html = '<main><h1>Ohio Housing and Utility Assistance</h1><p>Fixture Housing Foundation provides housing and utility assistance for Ohio residents facing eviction or utility shutoff. Applicants should read all program conditions on this source page before applying. This fixture has enough source text to exercise the actual extraction and storage path.</p><a href="' + rejectedUrl + '">Apply now</a></main>'
+  const invoke = async () => ({ ok: true, json: { opportunities: [{
+    title: 'Ohio Housing and Utility Assistance', funder: 'Fixture Housing Foundation',
+    summary: 'Housing and utility assistance for Ohio residents facing eviction or utility shutoff.',
+    eligibility_text: 'Ohio residents facing eviction or utility shutoff', eligibility_bullets: [],
+    need_categories: ['housing', 'utilities'], amount_min: null, amount_max: null, deadline: null,
+    national: false, states: ['OH'], is_loan: null, requires_cost_share: null,
+    apply_link_id: 'L1', info_link_id: null,
+    evidence: { eligibility: 'Ohio residents facing eviction or utility shutoff', geography: 'Ohio residents' },
+  }] } })
+  const store = createMemoryStore()
+  const result = await runWebDiscoveryLane({
+    store,
+    fetcher: { fetch: async (url) => ({ ok: true, status: 200, body: html, finalUrl: url, contentHash: 'fixture-hash', fetchedAt: '2026-09-17T00:00:00Z' }) },
+    searchWeb: async () => [{ url: pageUrl, title: 'Housing assistance', snippet: '' }],
+    extractOpportunities: (args) => extractOpportunitiesFromPage(args, { invoke, openai: null }),
+  }, { thesis: { profile_id: 'fixture', applicant_types: ['individual'], needs: ['housing', 'utilities'], needs_defaulted: false, location: { state: 'OH' } }, runId: 'provenance-flow', maxQueries: 1, seed: 0 })
+  expect(result.extracted).toBe(1)
+  expect(store.all('funding_opportunities')).toHaveLength(1)
+  const db = makeMigratedDb()
+  try {
+    // This test exercises catalog persistence. Match-row persistence is
+    // independently covered by the real pipeline and stale-refresh regressions.
+    await persistRun(db, makeMemStore(store.all('funding_opportunities')), {})
+    const row = db.prepare('SELECT application_url, apply_url, source_url, field_provenance FROM funding_opportunities').get()
+    expect(row.application_url).toBeNull()
+    expect(row.apply_url).toBeNull()
+    expect(row.source_url).toBe(pageUrl)
+    expect(JSON.parse(row.field_provenance).application_target_refusal).toMatchObject({
+      value: rejectedUrl, status: 'non_application', reason: 'non_application_vendor_content', source: 'application_surface_policy',
+    })
+  } finally { db.close() }
+})

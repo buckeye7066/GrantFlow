@@ -1,3 +1,6 @@
+import { resolveApplicationUrl, readApplicationTargetRefusal } from '../../../shared/applicationTarget.js'
+import { classifyApplicationTargetRefusal } from '../../../backend/config/applicationTargetPolicy.js'
+import { resolveFunderApplicationLink } from '@/lib/funderApplicationLink'
 import React, { useState } from "react"
 import { useQuery } from "@tanstack/react-query"
 import {
@@ -64,7 +67,10 @@ function OpportunityRow({ opp, showScore }) {
     ? `$${(opp.amount_min || opp.amount_max || 0).toLocaleString()}${opp.amount_max && opp.amount_min && opp.amount_max !== opp.amount_min ? ` – $${opp.amount_max.toLocaleString()}` : ""}`
     : null
 
-  const url = opp.application_url || opp.source_url || opp.url
+  const selected = resolveApplicationUrl(opp)
+  const refused = readApplicationTargetRefusal(opp) || classifyApplicationTargetRefusal(selected)
+  const applicationUrl = refused ? null : selected
+  const url = resolveFunderApplicationLink(opp)
   const deadlineText = opp.deadline
     ? new Date(opp.deadline).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })
     : opp.deadline_type === "rolling" ? "Rolling" : null
@@ -99,11 +105,11 @@ function OpportunityRow({ opp, showScore }) {
       </div>
       {url && (
         <a
-          href={opp.application_url || opp.source_url || opp.url}
+          href={url}
           target="_blank"
           rel="noopener noreferrer"
           className="shrink-0 text-blue-600 hover:text-blue-800 p-1"
-          title={opp.application_url ? "Open application" : "View source (application link unavailable)"}
+          title={applicationUrl ? "Open application" : "View source (application link unavailable)"}
         >
           <ExternalLink className="w-4 h-4" />
         </a>

@@ -1,3 +1,4 @@
+import { resolveApplicationUrl } from '../../shared/applicationTarget.js'
 import React, { useMemo, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
@@ -187,7 +188,7 @@ export default function FundingResults() {
     }
 
     const orgId = organizationId ?? null;
-    const candidateUrl = opportunity.application_url ?? opportunity.apply_url ?? null;
+    const candidateUrl = resolveApplicationUrl(opportunity);
     if (orgId && candidateUrl) {
       try {
         const lookupUrl = candidateUrl;
@@ -216,7 +217,7 @@ export default function FundingResults() {
       }
       return { status: 'failed', error: 'missing_title' };
     }
-    const applicationUrl = opportunity.application_url ?? opportunity.apply_url ?? null;
+    const applicationUrl = resolveApplicationUrl(opportunity);
     if (!applicationUrl) {
       if (!silent) {
         toast({ variant: 'destructive', title: 'No application link', description: `"${opportunity.title}" has no application URL and cannot be added to the pipeline.` });
@@ -242,7 +243,7 @@ export default function FundingResults() {
             // application_url is the authoritative Goal 1 field. url is the detail/source page.
             // Both are forwarded explicitly so the server can distinguish them.
             // The server must use application_url as the primary application path.
-            application_url: opportunity.application_url ?? null,
+            application_url: applicationUrl,
             url: opportunity.url ?? null,
             awardMin: opportunity.awardMin ?? opportunity.amount_min,
             awardMax: opportunity.awardMax ?? opportunity.amount_max,

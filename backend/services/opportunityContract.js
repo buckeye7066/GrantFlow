@@ -1,3 +1,4 @@
+import { resolveApplicationUrl } from '../../shared/applicationTarget.js'
 /**
  * Canonical opportunity read contract for the existing JavaScript catalog.
  *
@@ -317,7 +318,7 @@ export function buildOpportunityReadModel(row = {}, options = {}) {
     recurrence: nonEmptyString(row.recurrence),
     required_documents: requiredDocuments,
     application_method: nonEmptyString(row.application_method ?? row.application_mode),
-    authoritative_application_url: nonEmptyString(row.authoritative_application_url ?? row.application_url ?? row.apply_url),
+    authoritative_application_url: nonEmptyString(row.authoritative_application_url ?? resolveApplicationUrl(row)),
     source_url: nonEmptyString(row.source_url),
     provenance: provenanceFor(row),
     first_published_at: nonEmptyString(row.first_published_at),

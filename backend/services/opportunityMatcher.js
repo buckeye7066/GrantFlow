@@ -1,3 +1,4 @@
+import { classifyApplicationTargetRefusal } from '../config/applicationTargetPolicy.js'
 /**
  * Opportunity Matcher and Pipeline Manager
  * Evaluates opportunity matches and saves to appropriate pipelines.
@@ -14,6 +15,7 @@
  */
 
 import crypto from 'crypto'
+import { resolveApplicationUrl } from '../../shared/applicationTarget.js'
 import { sanitizeLogValue } from '../utils/logger.js'
 import { computeMatchDecision, normalizeProfile, computeProfileFingerprint, normalizeOpportunity, computeOpportunityFingerprint } from './matchEngine.js'
 import {
@@ -77,13 +79,14 @@ function sha256Stable(value) {
 }
 
 export const PIPELINE_ADMISSION_POLICY_VERSION = sha256Stable({
-  version: 2,
+  version: 3,
   allowedSources: PIPELINE_ALLOWED_SOURCES,
   deniedSources: PIPELINE_DENIED_SOURCES,
   relevanceFloor: RELEVANCE_FLOOR,
   trustedRelevanceFloor: TRUSTED_RELEVANCE_FLOOR,
   trustedOrigins: TRUSTED_RECORD_ORIGINS,
   canonicalDecisionAuthority: true,
+  exactApplicationTargetRequired: true,
   hiddenProfileEligibilityTrials: false,
 })
 
@@ -533,6 +536,18 @@ async function admitToPipeline(db, profileContext, opportunity, ctx = {}) {
       }, decision?.score ?? 0)
     }
 
+    // Validate the exact URL that the writer will persist. A separate valid
+    // reference/application alias cannot license a rejected selected target.
+    const selectedTarget = resolveApplicationUrl(opportunity) || chooseGrantUrl(opportunity)
+    const targetRefusal = classifyApplicationTargetRefusal(selectedTarget)
+    if (targetRefusal) {
+      return denied('eligibility_unverified', {
+        saved: false, gate: 'APPLICATION_TARGET', decision: 'REVIEW',
+        reason: 'Application target needs verification: ' + targetRefusal.reason,
+        matchPercentage: decision?.score ?? null, threshold,
+      }, decision?.score ?? null)
+    }
+
     // Gate 3: Exclusion engine — custom suppression rules
     let exclusion = null
     try {
@@ -890,6 +905,9 @@ export async function saveToProfilePipeline(
     // fields the dedup/drift check relies on. Reuse the fingerprint already
     // computed for the dedup gate so insert + dedup can never disagree.
     const canonicalUrl = chooseGrantUrl(opportunity)
+    // Identity retains its legacy source-like URL. Application actions use the
+    // explicit target aliases instead; do not change the fingerprint contract.
+    const applicationUrl = resolveApplicationUrl(opportunity) || canonicalUrl
     const canonicalFingerprint = candidateFp
 
     // Pipeline-$ visibility: default amount_requested from the opportunity's
@@ -927,7 +945,7 @@ export async function saveToProfilePipeline(
       ['match_score', matchPercentage],
       ['match_reasons', JSON.stringify(canonicalReasons)],
       ['notes', `Auto-added: ${matchPercentage}% match for profile ${profileId} (decision: ${decision?.decision ?? 'N/A'})`],
-      ['application_url', canonicalUrl],
+      ['application_url', applicationUrl],
       ['application_method', opportunity.application_method || opportunity.submission_method || guessMethodFromOpportunity(opportunity) || null],
       ['contact_name', contactInfo.name],
       ['contact_email', contactInfo.email],
@@ -1136,7 +1154,7 @@ function guessMethodFromOpportunity(opportunity) {
   if (text.includes('portal') || text.includes('.gov') || text.includes('apply online')) return 'portal'
   if (text.includes('call') || text.includes('phone')) return 'phone_contact'
   if (text.includes('email')) return 'email_contact'
-  if (opportunity.application_url || opportunity.applicationUrl || opportunity.url) return 'portal'
+  if (resolveApplicationUrl(opportunity) || opportunity.url) return 'portal'
   return null
 }
 
@@ -1240,7 +1258,7 @@ function titleSimilarity(a, b) {
  */
 function getSourceRank(opp) {
   const url = String(
-    opp?.application_url || opp?.apply_url || opp?.source_url || opp?.url || ''
+    resolveApplicationUrl(opp) || opp?.source_url || opp?.url || ''
   ).toLowerCase()
   if (url.includes('.gov')) return 4
   if (url.includes('.edu')) return 3
@@ -1382,7 +1400,7 @@ function buildDedupeKey(opp) {
 
 /** Registrable-ish hostname for an opportunity's primary URL (lowercased, no www). */
 function dedupeDomainOf(opp) {
-  const url = opp?.application_url || opp?.apply_url || opp?.url || opp?.source_url || ''
+  const url = resolveApplicationUrl(opp) || opp?.url || opp?.source_url || ''
   return extractHostname(url)
 }
 

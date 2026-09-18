@@ -1,3 +1,4 @@
+import { resolveApplicationUrl } from '../../../shared/applicationTarget.js'
 /**
  * robertMatchBridge.js
  *
@@ -102,7 +103,7 @@ export function catalogRowToCrawlerOsOpportunity(opportunity = {}) {
     },
     deadline: opportunity.deadline ?? null,
     is_rolling: String(opportunity.deadline_type ?? '').toLowerCase() === 'rolling',
-    apply_url: opportunity.application_url ?? opportunity.apply_url ?? null,
+    apply_url: resolveApplicationUrl(opportunity),
     info_url: opportunity.info_url ?? opportunity.source_url ?? opportunity.url ?? evidenceUrl,
     trust_tier: opportunity.source_trust_tier ?? opportunity.trust_tier ?? null,
     reality_status: normalizeRealityStatus(opportunity.reality_status),

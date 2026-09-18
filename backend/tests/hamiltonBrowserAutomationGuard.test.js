@@ -129,3 +129,26 @@ describe('deriveProfilePortalHosts', () => {
     expect(hosts.size).toBe(0)
   })
 })
+
+
+it('the selected application alias authorizes its host, never the stale secondary host', () => {
+  const selected = 'https://fixture-foundation.org/apply'
+  const hosts = deriveProfilePortalHosts({ opportunity: { apply_url: selected, application_url: 'https://alpha.grantable.co/login' } })
+  expect(hosts.has('fixture-foundation.org')).toBe(true)
+  expect(hosts.has('alpha.grantable.co')).toBe(false)
+  expect(browserAutomationPermittedForUrl(selected, { extraAllowedHosts: [...hosts] })).toBe(true)
+  const refused = deriveProfilePortalHosts({ opportunity: { apply_url: 'https://m.facebook.com/apply', application_url: selected } })
+  expect(refused.size).toBe(0)
+})
+
+it.each(['opportunity_url', 'opportunity_source', 'grant_url', 'grant_apply_alias'])('Hamilton authorizes the validated selected %s legacy target', (variant) => {
+  const target = 'https://fixture-foundation.org/apply'
+  const input = variant === 'opportunity_url' ? { opportunity: { url: target } }
+    : variant === 'opportunity_source' ? { opportunity: { source_url: target } }
+      : variant === 'grant_url' ? { grant: { url: target } }
+        : { grant: { apply_url: target, application_url: 'https://alpha.grantable.co/login' } }
+  const hosts = deriveProfilePortalHosts(input)
+  expect(hosts.has('fixture-foundation.org')).toBe(true)
+  expect(hosts.has('alpha.grantable.co')).toBe(false)
+  expect(browserAutomationPermittedForUrl(target, { extraAllowedHosts: [...hosts] })).toBe(true)
+})

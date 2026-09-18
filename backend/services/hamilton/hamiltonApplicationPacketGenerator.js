@@ -1,4 +1,5 @@
-﻿/**
+import { resolveApplicationUrl } from '../../../shared/applicationTarget.js'
+/**
  * hamiltonApplicationPacketGenerator.js
  *
  * Generates a complete application packet for a single funding source
@@ -300,7 +301,7 @@ Applicant fit notes:
 export function buildMailingInstructions({ opportunity, grant, automationType }) {
   const opp = opportunity || grant || {}
   const funder = opp.sponsor || opp.funder || opp.organization || 'Funder'
-  const url = opp.application_url || opp.apply_url || opp.url || null
+  const url = resolveApplicationUrl(opp) || opp.url || null
   const due = deadline(opp)
   const address = opp.mailing_address || opp.application_address || null
   const fax = opp.apply_fax || opp.application_fax || opp.fax || null

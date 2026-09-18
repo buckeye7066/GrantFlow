@@ -38,6 +38,8 @@ import { isGenericOnly } from '../config/genericTitleVocabulary.js'
 import { detectForeignOpportunity, declaredStateFromTitle } from '../config/opportunityJurisdiction.js'
 import { countyAwardMismatch } from '../config/countyDeclaration.js'
 import { resolvedUsOpportunityJurisdiction } from '../config/canonicalUsJurisdiction.js'
+import { classifyApplicationTargetRefusal } from '../config/applicationTargetPolicy.js'
+import { resolveApplicationUrl } from '../../shared/applicationTarget.js'
 import {
   isLeadGenScholarship,
   institutionalPassThroughConflict,
@@ -184,7 +186,7 @@ function _extractDomain(url) {
  */
 export function calculateSourceTrust(opportunity) {
   if (!opportunity) return 20
-  const url = opportunity.application_url || opportunity.apply_url ||
+  const url = resolveApplicationUrl(opportunity) ||
     opportunity.source_url || opportunity.evidence_url || opportunity.url || ''
   const urlLower = String(url).toLowerCase()
   if (!url || urlLower.trim() === '') return 10
@@ -313,7 +315,7 @@ export function calculateConfidence(opportunity, oppNorm = null) {
       : localTrust >= 75 ? 'verified'
         : localTrust >= 60 ? 'directory'
           : localTrust >= 35 ? 'community' : 'unknown'
-    const url = opportunity?.application_url || opportunity?.apply_url ||
+    const url = resolveApplicationUrl(opportunity) ||
       opportunity?.source_url || opportunity?.url || ''
     actionable = Boolean(String(url).trim())
   }
@@ -5073,7 +5075,23 @@ export function computeMatchDecision(rawProfile, rawOpportunity, opts = {}) {
   // ("missing application URL") while the row carried a live apply_url
   // (prod 2026-09-07: a transfer student's TELS/HOPE and every MTSU
   // scholarship). A bare source_url is NOT an apply target — that stays REVIEW.
-  const hasUrl = Boolean(rawOpportunity?.application_url || rawOpportunity?.apply_url || rawOpportunity?.url)
+  const applicationUrl = resolveApplicationUrl(rawOpportunity) || rawOpportunity?.url
+  const hasUrl = Boolean(applicationUrl)
+  // A real URL is not necessarily a funder application. Reuse the same
+  // authority as Hamilton and applyability, including on old catalog rows.
+  // Preserve the source and score; REVIEW cannot be auto-admitted or acquire
+  // an ACCEPT four-truth proof. Never weaken a prior hard rejection.
+  const nonApplicationTarget = classifyApplicationTargetRefusal(applicationUrl)
+  if (nonApplicationTarget) {
+    match_explain.application_target = { status: 'non_application', ...nonApplicationTarget }
+    if (decision === 'ACCEPT') {
+      decision = 'REVIEW'
+      explanation = 'The listed application URL is not a usable funder application target. Find and verify the funder application before applying.'
+      const reason = 'Application target needs verification: ' + nonApplicationTarget.reason
+      decisionReasons = [...decisionReasons, reason]
+      reasons.push(reason)
+    }
+  }
 
   if (decision === 'ACCEPT' && !hasUrl) {
     decision = 'REVIEW'

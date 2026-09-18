@@ -32,6 +32,7 @@ import { extractPageFactsBlind } from '../crawler-os/blindPageFactExtractor.js';
 import { mapBlindFactsToCandidate } from '../crawler-os/blindFactsMapper.js';
 import { classifyBlindOpportunityKind } from '../crawler-os/blindOpportunityKind.js';
 import { OPPORTUNITY_KIND } from '../crawler-os/contract.js';
+import { classifyApplicationTargetRefusal } from '../config/applicationTargetPolicy.js';
 import { createLogger } from '../utils/logger.js';
 
 const log = createLogger('service:webGrantExtractor');
@@ -372,7 +373,36 @@ export async function extractOpportunitiesFromPage(
   // 2026-08-23). This is the ROOT fix for the Coolidge/Live Más class — the
   // enforceSharedListingApplicationTargets boot sweep (#1324) is only the net.
   const decomposed = decomposeHubApplyTargets(classified, { pageUrl, linkInventory });
-  return tagResult(decomposed, { status: decomposed.length > 0 ? 'ok' : 'empty', provider: outcome.provider });
+  // A page-owned link can still be a software login or an editorial page.
+  // Check AFTER hub decomposition so a recovered link cannot bypass this
+  // authority. Keep every candidate and the fetched source; never guess a URL.
+  const targetChecked = decomposed.map((candidate) => {
+    const refusal = classifyApplicationTargetRefusal(candidate.apply_url);
+    if (!refusal) return candidate;
+    return {
+      ...candidate,
+      apply_url: null,
+      info_url: candidate.raw?.page_url || candidate.info_url || pageUrl,
+      // The OS and live catalog deliberately omit raw. Put this policy
+      // observation in their existing durable provenance contract as well.
+      field_provenance: {
+        ...(candidate.field_provenance || {}),
+        application_target_refusal: {
+          value: candidate.apply_url,
+          status: 'non_application',
+          reason: refusal.reason,
+          source: 'application_surface_policy',
+          source_url: candidate.raw?.page_url || pageUrl,
+          evaluated_at: new Date().toISOString(),
+        },
+      },
+      raw: {
+        ...(candidate.raw || {}),
+        application_target_refusal: { ...refusal, url: candidate.apply_url },
+      },
+    };
+  });
+  return tagResult(targetChecked, { status: targetChecked.length > 0 ? 'ok' : 'empty', provider: outcome.provider });
 }
 
 export default {

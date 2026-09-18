@@ -1,3 +1,4 @@
+import { resolveApplicationUrl } from '../../shared/applicationTarget.js'
 import express from 'express';
 import crypto from 'crypto';
 import { safeParseJSON } from '../utils/safeJson.js';
@@ -1784,7 +1785,7 @@ router.post('/from-opportunity', async (req, res, next) => {
         const normalizedDeadline = normalizeDateForDb(rawDeadline)
         const amountMin = normalizeMoney(opportunity_data.awardMin ?? opportunity_data.amount_min ?? null)
         const amountMax = normalizeMoney(opportunity_data.awardMax ?? opportunity_data.amount_max ?? null)
-        const applicationUrl = coerceString(opportunity_data.url || opportunity_data.application_url, { maxLen: 2000 })
+        const applicationUrl = coerceString(resolveApplicationUrl(opportunity_data) || opportunity_data.url, { maxLen: 2000 })
         const title = coerceString(opportunity_data.title, { maxLen: 500 })
         if (!title) {
           return res.status(400).json({

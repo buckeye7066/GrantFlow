@@ -1,3 +1,5 @@
+import { resolveApplicationUrl } from '../../shared/applicationTarget.js'
+
 /**
  * Centralized URL validation rules.
  *
@@ -283,7 +285,8 @@ export function isPlaceholderUrl(url) {
 export function isNonActionableUrl(url) {
   if (!url) return false
   const hostname = extractHostname(url)
-  return NON_ACTIONABLE_DOMAINS.has(hostname)
+  if (!hostname) return false
+  return [...NON_ACTIONABLE_DOMAINS].some((domain) => hostname === domain || hostname.endsWith('.' + domain))
 }
 
 /**
@@ -453,8 +456,7 @@ export function portalUrlFunderPlausibility(url, funderName) {
 export function pickRealUrl(opportunity) {
   if (!opportunity) return null
   const candidates = [
-    opportunity.application_url,
-    opportunity.apply_url,
+    resolveApplicationUrl(opportunity),
     opportunity.url,
     opportunity.source_url,
     opportunity.evidence_url,

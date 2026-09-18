@@ -116,8 +116,10 @@ export async function runStaleMatchExplainRefresh(db, opts = {}) {
     unscorable: 0,
     skipped_no_profile: 0,
     convergence_errors: 0,
+    concurrent_changes_skipped: 0,
     proofs_carried: 0,
     held_at_review: 0,
+    structural_target_holds: 0,
     truncated: false,
   }
 
@@ -253,13 +255,20 @@ export async function runStaleMatchExplainRefresh(db, opts = {}) {
       summary.held_at_review += 1
     }
 
-    // Accept-only lanes: only allow ACCEPT to be written; keep stored decision/score otherwise
-    if (ACCEPT_ONLY_VERSIONS.has(matcherVersion) && verdictToWrite !== 'accept') {
+    // A known non-application target is a structural refusal, not a scoring
+    // preference. Historical linker admission cannot keep a software login
+    // labeled ACCEPT after the canonical engine disproves its application
+    // target. Preserve the row and lane, but converge the stored verdict too.
+    const structuralTargetRefusal = storedDecision === 'accept' && verdictToWrite === 'review' &&
+      decision?.match_explain?.application_target?.status === 'non_application'
+
+    // Other linker scoring/provenance rules retain their existing behavior.
+    if (!structuralTargetRefusal && ACCEPT_ONLY_VERSIONS.has(matcherVersion) && verdictToWrite !== 'accept') {
       verdictToWrite = null
       scoreToWrite = null
     }
     // For linker lanes in general: never allow a downgrade (e.g., accept -> review/reject)
-    if (LINKER_VERSIONS.has(matcherVersion)) {
+    if (!structuralTargetRefusal && LINKER_VERSIONS.has(matcherVersion)) {
       if (rank(verdictToWrite) < rank(storedDecision)) {
         verdictToWrite = null
         // Do not lower the score alongside a downgrade; keep existing score
@@ -293,7 +302,10 @@ export async function runStaleMatchExplainRefresh(db, opts = {}) {
                 updated_at = ${nowFn},
                 evaluated_at = ${nowFn}
           WHERE id = ?
-            AND matcher_version = ?`,
+            AND matcher_version = ?
+            AND COALESCE(match_decision, '') = ?
+            AND COALESCE(CAST(match_explain_json AS TEXT), '') = ?
+            AND COALESCE(match_score, -1) = ?`,
       ).run(
         JSON.stringify(explainToPersist),
         scoreToWrite,
@@ -301,8 +313,18 @@ export async function runStaleMatchExplainRefresh(db, opts = {}) {
         explanationToWrite,
         row.match_id,
         row.matcher_version,
+        row.stored_decision ?? '',
+        typeof row.existing_explain === 'object' && row.existing_explain !== null
+          ? JSON.stringify(row.existing_explain) : (row.existing_explain ?? ''),
+        row.stored_score ?? -1,
       )
-      if (changesOf(res) > 0) summary.refreshed += 1
+      if (changesOf(res) > 0) {
+        summary.refreshed += 1
+        if (structuralTargetRefusal) summary.structural_target_holds += 1
+      } else {
+        // A fresh rescore or user correction supersedes the observed pair.
+        summary.concurrent_changes_skipped += 1
+      }
     } catch (err) {
       summary.convergence_errors += 1
       log.warn('stale-match-explain update failed (non-fatal)', {

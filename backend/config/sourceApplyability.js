@@ -1,3 +1,4 @@
+import { classifyApplicationTargetRefusal } from './applicationTargetPolicy.js'
 /**
  * sourceApplyability.js — classify a funding source by whether a person can
  * actually APPLY to it, and how.
@@ -50,6 +51,7 @@
 import { classifyFundingSource } from '../services/hamilton/hamiltonAutomationClassifier.js'
 import { isPointerKind } from './opportunityKindClasses.js'
 import { classifyNonApplicationSurface } from './applicationSurfaceHosts.js'
+import { resolveApplicationUrl } from '../../shared/applicationTarget.js'
 import { isSearchEngineUrl } from './urlRules.js'
 
 export const APPLYABILITY_TIERS = Object.freeze({
@@ -168,8 +170,7 @@ function firstNonEmpty(...values) {
 
 function resolveUrl(source) {
   return firstNonEmpty(
-    source?.application_url,
-    source?.apply_url,
+    resolveApplicationUrl(source),
     source?.portal_url,
     source?.url,
     source?.source_url,
@@ -221,9 +222,26 @@ export function classifyApplyability(source) {
     return tierResult(APPLYABILITY_TIERS.INFO_ONLY, 'info_only:no_source')
   }
 
-  const url = resolveUrl(source)
-  const host = hostOf(url)
   const kind = String(source?.opportunity_kind ?? '').trim().toLowerCase()
+  const auto = classifyFundingSource({ opportunity: source, grant: source })
+  const automationType = String(auto?.automation_type ?? 'unknown').toLowerCase()
+  const explicitTarget = firstNonEmpty(resolveApplicationUrl(source), source?.portal_url)
+  // Informational pages do not override a declared offline application
+  // channel. Reuse Hamilton's structured decision, never infer a recipient
+  // from a generic page URL or turn a pointer into its own application.
+  const declaredOffline = auto?.deciding_rule === 'metadata.application_mode' ||
+    (automationType === 'email' && auto?.apply_email) ||
+    (automationType === 'fax' && auto?.apply_fax) ||
+    (automationType === 'mail' && auto?.mailing_address)
+  if (!explicitTarget && !isPointerKind(kind) && declaredOffline &&
+      ['email', 'fax', 'mail'].includes(automationType)) {
+    return tierResult(APPLYABILITY_TIERS.MAIL_OR_PDF, `mail_or_pdf:automation_type:${automationType}`)
+  }
+
+  const url = resolveUrl(source)
+  const targetRefusal = classifyApplicationTargetRefusal(url)
+  if (targetRefusal) return tierResult(APPLYABILITY_TIERS.INFO_ONLY, `info_only:${targetRefusal.reason}`)
+  const host = hostOf(url)
 
   // 1. A search-engine RESULTS page is never an application surface.
   if (url && (() => { try { return isSearchEngineUrl(url) } catch { return false } })()) {
@@ -262,8 +280,6 @@ export function classifyApplyability(source) {
   }
 
   // 7. Reuse Hamilton's automation_type — do NOT fork the classifier.
-  const auto = classifyFundingSource({ opportunity: source, grant: source })
-  const automationType = String(auto?.automation_type ?? 'unknown').toLowerCase()
 
   switch (automationType) {
     case 'portal':

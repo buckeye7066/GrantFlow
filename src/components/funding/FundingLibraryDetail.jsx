@@ -1,3 +1,6 @@
+import { resolveApplicationUrl, readApplicationTargetRefusal } from '../../../shared/applicationTarget.js'
+import { classifyApplicationTargetRefusal } from '../../../backend/config/applicationTargetPolicy.js'
+import { resolveFunderApplicationLink } from '@/lib/funderApplicationLink'
 import React from 'react'
 import {
   Dialog,
@@ -19,8 +22,10 @@ export default function FundingLibraryDetail({ item, open, onClose }) {
   // and calling it "Open application" tells the owner they are one click from
   // applying when they are not. Fall back to it (a real link beats none) but
   // label it for what it is.
-  const directApplyUrl = item.apply_url || item.application_url
-  const applyUrl = directApplyUrl || item.source_url
+  const selectedTarget = resolveApplicationUrl(item)
+  const refused = readApplicationTargetRefusal(item) || classifyApplicationTargetRefusal(selectedTarget)
+  const directApplyUrl = refused ? null : selectedTarget
+  const applyUrl = directApplyUrl || resolveFunderApplicationLink(item)
   const showApply = Boolean(applyUrl)
   const applyLabel = directApplyUrl ? 'Open application' : 'Open source page'
 

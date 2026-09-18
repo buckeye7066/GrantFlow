@@ -1,3 +1,4 @@
+import { resolveApplicationUrl } from '../../shared/applicationTarget.js';
 // crawler-os/matchEngine.js
 //
 // Compatibility facade for Crawler OS callers.
@@ -239,10 +240,15 @@ export function computeMatchDecision(opportunity, thesis = {}, opts = {}) {
 
   // A program/listing with no direct apply target cannot be an apply-now ACCEPT.
   // Directory locators are exempt because their contract is the information link.
-  const hasApplyUrl = Boolean(opportunity?.apply_url ?? opportunity?.application_url);
+  const hasApplyUrl = Boolean(resolveApplicationUrl(opportunity));
   const isDirectoryLocator = String(opportunity?.kind ?? '').toUpperCase() === OPPORTUNITY_KIND.DIRECTORY;
   const isPastAwardIntel = String(opportunity?.kind ?? '').toUpperCase() === OPPORTUNITY_KIND.PAST_AWARD_INTEL;
-  if (!hasApplyUrl && !isDirectoryLocator && decision === MATCH_DECISION.ACCEPT) {
+  // The canonical engine or four-truth boundary may already have held this
+  // strong match at REVIEW. Keep the missing-target explanation observable
+  // regardless of which guard ran first; never promote a REJECT or a pointer.
+  if (!hasApplyUrl && !isDirectoryLocator && !isPastAwardIntel &&
+      (decision === MATCH_DECISION.ACCEPT ||
+       (decision === MATCH_DECISION.REVIEW && isAcceptLevelScore(score)))) {
     decision = MATCH_DECISION.REVIEW;
     warnings.push('no direct application URL — strong fit held at REVIEW until an apply target is known');
   }
@@ -289,6 +295,9 @@ export function computeMatchDecision(opportunity, thesis = {}, opts = {}) {
       matched_profile_type: Boolean(canonical?.match_explain?.matchedSignals?.includes?.('applicant_type')),
       matched_location: describeLocationMatch(canonical),
       eligibility_fit: canonical?.eligible ?? 'maybe',
+      ...(canonical?.match_explain?.application_target
+        ? { application_target: canonical.match_explain.application_target }
+        : {}),
       why: canonical?.explanation ?? `Canonical ${MATCHER_VERSION} / ${NEED_FIRST_SCORING_VERSION} decision: ${String(canonical?.decision ?? 'REVIEW')}`,
       warnings,
       matched_needs: canonical?.matchedNeeds ?? [],
@@ -410,8 +419,8 @@ function opportunityToCanonicalOpportunity(opportunity = {}) {
     requires_match: Boolean(opportunity.funding?.requires_cost_share),
     deadline: opportunity.deadline ?? null,
     deadline_type: opportunity.is_rolling ? 'rolling' : null,
-    application_url: opportunity.apply_url ?? null,
-    apply_url: opportunity.apply_url ?? null,
+    application_url: resolveApplicationUrl(opportunity),
+    apply_url: resolveApplicationUrl(opportunity),
     source_url: url,
     url,
     type: isDirectory ? 'DIRECTORY' : (opportunity.kind ?? null),

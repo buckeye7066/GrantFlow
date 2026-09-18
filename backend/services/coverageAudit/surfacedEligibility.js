@@ -1,3 +1,4 @@
+import { resolveApplicationUrl } from '../../../shared/applicationTarget.js'
 /**
  * surfacedEligibility.js — re-assert the FAITHFUL match-engine eligibility
  * decision against persisted, currently-surfacing profile_opportunity_matches.
@@ -82,7 +83,7 @@ export function liveOppToOs(row = {}) {
     // apply_url to a direct application target and info_url to the official
     // source. Dropping both here makes the canonical no_actionable_url rule
     // falsely REJECT every persisted direct row during the post-crawl sweep.
-    apply_url: row.application_url ?? row.apply_url ?? null,
+    apply_url: resolveApplicationUrl(row),
     info_url: row.source_url ?? row.url ?? null,
     applicant_types: applicantTypes,
     need_categories: parseListMaybe(row.categories),

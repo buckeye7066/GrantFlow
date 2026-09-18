@@ -258,3 +258,11 @@ describe('FundingResultCard', () => {
     )
   })
 })
+
+it('the raw result card opens the preferred application alias, not a stale secondary URL', () => {
+  const selected = 'https://www.tn.gov/collegepays/apply'
+  const stale = 'https://alpha.grantable.co/login'
+  const { container } = render(<FundingResultCard result={{ ...BASE, kind: 'direct', link_status: 'verified', apply_url: selected, application_url: stale }} />)
+  expect(container.querySelector(`a[href="${selected}"]`)).toBeTruthy()
+  expect(container.querySelector(`a[href="${stale}"]`)).toBeNull()
+})

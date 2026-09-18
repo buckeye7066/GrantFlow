@@ -5477,7 +5477,7 @@ export async function enforcePipelinePrecision(db) {
       log.warn('pipeline_precision: verifier unavailable (non-fatal)', { error: String(err?.message || err) })
       return { scanned: 0, repaired: 0, enforced: true, skipped: 'deps' }
     }
-    const { loadProfileFacts, loadPipelineRows, gateRelatable, gateQualifies, gateCoversNeed, gateRealOffline, GATES, gateEngine, scoreRowWithEngine, stampPipelineRowFromDecision } = audit
+    const { loadProfileFacts, loadPipelineRows, gateRelatable, gateQualifies, gateCoversNeed, gateRealOffline, GATES, gateEngine, scoreRowWithEngine, stampPipelineRowFromDecision, pipelineApplicationTargetRepair, pipelineStoredTargetRefusal } = audit
     // THE ENGINE CONJUNCT (owner order 2026-09-07): every pipeline row is
     // re-scored by the ONE matching authority each boot and re-stamped with
     // the fresh verdict; a REJECT fails the sweep with the engine's reasons.
@@ -5514,7 +5514,7 @@ export async function enforcePipelinePrecision(db) {
       scanned: 0, kept: 0, removed: 0, relabeled: 0, failed: 0, tasksCancelled: 0,
       protectedProfilesSkipped: 0, needNeutralProfile: 0, needNeutralRow: 0,
       harvestFirst: 0, truncated: false, loadFailures: 0, firstLoadError: null,
-      rescored: 0, restamped: 0, unscorable: 0, cleared: 0,
+      rescored: 0, restamped: 0, unscorable: 0, cleared: 0, applicationTargetsRepaired: 0,
     }
     const byGate = { [GATES.ENGINE]: 0, [GATES.RELATABLE]: 0, [GATES.QUALIFIES]: 0, [GATES.COVERS_NEED]: 0, [GATES.REAL]: 0 }
     const byReason = {}
@@ -5585,7 +5585,9 @@ export async function enforcePipelinePrecision(db) {
         counts.scanned += 1
         let verdict = null
         let failedGate = null
+        let targetRepair = null
         let scored = null
+        let stampDeferred = false
         try {
           // The canonical decision is computed up front (and re-stamped);
           // the engine conjunct itself runs after the structural gates.
@@ -5595,9 +5597,13 @@ export async function enforcePipelinePrecision(db) {
           if (scored?.decision) {
             counts.rescored += 1
             try {
-              if (await stampPipelineRowFromDecision(db, row.grant_id, scored.decision, grantCols)) counts.restamped += 1
+              // Do not label a stale target ACCEPT before its repair succeeds.
+              stampDeferred = Boolean(pipelineStoredTargetRefusal(row) && pipelineApplicationTargetRepair(row, scored))
+              if (!stampDeferred && await stampPipelineRowFromDecision(db, row.grant_id, scored.decision, grantCols, { ...row, profile_id: profileId })) counts.restamped += 1
             } catch (err) {
-              log.warn('pipeline_precision: re-stamp failed (non-fatal)', { grant: row.grant_id, error: String(err?.message || err) })
+              counts.failed += 1
+              log.warn('pipeline_precision: re-stamp failed; row requires recheck', { grant: row.grant_id, error: String(err?.message || err) })
+              continue
             }
           } else {
             counts.unscorable += 1
@@ -5619,11 +5625,32 @@ export async function enforcePipelinePrecision(db) {
             // the structural gates cannot see (temporal anchors, declined aid
             // types, hard eligibility, deadlines).
             verdict = gateEngine(row, scored)
+            // Reconcile existing pipeline copies at the same protected boot
+            // boundary that owns their cleanup. This consumes the canonical
+            // target verdict; it does not change unrelated audit/purge rules.
+            const target = scored?.decision?.match_explain?.application_target
+            if (verdict.pass && target?.status === 'non_application') {
+              verdict = {
+                pass: false,
+                reason: 'non_application_target',
+                evidence: { gate: 'engine', detail: target.reason, decision: scored.decision.decision },
+              }
+            }
             if (!verdict.pass) failedGate = GATES.ENGINE
           }
           if (!failedGate) {
             const real = gateRealOffline(row, { now })
             if (real && !real.pass) { verdict = real; failedGate = GATES.REAL }
+          }
+          if (!failedGate) {
+            targetRepair = pipelineApplicationTargetRepair(row, scored)
+            const ownTargetRefusal = pipelineStoredTargetRefusal(row)
+            if (ownTargetRefusal && (!targetRepair || isProtectedRow(row, awarded) || await hasSubmissionUncertainTask(profileId, row))) {
+              // A valid catalog URL does not repair a protected pipeline URL.
+              // Preserve history and flag it instead of reporting a clean keep.
+              failedGate = GATES.ENGINE
+              verdict = { pass: false, reason: 'non_application_target', evidence: { gate: 'engine', detail: ownTargetRefusal.reason } }
+            }
           }
         } catch (err) {
           counts.failed += 1
@@ -5631,6 +5658,56 @@ export async function enforcePipelinePrecision(db) {
           continue
         }
         if (!failedGate) {
+          if (targetRepair && !isProtectedRow(row, awarded)) {
+            if (writes >= limit) {
+              counts.truncated = true
+            } else {
+              try {
+                if (!(await hasSubmissionUncertainTask(profileId, row))) {
+                  const changes = targetRepair.filter((change) => grantCols.has(change.column))
+                  if (changes.length) {
+                    // Column names come exclusively from the two fixed URL
+                    // fields in the pure repair planner. Values and identity
+                    // are bound, and a concurrent user edit cancels the update.
+                    // audit:allow dynamic-sql -- constant URL columns only
+                    const taskGuard = hasTasks
+                      ? " AND NOT EXISTS (SELECT 1 FROM application_tasks WHERE profile_id = ? AND (grant_id = ? OR opportunity_id = ?) AND LOWER(COALESCE(status, '')) IN (" +
+                        SUBMISSION_UNCERTAIN_TASK_STATUSES.map(() => '?').join(', ') + '))'
+                      : ''
+                    const sql = 'UPDATE grants SET ' + changes.map((c) => c.column + ' = ?').join(', ') +
+                      " WHERE id = ? AND profile_id = ? AND COALESCE(status, '') = ? AND " +
+                      changes.map((c) => c.column + ' = ?').join(' AND ') +
+                      (hasAwarded ? ' AND COALESCE(amount_awarded, 0) <= 0' : '') + taskGuard
+                    const changed = changesOf(await db.prepare(sql).run(
+                      ...changes.map((c) => c.value), row.grant_id, profileId, row.grant_status ?? '',
+                      ...changes.map((c) => c.previous),
+                      ...(hasTasks ? [profileId, row.grant_id, row.funding_opportunity_id ?? null, ...SUBMISSION_UNCERTAIN_TASK_STATUSES] : []),
+                    ))
+                    if (!changed) throw new Error('Application target or protection changed during reconciliation; recheck required')
+                    if (changed) {
+                      if (stampDeferred) {
+                        const repairedRow = { ...row, profile_id: profileId,
+                          grant_application_url: changes.find(c => c.column === 'application_url')?.value ?? row.grant_application_url,
+                          grant_url: changes.find(c => c.column === 'url')?.value ?? row.grant_url }
+                        if (await stampPipelineRowFromDecision(db, row.grant_id, scored.decision, grantCols, repairedRow)) counts.restamped += 1
+                      }
+                      writes += 1
+                      counts.applicationTargetsRepaired += 1
+                      affectedProfiles.add(profileId)
+                    }
+                  }
+                } else {
+                  throw new Error('Submission evidence appeared before target repair; recheck required')
+                }
+              } catch (err) {
+                counts.failed += 1
+                log.warn('pipeline_precision: application-target reconciliation failed', {
+                  grant: row.grant_id, error: String(err?.message || err),
+                })
+                continue
+              }
+            }
+          }
           counts.kept += 1
           // A row that passes EVERY gate today may still wear an 'ineligible'
           // label an earlier matching-policy pass wrote (the 2026-09-05
@@ -5690,23 +5767,56 @@ export async function enforcePipelinePrecision(db) {
 
         if (submissionUncertain || isProtectedRow(row, awarded)) {
           try {
-            if (hasEligStatus && hasIneligReasons) {
+            const targetRelabel = verdict?.reason === 'non_application_target'
+            const assignments = []
+            const values = []
+            if (targetRelabel && grantCols.has('match_decision')) {
+              assignments.push('match_decision = ?')
+              values.push('REVIEW')
+            }
+            if (!hasEligStatus) throw new Error('grants.eligibility_status column absent - protected row cannot be re-labeled')
+            assignments.push('eligibility_status = ?')
+            values.push('ineligible')
+            let observedReasons = null
+            if (hasIneligReasons) {
+              const cur = await db.prepare('SELECT ineligibility_reasons FROM grants WHERE id = ? AND profile_id = ?').get(row.grant_id, profileId)
+              observedReasons = cur?.ineligibility_reasons ?? null
               let existing = []
-              try {
-                const cur = await db.prepare('SELECT ineligibility_reasons FROM grants WHERE id = ?').get(row.grant_id)
-                const raw = cur?.ineligibility_reasons
-                existing = typeof raw === 'string' ? JSON.parse(raw || '[]') : (Array.isArray(raw) ? raw : [])
-              } catch { existing = [] }
+              try { existing = typeof observedReasons === 'string' ? JSON.parse(observedReasons || '[]') : observedReasons } catch { existing = [] }
               if (!Array.isArray(existing)) existing = []
               const tag = `pipeline_precision:${reasonKey}${detail ? `:${detail}` : ''}`
               if (!existing.includes(tag)) existing.push(tag)
-              await db
-                .prepare('UPDATE grants SET eligibility_status = ?, ineligibility_reasons = ? WHERE id = ?')
-                .run('ineligible', JSON.stringify(existing), row.grant_id)
-            } else if (hasEligStatus) {
-              await db.prepare('UPDATE grants SET eligibility_status = ? WHERE id = ?').run('ineligible', row.grant_id)
-            } else {
-              throw new Error('grants.eligibility_status column absent — protected row cannot be re-labeled')
+              assignments.push('ineligibility_reasons = ?')
+              values.push(JSON.stringify(existing))
+            }
+            const guards = ['id = ?', 'profile_id = ?']
+            const expected = [row.grant_id, profileId]
+            if (targetRelabel) {
+              // Label the observed protected target atomically. A user URL,
+              // status, award or label correction must win over this snapshot.
+              guards.push("COALESCE(status, '') = ?")
+              expected.push(row.grant_status ?? '')
+              for (const [column, value] of [['application_url', row.grant_application_url], ['url', row.grant_url]]) {
+                if (grantCols.has(column)) {
+                  guards.push(`COALESCE(${column}, '') = ?`)
+                  expected.push(value ?? '')
+                }
+              }
+              if (hasAwarded) {
+                guards.push('COALESCE(amount_awarded, 0) = ?')
+                expected.push(awarded.get(String(row.grant_id)) || 0)
+              }
+              if (hasIneligReasons) {
+                guards.push("COALESCE(CAST(ineligibility_reasons AS TEXT), '') = ?")
+                expected.push(typeof observedReasons === 'object' && observedReasons !== null ? JSON.stringify(observedReasons) : (observedReasons ?? ''))
+              }
+            }
+            // audit:allow dynamic-sql -- assignments/guards use hard-coded columns
+            // present in the probed grants schema; all row values remain bound.
+            const relabel = await db.prepare(`UPDATE grants SET ${assignments.join(', ')} WHERE ${guards.join(' AND ')}`)
+              .run(...values, ...expected)
+            if (Number(relabel?.changes ?? relabel?.rowCount ?? 0) === 0) {
+              throw new Error('Protected application target changed during relabel; reconciliation must retry')
             }
             writes += 1
             counts.relabeled += 1
@@ -5855,6 +5965,7 @@ export async function enforcePipelinePrecision(db) {
       kept: counts.kept,
       removed: counts.removed,
       relabeled: counts.relabeled,
+      applicationTargetsRepaired: counts.applicationTargetsRepaired,
       deferred: precisionDeferred,
       tasksCancelled: counts.tasksCancelled,
       matchesRemoved: Number(taskRepairAudit.matchesRemoved || 0),
@@ -5871,7 +5982,7 @@ export async function enforcePipelinePrecision(db) {
 
     if (counts.scanned === 0) {
       log.warn('pipeline_precision: no pipeline rows scanned', { profiles: profileIds.length })
-    } else if (counts.removed === 0 && counts.relabeled === 0) {
+    } else if (counts.removed === 0 && counts.relabeled === 0 && counts.applicationTargetsRepaired === 0) {
       log.warn('pipeline_precision: removed nothing', { scanned: counts.scanned, kept: counts.kept, profiles: profileIds.length })
     } else {
       log.info('pipeline_precision: converged profile pipelines', {
@@ -5881,7 +5992,7 @@ export async function enforcePipelinePrecision(db) {
     return {
       ...counts,
       status: precisionSummary.status,
-      repaired: counts.removed + counts.relabeled,
+      repaired: counts.removed + counts.relabeled + counts.applicationTargetsRepaired,
       byGate,
       byReason,
       profiles: profileIds.length,

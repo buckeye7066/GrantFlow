@@ -18,7 +18,7 @@
 - [x] Replace obsolete test expectation with required current New Run fields, start control, and an explicit detached-state assertion for the removed demo checkbox; run tests and observe failure on the unchanged manifest.
 - [x] Update `qa/manifests/factory-deck.json`: wait for `#repo-name`, `#idea`, and `button:has-text("Start Factory Run")`, then require the old demo checkbox to be detached. Keep all steps read-only and keep the existing journey ID.
 - [x] Run manifest and complete EVA tests; exercise the real Factory UI without starting a run. Verify the absence check also rejects a page containing the old checkbox.
-- [ ] Review exact diff, create PR, wait for required checks, merge through the repository guard, sync main, and rerun the targeted signed Factory Deck journey.
+- [x] Review exact diff, create PR, wait for required checks, merge through the repository guard, sync main, and rerun the targeted signed Factory Deck journey.
 
 ## Current production findings (not permanent closure)
 At 2026-09-17T17:20:41Z a fresh in-container provider probe reported healthy SearXNG (bing/seznam/yandex) and Brave HTTP 200. Other SearXNG engines still report suspensions. The latest ten recorded Federal Register adapter runs had no fetch error; the Amy error was HTTP 500, not evidence of a missing API key. The latest eight inspected web-lane records had healthy extraction with partial timeouts, not quota failures. Intermittent search degradation and all downstream coverage findings remain open until representative reruns prove recovery.

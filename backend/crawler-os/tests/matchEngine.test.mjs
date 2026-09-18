@@ -449,3 +449,25 @@ test('the same military-only directory stays available to a veteran thesis', () 
   const m = computeMatchDecision(dolTap, veteranThesis);
   assert.notEqual(m.decision, MATCH_DECISION.REJECT, `veteran profile must keep military resources (got ${m.decision} @ ${m.match_score})`);
 });
+
+// An earlier canonical/four-truth REVIEW must not hide the missing-target
+// diagnostic. Source-page URLs are not application-target evidence.
+for (const info_url of ['https://www.tn.gov/collegepays/tsaa', 'https://studentaid.example.gov/tsaa', null]) {
+  test(`missing application target is explained after earlier guards: ${info_url}`, () => {
+    const program = studentOpp({ kind: OPPORTUNITY_KIND.PROGRAM, apply_url: null, info_url });
+    const result = computeMatchDecision(program, PROVEN_STUDENT_THESIS, STUDENT_CTX);
+    assert.equal(result.decision, MATCH_DECISION.REVIEW);
+    assert.ok(result.match_score >= 11);
+    assert.equal(result.match_explain.warnings.filter((w) => /no direct application URL/i.test(w)).length, 1);
+  });
+}
+
+test('missing-target diagnostic never upgrades a rejection or describes a research pointer as apply-now', () => {
+  const rejected = studentOpp({ apply_url: null, eligibility_text: 'Applicants must be active duty military personnel only.' });
+  const result = computeMatchDecision(rejected, PROVEN_STUDENT_THESIS, PROVEN_STUDENT_CTX);
+  assert.equal(result.decision, MATCH_DECISION.REJECT);
+  assert.ok(!result.match_explain.warnings.some((w) => /no direct application URL/i.test(w)));
+  const pointer = computeMatchDecision(studentOpp({ kind: OPPORTUNITY_KIND.PAST_AWARD_INTEL, apply_url: null }), PROVEN_STUDENT_THESIS, PROVEN_STUDENT_CTX);
+  assert.equal(pointer.decision, MATCH_DECISION.REVIEW);
+  assert.ok(!pointer.match_explain.warnings.some((w) => /no direct application URL/i.test(w)));
+});

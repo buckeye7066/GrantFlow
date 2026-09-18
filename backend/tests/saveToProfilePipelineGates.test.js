@@ -168,7 +168,7 @@ describe('saveToProfilePipeline — legacy caller error contract', () => {
       sponsor: 'State Health Dept',
       source: 'grants_gov',
       description: 'Community program support',
-      application_url: 'https://example.gov/apply',
+      application_url: 'https://fixture-health.org/apply',
     }
 
     const result = await saveToProfilePipeline(failingDb, admissionReady(opportunity), 'p1', profileContext, 90, 55)
@@ -213,7 +213,7 @@ describe('saveToProfilePipeline — DUPLICATE gate', () => {
       title: 'Community Health Initiative',
       sponsor: 'State Health Dept',
       deadline: '2026-12-31',
-      url: 'https://grants.example.gov/community-health',
+      url: 'https://grants.fixture-health.org/community-health',
       source: 'grants_gov',
     }
 
@@ -239,7 +239,7 @@ describe('saveToProfilePipeline — DUPLICATE gate', () => {
       title: 'Community Health Initiative',
       sponsor: 'State Health Dept',
       deadline: '2026-12-31',
-      url: 'https://grants.example.gov/v1',
+      url: 'https://grants.fixture-health.org/v1',
       source: 'grants_gov',
     }
     const first = await saveToProfilePipeline(db, admissionReady(opp), 'p1', profileContext, 90, 55)
@@ -252,7 +252,7 @@ describe('saveToProfilePipeline — DUPLICATE gate', () => {
       title: '  community health initiative ', // whitespace/case drift
       sponsor: 'State Health Dept',
       deadline: '2027-01-15',
-      url: 'https://grants.example.gov/v2-moved',
+      url: 'https://grants.fixture-health.org/v2-moved',
       source: 'grants_gov',
     }
     const second = await saveToProfilePipeline(db, admissionReady(drifted), 'p1', profileContext, 90, 55)
@@ -378,7 +378,7 @@ describe('saveToProfilePipeline — FUNDING_RESULT gate (Gate 1.75, the 2026-08-
       id: 'opp-good-score',
       title: 'Strong Match Program',
       sponsor: 'Good Funder',
-      url: 'https://grants.example.gov/good',
+      url: 'https://grants.fixture-health.org/good',
       source: 'grants_gov',
     }
     const res = await saveToProfilePipeline(db, admissionReady(goodOpp), 'p1', profileContext, 90, 55)
@@ -403,7 +403,7 @@ describe('saveToProfilePipeline — RELEVANCE FLOOR', () => {
       id: 'opp-low',
       title: 'Barely Relevant Program',
       sponsor: 'Some Funder',
-      url: 'https://grants.example.gov/low',
+      url: 'https://grants.fixture-health.org/low',
       source: 'grants_gov',
       test_score: belowFloor,
     }
@@ -438,7 +438,7 @@ describe('saveToProfilePipeline — RELEVANCE FLOOR', () => {
       sponsor: 'NIH',
       description: 'Funding for cancer research projects',
       eligibility: 'nonprofits',
-      url: 'https://grants.example.gov/reject',
+      url: 'https://grants.fixture-health.org/reject',
       source: 'grants_gov',
       test_decision: 'REJECT',
     }
@@ -454,7 +454,7 @@ describe('saveToProfilePipeline — RELEVANCE FLOOR', () => {
       id: 'opp-good',
       title: 'Strong Match Program',
       sponsor: 'Good Funder',
-      url: 'https://grants.example.gov/good',
+      url: 'https://grants.fixture-health.org/good',
       source: 'grants_gov',
       test_score: RELEVANCE_FLOOR,
     }

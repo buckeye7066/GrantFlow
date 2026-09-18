@@ -1,3 +1,4 @@
+import { resolveApplicationUrl } from '../../shared/applicationTarget.js'
 /**
  * GET /api/profiles/:id/funding-sources
  *
@@ -188,8 +189,9 @@ router.get('/profiles/:id/funding-sources', async (req, res) => {
           matchExplain?.scoreScaleId ??
           null,
         ineligibility_reasons: jparse(row.ineligibility_reasons, row.ineligibility_reasons ?? []),
-        url: row.application_url ?? row.apply_url ?? row.source_url ?? null,
-        actionable_url: row.application_url ?? row.apply_url ?? row.source_url ?? null,
+        url: resolveApplicationUrl(row) ?? row.source_url ?? null,
+        actionable_url: resolveApplicationUrl(row) ?? row.source_url ?? null,
+        application_url: resolveApplicationUrl(row),
         is_directory: isFundingResource(row),
       }
     })
@@ -219,11 +221,11 @@ router.get('/profiles/:id/funding-sources', async (req, res) => {
         title: cleanExtractedText(row.title),
         sponsor: cleanExtractedText(row.sponsor),
         summary: cleanExtractedText(row.description),
-        url: row.application_url ?? row.apply_url ?? row.source_url ?? null,
+        url: resolveApplicationUrl(row) ?? row.source_url ?? null,
         // The shared filter chain reads these verbatim fields (an apply URL and
         // an EXPLICIT rolling deadline are fundable signals; a fabricated
         // is_rolling is not).
-        application_url: row.application_url ?? row.apply_url ?? null,
+        application_url: resolveApplicationUrl(row),
         source_url: row.source_url ?? null,
         external_id: row.external_id ?? null,
         source: row.source ?? null,
