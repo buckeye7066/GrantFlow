@@ -5,6 +5,7 @@ const appBase = String(basePath || '').replace(/\/+$/, '')
 const endpoint = (response, path) => new URL(response.url()).pathname === path
 
 test('Foundation signup saves answers, resumes, signs in and retains the new profile', async ({ page, browser }) => {
+  test.setTimeout(120_000)
   const email = `foundation-journey-${Date.now()}@example.invalid`
   const profileName = 'Foundation Journey Tester'
   const password = 'Foundation-Journey-2026!'
@@ -35,7 +36,6 @@ test('Foundation signup saves answers, resumes, signs in and retains the new pro
   await expect(page.locator('#county')).toHaveValue('Bradley')
   await clickAnswer('Continue', 'personal_subtype')
 
-  // Reload the actual page and verify that the durable interview resumes.
   const resumedResponse = page.waitForResponse((response) =>
     new URL(response.url()).pathname.startsWith('/api/onboarding/sessions/'))
   await page.reload({ waitUntil: 'domcontentloaded' })
@@ -60,7 +60,7 @@ test('Foundation signup saves answers, resumes, signs in and retains the new pro
   expect(completed.status(), JSON.stringify({ error: completion.error, detail: completion.detail })).toBe(201)
   expect(completion.profile_id).toBeTruthy()
   expect(completion.email).toBe(email)
-  // This is the isolated development email-token handoff, not proof of SMTP delivery.
+  // Isolated development token handoff does not prove production SMTP delivery.
   await expect(page).toHaveURL(/\/set-password\?token=/)
   await page.locator('#new-password').fill(password)
   await page.locator('#confirm-password').fill(password)
@@ -69,10 +69,15 @@ test('Foundation signup saves answers, resumes, signs in and retains the new pro
   await page.getByRole('button', { name: 'Set password & sign in', exact: true }).click()
   const setup = await setupResponse
   expect(setup.status()).toBe(200)
+  const setupUser = (await setup.json()).user
+  expect(setupUser.is_admin).toBe(false)
+  expect(setupUser.has_completed_onboarding).toBe(true)
+  expect(setupUser.profile_completion.next.effective_type).toBe('individual')
+  expect(setupUser.profile_completion.next.questions.map((question) => question.id)).toEqual(['financial_need'])
   await expect(page).toHaveURL(/\/Dashboard(?:\?|$)/)
-  console.log('Foundation journey: new account password setup and dashboard redirect succeeded')
+  console.log('Foundation journey: account creation retained personal type and completed onboarding')
 
-  // A new browser context proves login and storage without reusing session tokens.
+  // Fresh context: no reused session, administrator bypass, or pre-created account.
   const context = await browser.newContext({ baseURL: test.info().project.use.baseURL })
   try {
     const returning = await context.newPage()
@@ -83,12 +88,36 @@ test('Foundation signup saves answers, resumes, signs in and retains the new pro
     await returning.getByRole('textbox', { name: 'Password', exact: true }).fill(password)
     await returning.getByRole('button', { name: 'Sign in', exact: true }).click()
     await expect(returning).toHaveURL(/\/Dashboard(?:\?|$)/)
+    const profileResponse = returning.waitForResponse((response) =>
+      endpoint(response, `/api/profiles/${completion.profile_id}`) && response.request().method() === 'GET')
     await returning.goto(`${appBase}/ProfileDetail?id=${encodeURIComponent(completion.profile_id)}`)
+    const profileHttp = await profileResponse
+    expect(profileHttp.status()).toBe(200)
+    const profile = await profileHttp.json()
+    expect(profile.primary_type).toBe('individual')
+    expect(profile.billing.tier_id).toBe('foundation')
+    const sections = Object.fromEntries(profile.sections.map((section) => [section.section_key, section.data]))
+    expect(sections.basic_information).toMatchObject({ full_name: profileName, profile_type: 'individual', city: 'Cleveland', county: 'Bradley', state: 'TN', zip_code: '37312' })
+    expect(sections.financial_information.assistance_needs).toEqual(['utilities'])
+
+    // Complete the genuinely missing personal fact; never bypass the required gate.
+    const gate = returning.getByTestId('profile-completion-gate')
+    await expect(gate).toBeVisible()
+    await expect(gate.getByText(/What kind of organization/)).toHaveCount(0)
+    await gate.getByRole('textbox', { name: /Roughly how urgent is your financial need/ }).fill('high')
+    const answerResponse = returning.waitForResponse((response) =>
+      endpoint(response, `/api/profiles/${completion.profile_id}/completion-gate/answer`) && response.request().method() === 'POST')
+    await gate.getByRole('button', { name: 'Finish', exact: true }).click()
+    const answer = await answerResponse
+    expect(answer.status()).toBe(200)
+    expect((await answer.json()).complete).toBe(true)
+    await expect(gate).toBeHidden()
     await expect(returning.getByRole('heading', { name: profileName, exact: true }).first()).toBeVisible()
     await expect(returning.getByRole('link', { name: 'Admin Panel', exact: true })).toHaveCount(0)
     await returning.reload({ waitUntil: 'domcontentloaded' })
     await expect(returning.getByRole('heading', { name: profileName, exact: true }).first()).toBeVisible()
-    console.log('Foundation journey: independent login and persisted profile survived page reload')
+    await expect(returning.getByTestId('profile-completion-gate')).toHaveCount(0)
+    console.log('Foundation journey: independent login, required answer and saved profile survived reload')
   } finally {
     await context.close()
   }
