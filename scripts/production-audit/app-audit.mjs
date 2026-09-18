@@ -293,6 +293,24 @@ export async function createAuditPages(context) {
   return { page, capturePage };
 }
 
+export function summarizePortalRead(result) {
+  const body = result?.body ?? {};
+  const status = Number(result?.status) || 0;
+  const bodyOk = body.ok === true;
+  const readAccess = body.read?.access ?? body.summary?.read?.access ?? null;
+  const hitLoginWall = body.hit_login_wall === true || body.summary?.hit_login_wall === true || readAccess === 'signin_wall';
+  const needsSession = hitLoginWall || body.needs_session === true || body.summary?.needs_session === true
+    || (!bodyOk && /session|sign[- ]?in|login/i.test(String(body.error ?? '')));
+  let outcome = 'refused_or_failed';
+  if (needsSession) outcome = 'needs_session';
+  else if (status >= 200 && status < 300 && bodyOk) {
+    outcome = readAccess === 'authenticated' ? 'read_completed' : 'access_unproven';
+  }
+  return { http_status: status, body_ok: bodyOk, hit_login_wall: hitLoginWall, read_access: readAccess,
+    needs_session: needsSession, outcome, fields_found: body.read?.fields_found ?? null,
+    awards_found: body.read?.awards_found ?? null, error: body.error ?? null };
+}
+
 export function assessPortalReads(results = [], { requested = false, hosts = [], profileIds = [] } = {}) {
   if (!requested) return { ok: true, requested: false, expected_count: 0, completed_count: 0, failures: [] };
   const expected = [...new Set(profileIds.map(String))].flatMap(profileId =>
@@ -303,7 +321,8 @@ export function assessPortalReads(results = [], { requested = false, hosts = [],
     const matches = results.filter(row => row.profile_id === profileId && row.portal_host === host);
     const row = matches[0];
     const pass = matches.length === 1 && Number(row.http_status) >= 200 && Number(row.http_status) < 300
-      && row.body_ok === true && row.needs_session !== true && row.outcome === 'read_completed';
+      && row.body_ok === true && row.needs_session !== true && row.hit_login_wall !== true
+      && row.read_access === 'authenticated' && row.outcome === 'read_completed';
     if (pass) completed++;
     else failures.push({ profile_id: profileId, portal_host: host, http_status: Number(row?.http_status) || 0,
       outcome: row?.outcome || 'missing_result', result_count: matches.length });
@@ -623,41 +642,9 @@ async function main() {
       for (const profileId of args.profiles) {
         await step(`portal READ ${host} (profile ${profileId})`, async () => {
           const result = await apiPostRead('/api/hamilton/portal-sync/read', { profileId, portalHost: host }, profileId);
-          // Classify on the BODY, never the HTTP status.
-          //
-          // This route answers HTTP 200 with `{"ok": false, "error": "no
-          // authenticated session or saved login for this profile + portal
-          // host"}`. An earlier version keyed off res.ok (the HTTP status) and
-          // therefore reported three no-session failures as `read_completed` —
-          // the exact dishonesty this lane is supposed to avoid. A portal that
-          // could not be read must never be recorded as read.
-          const body = result?.body ?? {};
-          const bodyOk = body.ok === true;
-          const needsSession =
-            body.needs_session === true ||
-            body.summary?.needs_session === true ||
-            (!bodyOk && /session|sign[- ]?in|login/i.test(String(body.error ?? '')));
-
-          let outcome;
-          if (bodyOk) outcome = 'read_completed';
-          else if (needsSession) outcome = 'needs_session';
-          else outcome = 'refused_or_failed';
-
-          portalReadResults.push({
-            portal_host: host,
-            profile_id: profileId,
-            http_status: result?.status ?? 0,
-            body_ok: bodyOk,
-            needs_session: needsSession,
-            outcome,
-            // What the read actually PERSISTED, so "completed" can be checked
-            // against "found nothing", which are different facts.
-            fields_found: body.read?.fields_found ?? null,
-            awards_found: body.read?.awards_found ?? null,
-            error: body.error ?? null,
-            body,
-          });
-          return `HTTP ${result?.status} body.ok=${bodyOk} outcome=${outcome}`;
+          const summary = summarizePortalRead(result);
+          portalReadResults.push({ portal_host: host, profile_id: profileId, ...summary, body: result?.body ?? {} });
+          return `HTTP ${summary.http_status} body.ok=${summary.body_ok} outcome=${summary.outcome}`;
         });
       }
     }

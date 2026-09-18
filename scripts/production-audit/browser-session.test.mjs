@@ -9,11 +9,13 @@ test('read-only portal authentication survives visual page navigation without ex
   assert.equal(typeof audit.postAuditRead, 'function')
   const browser = await chromium.launch({ headless: true })
   let posted = 0
+  let receivedAuthorization
+  let receivedProfile
   const server = http.createServer((req, res) => {
     if (req.method === 'POST') {
       posted++
-      assert.equal(req.headers.authorization, 'Bearer local-synthetic-audit-session')
-      assert.equal(req.headers['x-profile-id'], 'synthetic-profile')
+      receivedAuthorization = req.headers.authorization
+      receivedProfile = req.headers['x-profile-id']
       res.writeHead(200, { 'content-type': 'application/json' }); res.end('{"ok":true,"read":{"fields_found":0}}'); return
     }
     res.writeHead(200, { 'content-type': 'text/html' }); res.end('<!doctype html><title>Local audit navigation test</title>')
@@ -32,6 +34,8 @@ test('read-only portal authentication survives visual page navigation without ex
     const result = await audit.postAuditRead(page, '/api/hamilton/portal-sync/read', { profileId: 'synthetic-profile', portalHost: 'portal.invalid' }, 'synthetic-profile')
     assert.equal(result.status, 200)
     assert.equal(result.body.ok, true)
+    assert.equal(receivedAuthorization, 'Bearer local-synthetic-audit-session')
+    assert.equal(receivedProfile, 'synthetic-profile')
     assert.equal(posted, 1)
     assert.doesNotMatch(JSON.stringify(result), /local-synthetic-audit-session/)
     await assert.rejects(audit.postAuditRead(page, '/api/hamilton/portal-sync/write', {}, 'synthetic-profile'), /read-only/)
