@@ -30,7 +30,7 @@
 import zipcodes from 'zipcodes'
 import { safeParseArrayField, resolveApplicantType, buildProfileSignals } from './profileHelpers.js'
 import { normalizeProfile } from './profileNormalizer.js'
-import { evaluateSchoolOrigin } from '../config/schoolOriginEligibility.js'
+import { evaluateSchoolOrigin, normalizeSchoolOrigin, schoolOriginPeriod } from '../config/schoolOriginEligibility.js'
 import { normalizeOpportunity, inferHousingClassification } from './opportunityNormalizer.js'
 import { haversineDistanceMiles } from './sharedGeo.js'
 import { listPresentProfileSignals } from './profileCoverage.js'
@@ -4393,14 +4393,13 @@ export function makeDecision(score, profile, opportunity, normalizedProfile = nu
     }
   }
 
-  const schoolOrigin = evaluateSchoolOrigin(np.schoolOrigin, on.schoolOriginRequirements)
+  const schoolOrigin = evaluateSchoolOrigin(np?.schoolOrigin ?? normalizeSchoolOrigin(sections), on.schoolOriginRequirements)
   if (schoolOrigin.ineligibilityReasons.length) {
     reasons.push(...schoolOrigin.ineligibilityReasons)
     return { decision: 'REJECT', explanation: schoolOrigin.ineligibilityReasons.join('; '), reasons }
   }
   if (schoolOrigin.missingFields.length) {
     reasons.push(...schoolOrigin.missingFields.map(field => `School-origin eligibility unconfirmed (missing: ${field})`))
-    return { decision: 'REVIEW', explanation: 'This scholarship requires a particular high-school graduation history. Confirm the declared school location, type and graduation year before applying; current residence is not evidence of school history.', reasons }
   }
 
   const profileTypeIsMissingOrGeneric = !profileType || profileType === 'organization'
@@ -4625,6 +4624,11 @@ export function makeDecision(score, profile, opportunity, normalizedProfile = nu
       reasons.push(`Geographic note — opportunity is in ${oppStateRaw}, profile is in ${profStateLabel} (may still be accessible)`)
       return { decision: 'REVIEW', explanation: `Opportunity is based in ${oppStateRaw} but may be accessible from ${profStateLabel}. Confirm eligibility on the program page.`, reasons }
     }
+  }
+
+  // Missing school evidence is a soft hold, never a way around hard applicant or geography gates.
+  if (schoolOrigin.missingFields.length) {
+    return { decision: 'REVIEW', explanation: 'This scholarship requires a particular high-school graduation history. Confirm the declared school location, type and graduation year before applying; current residence is not evidence of school history.', reasons }
   }
 
   // Matching funds are a cost/feasibility signal, not an absolute exclusivity
@@ -4874,6 +4878,8 @@ export function computeMatchDecision(rawProfile, rawOpportunity, opts = {}) {
     confidence_reasons,
     confidence_band,
   } = scoreResult
+  // Calendar-dependent school evidence must expire even without a profile edit.
+  if (oppNorm.schoolOriginRequirements?.length) match_explain.school_origin_period = schoolOriginPeriod()
 
   // Hard eligibility gate.
   // Geography is intentionally excluded here because makeDecision() has the

@@ -125,3 +125,61 @@ it('does not hard-reject verified school history because the funder state differ
   expect(decision.decision).not.toBe('REJECT')
   expect(decision.missingEligibilityFields.filter(field => field.startsWith('education.high_school_'))).toEqual([])
 })
+
+describe('direct makeDecision compatibility and hard-gate priority', () => {
+  const student = { ...profile, primary_type: 'college_student' }
+  it('handles a direct caller without a normalized profile or school requirement', async () => {
+    const { makeDecision } = await import('../services/matchEngine.js')
+    expect(() => makeDecision(90, student, { ...opportunity, description: 'Education assistance for students.' })).not.toThrow()
+  })
+  it('uses supplied school sections when the caller has not normalized the profile', async () => {
+    const { makeDecision } = await import('../services/matchEngine.js')
+    const data = sections({ high_school_county: 'Raleigh', high_school_state: 'WV', high_school_type: 'public' })
+    const result = makeDecision(90, student, opportunity, null, null, null, data)
+    expect(result.decision).toBe('ACCEPT')
+    expect(result.reasons.join(' ')).not.toMatch(/School-origin eligibility unconfirmed/)
+  })
+  it('keeps an unconfirmed direct school-history caller at REVIEW without throwing', async () => {
+    const { makeDecision } = await import('../services/matchEngine.js')
+    const result = makeDecision(90, student, opportunity, null, null, null, sections())
+    expect(result.decision).toBe('REVIEW')
+    expect(result.reasons.join(' ')).toMatch(/education.high_school_county/)
+  })
+  it('rejects a direct caller with a stated contradictory graduation county', async () => {
+    const { makeDecision } = await import('../services/matchEngine.js')
+    const result = makeDecision(90, student, opportunity, null, null, null, sections({ high_school_county: 'Bradley', high_school_type: 'public' }))
+    expect(result.decision).toBe('REJECT')
+    expect(result.explanation).toMatch(/Raleigh County/i)
+  })
+  it('does not let missing school facts bypass a known exclusive residency mismatch', async () => {
+    const { makeDecision } = await import('../services/matchEngine.js')
+    const row = { ...opportunity, state: 'WV', is_national: false, state_residents_only: true }
+    const data = sections()
+    const result = makeDecision(90, student, row, normalizeProfile(student, data), null, null, data)
+    expect(result.decision).toBe('REJECT')
+    expect(result.explanation).toMatch(/Geographic mismatch/)
+  })
+})
+
+it.each(['education_information', 'student'])('reads explicit completed school history from legacy %s sections', sectionName => {
+  const norm = normalizeProfile(profile, { [sectionName]: { ...baseEducation, high_school_county: 'Bradley', high_school_type: 'public' } })
+  expect(evaluateEligibility(norm, normalizeOpportunity(opportunity)).eligible).toBe(false)
+})
+it('retains a current restriction when the fund establishment date is historical', () => {
+  const row = { ...opportunity, description: 'The fund was established in 2000 and is available to graduates of public high schools in Raleigh County.' }
+  expect(evaluate({ high_school_county: 'Bradley', high_school_type: 'public' }, row).eligible).toBe(false)
+})
+it.each([
+  'Open to graduates of a public high school in Raleigh County, WV, or an adjacent county.',
+  'Open to graduates of a public high school in Raleigh County, West Virginia, or an adjacent county.',
+])('preserves an alternative after a comma-delimited school state: %s', description => {
+  expect(missing(evaluate({}, { ...opportunity, description }))).toEqual([])
+  expect(evaluate({ high_school_county: 'Fayette', high_school_state: 'WV', high_school_type: 'public' }, { ...opportunity, description }).eligible).toBe(true)
+})
+it('does not apply beneficiary school history to an organizational applicant', () => {
+  const row = { ...opportunity, entity_types_allowed: ['nonprofit'], description: 'Funding is available to nonprofit organizations providing scholarships to graduates of public high schools in Raleigh County.' }
+  const nonprofit = normalizeProfile({ primary_type: 'nonprofit', entity_type: 'nonprofit', state: 'TN', needs: ['education'], is_nonprofit: true }, {})
+  const result = evaluateEligibility(nonprofit, normalizeOpportunity(row))
+  expect(missing(result)).toEqual([])
+  expect(result.ineligibilityReasons.join(' ')).not.toMatch(/school/i)
+})

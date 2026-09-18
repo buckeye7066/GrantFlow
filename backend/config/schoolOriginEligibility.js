@@ -6,7 +6,9 @@ const SCHOOL_COUNTY = /\b(?:graduates?\s+(?:of|from)|graduated\s+from)\s+(?:(?:a
 const COUNTY_GRADUATES = /\bfor\s+([a-z][a-z .'-]{0,70}?)\s+County(?:\s*,\s*([a-z]+(?:\s+[a-z]+){0,2}?))?\s+(?:(public|private)\s+)?high[- ]school\s+graduates?\b/gi
 const HISTORICAL = /\b(?:was|were|previous(?:ly)?|formerly|last\s+year|past\s+recipient|donor|founder)\b/i
 const NONEXCLUSIVE = /\b(?:not|never|preference|prefer(?:red|ence)?|priority|may|regardless|including|such\s+as)\b/i
-const REQUIRED = /\b(?:must|required|restricted|eligible|eligibility|open\s+to|available\s+to|awarded\s+to|offered\s+to)\b/i
+const REQUIRED = /\b(?:must\s+(?:be|have)|required\s+to\s+(?:be|have)|(?:restricted|limited|open|available|awarded|offered)\s+to|eligible\s+if\s+(?:they|you)(?:\s+are)?)\s*(?:(?:a|an|the|any)\s+)?$/i
+const REVERSE_SUBJECT = /^\s*(?:(?:the|a|this)\s+)?(?:scholarship|award|program|fund)s?\s+(?:(?:is|are|will\s+be)\s+)?$/i
+const CURRENT_BINDING = /\b(?:is|are|will)\b[^.!?;]*$/i
 const WIDENED = /^\s*(?:,\s*)?(?:or\b|(?:and\s+)?(?:surrounding|adjacent|neighbou?ring|other|nearby)\b|(?:and|,|\/|&)\s*[a-z .'-]+\s+count(?:y|ies)\b)/i
 const unknown = value => !value || /^(?:unknown|unspecified|not specified|n\/?a|none|prefer not to say)$/i.test(value)
 const countyName = value => {
@@ -17,8 +19,15 @@ function objectValue(value) {
   if (typeof value === 'string') { try { value = JSON.parse(value) } catch { return {} } }
   return value && typeof value === 'object' && !Array.isArray(value) ? value : {}
 }
+/** UTC keeps fingerprints, database selection and deployed workers on the same boundary. */
+export function schoolOriginPeriod(now = new Date()) {
+  return `${now.getUTCFullYear()}-H${now.getUTCMonth() < 6 ? 1 : 2}`
+}
+function graduationCompleted(year, now = new Date()) {
+  return Boolean(year && (year < now.getUTCFullYear() || (year === now.getUTCFullYear() && now.getUTCMonth() >= 6)))
+}
 export function normalizeSchoolOrigin(sections) {
-  const section = objectValue(sections?.education)
+  const section = objectValue(sections?.education ?? sections?.education_information ?? sections?.student)
   const education = objectValue(section.answers ?? section)
   const type = String(education.high_school_type ?? '').trim().toLowerCase()
   const year = Number(education.high_school_graduation_year)
@@ -27,6 +36,7 @@ export function normalizeSchoolOrigin(sections) {
     state: normalizeStateCode(education.high_school_state),
     type: ['public', 'private'].includes(type) ? type : null,
     graduationYear: Number.isInteger(year) && year >= 1900 && year <= 2200 ? year : null,
+    graduationCompleted: Number.isInteger(year) && year >= 1900 && year <= 2200 && graduationCompleted(year),
   }
 }
 function sourceText(value) {
@@ -40,13 +50,17 @@ function sourceText(value) {
 }
 function explicitState(after) {
   const match = after.match(/^\s*,\s*([a-z .'-]+)/i)
-  if (!match) return null
-  const words = match[1].trim().split(/\s+/)
-  for (let count = Math.min(words.length, 3); count > 0; count -= 1) {
-    const state = normalizeStateCode(words.slice(0, count).join(' ').replace(/[.,]+$/, ''))
-    if (state) return state
+  if (!match) return { state: null, remainder: after }
+  const words = [...match[1].matchAll(/[a-z]+/gi)].slice(0, 3)
+  for (let count = words.length; count > 0; count -= 1) {
+    const state = normalizeStateCode(words.slice(0, count).map(word => word[0]).join(' '))
+    if (state) {
+      const last = words[count - 1]
+      const consumed = match[0].length - match[1].length + last.index + last[0].length
+      return { state, remainder: after.slice(consumed) }
+    }
   }
-  return null
+  return { state: null, remainder: after }
 }
 export function schoolOriginRequirements(row) {
   const requirements = []
@@ -62,9 +76,14 @@ export function schoolOriginRequirements(row) {
         const before = sentence.slice(0, match.index)
         const after = sentence.slice(match.index + match[0].length)
         const standaloneBullet = field.startsWith('eligibility_') && /^\s*(?:[-*]|\d+[.)])?\s*$/.test(before)
-        if (NONEXCLUSIVE.test(before) || HISTORICAL.test(before) || (!candidate.reverse && !standaloneBullet && !REQUIRED.test(before)) || WIDENED.test(after)) continue
+        const stateSuffix = explicitState(after)
+        const historical = HISTORICAL.test(before) && !CURRENT_BINDING.test(before)
+        const subjectBound = candidate.reverse
+          ? !before.trim() || REVERSE_SUBJECT.test(before)
+          : standaloneBullet || REQUIRED.test(before)
+        if (!subjectBound || NONEXCLUSIVE.test(before) || historical || WIDENED.test(after) || WIDENED.test(stateSuffix.remainder)) continue
         const county = countyName(candidate.county)
-        if (county) requirements.push({ county, state: candidate.reverse ? candidate.state : explicitState(after), type: candidate.type?.toLowerCase() ?? null, field, evidence: sentence.trim() })
+        if (county) requirements.push({ county, state: candidate.reverse ? candidate.state : stateSuffix.state, type: candidate.type?.toLowerCase() ?? null, field, evidence: sentence.trim() })
       }
     }
   }
@@ -76,7 +95,7 @@ export function evaluateSchoolOrigin(origin, requirements, now = new Date()) {
   const ineligibilityReasons = [], missingFields = []
   for (const rule of requirements ?? []) {
     const year = origin?.graduationYear
-    const completed = year && (year < now.getFullYear() || (year === now.getFullYear() && now.getMonth() >= 6))
+    const completed = graduationCompleted(year, now)
     if (!completed) missingFields.push('education.high_school_graduation_year')
     if (!origin?.county) missingFields.push('education.high_school_county')
     else if (completed && origin.county !== rule.county) ineligibilityReasons.push(`Requires graduation from a high school in ${rule.county} County; declared high school is in ${origin.county} County`)

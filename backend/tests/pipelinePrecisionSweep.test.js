@@ -543,3 +543,34 @@ it('a task becoming submission-uncertain between planning and repair is not a cl
       .toEqual({application_url:vendor,url:vendor,match_decision:'REVIEW',eligibility_status:'ineligible',ineligibility_reasons:warning})
   } finally {sqlite.close()}
 })
+
+it.each([
+  { status: 'discovered', county: 'Bradley', expected: 'removed' },
+  { status: 'saved', county: 'Bradley', expected: 'flagged' },
+  { status: 'saved', county: null, expected: 'review' },
+])('existing pipeline reconciliation applies school history: $status / $expected', async ({ status, county, expected }) => {
+  const row = { id: 'school-origin', t: 'Community Education Scholarship', s: 'Community Foundation', ent: ['student'], cats: ['education'], url: 'https://example-rcf.org/apply', status }
+  const { sqlite, db } = seed([row])
+  try {
+    sqlite.prepare('UPDATE funding_opportunities SET description=? WHERE id=?').run('Scholarships are restricted to graduates of a public high school in Raleigh County.', 'fo-school-origin')
+    const old = JSON.parse(sqlite.prepare('SELECT data FROM profile_sections WHERE profile_id=? AND section_key=?').get(PROFILE_ID, 'education').data)
+    sqlite.prepare('UPDATE profile_sections SET data=? WHERE profile_id=? AND section_key=?').run(JSON.stringify({ ...old, high_school_graduation_year: 2020, high_school_county: county, high_school_type: 'public' }), PROFILE_ID, 'education')
+    sqlite.prepare('UPDATE grants SET match_decision=?, match_score=? WHERE id=?').run('ACCEPT', 90, 'g-school-origin')
+    const result = await enforcePipelinePrecision(db)
+    expect(result.ok).toBe(true)
+    expect(result.rescored).toBe(1)
+    expect(result.failed).toBe(0)
+    expect(sqlite.prepare('SELECT id FROM funding_opportunities WHERE id=?').get('fo-school-origin')).toBeTruthy()
+    const grant = sqlite.prepare('SELECT * FROM grants WHERE id=?').get('g-school-origin')
+    if (expected === 'removed') {
+      expect(grant).toBeUndefined()
+      expect(result.removed).toBe(1)
+    } else {
+      expect(grant.status).toBe(status)
+      expect(grant.funding_opportunity_id).toBe('fo-school-origin')
+      expect(grant.match_decision).toBe(expected === 'review' ? 'REVIEW' : 'REJECT')
+      if (expected === 'flagged') expect(grant.eligibility_status).toBe('ineligible')
+      if (expected === 'review') expect(grant.eligibility_status).not.toBe('ineligible')
+    }
+  } finally { sqlite.close() }
+})
