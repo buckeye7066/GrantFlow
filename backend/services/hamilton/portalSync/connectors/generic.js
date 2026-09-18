@@ -21,10 +21,11 @@
 
 import { registrableDomain } from '../../hamiltonPortalCredentialService.js'
 import { extractPortalDataWithLLM } from '../llmPageExtract.js'
+import { observeGenericAccess } from '../genericAccess.js'
 
 const GENERIC_NOTE =
-  'Signed in successfully, but there is no structured data connector for this portal yet, ' +
-  'so no fields were read/written. (A dedicated connector is needed to map this portal.)'
+  'Authenticated access was observed, but no supported personal fields or awards were extracted. ' +
+  'This generic connector cannot certify a complete portal synchronization.'
 
 /**
  * Navigation candidates, in order: the saved credential's login_url (the URL the
@@ -109,21 +110,34 @@ const generic = {
       }
     }
 
-    // Selector-independent extraction from the authenticated page text.
-    const llm = await extractPortalDataWithLLM(page, { log, navCandidates: [nav.url] })
+    const observed = await observeGenericAccess(page, ctx, nav.url)
+    const refuse = observation => ({
+      reached: true, access: observation.access, fields: [], awards: [], rejected: [],
+      notFound: [observation.access === 'signin_wall' ? 'The portal requires a fresh sign-in session.'
+        : observation.access === 'blocked' ? 'The portal blocked this browser; authentication was not verified.'
+        : 'Authenticated account controls were not observed; no personal data was extracted.'],
+      raw: { navigated: nav, pages: [observation.page] },
+    })
+    if (observed.access !== 'authenticated') return refuse(observed)
+    // Generic portals have no reviewed private-page map. Read only the observed
+    // account page; following arbitrary links cannot inherit its authentication proof.
+    const llm = await extractPortalDataWithLLM(page, { log, maxPages: 1 })
+    const after = await observeGenericAccess(page, ctx, nav.url)
+    if (after.access !== 'authenticated') return refuse(after)
     const notFound = (llm.notFound || []).slice()
     if ((llm.awards || []).length === 0 && (llm.fields || []).length === 0) {
       // Nothing extracted — keep the honest generic note alongside the reason.
       notFound.push(GENERIC_NOTE)
     }
     return {
+      reached: true, access: after.access,
       fields: llm.fields || [],
       awards: llm.awards || [],
       // Fabrication-guard audit trail: what the extractor REFUSED to record as
       // user awards (listing/marketing entries) — surfaced in the run summary.
       rejected: llm.rejected || [],
       notFound,
-      raw: { navigated: nav, llm: llm.raw },
+      raw: { navigated: nav, pages: [after.page], llm: llm.raw },
     }
   },
 

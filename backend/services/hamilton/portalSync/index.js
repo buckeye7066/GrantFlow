@@ -1,3 +1,4 @@
+import { portalAccessFailureDetail } from '../../../../shared/portalSyncMessages.js'
 /**
  * portalSync/index.js
  *
@@ -765,6 +766,20 @@ async function runPortalSyncInner(db, { profileId, host, dir, actorUserId, fligh
       if (readResult?.access === 'signin_wall' && savedSession?.id) {
         hitLoginWall = true
         await markSessionDeadAfterWall(db, savedSession, host).catch(() => {})
+      }
+      // A saved session is not proof of access. Never persist personal data or
+      // award a successful-sync timestamp after an explicitly unverified read.
+      const observedAccess = readResult?.access || (connectorId === 'generic' ? 'unknown' : null)
+      if (observedAccess && observedAccess !== 'authenticated') {
+        return await fail('portal_access_unproven', {
+          detail: portalAccessFailureDetail(observedAccess),
+          needs_session: observedAccess === 'signin_wall',
+          read: { access: observedAccess, fields_found: 0, awards_found: 0,
+            pages: (readResult?.raw?.pages || []).map(p => ({
+              url: p?.url || null, landed: p?.landed || null, title: p?.title || null,
+              chars: p?.chars ?? null, access: p?.access || null,
+            })) },
+        })
       }
       const persisted = await persistReadResult(db, { profileId, portalHost: host, actorUserId, readResult })
       result.read = {
