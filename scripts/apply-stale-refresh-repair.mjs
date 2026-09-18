@@ -6,6 +6,7 @@ const originals = {
   'backend/services/matching/staleMatchExplainRefresh.js': '0dae55768e5c92862fdf79922a8d9e54c2418417',
   'backend/startup/enforceInvariants.js': 'b65d14d89af8337beb39b8d2c13e4710faaf8a9a',
   'backend/server.js': '16af82931c4c8e7b3c65d8d6171ee5a1d572aeb7',
+  'backend/tests/enforceInvariants.test.js': '0e99c534aa5cec00f113926d310c2eb44ff952c0',
 }
 const sources = new Map()
 for (const [file, expected] of Object.entries(originals)) {
@@ -82,5 +83,15 @@ edit(server, anchor, anchor + `
           if (!explainRefresh.ok) {
             console.warn('[stale-match-explain] recurring refresh failed:', explainRefresh)
           }`)
+edit('backend/tests/enforceInvariants.test.js', `    expect(summary.ran).toBe(70)
+    expect(summary.failed).toBe(0)
+    expect(summary.steps.map((s) => s.name)).toEqual([`, `    expect(summary.ran).toBe(70)
+    // This minimal fixture lacks the match store. Its failed candidate query
+    // must remain visible instead of being reported as successful maintenance.
+    expect(summary.failed).toBe(1)
+    expect(summary.steps.filter((step) => !step.ok)).toEqual([
+      expect.objectContaining({ name: 'stale_match_explain_refresh', ok: false, skipped: 'query', repaired: 0, scanned: 0 }),
+    ])
+    expect(summary.steps.map((s) => s.name)).toEqual([`)
 for (const [file, source] of sources) fs.writeFileSync(file, source)
 console.log('EXACT_REPAIR_APPLIED', JSON.stringify({ files: [...sources.keys()], acceptance_policy_changed: false, batch_budget_increased: false }))

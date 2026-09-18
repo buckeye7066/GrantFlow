@@ -77,7 +77,7 @@ jobs:
         run: |
           current=$(gh api repos/${GITHUB_REPOSITORY}/git/ref/heads/fix/stale-refresh-batch-honesty --jq '.object.sha')
           test "$current" = "$EXPECTED_HEAD"
-          git add backend/services/matching/staleMatchExplainRefresh.js backend/startup/enforceInvariants.js backend/server.js
+          git add backend/services/matching/staleMatchExplainRefresh.js backend/startup/enforceInvariants.js backend/server.js backend/tests/enforceInvariants.test.js
           git -c user.name='github-actions[bot]' -c user.email='41898282+github-actions[bot]@users.noreply.github.com' commit -m 'fix(matching): resume bounded stale refresh and preserve failure diagnostics'
           git push "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" HEAD:fix/stale-refresh-batch-honesty
           echo "VALIDATED_REPAIR_HEAD=$(git rev-parse HEAD)"

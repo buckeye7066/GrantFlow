@@ -1,4 +1,5 @@
 import fs from 'node:fs'
+import { compileFunction } from 'node:vm'
 import { describe, expect, it, vi } from 'vitest'
 
 // Execute the actual scheduling function without opening a server or external connections.
@@ -17,7 +18,7 @@ function schedulerFixture({ boot, signal, refreshResult = { ok: true, scanned: 2
     throw new Error('Unexpected scheduler dependency: ' + path)
   }
   const logger = { log: vi.fn(), warn: vi.fn() }
-  const factory = new Function('app', 'runLinkVerification', 'runWithSchedulerLock', 'console', 'setTimeout', 'setInterval', 'dependencyImport', body + '\nreturn scheduleLinkVerification')
+  const factory = compileFunction(body + '\nreturn scheduleLinkVerification', ['app', 'runLinkVerification', 'runWithSchedulerLock', 'console', 'setTimeout', 'setInterval', 'dependencyImport'])
   const schedule = factory({ locals: { bootMaintenancePromise: boot } }, async () => { sequence.push('links'); return {} },
     async (_db, _options, callback) => callback({ signal }), logger,
     callback => timers.push(callback), () => {}, dependencyImport)
