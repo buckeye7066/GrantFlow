@@ -34,9 +34,8 @@ function parseJsonLoose(text) {
   if (!raw) return null
   const direct = safeParseJSON(raw, null)
   if (direct && typeof direct === 'object') return direct
-  const first = raw.indexOf('{')
-  const last = raw.lastIndexOf('}')
-  return first >= 0 && last > first ? safeParseJSON(raw.slice(first, last + 1), null) : null
+  const fenced = raw.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/i)
+  return fenced ? safeParseJSON(fenced[1], null) : null
 }
 
 /** Allow only credentials dedicated to free/self-hosted routes. */
@@ -213,7 +212,7 @@ async function invokeRoutes({
             messages,
             temperature,
             max_tokens: maxTokens,
-          }, { signal: attemptSignal })
+          }, { signal: attemptSignal, maxRetries: 0 })
         },
         {
           timeoutMs: Math.max(500, Math.floor(remainingMs / routesLeft)),
@@ -223,11 +222,14 @@ async function invokeRoutes({
       )
       const raw = String(completion?.choices?.[0]?.message?.content ?? '').trim()
       if (!raw) throw new Error('route returned an empty response')
+      const finish = completion?.choices?.[0]?.finish_reason
+      if (finish && finish !== 'stop') throw new Error('route returned invalid JSON or incomplete text')
       const common = {
         ok: true,
         provider: `free:${route.id}`,
         route_id: route.id,
         model: route.model,
+        billing_mode: 'free_or_local',
         raw,
         usage: completion?.usage ?? null,
         degraded: true,
