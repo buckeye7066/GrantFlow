@@ -433,3 +433,35 @@ describe("Sam check `recall.scorecard`", () => {
     try { expect((await check.run({ db: thin })).ok).toBe(true) } finally { thin.close() }
   })
 })
+
+
+describe('degraded extraction is not evidence of an admission-gate defect', () => {
+  const partial = laneRecord({ extracted: 1, provider_health: { search: 'healthy', llm: 'degraded' }, stage_ledger: { ...STUDENT.stage_ledger, candidates_extracted: 1, extraction_failed: 3, extraction_failed_by_class: { llm_quota: 3 }, qualified_admitted: 0 } })
+  it('classifies provider degradation before gate and query-budget claims', () => {
+    const result = classifyRecallBlocker({ lane: partial, audit: BELOW })
+    expect(result.blocker).toBe('extraction_degraded')
+    expect(result.detail).toMatchObject({ llm_quota: 3 })
+    expect(classifyRecallBlocker({ lane: partial, audit: MET }).blocker).toBe(RECALL_BLOCKER.MET_TARGET)
+  })
+  it.each(['degraded', 'unavailable'])('retains all counts but excludes %s runs from the healthy-extraction alarm denominator', async (llm) => {
+    const db = makeDb()
+    try {
+      const audits = []
+      for (let i = 0; i < 3; i++) {
+        const id = 'partial-' + i
+        seedProfile(db, id)
+        await recordWebLaneRun(db, { profileId: id, telemetry: { ...partial, provider_health: { search: 'healthy', llm } } })
+        audits.push({ ...BELOW, profile_id: id })
+      }
+      const fleet = await buildFleetRecallScorecard(db, { audits })
+      expect(fleet.totals.candidates_extracted).toBe(3)
+      expect(fleet.rows).toHaveLength(3)
+      expect(fleet.metric_envelope.provider_health.extraction_alive_runs).toBe(0)
+      expect(fleet.shares.admitted_zero_while_alive).toBeNull()
+      await recordRecallScorecard(db, fleet)
+      const result = await getCheckById('recall.scorecard').run({ db })
+      expect(result.summary).not.toMatch(/DEAD BELOW EXTRACTION/)
+      expect(result.recommended_fix ?? '').not.toMatch(/gate|eligibility evidence/i)
+    } finally { db.close() }
+  })
+})

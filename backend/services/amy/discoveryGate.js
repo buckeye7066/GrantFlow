@@ -215,11 +215,17 @@ export function classifyWebLane(lane, { primaryAttribution = null } = {}) {
     out.llm = 'not_run'
   }
 
+  // Candidate counts prove some extraction, not a fully healthy provider.
+  // Preserve the lane's explicit partial/down verdict for coverage credit.
+  const reportedLlm = lane.provider_health?.llm
+  if (reportedLlm === 'degraded' || reportedLlm === 'unavailable') out.llm = reportedLlm
+
   if (search === 'unavailable') {
     return finish({ ...out, reason: DISCOVERY_BLOCK_REASON.PROVIDER_UNAVAILABLE, detail: 'every_search_query_unavailable' })
   }
-  if (out.extraction === 'failed') {
-    return finish({ ...out, reason: DISCOVERY_BLOCK_REASON.EXTRACTION_FAILED, detail: `zero_extractions_on_${counters.fetched}_fetched_pages` })
+  if (out.extraction === 'failed' || out.llm === 'unavailable') {
+    const detail = out.extraction === 'failed' ? `zero_extractions_on_${counters.fetched}_fetched_pages` : 'llm_reported_unavailable'
+    return finish({ ...out, reason: DISCOVERY_BLOCK_REASON.EXTRACTION_FAILED, detail })
   }
   if (out.extraction === 'none_fetched') {
     return finish({ ...out, reason: DISCOVERY_BLOCK_REASON.EXTRACTION_FAILED, detail: `zero_pages_fetched_of_${counters.pages}` })
@@ -230,10 +236,10 @@ export function classifyWebLane(lane, { primaryAttribution = null } = {}) {
   // the run evaluable for the other detectors (an ineligible ACCEPT is an
   // ineligible ACCEPT whatever the SERP did) but cannot make a member clean.
   out.evaluable = true
-  out.recall_measurable = search === 'healthy'
-  if (search === 'degraded') {
+  out.recall_measurable = search === 'healthy' && out.llm !== 'degraded'
+  if (search === 'degraded' || out.llm === 'degraded') {
     out.reason = DISCOVERY_BLOCK_REASON.PROVIDER_DEGRADED
-    out.detail = 'search_degraded_recall_unmeasurable'
+    out.detail = out.llm === 'degraded' ? 'llm_degraded_recall_unmeasurable' : 'search_degraded_recall_unmeasurable'
   } else if (search === 'unknown') {
     out.reason = DISCOVERY_BLOCK_REASON.PROVIDER_UNKNOWN
     out.detail = 'search_provenance_unknown_recall_unmeasurable'

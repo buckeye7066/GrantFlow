@@ -398,3 +398,24 @@ describe('classifyWebLane — the one choke point', () => {
     expect(degraded.class).toBe(blockedClass(DISCOVERY_BLOCK_REASON.PROVIDER_DEGRADED))
   })
 })
+
+
+describe('partial LLM failures cannot certify full cohort coverage', () => {
+  it('retains precision evaluation, withholds clean/recall credit, and creates no query-builder accusation', () => {
+    const ev = evaluate({ lane: laneHealthy({ provider_health: { search: 'healthy', llm: 'degraded' } }), recommendations: countyNamed() })
+    expect(ev.discovery_gate.evaluable).toBe(true)
+    expect(ev.discovery_gate.recall_measurable).toBe(false)
+    expect(ev.provider_health.llm).toBe('degraded')
+    expect(ev.discovery_gate.class).toBe('discovery_blocked:provider_degraded')
+    expect(isCleanEvaluation(ev)).toBe(false)
+    expect(receiptFor([ev]).outcomes).toMatchObject({ clean: 0, unevaluable: 1 })
+    expect(classifyProbeOutcome(ev)).toBe(PROBE_OUTCOME.UNKNOWN)
+    expect(buildApprovalQueue([ev]).filter((item) => item.lever === 'query_breadth')).toHaveLength(0)
+  })
+  it('never upgrades explicit LLM unavailability merely because some candidates exist', () => {
+    const gate = classifyWebLane(laneHealthy({ provider_health: { search: 'healthy', llm: 'unavailable' } }))
+    expect(gate.llm).toBe('unavailable')
+    expect(gate.evaluable).toBe(false)
+    expect(gate.recall_measurable).toBe(false)
+  })
+})

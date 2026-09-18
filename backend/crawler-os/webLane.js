@@ -335,7 +335,8 @@ function summarizeProviderHealth(result, llmStats) {
   }
   let llm = 'unknown';
   if (result.fetched > 0) {
-    if (llmStats.ok_pages > 0) llm = 'healthy';
+    // A working page cannot erase quota/time-out losses elsewhere in this run.
+    if (llmStats.ok_pages > 0) llm = llmStats.llm_failed_pages > 0 ? 'degraded' : 'healthy';
     else if (llmStats.llm_failed_pages > 0) llm = 'unavailable';
   }
   const detail = {
@@ -1163,7 +1164,7 @@ export async function runWebDiscoveryLane(deps, opts = {}) {
   // and (at the choke point) primary_attribution — never hidden behind ok:true.
   result.provider_health = summarizeProviderHealth(result, llmStats);
   result.extraction_available = result.provider_health.llm === 'unavailable' ? false
-    : (result.provider_health.llm === 'healthy' ? true : null);
+    : (['healthy', 'degraded'].includes(result.provider_health.llm) ? true : null);
   if (result.provider_health.llm === 'unavailable') {
     result.reason = `extraction_failed:${dominantFailureClass(result.stage_ledger.extraction_failed_by_class) || 'unknown'}`;
   } else if (result.provider_health.search === 'unavailable') {

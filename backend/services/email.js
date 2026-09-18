@@ -37,15 +37,25 @@ function getFromEmail() {
   return s ? s : null
 }
 
-// The canonical link back to GrantFlow, appended to every outbound email
-// (user-facing and internal) so no email is ever a dead end -- configurable
-// via the same env var the OTP sign-in link already used, defaulting to the
-// Axiom Biolabs marketing-site URL (verified live 2026-07-06: redirects to
-// the working app rather than 404ing, despite a past DNS-drift incident
-// logged in docs/ERROR_LEDGER.md).
-const GRANTFLOW_LINK_URL = String(
-  process.env.GRANTFLOW_SIGNIN_URL || 'https://www.axiombiolabs.org/grantflow',
-).trim()
+// One application destination for verification messages and every email footer.
+// The marketing /grantflow page no longer redirects into the app. Normalize
+// that retired setting too, rather than fixing only installations with no env.
+function grantFlowSignInUrl() {
+  const fallback = 'https://app.axiombiolabs.org/login'
+  const configured = String(process.env.GRANTFLOW_SIGNIN_URL || '').trim()
+  if (!configured) return fallback
+  try {
+    const url = new URL(configured)
+    if (!['https:', 'http:'].includes(url.protocol) || url.username || url.password) return fallback
+    if (['www.axiombiolabs.org', 'axiombiolabs.org'].includes(url.hostname) &&
+        /^\/grantflow(?:\/login)?\/?$/i.test(url.pathname)) {
+      return fallback + url.search + url.hash
+    }
+    return url.toString()
+  } catch {
+    return fallback
+  }
+}
 
 function escapeHtml(value) {
   return String(value)
@@ -58,7 +68,7 @@ function escapeHtml(value) {
 
 /** HTML snippet linking back to GrantFlow -- append to every email template's HTML body. */
 export function grantFlowLinkFooterHtml() {
-  const safeUrl = escapeHtml(GRANTFLOW_LINK_URL)
+  const safeUrl = escapeHtml(grantFlowSignInUrl())
   return `<p style="margin-top: 24px; padding-top: 16px; border-top: 1px solid #e2e8f0; font-size: 13px; color: #64748b;">
           <a href="${safeUrl}" style="color: #2563eb;">Open GrantFlow</a>
         </p>`
@@ -66,7 +76,7 @@ export function grantFlowLinkFooterHtml() {
 
 /** Plain-text footer linking back to GrantFlow -- append to every email template's text body. */
 export function grantFlowLinkFooterText() {
-  return `\n\n---\nOpen GrantFlow: ${GRANTFLOW_LINK_URL}`
+  return `\n\n---\nOpen GrantFlow: ${grantFlowSignInUrl()}`
 }
 
 /**
@@ -192,10 +202,7 @@ export async function sendVerificationEmail(email, code) {
     const from = getFromEmail()
     if (!from) return false
 
-    // The sign-in URL points at the public GrantFlow landing page on the
-    // Axiom Biolabs website (configurable, but defaults there on purpose so
-    // every sign-in email also drives traffic to the marketing site).
-    const signInUrl = String(process.env.GRANTFLOW_SIGNIN_URL || 'https://www.axiombiolabs.org/grantflow').trim()
+    const signInUrl = grantFlowSignInUrl()
     const safeSignInUrl = signInUrl
       .replace(/&/g, '&amp;')
       .replace(/"/g, '&quot;')

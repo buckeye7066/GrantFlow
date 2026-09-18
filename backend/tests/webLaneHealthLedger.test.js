@@ -23,6 +23,7 @@ import {
   getLastWebLaneRun,
   buildWebLaneRunRecord,
   MIN_RUNS_TO_JUDGE,
+  JUDGE_LAST_N,
   LAST_RUN_KV_KEY,
   LAST_RUN_MAX_PROFILES,
 } from '../services/coverageAudit/webLaneHealth.js'
@@ -229,6 +230,86 @@ describe('discovery-attrib-5 — a dead extractor is judged extraction_dead', ()
       const ok = await check.run({ db })
       expect(ok.ok).toBe(true)
       expect(ok.evidence.metric_envelope.evaluated_count).toBe(8)
+    } finally { db.close() }
+  })
+})
+
+
+describe('a success cannot erase failures in the judged provider-health window', () => {
+  it('reports mixed healthy/unavailable runs as degraded and retains failure counts', () => {
+    const healthy = laneTelemetry({ extracted: 3, provider_health: { search: 'healthy', llm: 'healthy' }, stage_ledger: { extraction_failed: 0, extraction_failed_by_class: {} } })
+    let store = buildWebLaneHealthUpdate(null, buildWebLaneRunRecord(laneTelemetry(), { profileId: 'p1', at: '2026-09-18T12:00:00Z' }))
+    store = buildWebLaneHealthUpdate(store, buildWebLaneRunRecord(healthy, { profileId: 'p2', at: '2026-09-18T12:01:00Z' }))
+    const summary = summarizeRecentWebLane(store)
+    expect(summary.provider_health.llm).toBe('degraded')
+    expect(summary.extraction_failed_by_class.llm_quota).toBe(40)
+  })
+  it.each(['healthy', 'degraded'])('preserves partial failure evidence from %s legacy/new telemetry', (llm) => {
+    const lane = laneTelemetry({ extracted: 2, provider_health: { search: 'healthy', llm }, stage_ledger: { extraction_failed: 1, extraction_failed_by_class: { llm_quota: 1 } } })
+    const store = buildWebLaneHealthUpdate(null, buildWebLaneRunRecord(lane, { profileId: 'p1', at: '2026-09-18T12:00:00Z' }))
+    expect(summarizeRecentWebLane(store).provider_health.llm).toBe('degraded')
+  })
+})
+
+
+describe('Sam exposes a partial LLM outage instead of returning green', () => {
+  it('raises an actionable finding while preserving successful candidates and provider evidence', async () => {
+    const db = new Database(':memory:')
+    try {
+      const partial = laneTelemetry({ extracted: 2, provider_health: { search: 'healthy', llm: 'degraded' }, stage_ledger: { candidates_extracted: 2, extraction_failed: 1, extraction_failed_by_class: { llm_quota: 1 } } })
+      for (let i = 0; i < MIN_RUNS_TO_JUDGE; i++) await recordWebLaneRun(db, { profileId: 'partial-' + i, telemetry: partial })
+      const result = await getCheckById('crawler.webLaneHealth').run({ db })
+      expect(result.ok).toBe(false)
+      expect(result.summary).toMatch(/DEGRADED/)
+      expect(result.evidence.provider_health).toMatchObject({ search: 'healthy', llm: 'degraded' })
+      expect(result.evidence.extracted).toBe(2 * MIN_RUNS_TO_JUDGE)
+      expect(result.evidence.extraction_failed_by_class.llm_quota).toBe(MIN_RUNS_TO_JUDGE)
+      expect(result.recommended_fix).toMatch(/provider|quota|fallback/i)
+    } finally { db.close() }
+  })
+})
+
+
+describe('outage judgment honors sample size and unknown is not recovery', () => {
+  it('keeps cold-start partial evidence visible without alerting below the sample floor', async () => {
+    const db = new Database(':memory:')
+    try {
+      await recordWebLaneRun(db, { profileId: 'cold', telemetry: laneTelemetry({ extracted: 2, provider_health: { search: 'healthy', llm: 'degraded' }, stage_ledger: { candidates_extracted: 2, extraction_failed: 1, extraction_failed_by_class: { llm_quota: 1 } } }) })
+      const result = await getCheckById('crawler.webLaneHealth').run({ db })
+      expect(result.ok).toBe(true)
+      expect(result.evidence.judged).toBe(1)
+      expect(result.evidence.provider_health.llm).toBe('degraded')
+    } finally { db.close() }
+  })
+  it('unknown no-fetch runs cannot clear retained unavailable extraction evidence', async () => {
+    const db = new Database(':memory:')
+    try {
+      await recordWebLaneRun(db, { profileId: 'failed', telemetry: laneTelemetry() })
+      const unknown = laneTelemetry({ fetched: 0, extracted: 0, provider_health: { search: 'healthy', llm: 'unknown' }, stage_ledger: { response_received: 0, candidates_extracted: 0, extraction_failed: 0, extraction_failed_by_class: {} }, primary_attribution: null, extraction_available: null, reason: null })
+      for (let i = 1; i < MIN_RUNS_TO_JUDGE; i++) await recordWebLaneRun(db, { profileId: 'unknown-' + i, telemetry: unknown })
+      const result = await getCheckById('crawler.webLaneHealth').run({ db })
+      expect(result.evidence.provider_health.llm).toBe('unavailable')
+      expect(result.ok).toBe(false)
+      expect(result.evidence.extracted).toBe(0)
+      expect(result.recommended_fix).toMatch(/provider|quota|fallback/i)
+    } finally { db.close() }
+  })
+})
+
+
+describe('recovery closes the provider alert without deleting history', () => {
+  it('clears the alert after a full healthy judged window and retains older outage records', async () => {
+    const db = new Database(':memory:')
+    try {
+      const partial = laneTelemetry({ extracted: 2, provider_health: { search: 'healthy', llm: 'degraded' }, stage_ledger: { candidates_extracted: 2, extraction_failed: 1, extraction_failed_by_class: { llm_quota: 1 } } })
+      for (let i = 0; i < MIN_RUNS_TO_JUDGE; i++) await recordWebLaneRun(db, { profileId: 'failed-' + i, telemetry: partial })
+      expect((await getCheckById('crawler.webLaneHealth').run({ db })).ok).toBe(false)
+      const healthy = laneTelemetry({ extracted: 3, stored: 1, provider_health: { search: 'healthy', llm: 'healthy' }, stage_ledger: { candidates_extracted: 3, extraction_failed: 0, extraction_failed_by_class: {}, qualified_admitted: 1 }, primary_attribution: null, extraction_available: true, reason: null })
+      for (let i = 0; i < JUDGE_LAST_N; i++) await recordWebLaneRun(db, { profileId: 'recovered-' + i, telemetry: healthy })
+      const result = await getCheckById('crawler.webLaneHealth').run({ db })
+      expect(result.ok).toBe(true)
+      expect(result.evidence.provider_health.llm).toBe('healthy')
+      expect((await getWebLaneHealth(db)).recent.some((r) => r.provider_health.llm === 'degraded')).toBe(true)
     } finally { db.close() }
   })
 })

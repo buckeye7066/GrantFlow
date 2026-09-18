@@ -1328,6 +1328,18 @@ export const DIAGNOSTIC_CHECKS = Object.freeze([
           confidence: 0.9,
         }
       }
+      // Partial provider failures are actionable even when some candidates
+      // survived. Reporting green here would hide the degraded ledger again.
+      if (summary.judgment_ready && ['degraded', 'unavailable'].includes(summary.provider_health.llm)) {
+        const extractionStatus = summary.provider_health.llm === 'degraded' ? 'DEGRADED' : 'UNAVAILABLE (recovery unverified)'
+        return {
+          ok: false,
+          summary: `Open-web discovery lane extraction is ${extractionStatus}: ${summary.extracted} candidates survived across ${summary.judged} judged runs, but extraction-provider failures remain (${JSON.stringify(summary.extraction_failed_by_class)}). Search backend: ${summary.provider_health.search}. Successful pages do not establish complete discovery coverage.`,
+          evidence,
+          recommended_fix: 'Inspect provider quota/timeouts and fallback outcomes, restore extraction availability, and rerun affected profiles. Preserve accepted results and historical coverage evidence; one successful page does not close a partial outage.',
+          confidence: 0.9,
+        }
+      }
       return {
         ok: true,
         summary: `web lane alive: ${summary.judged - summary.zero_page}/${summary.judged} judged runs returned search pages, ${summary.extracted} candidates extracted from ${summary.fetched} fetched pages, ${summary.stored} web-lane opportunities stored (${summary.skipped} skipped run(s) not judged; provider health search=${summary.provider_health.search} llm=${summary.provider_health.llm}).`,

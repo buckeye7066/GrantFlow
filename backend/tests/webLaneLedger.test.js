@@ -314,3 +314,23 @@ it('attributes an existing non-application URL to apply-target hold, not eligibi
   expect(res.page_ledger[0].gate_rejected.apply_target).toBe(1)
   expect(res.provider_health.search).toBe('healthy')
 })
+
+
+describe('partial LLM outage is not healthy', () => {
+  it('retains successful candidates but reports mixed quota failures as degraded', async () => {
+    const searchWeb = vi.fn().mockResolvedValue(withMeta([
+      { url: 'https://one.org/a', title: 'one', snippet: '' },
+      { url: 'https://two.org/b', title: 'two', snippet: '' },
+    ], { provider: 'searxng', provenance: 'live', status: 'ok' }))
+    const extractOpportunities = vi.fn(async ({ pageUrl }) => pageUrl.includes('one.org')
+      ? [realOpp()] : withFailure([], { class: 'llm_quota', detail: 'quota exhausted' }))
+    const result = await runWebDiscoveryLane(
+      { store: createMemoryStore(), fetcher: fakeFetcher({ 'https://one.org/a': '<body>one</body>', 'https://two.org/b': '<body>two</body>' }), searchWeb, extractOpportunities },
+      { thesis, runId: 'partial-llm', maxQueries: 1, seed: 0 },
+    )
+    expect(result.extracted).toBe(1)
+    expect(result.stage_ledger.extraction_failed_by_class).toEqual({ llm_quota: 1 })
+    expect(result.provider_health.llm).toBe('degraded')
+    expect(result.provider_health.detail.llm.ok_pages).toBe(1)
+  })
+})
