@@ -1,0 +1,96 @@
+import { test, expect } from 'playwright/test'
+import { basePath } from './playwright.config.mjs'
+
+const appBase = String(basePath || '').replace(/\/+$/, '')
+const endpoint = (response, path) => new URL(response.url()).pathname === path
+
+test('Foundation signup saves answers, resumes, signs in and retains the new profile', async ({ page, browser }) => {
+  const email = `foundation-journey-${Date.now()}@example.invalid`
+  const profileName = 'Foundation Journey Tester'
+  const password = 'Foundation-Journey-2026!'
+  const errors = []
+  page.on('pageerror', (error) => errors.push(error.message))
+
+  async function clickAnswer(name, expectedQuestionId) {
+    const responsePromise = page.waitForResponse((response) =>
+      endpoint(response, '/api/onboarding/answer') && response.request().method() === 'POST')
+    await page.getByRole('button', { name, exact: true }).click()
+    const response = await responsePromise
+    expect(response.status(), `Answer accepted before ${expectedQuestionId}`).toBe(200)
+    const result = await response.json()
+    expect(result.question?.id).toBe(expectedQuestionId)
+    console.log(`Foundation journey: reached ${expectedQuestionId}`)
+    return result
+  }
+
+  await page.goto(`${appBase}/start`, { waitUntil: 'domcontentloaded' })
+  const intro = page.getByRole('dialog').filter({ hasText: 'Welcome to GrantFlow!' })
+  await expect(intro).toBeVisible()
+  await intro.getByRole('button', { name: 'Skip for now', exact: true }).click()
+  await clickAnswer('English', 'intro')
+  await clickAnswer("Let's do it", 'who')
+  await clickAnswer('Myself or my family', 'location')
+  await page.locator('#zip').fill('37312')
+  await expect(page.locator('#city')).toHaveValue('Cleveland')
+  await expect(page.locator('#county')).toHaveValue('Bradley')
+  await clickAnswer('Continue', 'personal_subtype')
+
+  // Reload the actual page and verify that the durable interview resumes.
+  const resumedResponse = page.waitForResponse((response) =>
+    new URL(response.url()).pathname.startsWith('/api/onboarding/sessions/'))
+  await page.reload({ waitUntil: 'domcontentloaded' })
+  const resumed = await resumedResponse
+  expect(resumed.status()).toBe(200)
+  expect((await resumed.json()).question.id).toBe('personal_subtype')
+  await clickAnswer('Just me (single adult)', 'needs_personal')
+  await page.getByRole('button', { name: 'Utility bills (electric, gas, water, internet)', exact: true }).click()
+  await clickAnswer('Continue', 'situations')
+  await clickAnswer('Continue', 'narrative')
+  await page.locator('textarea').fill('I need help with household utility bills in Bradley County.')
+  await clickAnswer('Continue', 'name')
+  await page.getByPlaceholder("e.g. 'Jordan Smith' or 'Hope Community Church'").fill(profileName)
+  await clickAnswer('Continue', 'email')
+  await page.locator('input[type="email"]').fill(email)
+
+  const completedResponse = page.waitForResponse((response) =>
+    endpoint(response, '/api/onboarding/complete') && response.request().method() === 'POST')
+  await page.getByRole('button', { name: 'Send my sign-in code', exact: true }).click()
+  const completed = await completedResponse
+  const completion = await completed.json()
+  expect(completed.status(), JSON.stringify({ error: completion.error, detail: completion.detail })).toBe(201)
+  expect(completion.profile_id).toBeTruthy()
+  expect(completion.email).toBe(email)
+  // This is the isolated development email-token handoff, not proof of SMTP delivery.
+  await expect(page).toHaveURL(/\/set-password\?token=/)
+  await page.locator('#new-password').fill(password)
+  await page.locator('#confirm-password').fill(password)
+  const setupResponse = page.waitForResponse((response) =>
+    endpoint(response, '/api/auth/password/setup/complete') && response.request().method() === 'POST')
+  await page.getByRole('button', { name: 'Set password & sign in', exact: true }).click()
+  const setup = await setupResponse
+  expect(setup.status()).toBe(200)
+  await expect(page).toHaveURL(/\/Dashboard(?:\?|$)/)
+  console.log('Foundation journey: new account password setup and dashboard redirect succeeded')
+
+  // A new browser context proves login and storage without reusing session tokens.
+  const context = await browser.newContext({ baseURL: test.info().project.use.baseURL })
+  try {
+    const returning = await context.newPage()
+    returning.on('pageerror', (error) => errors.push(error.message))
+    await returning.goto(`${appBase}/login`)
+    await returning.getByRole('textbox', { name: 'Profile email', exact: true }).fill(email)
+    await returning.getByRole('button', { name: 'Continue with Email', exact: true }).click()
+    await returning.getByRole('textbox', { name: 'Password', exact: true }).fill(password)
+    await returning.getByRole('button', { name: 'Sign in', exact: true }).click()
+    await expect(returning).toHaveURL(/\/Dashboard(?:\?|$)/)
+    await returning.goto(`${appBase}/ProfileDetail?id=${encodeURIComponent(completion.profile_id)}`)
+    await expect(returning.getByRole('heading', { name: profileName, exact: true }).first()).toBeVisible()
+    await expect(returning.getByRole('link', { name: 'Admin Panel', exact: true })).toHaveCount(0)
+    await returning.reload({ waitUntil: 'domcontentloaded' })
+    await expect(returning.getByRole('heading', { name: profileName, exact: true }).first()).toBeVisible()
+    console.log('Foundation journey: independent login and persisted profile survived page reload')
+  } finally {
+    await context.close()
+  }
+  expect(errors).toEqual([])
+})
