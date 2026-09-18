@@ -30,6 +30,7 @@
 import zipcodes from 'zipcodes'
 import { safeParseArrayField, resolveApplicantType, buildProfileSignals } from './profileHelpers.js'
 import { normalizeProfile } from './profileNormalizer.js'
+import { evaluateSchoolOrigin, normalizeSchoolOrigin, schoolOriginPeriod } from '../config/schoolOriginEligibility.js'
 import { normalizeOpportunity, inferHousingClassification } from './opportunityNormalizer.js'
 import { haversineDistanceMiles } from './sharedGeo.js'
 import { listPresentProfileSignals } from './profileCoverage.js'
@@ -467,6 +468,10 @@ export function evaluateEligibility(profileNorm, oppNorm) {
   if (!profileNorm || !oppNorm) {
     return { eligible: 'maybe', ineligibilityReasons: [], missingFields: ['profile', 'opportunity'] }
   }
+
+  const schoolOrigin = evaluateSchoolOrigin(profileNorm.schoolOrigin, oppNorm.schoolOriginRequirements)
+  ineligibilityReasons.push(...schoolOrigin.ineligibilityReasons)
+  missingFields.push(...schoolOrigin.missingFields)
 
   if (oppNorm.isLoan) ineligibilityReasons.push('Opportunity is a loan, not a grant')
 
@@ -1142,7 +1147,7 @@ export function eligibilityEvidenceLevel(opportunity, oppNorm) {
     const value = oppNorm?.[key]
     return Boolean(value) && value !== 'none' && value !== 'unknown'
   })
-  if (ethnicity || flagged || oppNorm?.educationLevel === 'k12') return ELIGIBILITY_EVIDENCE.STRUCTURED_FLAGS
+  if (ethnicity || flagged || oppNorm?.schoolOriginRequirements?.length > 0 || oppNorm?.educationLevel === 'k12') return ELIGIBILITY_EVIDENCE.STRUCTURED_FLAGS
   if (oppNorm && !oppNorm.applicabilityUnknown && (oppNorm.entityTypesAllowed?.length ?? 0) > 0) {
     return ELIGIBILITY_EVIDENCE.APPLICANT_TYPES_ONLY
   }
@@ -4388,6 +4393,15 @@ export function makeDecision(score, profile, opportunity, normalizedProfile = nu
     }
   }
 
+  const schoolOrigin = evaluateSchoolOrigin(np?.schoolOrigin ?? normalizeSchoolOrigin(sections, prof), on.schoolOriginRequirements)
+  if (schoolOrigin.ineligibilityReasons.length) {
+    reasons.push(...schoolOrigin.ineligibilityReasons)
+    return { decision: 'REJECT', explanation: schoolOrigin.ineligibilityReasons.join('; '), reasons }
+  }
+  if (schoolOrigin.missingFields.length) {
+    reasons.push(...schoolOrigin.missingFields.map(field => `School-origin eligibility unconfirmed (missing: ${field})`))
+  }
+
   const profileTypeIsMissingOrGeneric = !profileType || profileType === 'organization'
   if (on.requiresNonprofit && !isNonprofit) {
     if (profileTypeIsMissingOrGeneric) {
@@ -4610,6 +4624,11 @@ export function makeDecision(score, profile, opportunity, normalizedProfile = nu
       reasons.push(`Geographic note — opportunity is in ${oppStateRaw}, profile is in ${profStateLabel} (may still be accessible)`)
       return { decision: 'REVIEW', explanation: `Opportunity is based in ${oppStateRaw} but may be accessible from ${profStateLabel}. Confirm eligibility on the program page.`, reasons }
     }
+  }
+
+  // Missing school evidence is a soft hold, never a way around hard applicant or geography gates.
+  if (schoolOrigin.missingFields.length) {
+    return { decision: 'REVIEW', explanation: 'This scholarship requires a particular high-school graduation history. Confirm the declared school location, type and graduation year before applying; current residence is not evidence of school history.', reasons }
   }
 
   // Matching funds are a cost/feasibility signal, not an absolute exclusivity
@@ -4859,6 +4878,8 @@ export function computeMatchDecision(rawProfile, rawOpportunity, opts = {}) {
     confidence_reasons,
     confidence_band,
   } = scoreResult
+  // Calendar-dependent school evidence must expire even without a profile edit.
+  if (oppNorm.schoolOriginRequirements?.length) match_explain.school_origin_period = schoolOriginPeriod()
 
   // Hard eligibility gate.
   // Geography is intentionally excluded here because makeDecision() has the

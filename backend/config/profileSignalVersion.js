@@ -56,7 +56,7 @@
 // proofs gain the block on the boot drain.
 // 2026-09-17 (email Phase 2): known non-application targets cannot authorize
 // ACCEPT. Rescore stored pairs and their proofs through the existing boot drain.
-export const PROFILE_SIGNAL_VERSION = '2026.09.17-3'
+export const PROFILE_SIGNAL_VERSION = '2026.09.17-4'
 
 /** Repo-relative files whose content decides what the engine believes about a profile. */
 export const PROFILE_SIGNAL_DERIVATION_FILES = Object.freeze([
@@ -69,6 +69,7 @@ export const PROFILE_SIGNAL_DERIVATION_FILES = Object.freeze([
   'backend/config/profileDerivedFacts.js',
   'backend/config/profileFactTimeline.js',
   'backend/config/temporalRelatability.js',
+  'backend/config/schoolOriginEligibility.js',
   'backend/config/stageOfLifeEligibility.js',
   'backend/services/matching/needFirstScoringAdapter.js',
   'backend/services/matchEngine.js',
@@ -89,6 +90,6 @@ export const PROFILE_SIGNAL_DERIVATION_FILES = Object.freeze([
  * sha256 over the LF-normalized concatenation of the files above, pinned by
  * `scripts/pin-signal-version.mjs`. The test recomputes it.
  */
-export const PROFILE_SIGNAL_DERIVATION_HASH = 'e63e71033aaf98d48c42e22dc47f7c9b90ab6784add2b1d29a17c738d55fe27c'
+export const PROFILE_SIGNAL_DERIVATION_HASH = 'cf7eb5732b1cb4bd08c6994c8e513ecc36202ba28a4609d4f3148fe072cf876b'
 
 export default { PROFILE_SIGNAL_VERSION, PROFILE_SIGNAL_DERIVATION_FILES, PROFILE_SIGNAL_DERIVATION_HASH }
