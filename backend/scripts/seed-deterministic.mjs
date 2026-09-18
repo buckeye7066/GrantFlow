@@ -248,7 +248,7 @@ async function main() {
         record_origin, type, is_national, state, is_active, updated_at
       ) VALUES (
         @id, @title, @sponsor, @source, @source_id, @source_url, @application_url,
-        'curated_verified', @type, @is_national, @state, 1, CURRENT_TIMESTAMP
+        'curated_verified', @type, @is_national, @state, TRUE, CURRENT_TIMESTAMP
       )
       ON CONFLICT(id) DO UPDATE SET
         title = excluded.title,
