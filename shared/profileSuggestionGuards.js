@@ -151,7 +151,7 @@ function selfTargetFor(key) {
   return key
 }
 
-function normalizeProfileSectionAliases(data, sectionKey) {
+export function normalizeProfileSectionAliases(data, sectionKey) {
   const aliases = PROFILE_FIELD_ALIASES[sectionKey] ?? {}
   // CodeQL js/remote-property-injection (#752): a plain-object accumulator
   // built from remote-shaped data with no key guard lets a "__proto__" key
@@ -160,9 +160,12 @@ function normalizeProfileSectionAliases(data, sectionKey) {
   const normalized = Object.create(null)
   const aliasRejections = []
   for (const [rawKey, value] of Object.entries(data ?? {})) {
-    const key = aliases[rawKey] ?? rawKey
+    const key = Object.prototype.hasOwnProperty.call(aliases, rawKey) ? aliases[rawKey] : rawKey
     if (key !== rawKey) {
       aliasRejections.push({ key: rawKey, reason: 'normalized_alias', routedTo: key })
+      // A directly supplied canonical answer wins regardless of JSON key order,
+      // including an intentional empty answer. An old alias must not restore it.
+      if (Object.prototype.hasOwnProperty.call(data, key)) continue
     }
     normalized[key] = value
   }
@@ -386,7 +389,7 @@ export function guardProfileSectionSuggestion(existing, suggestion, { sectionKey
     metadata,
   })
   return {
-    data: { ...(existing ?? {}), ...guarded.data },
+    data: { ...normalizeProfileSectionAliases(existing, sectionKey).data, ...guarded.data },
     rejected: guarded.rejected,
   }
 }
