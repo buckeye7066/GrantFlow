@@ -232,3 +232,20 @@ describe('discovery-attrib-5 — a dead extractor is judged extraction_dead', ()
     } finally { db.close() }
   })
 })
+
+
+describe('a success cannot erase failures in the judged provider-health window', () => {
+  it('reports mixed healthy/unavailable runs as degraded and retains failure counts', () => {
+    const healthy = laneTelemetry({ extracted: 3, provider_health: { search: 'healthy', llm: 'healthy' }, stage_ledger: { extraction_failed: 0, extraction_failed_by_class: {} } })
+    let store = buildWebLaneHealthUpdate(null, buildWebLaneRunRecord(laneTelemetry(), { profileId: 'p1', at: '2026-09-18T12:00:00Z' }))
+    store = buildWebLaneHealthUpdate(store, buildWebLaneRunRecord(healthy, { profileId: 'p2', at: '2026-09-18T12:01:00Z' }))
+    const summary = summarizeRecentWebLane(store)
+    expect(summary.provider_health.llm).toBe('degraded')
+    expect(summary.extraction_failed_by_class.llm_quota).toBe(40)
+  })
+  it.each(['healthy', 'degraded'])('preserves partial failure evidence from %s legacy/new telemetry', (llm) => {
+    const lane = laneTelemetry({ extracted: 2, provider_health: { search: 'healthy', llm }, stage_ledger: { extraction_failed: 1, extraction_failed_by_class: { llm_quota: 1 } } })
+    const store = buildWebLaneHealthUpdate(null, buildWebLaneRunRecord(lane, { profileId: 'p1', at: '2026-09-18T12:00:00Z' }))
+    expect(summarizeRecentWebLane(store).provider_health.llm).toBe('degraded')
+  })
+})

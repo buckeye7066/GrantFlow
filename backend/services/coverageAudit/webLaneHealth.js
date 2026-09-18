@@ -373,9 +373,15 @@ export function summarizeRecentWebLane(store, { lastN = JUDGE_LAST_N, minRuns = 
     return best ?? 'unknown'
   }
   const searchHealth = dead ? 'unavailable' : worst(searchVerdicts, ['healthy', 'unknown', 'degraded', 'unavailable'])
+  // Preserve partial failures, including older records mislabeled healthy.
+  // A later success demonstrates recovery, not a clean historical window.
+  const anyLlmHealthy = llmVerdicts.includes('healthy')
+  const anyLlmFailure = llmFailures > 0 || llmVerdicts.includes('unavailable')
+  const llmDegraded = llmVerdicts.includes('degraded') || (anyLlmHealthy && anyLlmFailure)
   const llmHealth = extractionDead
     ? 'unavailable'
-    : (llmVerdicts.length ? (llmVerdicts.every((v) => v === 'unavailable') ? 'unavailable' : (llmVerdicts.some((v) => v === 'healthy') ? 'healthy' : 'unknown')) : 'unknown')
+    : llmDegraded ? 'degraded'
+      : (llmVerdicts.length && llmVerdicts.every((v) => v === 'unavailable') ? 'unavailable' : (anyLlmHealthy ? 'healthy' : 'unknown'))
   const newest = recent[0]?.at ?? all[0]?.at ?? null
   const oldest = recent.length ? recent[recent.length - 1]?.at ?? null : null
   return {
