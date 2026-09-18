@@ -271,6 +271,19 @@ export function projectPersistedStep(s) {
   for (const key of PERSISTED_STEP_DIAGNOSTICS) {
     if (s[key] !== undefined) out[key] = s[key]
   }
+  // The stale-refresh receipt distinguishes successful work from verified
+  // completion. Preserve explicit zero, false and null without affecting
+  // unrelated invariant records.
+  if (s.name === 'stale_match_explain_refresh') {
+    for (const key of [
+      'remaining_candidates', 'remaining_stale', 'verification_scanned',
+      'verification_truncated', 'verification_failed', 'verified_at',
+      'complete', 'status', 'unscorable', 'skipped_no_profile',
+      'convergence_errors', 'concurrent_changes_skipped', 'skipped',
+    ]) {
+      if (s[key] !== undefined) out[key] = s[key]
+    }
+  }
   // Work the sweep deliberately did NOT do, and why — so "repaired 0" can be
   // read as "the decision contract forbade N candidates" instead of as an
   // unexplained empty run.
@@ -11238,10 +11251,13 @@ export async function enforceStaleMatchExplainRefresh(db) {
       ;({ runStaleMatchExplainRefresh } = await import('../services/matching/staleMatchExplainRefresh.js'))
     } catch (err) {
       log.warn('stale_match_explain_refresh: unavailable (non-fatal)', { error: String(err?.message || err) })
-      return { scanned: 0, repaired: 0, enforced: true, skipped: 'deps' }
+      return { ok: false, scanned: 0, repaired: 0, enforced: false, skipped: 'deps',
+        remaining_candidates: null, remaining_stale: null, verification_failed: true,
+        complete: false, status: 'failed' }
     }
     const res = await runStaleMatchExplainRefresh(db)
     return {
+      ...res,
       scanned: res.scanned ?? 0,
       repaired: res.refreshed ?? 0,
       wouldRepair: res.would_refresh ?? 0,

@@ -280,3 +280,96 @@ for (const invalid of [null, undefined, '', false, -1, 'not-a-count']) {
     } finally { raw.close() }
   })
 }
+
+test('completion readback uses current calendar freshness, not the initial page timestamp', async () => {
+  const OriginalDate = globalThis.Date
+  let time = OriginalDate.parse('2027-06-30T23:59:59Z')
+  globalThis.Date = class extends OriginalDate {
+    constructor(...args) { super(...(args.length ? args : [time])) }
+    static now() { return time }
+  }
+  const { raw, adapter, deps } = fixture(1)
+  try {
+    raw.prepare('UPDATE profile_opportunity_matches SET match_explain_json=?').run(JSON.stringify({
+      scoring_policy_version: 'current', signal_version: PROFILE_SIGNAL_VERSION,
+      matchedNeeds: [], school_origin_period: '2027-H1',
+    }))
+    const rollover = faultAdapter(adapter, (sql, prepare) => {
+      const statement = prepare()
+      if (!sql.includes('m.id AS match_id')) return statement
+      return { ...statement, all: (...args) => {
+        const rows = statement.all(...args)
+        time = OriginalDate.parse('2027-07-01T00:00:01Z')
+        return rows
+      } }
+    })
+    const result = await runStaleMatchExplainRefresh(rollover, { deps })
+    assert.equal(result.refreshed, 0)
+    assert.equal(result.remaining_candidates, 1)
+    assert.equal(result.complete, false)
+    assert.equal(result.status, 'pending')
+  } finally { raw.close(); globalThis.Date = OriginalDate }
+})
+
+test('malformed JSON with current marker text cannot be declared fully refreshed', async () => {
+  const { raw, adapter, deps } = fixture(1)
+  try {
+    raw.prepare('UPDATE profile_opportunity_matches SET match_explain_json=?').run(
+      `{"scoring_policy_version":"current","signal_version":"${PROFILE_SIGNAL_VERSION}","matchedSignals":[]`,
+    )
+    const result = await runStaleMatchExplainRefresh(adapter, { deps })
+    assert.equal(result.remaining_candidates, 0)
+    assert.equal(result.remaining_stale, 1)
+    assert.equal(result.verification_scanned, 1)
+    assert.equal(result.complete, false)
+    assert.equal(result.status, 'pending')
+  } finally { raw.close() }
+})
+
+test('an exact-audit row limit cannot turn a partial inspection into completion', async () => {
+  const { raw, adapter, deps } = fixture(3)
+  try {
+    raw.prepare('UPDATE profile_opportunity_matches SET match_explain_json=?').run(JSON.stringify({
+      scoring_policy_version: 'current', signal_version: PROFILE_SIGNAL_VERSION, matchedNeeds: [],
+    }))
+    const limited = await runStaleMatchExplainRefresh(adapter, { verificationRowBudget: 2, deps })
+    assert.equal(limited.remaining_candidates, 0)
+    assert.equal(limited.remaining_stale, null)
+    assert.equal(limited.verification_scanned, 2)
+    assert.equal(limited.verification_truncated, true)
+    assert.equal(limited.complete, false)
+    const verified = await runStaleMatchExplainRefresh(adapter, { verificationRowBudget: 4, deps })
+    assert.equal(verified.remaining_stale, 0)
+    assert.equal(verified.complete, true)
+  } finally { raw.close() }
+})
+
+test('failed exact verification is not hidden by a successful zero-candidate count', async () => {
+  const { raw, adapter, deps } = fixture(0)
+  try {
+    const fault = faultAdapter(adapter, (sql, prepare) => {
+      if (sql.includes('verification_explain')) throw Error('exact audit unavailable')
+      return prepare()
+    })
+    const result = await runStaleMatchExplainRefresh(fault, { deps })
+    assert.equal(result.remaining_candidates, 0)
+    assert.equal(result.remaining_stale, null)
+    assert.equal(result.verification_failed, true)
+    assert.equal(result.complete, false)
+    assert.equal(result.status, 'failed')
+  } finally { raw.close() }
+})
+
+test('an expired time budget leaves exact verification incomplete, not a false all-clear', async () => {
+  const { raw, adapter, deps } = fixture(1)
+  try {
+    raw.prepare('UPDATE profile_opportunity_matches SET match_explain_json=?').run(JSON.stringify({
+      scoring_policy_version: 'current', signal_version: PROFILE_SIGNAL_VERSION, matchedNeeds: [],
+    }))
+    const result = await runStaleMatchExplainRefresh(adapter, { timeBudgetMs: 0, deps })
+    assert.equal(result.remaining_candidates, 0)
+    assert.equal(result.remaining_stale, null)
+    assert.equal(result.verification_truncated, true)
+    assert.equal(result.complete, false)
+  } finally { raw.close() }
+})
