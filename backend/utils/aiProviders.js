@@ -1,3 +1,5 @@
+import { tryOwnerSubscription } from '../services/ownerAi/ownerAiBroker.js'
+import { getOwnerAiScope } from '../services/ownerAi/ownerAiScope.js'
 import OpenAI from 'openai'
 import { resolvePaidAiRoutes, paidCircuitState, circuitBlocked, recordPaidFailure, isHardPaidFailure } from './paidAiRoutes.js'
 import { createOpenAIClient, summarizeOpenAIError } from './openaiClient.js'
@@ -160,15 +162,37 @@ export function invokeJsonWithFallback(options = {}) { return invokePaidLadder(o
 async function invokePaidLadder({
   openai = getOpenAIOptional({ maxRetries: 0 }), system = null, prompt,
   temperature, maxTokens = 1200, openaiModel = null, anthropicModel = null,
-  freeRoutes = null, freeClientFactory = null, timeoutMs = null, signal = null,
+  freeRoutes = null, freeClientFactory = null, timeoutMs = null, signal: callerSignal = null,
   paidCircuitState: injectedState,
 } = {}, jsonOnly) {
+  const ownerScope = getOwnerAiScope()
+  const signal = ownerScope
+    ? AbortSignal.any([ownerScope.signal, ...(callerSignal ? [callerSignal] : [])])
+    : callerSignal
   if (signal?.aborted) return abortedResult(signal)
   const supplied = Number(timeoutMs ?? LLM_TIMEOUT_MS)
   const budget = Number.isFinite(supplied) ? Math.max(0, supplied) : LLM_TIMEOUT_MS
   const deadline = Date.now() + budget
   const remaining = () => Math.max(0, deadline - Date.now())
   const safePrompt = typeof prompt === 'string' ? prompt : JSON.stringify(prompt ?? '')
+  // Owner subscription work uses the same caller deadline, with time left for APIs.
+  // The canonical request scope excludes customers, other admins and service tokens.
+  const configuredSubscriptionWindow = Number(process.env.OWNER_AI_SUBSCRIPTION_TIMEOUT_MS ?? 10000)
+  const subscriptionWindow = Math.min(budget / 2,
+    Number.isFinite(configuredSubscriptionWindow) ? Math.max(0, Math.min(60000, configuredSubscriptionWindow)) : 10000)
+  if (ownerScope && subscriptionWindow > 0) {
+    try {
+      const subscription = await withLLMTimeout(attemptSignal => tryOwnerSubscription({
+        format: jsonOnly ? 'json' : 'text', system, prompt: safePrompt, maxTokens,
+        timeoutMs: subscriptionWindow, signal: attemptSignal,
+      }), { timeoutMs: subscriptionWindow, signal, label: 'Owner subscription request' })
+      if (signal?.aborted) return abortedResult(signal)
+      if (subscription?.ok === true) return subscription
+    } catch {
+      if (signal?.aborted) return abortedResult(signal)
+      qualityLog.warn('owner_subscription_unavailable', { reason: 'bounded_subscription_attempt_failed' })
+    }
+  }
   const routes = resolvePaidAiRoutes({ openai, openaiModel, anthropicModel })
   // Legacy calls retain request-local state; configured ladders share bounded cooldowns.
   const state = injectedState ?? (process.env.AI_PAID_ROUTES ? paidCircuitState() : new Map())
