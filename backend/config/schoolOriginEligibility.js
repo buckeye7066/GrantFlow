@@ -99,7 +99,7 @@ function applicantClause(before) {
 }
 export function schoolOriginRequirements(row) {
   const requirements = []
-  const blindEvidenceRecord = (row?.source_id === 'web_search' || row?.source === 'web_search') && (row?.page_fact_schema_version != null || objectValue(row?.raw).blind_extraction === true)
+  const blindEvidenceRecord = (row?.source_id === 'web_search' || row?.source === 'web_search') && ((row?.page_fact_schema_version !== null && row?.page_fact_schema_version !== undefined) || objectValue(row?.raw).blind_extraction === true)
   const sourceFields = blindEvidenceRecord ? SOURCE_FIELDS.filter(field => field.startsWith('eligibility_')) : SOURCE_FIELDS
   for (const field of sourceFields) {
     const sentences = sourceText(row?.[field]).split(/(?<=[.!?])\s+|\n+/)
