@@ -135,3 +135,16 @@ describe('runPortalSync — a proven sign-in wall is never recorded as a complet
     expect(runs[0].status).not.toBe('completed')
   })
 })
+
+it.each(['unknown','blocked'])('does not persist or complete an unverified %s portal read', async access => {
+  const db = makeDb()
+  wallConnector.read.mockResolvedValueOnce({ reached: true, access,
+    fields: [{ sectionKey: 'education', field: 'act_score', value: 30 }], awards: [], raw: { pages: [] } })
+  try {
+    const result = await runPortalSync(db, { profileId: PROFILE_ID, portalHost: HOST, direction: 'read', actorUserId: 'u1' })
+    expect(wallConnector.read).toHaveBeenCalledOnce()
+    expect(result).toMatchObject({ ok: false, error: 'portal_access_unproven', read: { access } })
+    expect(db.prepare('SELECT COUNT(*) AS n FROM profile_sections').get().n).toBe(0)
+    expect((await listRuns(db, { profileId: PROFILE_ID, portalHost: HOST }))[0].status).toBe('failed')
+  } finally { db.close() }
+})
