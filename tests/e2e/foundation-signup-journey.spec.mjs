@@ -88,19 +88,8 @@ test('Foundation signup saves answers, resumes, signs in and retains the new pro
     await returning.getByRole('textbox', { name: 'Password', exact: true }).fill(password)
     await returning.getByRole('button', { name: 'Sign in', exact: true }).click()
     await expect(returning).toHaveURL(/\/Dashboard(?:\?|$)/)
-    const profileResponse = returning.waitForResponse((response) =>
-      endpoint(response, `/api/profiles/${completion.profile_id}`) && response.request().method() === 'GET')
-    await returning.goto(`${appBase}/ProfileDetail?id=${encodeURIComponent(completion.profile_id)}`)
-    const profileHttp = await profileResponse
-    expect(profileHttp.status()).toBe(200)
-    const profile = await profileHttp.json()
-    expect(profile.primary_type).toBe('individual')
-    expect(profile.billing.tier_id).toBe('foundation')
-    const sections = Object.fromEntries(profile.sections.map((section) => [section.section_key, section.data]))
-    expect(sections.basic_information).toMatchObject({ full_name: profileName, profile_type: 'individual', city: 'Cleveland', county: 'Bradley', state: 'TN', zip_code: '37312' })
-    expect(sections.financial_information.assistance_needs).toEqual(['utilities'])
 
-    // Complete the genuinely missing personal fact; never bypass the required gate.
+    // Answer the blocking question on the login destination, before navigation.
     const gate = returning.getByTestId('profile-completion-gate')
     await expect(gate).toBeVisible()
     await expect(gate.getByText(/What kind of organization/)).toHaveCount(0)
@@ -112,6 +101,21 @@ test('Foundation signup saves answers, resumes, signs in and retains the new pro
     expect(answer.status()).toBe(200)
     expect((await answer.json()).complete).toBe(true)
     await expect(gate).toBeHidden()
+
+    // Materialize the response body as it arrives, rather than retaining a
+    // network handle across a full-page navigation.
+    const profileResponse = returning.waitForResponse((response) =>
+      endpoint(response, `/api/profiles/${completion.profile_id}`) && response.request().method() === 'GET')
+      .then(async (response) => ({ status: response.status(), body: await response.json() }))
+    await returning.goto(`${appBase}/ProfileDetail?id=${encodeURIComponent(completion.profile_id)}`)
+    const profileHttp = await profileResponse
+    expect(profileHttp.status).toBe(200)
+    const profile = profileHttp.body
+    expect(profile.primary_type).toBe('individual')
+    expect(profile.billing.tier_id).toBe('foundation')
+    const sections = Object.fromEntries(profile.sections.map((section) => [section.section_key, section.data]))
+    expect(sections.basic_information).toMatchObject({ full_name: profileName, profile_type: 'individual', city: 'Cleveland', county: 'Bradley', state: 'TN', zip_code: '37312' })
+    expect(sections.financial_information.assistance_needs).toEqual(['utilities'])
     await expect(returning.getByRole('heading', { name: profileName, exact: true }).first()).toBeVisible()
     await expect(returning.getByRole('link', { name: 'Admin Panel', exact: true })).toHaveCount(0)
     await returning.reload({ waitUntil: 'domcontentloaded' })

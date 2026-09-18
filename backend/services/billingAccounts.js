@@ -589,8 +589,16 @@ export async function ensureBillingAccount(db, profileId, { defaultTier = 'found
         discount_percent,
         is_pro_bono
       ) VALUES (?, ?, ?, ?, ?, 'none', 0, FALSE)
+      ON CONFLICT (profile_id) DO NOTHING
     `,
   ).run(accountId, profileId, tierId, assignedBy, 'Initial tier assignment')
+
+  // First-session access and billing requests can both observe no account.
+  // The database chooses one creator; the other request returns its account
+  // without replacing pricing/customizations or emitting a duplicate event.
+  const account = await selectAccount(db, profileId)
+  if (!account) throw new Error('Billing account was not available after creation')
+  if (account.id !== accountId) return account
 
   await logBillingAccountEvent(db, accountId, {
     changed_by: assignedBy,
@@ -605,7 +613,7 @@ export async function ensureBillingAccount(db, profileId, { defaultTier = 'found
     notes: 'Account created',
   })
 
-  return await selectAccount(db, profileId)
+  return account
 }
 
 export async function logBillingAccountEvent(

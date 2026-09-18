@@ -38,6 +38,19 @@ import { Input } from '@/components/ui/input'
  */
 export default function ProfileCompletionGate() {
   const isAuthenticated = useAuthStore((s) => s.isAuthenticated)
+  const userId = useAuthStore((s) => s.user?.id)
+  const profileCompletion = useAuthStore((s) => s.profileCompletion)
+  const next = profileCompletion?.next
+  // App mounts before sign-in completes. Do not freeze an empty question list
+  // then: create a session only when the authenticated profile is available.
+  // A different account/profile receives its own counters and unsaved answer.
+  if (!isAuthenticated || !profileCompletion?.blocked || !next?.profile_id ||
+      !Array.isArray(next.questions) || next.questions.length === 0) return null
+  return <ProfileCompletionSession key={`${userId ?? ''}:${next.profile_id}`} />
+}
+
+function ProfileCompletionSession() {
+  const isAuthenticated = useAuthStore((s) => s.isAuthenticated)
   const user = useAuthStore((s) => s.user)
   const profileCompletion = useAuthStore((s) => s.profileCompletion)
   const forcedWelcomeVideo = useAuthStore((s) => s.forcedWelcomeVideo)
