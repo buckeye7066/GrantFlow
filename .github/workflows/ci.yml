@@ -106,6 +106,9 @@ jobs:
       - name: Verify native project contract
         run: npm run check:native-platforms
 
+      - name: Native owner bridge DPAPI regression
+        run: node --test tests/unit/ownerAiDpapi.test.mjs
+
       - name: Typecheck on Windows
         run: npm run typecheck
 
