@@ -8,7 +8,9 @@ One successful extraction made a partly failed web crawl report LLM healthy. Amy
 
 The common email footer and verification template used the marketing URL instead of the application. Fresh browser checks confirmed that app.axiombiolabs.org/login renders the login heading and email field; www.axiombiolabs.org/grantflow is a marketing page and its /login child renders the marketing home page. The shared sign-in resolver now defaults to the application login, repairs the known retired setting, preserves deployment overrides, and keeps HTML escaping. Eight new assertions failed before this repair.
 
-Combined targeted verification: 150 tests passed across 11 suites, including crawl ledgers, Amy cohort gating, retained provider-health history, live-gap attribution, recall scorecards, and owner-email reporting. Full release gates and production readback are separate requirements, not implied by those tests.
+Combined targeted verification: 151 tests passed across 11 suites, including crawl ledgers, Amy cohort gating, retained provider-health history, live-gap attribution, recall scorecards, and owner-email reporting. Full release gates and production readback are separate requirements, not implied by those tests.
+
+Automated review also identified the remaining Sam consumer: the partial-outage verdict still returned a green check. A new DB-backed regression failed before the fix. Sam now emits an actionable degraded-extraction finding while preserving successful candidate counts and retained failure evidence.
 
 ## Findings deliberately not declared resolved
 

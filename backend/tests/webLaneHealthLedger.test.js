@@ -249,3 +249,21 @@ describe('a success cannot erase failures in the judged provider-health window',
     expect(summarizeRecentWebLane(store).provider_health.llm).toBe('degraded')
   })
 })
+
+
+describe('Sam exposes a partial LLM outage instead of returning green', () => {
+  it('raises an actionable finding while preserving successful candidates and provider evidence', async () => {
+    const db = new Database(':memory:')
+    try {
+      const partial = laneTelemetry({ extracted: 2, provider_health: { search: 'healthy', llm: 'degraded' }, stage_ledger: { candidates_extracted: 2, extraction_failed: 1, extraction_failed_by_class: { llm_quota: 1 } } })
+      for (let i = 0; i < MIN_RUNS_TO_JUDGE; i++) await recordWebLaneRun(db, { profileId: 'partial-' + i, telemetry: partial })
+      const result = await getCheckById('crawler.webLaneHealth').run({ db })
+      expect(result.ok).toBe(false)
+      expect(result.summary).toMatch(/DEGRADED/)
+      expect(result.evidence.provider_health).toMatchObject({ search: 'healthy', llm: 'degraded' })
+      expect(result.evidence.extracted).toBe(2 * MIN_RUNS_TO_JUDGE)
+      expect(result.evidence.extraction_failed_by_class.llm_quota).toBe(MIN_RUNS_TO_JUDGE)
+      expect(result.recommended_fix).toMatch(/provider|quota|fallback/i)
+    } finally { db.close() }
+  })
+})
