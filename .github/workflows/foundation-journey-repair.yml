@@ -41,6 +41,9 @@ jobs:
       DB_DIALECT: postgres
       MIGRATE_ON_BOOT: 'false'
       DB_AUTO_MIGRATE: 'false'
+      DISABLE_BACKGROUND_SERVICES: 'true'
+      ANYA_AUTONOMOUS_ENABLED: 'false'
+      NATIONAL_PROGRAMS_CRAWLER_ENABLED: 'false'
       ALLOW_EPHEMERAL_UPLOADS: 'true'
       UPLOADS_DIR: /tmp/grantflow-foundation-journey-uploads
       AUTH_JWT_SECRET: grantflow-ci-foundation-journey-not-for-production
@@ -60,7 +63,17 @@ jobs:
         run: npm ci --include=dev --include=optional
       - name: Install Chromium
         run: node ./node_modules/playwright/cli.js install chromium --with-deps
-      - name: Reproduce Foundation location submission through real app
+      - name: Follow Foundation signup and retain the location regression
         run: |
           mkdir -p "$UPLOADS_DIR"
-          node ./node_modules/playwright/cli.js test -c tests/e2e/playwright.config.mjs foundation-location-pending.spec.mjs --retries=0 --max-failures=1
+          node ./node_modules/playwright/cli.js test -c tests/e2e/playwright.config.mjs foundation-location-pending.spec.mjs foundation-signup-journey.spec.mjs --workers=1 --retries=0 --max-failures=1
+      - name: Retain isolated browser evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: foundation-journey-${{ github.sha }}
+          path: |
+            test-results
+            playwright-report
+          retention-days: 7
+          if-no-files-found: ignore
