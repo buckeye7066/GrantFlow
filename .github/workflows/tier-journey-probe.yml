@@ -14,7 +14,7 @@ concurrency:
 jobs:
   journey:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
@@ -29,31 +29,27 @@ jobs:
         run: node node_modules/playwright/cli.js install chromium --with-deps > /tmp/browser-install.log 2>&1 || { tail -80 /tmp/browser-install.log; exit 1; }
       - name: Build the real application
         run: npm run build > /tmp/journey-build.log 2>&1 || { tail -80 /tmp/journey-build.log; exit 1; }
+      - name: Initialize the disposable fixture using real verification
+        run: |
+          node --input-type=module <<'JS'
+          import fs from 'node:fs';
+          const path = 'tests/ux/server.mjs';
+          let source = fs.readFileSync(path, 'utf8');
+          if (!source.includes('await enforcePipelinePrecision(db)')) {
+            if (!source.includes('const port = 18133')) throw new Error('Fixture insertion point missing');
+            source = source.replace('const port = 18133', `
+          const { enforcePipelinePrecision } = await import('../../backend/startup/enforceInvariants.js')
+          const { readHamiltonTaskTruthSnapshot } = await import('../../backend/services/hamilton/hamiltonTaskTruthSnapshot.js')
+          await enforcePipelinePrecision(db)
+          const truth = await readHamiltonTaskTruthSnapshot(db)
+          if (!truth.queueReadable) throw new Error('Local UX task verification failed: ' + truth.status)
+          console.log('UX task verification:', truth.status)
+          const port = 18133`);
+            fs.writeFileSync(path, source);
+          }
+          JS
       - name: Execute the individual-tier browser journey
         run: npm run test:ux -- individual-tier.spec.mjs --max-failures=1
-      - name: Preserve isolated source and installed dependencies
-        if: always()
-        run: |
-          set -euo pipefail
-          snapshot="$RUNNER_TEMP/journey-runtime"
-          mkdir -p "$snapshot/.qa-toolchain"
-          git archive HEAD | tar -x -C "$snapshot"
-          cp -a node_modules "$snapshot/node_modules"
-          if test -d dist; then cp -a dist "$snapshot/dist"; fi
-          cp "$(command -v node)" "$snapshot/.qa-toolchain/node"
-          git rev-parse HEAD > "$snapshot/.qa-source-commit"
-          # Only tracked source, installed public packages and the Node binary.
-          # No .git credentials, environment values, test DBs or customer data.
-          tar --exclude='*.woff' --exclude='*.woff2' --exclude='*.ttf' --exclude='*.otf' --exclude='*.pfb' -czf "$RUNNER_TEMP/journey-runtime.tar.gz" -C "$snapshot" .
-      - name: Save isolated runtime
-        if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
-        with:
-          name: journey-runtime-${{ github.run_id }}
-          path: ${{ runner.temp }}/journey-runtime.tar.gz
-          compression-level: 0
-          retention-days: 1
-          if-no-files-found: error
       - name: Save browser evidence
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
