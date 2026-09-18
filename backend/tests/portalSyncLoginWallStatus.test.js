@@ -144,6 +144,7 @@ it.each(['unknown','blocked'])('does not persist or complete an unverified %s po
     const result = await runPortalSync(db, { profileId: PROFILE_ID, portalHost: HOST, direction: 'read', actorUserId: 'u1' })
     expect(wallConnector.read).toHaveBeenCalledOnce()
     expect(result).toMatchObject({ ok: false, error: 'portal_access_unproven', read: { access } })
+    expect(result.detail).toMatch(access === 'blocked' ? /blocked this browser/i : /could not verify/i)
     expect(db.prepare('SELECT COUNT(*) AS n FROM profile_sections').get().n).toBe(0)
     expect((await listRuns(db, { profileId: PROFILE_ID, portalHost: HOST }))[0].status).toBe('failed')
   } finally { db.close() }

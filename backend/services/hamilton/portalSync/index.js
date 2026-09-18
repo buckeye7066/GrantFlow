@@ -1,3 +1,4 @@
+import { portalAccessFailureDetail } from '../../../../shared/portalSyncMessages.js'
 /**
  * portalSync/index.js
  *
@@ -771,6 +772,7 @@ async function runPortalSyncInner(db, { profileId, host, dir, actorUserId, fligh
       const observedAccess = readResult?.access || (connectorId === 'generic' ? 'unknown' : null)
       if (observedAccess && observedAccess !== 'authenticated') {
         return await fail('portal_access_unproven', {
+          detail: portalAccessFailureDetail(observedAccess),
           needs_session: observedAccess === 'signin_wall',
           read: { access: observedAccess, fields_found: 0, awards_found: 0,
             pages: (readResult?.raw?.pages || []).map(p => ({

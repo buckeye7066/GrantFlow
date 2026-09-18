@@ -1,3 +1,4 @@
+import { registrableDomain } from '../hamiltonPortalCredentialService.js'
 /** Observe authenticated account controls; a saved session or readable page is not proof. */
 export async function observeGenericAccess(page, ctx = {}, requestedUrl) {
   let snapshot = null
@@ -32,10 +33,20 @@ export async function observeGenericAccess(page, ctx = {}, requestedUrl) {
     if (target.protocol === 'https:') actualHost = target.hostname.replace(/^www\./,'')
     signInUrl = /\/(?:login|signin|sign-in|account\/login)(?:\/|$)/i.test(target.pathname)
   } catch { /* Malformed URLs cannot prove account access. */ }
+  const expectedDomain = registrableDomain(expectedHost)
+  let savedHost = ''
+  try {
+    const saved = new URL(ctx.credential?.login_url || ctx.credential?.loginUrl || '')
+    if (saved.protocol === 'https:' && registrableDomain(saved.hostname) === expectedDomain) savedHost = saved.hostname.replace(/^www\./,'')
+  } catch { /* Missing login URL grants no additional host scope. */ }
+  // Trust the requested portal and its own descendants, or its explicitly saved
+  // same-domain login host. Never trust every sibling tenant of a shared domain.
+  const samePortal = expectedDomain && registrableDomain(actualHost) === expectedDomain &&
+    (actualHost === expectedHost || actualHost.endsWith('.' + expectedHost) || (savedHost && actualHost === savedHost))
   let access = 'unknown'
   if (snapshot?.blocked === true) access = 'blocked'
   else if (snapshot?.hasPassword === true || ((snapshot?.hasSignInPrompt === true || signInUrl) && snapshot?.hasLogout !== true)) access = 'signin_wall'
-  else if (ctx.hasSession === true && expectedHost && actualHost === expectedHost &&
+  else if (ctx.hasSession === true && samePortal &&
       snapshot?.hasLogout === true && snapshot?.hasAccountNavigation === true) access = 'authenticated'
   const safeUrl = value => {
     try { const url = new URL(value); return (url.origin + url.pathname).slice(0,1000) } catch { return null }

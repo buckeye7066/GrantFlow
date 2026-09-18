@@ -19,3 +19,10 @@ failed before their repairs. All 58 related portal tests then passed. This is
 not a claim that the user's current portal session is authenticated; that still
 requires the explicitly scoped live audit after release. No acceptance threshold,
 login credential, payment, or external submission is changed by these repairs.
+
+Review follow-through: the requested host and its own subdomains, plus an exact
+server-stored same-registrable-domain login host, can establish access. Unrelated
+registrable domains and arbitrary sibling tenants remain refused. The backend
+returns an actionable detail and the portal card uses the shared access-message
+contract for both immediate errors and historical run summaries. Subdomain,
+tenant-isolation, orchestration-detail and React message regressions pass.

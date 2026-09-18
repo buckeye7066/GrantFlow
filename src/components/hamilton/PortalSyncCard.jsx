@@ -1,3 +1,4 @@
+import { portalSyncFailureMessage } from '../../../shared/portalSyncMessages.js'
 /**
  * PortalSyncCard
  *
@@ -154,7 +155,7 @@ export default function PortalSyncCard({ profileId }) {
     onSuccess: (res, portalHost) => {
       refetchRuns()
       if (res?.ok === false) {
-        showErrorToast(toast, "Pull failed", res?.error || res?.detail || "See the status line for details.")
+        showErrorToast(toast, "Pull failed", portalSyncFailureMessage(res) || "See the status line for details.")
       } else {
         showSuccessToast(toast, "Pull started", `Pulling data from ${portalHost}. Watch the status line for the result.`)
       }
@@ -167,7 +168,7 @@ export default function PortalSyncCard({ profileId }) {
     onSuccess: (res, portalHost) => {
       refetchRuns()
       if (res?.ok === false) {
-        showErrorToast(toast, "Push failed", res?.error || res?.detail || "See the status line for details.")
+        showErrorToast(toast, "Push failed", portalSyncFailureMessage(res) || "See the status line for details.")
       } else {
         showSuccessToast(toast, "Push started", `Pushing your data to ${portalHost}. Watch the status line for the result.`)
       }
@@ -251,7 +252,7 @@ export default function PortalSyncCard({ profileId }) {
                         <span>Never synced</span>
                       )}
                       {run?.error && (
-                        <span className="text-destructive">Error: {String(run.error).slice(0, 160)}</span>
+                        <span className="text-destructive">Error: {portalSyncFailureMessage(run)}</span>
                       )}
                     </div>
                   </div>

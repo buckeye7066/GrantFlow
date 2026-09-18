@@ -51,3 +51,20 @@ it('discard data if extraction navigation ends at a sign-in wall', async () => {
   const result = await generic.read(p, context())
   expect(result.access).toBe('signin_wall'); expect(result.fields).toEqual([]); expect(result.awards).toEqual([])
 })
+
+it('accepts a captured apex portal landing on its account subdomain', async () => {
+ const ctx = { hasSession: true, portalHost: 'example.org', credential: { login_url: 'https://account.example.org/dashboard' } }
+ const result = await generic.read(pageWith(authenticated, 'https://account.example.org/dashboard'), ctx)
+ expect(result.access).toBe('authenticated')
+})
+it('accepts an exact saved same-domain login host without trusting arbitrary sibling tenants', async () => {
+ const ctx = { hasSession: true, portalHost: 'portal.example.org', credential: { login_url: 'https://account.example.org/dashboard' } }
+ expect((await generic.read(pageWith(authenticated, 'https://account.example.org/dashboard'), ctx)).access).toBe('authenticated')
+ expect((await generic.read(pageWith(authenticated, 'https://other.example.org/dashboard'), ctx)).access).toBe('unknown')
+})
+it('rejects sibling tenants and unrelated saved login hosts', async () => {
+ const ctx = { hasSession: true, portalHost: 'school-a.studioabroad.com', credential: { login_url: 'https://school-a.studioabroad.com/dashboard' } }
+ expect((await generic.read(pageWith(authenticated, 'https://school-b.studioabroad.com/dashboard'), ctx)).access).toBe('unknown')
+ ctx.credential.login_url = 'https://unrelated.example.org/dashboard'
+ expect((await generic.read(pageWith(authenticated, ctx.credential.login_url), ctx)).access).toBe('unknown')
+})
