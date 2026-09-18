@@ -1,0 +1,79 @@
+name: Tier journey probe
+
+on:
+  push:
+    branches: [fix/tier-journey-20260918]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tier-journey-probe-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  journey:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 24.19.0
+          cache: npm
+      - name: Install existing locked dependencies
+        run: npm ci --include=dev --include=optional
+      - name: Install browser
+        run: node node_modules/playwright/cli.js install chromium --with-deps
+      - name: Observe live public entry without submitting forms
+        run: |
+          mkdir -p test-results/live-entry
+          node --input-type=module <<'JS'
+          import { chromium } from 'playwright';
+          import fs from 'node:fs';
+          const browser = await chromium.launch({headless:true});
+          const context = await browser.newContext();
+          const page = await context.newPage();
+          const observations = [];
+          let current;
+          page.on('pageerror', error => current?.errors.push(error.message));
+          page.on('response', response => {
+            if(response.status() >= 400) current?.httpErrors.push({url:response.url().split('?')[0], status:response.status()});
+          });
+          for (const [name,url] of [['entry','https://app.axiombiolabs.org'],['login','https://app.axiombiolabs.org/login']]) {
+            current = {name,url,errors:[],httpErrors:[]};
+            try {
+              const response = await page.goto(url,{waitUntil:'networkidle',timeout:45000});
+              current.status = response?.status();
+              current.finalUrl = page.url();
+              current.title = await page.title();
+              current.headings = await page.locator('h1,h2,h3').allTextContents();
+              current.buttons = await page.getByRole('button').allTextContents();
+              current.inputs = await page.locator('input').evaluateAll(nodes => nodes.map(n => ({type:n.type,placeholder:n.placeholder,ariaLabel:n.getAttribute('aria-label')})));
+              current.links = await page.locator('a').evaluateAll(nodes => nodes.map(n => ({text:n.textContent?.trim(),href:n.getAttribute('href')})));
+              current.visibleText = (await page.locator('body').innerText()).slice(0,12000);
+              await page.screenshot({path:'test-results/live-entry/'+name+'.png',fullPage:true});
+            } catch(error) { current.navigationError = error.message; }
+            observations.push(current);
+            console.log('LIVE_ENTRY',JSON.stringify(current));
+          }
+          fs.writeFileSync('test-results/live-entry/observations.json',JSON.stringify(observations,null,2));
+          await browser.close();
+          if(observations.some(o => o.navigationError || o.status >= 400 || o.errors.length)) process.exitCode=1;
+          JS
+      - name: Build the real application for isolated account journeys
+        run: npm run build
+      - name: Execute existing authenticated browser journeys
+        run: npm run test:ux -- --max-failures=1
+      - name: Save session evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: tier-journey-evidence-${{ github.run_id }}
+          path: |
+            test-results/
+            playwright-report/
+          if-no-files-found: warn
+          retention-days: 7
