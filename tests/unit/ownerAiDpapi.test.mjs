@@ -19,8 +19,12 @@ test('installed DPAPI token survives the newline written by Set-Content', { skip
       readLine,
       "if ([System.Net.NetworkCredential]::new('', $secure).Password -cne 'synthetic-fixture-value-never-a-real-token') { throw 'Fixture roundtrip failed' }",
     ].join('\n')
+    // GitHub's pwsh host exports its incompatible v7 module paths to Windows PowerShell 5.
+    // Let the native child reconstruct its own built-in module search paths.
+    const env = { ...process.env, GF_DPAPI_TEST_DIR: dir }
+    for (const key of Object.keys(env)) if (key.toLowerCase() === 'psmodulepath') delete env[key]
     const result = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script], {
-      env: { ...process.env, GF_DPAPI_TEST_DIR: dir }, encoding: 'utf8', windowsHide: true, timeout: 15000,
+      env, encoding: 'utf8', windowsHide: true, timeout: 15000,
     })
     assert.equal(result.status, 0, result.stderr || result.error?.message || 'PowerShell fixture failed')
   } finally { rmSync(dir, { recursive: true, force: true }) }
