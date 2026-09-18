@@ -546,8 +546,8 @@ export default function Start() {
       case 'choice':       return <ChoiceQuestion question={question} onSubmit={submitAnswer} busy={busy} />
       case 'multi_choice': return <MultiChoiceQuestion key={question.id} question={question} onSubmit={submitAnswer} busy={busy} />
       case 'location':     return <LocationQuestion question={question} onSubmit={submitAnswer} busy={busy} />
-      case 'long_text':    return <TextQuestion question={question} onSubmit={submitAnswer} busy={busy} multiline />
-      case 'text':         return <TextQuestion question={question} onSubmit={submitAnswer} busy={busy} />
+      case 'long_text':    return <TextQuestion key={question.id} question={question} onSubmit={submitAnswer} busy={busy} multiline />
+      case 'text':         return <TextQuestion key={question.id} question={question} onSubmit={submitAnswer} busy={busy} />
       case 'email':        return <EmailQuestion question={question} onSubmit={submitAnswer} busy={busy} onWatchVideo={() => setShowVideo(true)} />
       default:             return null
     }
