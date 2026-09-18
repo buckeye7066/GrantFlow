@@ -1,4 +1,8 @@
 import { createHash } from 'node:crypto'
+import { createLogger } from './logger.js'
+const configLog = createLogger('utils:paidAiRoutes')
+const reasoningEfforts = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']
+const adaptiveModels = new Set(['claude-fable-5-1', 'claude-opus-5', 'claude-sonnet-5'])
 
 const sharedState = new Map()
 export function resetPaidAiCircuitState() { sharedState.clear() }
@@ -11,16 +15,21 @@ export function resolvePaidAiRoutes({ openai, openaiModel, anthropicModel }) {
     { provider: 'anthropic', model: anthropicModel || process.env.ANTHROPIC_MODEL || 'claude-haiku-4-5' },
   ]
   let entries = defaults
-  if (process.env.AI_PAID_ROUTES) {
+  if (process.env.AI_PAID_ROUTES !== undefined) {
     try { entries = JSON.parse(process.env.AI_PAID_ROUTES) } catch { entries = [] }
   }
-  if (!Array.isArray(entries)) return []
-  const routes = entries.slice(0, 24).flatMap(entry => {
+  if (!Array.isArray(entries)) entries = []
+  const parse = candidates => candidates.slice(0, 24).flatMap(entry => {
     if (!entry || !['openai', 'anthropic', 'compatible'].includes(entry.provider)) return []
     const { provider, model } = entry
     if (typeof model !== 'string' || !/^[a-zA-Z0-9][a-zA-Z0-9._:/-]{0,159}$/.test(model)) return []
-    if (entry.api && entry.api !== 'chat') return []
-    if (provider === 'openai' && (/(-pro|deep-research)(-|$)/.test(model) || !openai)) return []
+    const api = entry.api ?? 'chat'
+    if (!['chat', 'responses'].includes(api) || (api === 'responses' && provider !== 'openai')) return []
+    if (entry.reasoning_effort !== undefined && (provider !== 'openai' || api !== 'responses' || !reasoningEfforts.includes(entry.reasoning_effort))) return []
+    if (model === 'gpt-6-astra' && entry.reasoning_effort !== undefined && !['low', 'medium', 'high', 'xhigh', 'max'].includes(entry.reasoning_effort)) return []
+    if (entry.thinking !== undefined && (provider !== 'anthropic' || entry.thinking !== 'adaptive' || !adaptiveModels.has(model))) return []
+    if (entry.effort !== undefined && (entry.thinking !== 'adaptive' || !['low', 'medium', 'high', 'max'].includes(entry.effort))) return []
+    if (provider === 'openai' && ((api === 'chat' && /(-pro|deep-research)(-|$)/.test(model)) || !openai)) return []
     let baseURL
     let key = provider === 'anthropic' ? process.env.ANTHROPIC_API_KEY : process.env.OPENAI_API_KEY
     if (provider === 'compatible') {
@@ -34,9 +43,14 @@ export function resolvePaidAiRoutes({ openai, openaiModel, anthropicModel }) {
     } else if (entry.base_url || entry.api_key_env) return []
     if (provider !== 'openai' && !String(key || '').trim()) return []
     const account = createHash('sha256').update(`${provider}|${baseURL || ''}|${key || ''}`).digest('hex')
-    return [{ provider, model, baseURL, apiKeyEnv: entry.api_key_env, account,
+    return [{ provider, model, api, reasoningEffort: entry.reasoning_effort, thinking: entry.thinking, effort: entry.effort, baseURL, apiKeyEnv: entry.api_key_env, account,
       reasoning: entry.reasoning === true || (provider === 'openai' && /^(gpt-[5-9]|o[1-9])/.test(model)) }]
   })
+  let routes = parse(entries)
+  if (!routes.length && process.env.AI_PAID_ROUTES !== undefined) {
+    configLog.warn('paid_routes_default_recovery', { reason: 'zero_valid_routes' })
+    routes = parse(defaults)
+  }
   // First native primary, other native primary, then the remaining configured rank.
   const primary = routes.find(r => r.provider !== 'compatible')
   const other = primary && routes.find(r => r.provider !== 'compatible' && r.provider !== primary.provider)

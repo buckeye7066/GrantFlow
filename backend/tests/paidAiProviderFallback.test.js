@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-const sdk = vi.hoisted(() => ({ openai: vi.fn(), anthropic: vi.fn(), construct: vi.fn() }))
-vi.mock('openai', () => ({ default: class { constructor(options) { sdk.construct(options); this.chat = { completions: { create: sdk.openai } } } } }))
+const sdk = vi.hoisted(() => ({ responses: vi.fn(), openai: vi.fn(), anthropic: vi.fn(), construct: vi.fn() }))
+vi.mock('openai', () => ({ default: class { constructor(options) { sdk.construct(options); this.responses = { create: sdk.responses }; this.chat = { completions: { create: sdk.openai } } } } }))
 vi.mock('@anthropic-ai/sdk', () => ({ default: class { messages = { create: sdk.anthropic } } }))
 import { invokeJsonWithFallback, invokeTextWithFallback } from '../utils/aiProviders.js'
 import { clearRecentLogs, getRecentLogs } from '../utils/logger.js'
@@ -59,13 +59,15 @@ describe('ranked paid gateway', () => {
   })
   it('rejects truncated free JSON even when its prefix parses', async () => {
     config([])
+    vi.stubEnv('ANTHROPIC_API_KEY', '')
     const create = vi.fn().mockResolvedValue(completion('{"partial":true}', 'length'))
-    expect(await run({ freeRoutes: [{ model: 'fixture', base_url: 'https://fixture.invalid/v1' }], freeClientFactory: () => ({ chat: { completions: { create } } }) })).toMatchObject({ ok: false })
+    expect(await run({ openai: null, freeRoutes: [{ model: 'fixture', base_url: 'https://fixture.invalid/v1' }], freeClientFactory: () => ({ chat: { completions: { create } } }) })).toMatchObject({ ok: false })
   })
   it('rejects malformed free JSON with a valid object prefix', async () => {
     config([])
+    vi.stubEnv('ANTHROPIC_API_KEY', '')
     const create = vi.fn().mockResolvedValue(completion('{"partial":true} trailing garbage'))
-    expect(await run({ freeRoutes: [{ model: 'fixture', base_url: 'https://fixture.invalid/v1' }], freeClientFactory: () => ({ chat: { completions: { create } } }) })).toMatchObject({ ok: false })
+    expect(await run({ openai: null, freeRoutes: [{ model: 'fixture', base_url: 'https://fixture.invalid/v1' }], freeClientFactory: () => ({ chat: { completions: { create } } }) })).toMatchObject({ ok: false })
   })
   it('uses configured primary then other primary before remaining ranked models', async () => {
     sdk.openai.mockRejectedValueOnce(new Error('unavailable'))
@@ -127,7 +129,7 @@ describe('ranked paid gateway', () => {
     sdk.anthropic.mockResolvedValue({ stop_reason: 'max_tokens', content: [{ text: '{"partial":true}' }] })
     expect(await run({ paidCircuitState: new Map() })).toMatchObject({ provider: 'openai' })
   })
-  it('uses reasoning parameters and refuses Responses-only chat routes', async () => {
+  it('uses reasoning parameters and never sends Responses routes to chat', async () => {
     config([{ provider: 'openai', model: 'gpt-5.4' }])
     await run()
     expect(sdk.openai.mock.calls[0][0]).toMatchObject({ max_completion_tokens: 1200 })
@@ -144,5 +146,96 @@ describe('ranked paid gateway', () => {
     expect(sdk.construct.mock.calls.filter(([a]) => a.baseURL).length).toBe(1)
     const logs = JSON.stringify(getRecentLogs())
     expect(logs).not.toContain('private-provider-message'); expect(logs).not.toContain('dedicated-secret')
+  })
+})
+
+const nativeResponse = (overrides = {}) => ({ status: 'completed', model: 'gpt-6-astra', usage: { input_tokens: 10, output_tokens: 20, total_tokens: 30 }, output: [{ type: 'message', role: 'assistant', status: 'completed', content: [{ type: 'output_text', text: '{"ok":true}' }] }], ...overrides })
+const responseRoute = { provider: 'openai', model: 'gpt-6-astra', api: 'responses', reasoning_effort: 'low' }
+describe('native API options and recovery', () => {
+  beforeEach(() => { config([responseRoute]); sdk.responses.mockResolvedValue(nativeResponse()) })
+  it('uses native Responses JSON options and preserves model and usage', async () => {
+    expect(await run({ system: 'grounding', maxTokens: 1800 })).toMatchObject({ ok: true, model: 'gpt-6-astra', usage: { input_tokens: 10, output_tokens: 20 } })
+    expect(sdk.responses.mock.calls[0][0]).toMatchObject({ model: 'gpt-6-astra', max_output_tokens: 1800, store: false, instructions: expect.stringContaining('grounding'), input: 'fixture', text: { format: { type: 'json_object' } }, reasoning: { effort: 'low' } })
+    expect(sdk.openai).not.toHaveBeenCalled()
+  })
+  it('uses Responses text mode without a JSON format and retains returned model', async () => {
+    const response = nativeResponse({ model: 'gpt-6-astra-snapshot' }); response.output[0].content[0].text = 'answer'
+    sdk.responses.mockResolvedValue(response)
+    expect(await invokeTextWithFallback({ prompt: 'fixture', freeRoutes: [], paidCircuitState: state })).toMatchObject({ text: 'answer', model: 'gpt-6-astra-snapshot' })
+    expect(sdk.responses.mock.calls[0][0]).not.toHaveProperty('text')
+    expect(sdk.responses.mock.calls[0][0]).not.toHaveProperty('temperature')
+  })
+  it('preserves explicit null during invalid configuration recovery', async () => {
+    config([]); expect(await run({ openai: null })).toMatchObject({ provider: 'anthropic' })
+    expect(sdk.openai).not.toHaveBeenCalled(); expect(sdk.responses).not.toHaveBeenCalled()
+  })
+  it.each([
+    { ...responseRoute, reasoning_effort: 'invented' },
+    { provider: 'anthropic', model: 'claude-haiku-4-5', thinking: 'adaptive' },
+    { provider: 'anthropic', model: 'claude-fable-5-1', thinking: 'adaptive', effort: 'invented' },
+    { provider: 'anthropic', model: 'claude-fable-5-1', effort: 'high' },
+  ])('recovers defaults for unsupported native options %#', async route => {
+    config([route]); expect(await run()).toMatchObject({ ok: true })
+    expect(sdk.responses).not.toHaveBeenCalled()
+    expect(sdk.openai.mock.calls[0][0]).not.toHaveProperty('reasoning')
+    expect(JSON.stringify(getRecentLogs())).toContain('paid_routes_default_recovery')
+  })
+  it.each(['incomplete', 'failed', 'in_progress', undefined])('rejects noncompleted status %s', async status => {
+    sdk.responses.mockResolvedValue(nativeResponse({ status }))
+    expect(await run()).toMatchObject({ ok: false })
+  })
+  it.each([
+    [], [{ type: 'function_call', output: '{"ok":true}' }],
+    [{ type: 'message', role: 'user', status: 'completed', content: [{ type: 'output_text', text: '{"ok":true}' }] }],
+    [{ type: 'message', role: 'assistant', status: 'incomplete', content: [{ type: 'output_text', text: '{"ok":true}' }] }],
+    [{ type: 'message', role: 'assistant', status: 'completed', content: [{ type: 'refusal', refusal: 'no' }, { type: 'output_text', text: '{"ok":true}' }] }],
+  ])('rejects missing, tool, incomplete and refusal outputs %#', async (...items) => {
+    sdk.responses.mockResolvedValue(nativeResponse({ output: items }))
+    expect(await run()).toMatchObject({ ok: false })
+  })
+  it.each(['', '{"ok":true} garbage'])('rejects empty/malformed text %j', async text => {
+    const response = nativeResponse(); response.output[0].content[0].text = text
+    sdk.responses.mockResolvedValue(response)
+    expect(await run()).toMatchObject({ ok: false })
+  })
+  it('retries only one output-token truncation within the same budget and aggregates usage', async () => {
+    sdk.responses.mockResolvedValueOnce(nativeResponse({ status: 'incomplete', incomplete_details: { reason: 'max_output_tokens' } }))
+    expect(await run({ maxTokens: 1800 })).toMatchObject({ ok: true, usage: { input_tokens: 20, output_tokens: 40, total_tokens: 60 } })
+    expect(sdk.responses.mock.calls.map(([r]) => r.max_output_tokens)).toEqual([1800, 3600])
+  })
+  it('rejects repeated truncation and does not retry without time', async () => {
+    sdk.responses.mockResolvedValue(nativeResponse({ status: 'incomplete', incomplete_details: { reason: 'max_output_tokens' } }))
+    expect(await run()).toMatchObject({ ok: false }); expect(sdk.responses).toHaveBeenCalledTimes(2)
+    sdk.responses.mockClear()
+    expect(await run({ timeoutMs: 900, paidCircuitState: new Map() })).toMatchObject({ ok: false }); expect(sdk.responses).toHaveBeenCalledTimes(1)
+  })
+  it('aborts Responses at the overall deadline', async () => {
+    vi.useFakeTimers(); sdk.responses.mockImplementation(() => new Promise(() => {}))
+    const pending = run({ timeoutMs: 1000 }); await vi.advanceTimersByTimeAsync(1000)
+    expect(await pending).toMatchObject({ ok: false, timedOut: true })
+    expect(sdk.responses.mock.calls[0][1].signal.aborted).toBe(true)
+  })
+  it.each([429, 401])('shares cooldown across API shapes for status %s', async status => {
+    sdk.responses.mockRejectedValue(Object.assign(new Error('failure'), { status }))
+    await run(); config([{ ...responseRoute, api: 'chat', reasoning_effort: undefined }]); await run()
+    expect(sdk.openai).not.toHaveBeenCalled()
+  })
+  it.each(['claude-fable-5-1', 'claude-opus-5', 'claude-sonnet-5'])('uses explicit adaptive thinking for %s', async model => {
+    config([{ provider: 'anthropic', model, thinking: 'adaptive', effort: 'high' }]); await run()
+    expect(sdk.anthropic.mock.calls[0][0]).toMatchObject({ thinking: { type: 'adaptive' }, output_config: { effort: 'high' } })
+    expect(sdk.anthropic.mock.calls[0][0]).not.toHaveProperty('temperature')
+  })
+  it('keeps Haiku defaults and omits unspecified adaptive effort', async () => {
+    config([{ provider: 'anthropic', model: 'claude-haiku-4-5-20251001' }]); await run()
+    expect(sdk.anthropic.mock.calls[0][0]).toHaveProperty('temperature', 0.1)
+    expect(sdk.anthropic.mock.calls[0][0]).not.toHaveProperty('thinking')
+    config([{ provider: 'anthropic', model: 'claude-fable-5-1', thinking: 'adaptive' }]); await run()
+    expect(sdk.anthropic.mock.calls[1][0]).not.toHaveProperty('output_config')
+  })
+  it.each(['', '[]', '{}', 'private-secret-invalid', '[{"provider":"openai","model":"gpt-6-astra","api":"responses","reasoning_effort":"none"}]'])('recovers native defaults for invalid config %#', async value => {
+    vi.stubEnv('AI_PAID_ROUTES', value); sdk.openai.mockRejectedValue(new Error('unavailable'))
+    expect(await run()).toMatchObject({ provider: 'anthropic' }); expect(sdk.openai).toHaveBeenCalledTimes(1)
+    expect(JSON.stringify(getRecentLogs())).not.toContain('private-secret-invalid')
+    expect(JSON.stringify(getRecentLogs())).toContain('paid_routes_default_recovery')
   })
 })

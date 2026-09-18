@@ -122,13 +122,28 @@ function jsonCompletionError(choice) {
   return error
 }
 
+// Responses output is typed: never accept convenience text, refusals, or tool results.
+function extractResponsesText(response) {
+  if (response?.status !== 'completed' || !Array.isArray(response.output)) throw jsonCompletionError()
+  const texts = []
+  for (const item of response.output) {
+    if (item?.type === 'reasoning') continue
+    if (item?.type !== 'message' || item.role !== 'assistant' || item.status !== 'completed' || !Array.isArray(item.content)) throw jsonCompletionError()
+    for (const part of item.content) {
+      if (part?.type !== 'output_text' || typeof part.text !== 'string') throw jsonCompletionError()
+      texts.push(part.text)
+    }
+  }
+  return texts.join('\n').trim()
+}
+
 function combineCompletionUsage(first, second) {
   if (!first) return second ?? null
   if (!second) return first
   // Detailed cache/reasoning breakdowns describe individual requests. Return
   // the aggregate billing counters when recovery made two requests.
   const total = {}
-  for (const key of ['prompt_tokens', 'completion_tokens', 'total_tokens']) {
+  for (const key of ['prompt_tokens', 'completion_tokens', 'input_tokens', 'output_tokens', 'total_tokens']) {
     if (Number.isFinite(first[key]) && Number.isFinite(second[key])) total[key] = first[key] + second[key]
   }
   return total
@@ -187,7 +202,9 @@ async function invokePaidLadder({
             attemptSignal.throwIfAborted()
             if (!client) throw new Error('Provider unavailable')
             return client.messages.create({ model: route.model, max_tokens: outputLimit,
-              temperature: temperature ?? (jsonOnly ? 0.1 : 0.3),
+              ...(route.thinking === 'adaptive'
+                ? { thinking: { type: 'adaptive' }, ...(route.effort ? { output_config: { effort: route.effort } } : {}) }
+                : { temperature: temperature ?? (jsonOnly ? 0.1 : 0.3) }),
               system: [system, jsonOnly ? 'Return ONLY valid JSON (no markdown, no prose).' : null].filter(Boolean).join('\n\n') || undefined,
               messages: [{ role: 'user', content: safePrompt }],
             }, requestOptions)
@@ -197,6 +214,12 @@ async function invokePaidLadder({
           })
           attemptSignal.throwIfAborted()
           const systemText = [system, jsonOnly ? 'Return ONLY a complete, valid JSON object (no markdown, no prose).' : null].filter(Boolean).join('\n\n')
+          if (route.api === 'responses') return client.responses.create({
+            model: route.model, max_output_tokens: outputLimit, store: false,
+            ...(systemText ? { instructions: systemText } : {}), input: safePrompt,
+            ...(jsonOnly ? { text: { format: { type: 'json_object' } } } : {}),
+            ...(route.reasoningEffort ? { reasoning: { effort: route.reasoningEffort } } : {}),
+          }, requestOptions)
           return client.chat.completions.create({
             model: route.model,
             ...(route.reasoning ? { max_completion_tokens: outputLimit } : { max_tokens: outputLimit, temperature: temperature ?? (jsonOnly ? 0.1 : 0.3) }),
@@ -206,7 +229,10 @@ async function invokePaidLadder({
         }, { timeoutMs: attemptRemaining(), signal, label: 'Paid AI request' })
         const anthropic = route.provider === 'anthropic'
         usage = anthropic ? null : combineCompletionUsage(usage, response?.usage)
-        const choice = response?.choices?.[0]
+        const responses = route.api === 'responses'
+        const choice = responses
+          ? { finish_reason: response?.status === 'incomplete' && response?.incomplete_details?.reason === 'max_output_tokens' ? 'length' : response?.status === 'completed' ? 'stop' : 'unknown' }
+          : response?.choices?.[0]
         if (!anthropic && jsonOnly && choice?.finish_reason === 'length') {
           const retryLimit = Math.min(8192, Math.floor(Number(maxTokens) * 2))
           if (attempt === 0 && retryLimit > Number(outputLimit) && attemptRemaining() > 1000) {
@@ -219,11 +245,11 @@ async function invokePaidLadder({
             (anthropic && response?.stop_reason && response.stop_reason !== 'end_turn' && response.stop_reason !== 'stop_sequence')) {
           throw jsonCompletionError(choice)
         }
-        const raw = anthropic ? extractAnthropicText(response) : String(choice?.message?.content ?? '').trim()
+        const raw = anthropic ? extractAnthropicText(response) : responses ? extractResponsesText(response) : String(choice?.message?.content ?? '').trim()
         if (!raw) throw jsonCompletionError(choice)
         const json = jsonOnly ? (isLikelyJson(raw) ? safeParseJSON(raw, null) : tryParseJsonLoose(raw)) : null
         if (jsonOnly && (!json || typeof json !== 'object')) throw jsonCompletionError(choice)
-        return { ok: true, provider: route.provider, model: route.model, billing_mode: 'paid_api',
+        return { ok: true, provider: route.provider, model: responses && typeof response?.model === 'string' && response.model.trim() ? response.model : route.model, billing_mode: 'paid_api',
           ...(jsonOnly ? { json } : { text: raw }), raw, usage, openaiError, anthropicError }
       }
     } catch (error) {

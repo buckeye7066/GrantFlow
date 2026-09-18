@@ -21,3 +21,8 @@ test('failed acceptance uploads its receipt before keeping the workflow red', ()
   assert.match(workflow, /continue-on-error: true/)
   assert.match(workflow, /steps\.acceptance\.outcome != 'success'/)
 })
+
+test('paid route configuration is passed through a repository variable in env', () => {
+  assert.match(workflow, /AI_PAID_ROUTES: \$\{\{ vars\.AI_PAID_ROUTES \}\}/)
+  assert.doesNotMatch(workflow, /run:[\s\S]*\$\{\{ vars\.AI_PAID_ROUTES/)
+})

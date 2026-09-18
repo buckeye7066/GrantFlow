@@ -2,17 +2,27 @@
 
 `AI_PAID_ROUTES` is a server-only JSON array; array order is the owner-selected
 rank, not a universal model quality ranking. Unset preserves the existing
-OpenAI model then Anthropic model defaults. An empty array disables paid routes;
-invalid configuration fails closed. No credentials are provisioned by this code.
+OpenAI model then Anthropic model defaults. Empty or invalid configuration with zero valid routes recovers the two legacy
+native defaults (subject to available credentials and explicit client opt-out),
+with sanitized `paid_routes_default_recovery` diagnostics. No credentials are provisioned by this code.
 
-Example using existing native accounts (inference availability must be probed
-separately by the deployment owner):
+Example ranked paid chain, explicitly selected configuration rather than a
+cross-vendor benchmark. The owner reports these identifiers were returned by
+official model-list endpoints on 2026-09-18. Catalog metadata is not generation
+proof; the parent must verify live inference and account access separately.
+This example does not activate production configuration or provision keys.
 
 ```json
 [
-  {"provider":"openai","model":"gpt-4.1"},
-  {"provider":"anthropic","model":"claude-sonnet-4-6"},
-  {"provider":"openai","model":"gpt-4.1-mini"}
+  {"provider":"openai","model":"gpt-6-astra","api":"responses","reasoning_effort":"low"},
+  {"provider":"anthropic","model":"claude-fable-5-1","thinking":"adaptive"},
+  {"provider":"openai","model":"gpt-5.6-sol","api":"responses","reasoning_effort":"low"},
+  {"provider":"anthropic","model":"claude-opus-5","thinking":"adaptive"},
+  {"provider":"openai","model":"gpt-5.6-terra","api":"responses","reasoning_effort":"low"},
+  {"provider":"anthropic","model":"claude-sonnet-5","thinking":"adaptive"},
+  {"provider":"openai","model":"gpt-5.6-luna","api":"responses","reasoning_effort":"low"},
+  {"provider":"openai","model":"gpt-4.1","api":"chat"},
+  {"provider":"anthropic","model":"claude-haiku-4-5-20251001"}
 ]
 ```
 
@@ -30,11 +40,35 @@ are used. Missing keys skip the route. URLs are never taken from invocation
 options. Native routes cannot override endpoints or credential references.
 At most 24 entries are considered; duplicate account/model pairs are removed.
 
-Only chat-compatible models are supported here: `api: "responses"` and known
-native pro/deep-research models are skipped, never silently sent to chat.
-Native GPT-5+ and o-series models use `max_completion_tokens` without temperature.
-Compatible entries may set `reasoning: true` for that parameter convention.
-Deployment must verify each configured model's chat and JSON capabilities.
+Native OpenAI supports `api: "responses"` through `client.responses.create`,
+using `max_output_tokens`, `store:false`, `instructions`/`input`, and
+`text.format: {"type":"json_object"}` for JSON. Only completed assistant
+`output_text` is accepted; refusals, tool outputs, incomplete, malformed and
+empty answers fail. An output-token truncation may retry once within the same
+remaining time slice. Usage counters aggregate across that recovery; the
+returned Responses model identifier is retained when present.
+
+Optional `reasoning_effort` maps to `reasoning.effort` for native Responses.
+Known enum values are `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`;
+model support varies, and the gateway never inserts `none` by default.
+`gpt-6-astra` specifically permits only `low`, `medium`, `high`, `xhigh`, `max`.
+The strong-route example uses `low`. Native chat behavior remains unchanged:
+GPT-5+ and o-series use `max_completion_tokens` without temperature; known
+pro/deep-research models require Responses. Compatible routes remain chat-only
+and may set `reasoning:true` for the completion-token convention.
+
+Native Anthropic accepts explicitly configured `thinking:"adaptive"` for
+`claude-fable-5-1`, `claude-opus-5`, and `claude-sonnet-5`, omitting temperature.
+Optional `effort` (`low`, `medium`, `high`, `max`) maps to `output_config.effort`
+only with adaptive thinking; no effort is inferred. Other thinking options or
+unknown effort values invalidate the route. Legacy Haiku defaults retain their
+existing temperature and do not enable thinking. Model-specific generation
+capabilities remain subject to live verification.
+
+The existing `amy-web-parity-acceptance.yml` receives the same server-side JSON
+from GitHub repository variable `AI_PAID_ROUTES` through its job environment.
+Existing provider secrets retain their scopes; the variable is never interpolated
+into shell code. This change does not dispatch the workflow.
 
 Receipts add `model` and `billing_mode: "paid_api"`; free receipts carry
 `billing_mode: "free_or_local"`. These label the API route, not a price guarantee
@@ -45,7 +79,8 @@ only that model, honoring Retry-After (seconds or HTTP date), bounded to 1–300
 seconds (30 seconds if absent/invalid). Other failures cool the model for five
 seconds. State holds at most 256 hashed account/model entries with expiring
 timestamps; credential rotation changes the account identity. Configured ladders
-share process-local state; legacy calls use request-local state for compatibility.
+share process-local state across chat and Responses API shapes for the same
+account/model; legacy calls use request-local state for compatibility.
 Tests can inject `paidCircuitState: new Map()` or reset the shared state via
 `resetPaidAiCircuitState` in the companion module. Logs and returned diagnostics
 exclude upstream messages and credential values.
