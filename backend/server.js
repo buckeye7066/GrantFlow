@@ -4035,6 +4035,7 @@ if (process.env.NODE_ENV !== 'test') {
         if (app.locals.bootMaintenancePromise) {
           await app.locals.bootMaintenancePromise
         }
+        lease.signal?.throwIfAborted()
         const stats = await runLinkVerification(dbInstance, {
           limit,
           verifiedBy: `recurring-verifier:pid=${process.pid}`,
@@ -4052,6 +4053,11 @@ if (process.env.NODE_ENV !== 'test') {
           })
           lease.signal?.throwIfAborted()
           console.log('[link-repair] recurring lifecycle pass:', lifecycle)
+          const { enforceStaleMatchExplainRefresh } = await import('./startup/enforceInvariants.js')
+          const explainRefresh = await enforceStaleMatchExplainRefresh(dbInstance, { signal: lease.signal, lease, persistReceipt: true })
+          lease.signal?.throwIfAborted()
+          console.log('[stale-match-explain] recurring refresh:', explainRefresh)
+          if (!explainRefresh.ok) console.warn('[stale-match-explain] recurring refresh failed:', explainRefresh)
           // Link freshness can leave the boot census intentionally pending.
           // Refresh only that already-readable snapshot here, after the
           // canonical verifier and repair pass have completed under one lock.

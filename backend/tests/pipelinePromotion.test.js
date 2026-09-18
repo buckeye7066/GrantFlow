@@ -120,7 +120,7 @@ function seedCandidate(db, profileId, overrides = {}) {
       overrides.record_origin || 'curated_verified',
       overrides.description || 'Emergency housing assistance for individuals and families in need.',
       overrides.amount_min ?? null, overrides.amount_max ?? null,
-      overrides.url || `https://example.org/${id}`, overrides.url || `https://example.org/${id}`,
+      overrides.url || `https://fixture-foundation.org/${id}`, overrides.url || `https://fixture-foundation.org/${id}`,
       JSON.stringify(['emergency', 'housing']), overrides.kind || 'DIRECT_GRANT',
       overrides.is_active ?? 1, overrides.is_hidden ?? 0, overrides.status ?? 'active',
       overrides.link_status ?? 'unverified', overrides.reality_status ?? null,
@@ -357,7 +357,7 @@ describe('qualified pipeline promotion', () => {
   it('computes remaining from durable DB state and terminal duplicates do not recount', async () => {
     const db = makeDb()
     seedProfile(db, 'real')
-    const duplicate = seedCandidate(db, 'real', { id: 'dup', title: 'Stable Duplicate', url: 'https://example.org/stable' })
+    const duplicate = seedCandidate(db, 'real', { id: 'dup', title: 'Stable Duplicate', url: 'https://fixture-foundation.org/stable' })
     seedCandidate(db, 'real', { id: 'positive' })
     db.prepare(`INSERT INTO grants
       (id, profile_id, funding_opportunity_id, title, funder, status, application_url, url, fingerprint)

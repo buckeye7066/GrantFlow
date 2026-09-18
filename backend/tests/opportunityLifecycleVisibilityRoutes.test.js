@@ -237,3 +237,29 @@ describe('opportunities lifecycle visibility routes', () => {
     expect(scored.body.data.map((row) => row.id)).toEqual([visible.id])
   })
 })
+
+it.each(['source_only','preferred_alias'])('real opportunity list/detail/geo responses preserve application semantics: %s', async mode => {
+  const db=createDb()
+  try {
+    db.exec('ALTER TABLE funding_opportunities ADD COLUMN apply_url TEXT')
+    const row=seedOpportunity(db,{id:'9'.repeat(64)})
+    const source=`https://ohio.gov/funding/${row.id}`
+    const selected=mode==='source_only'?null:source+'/apply'
+    db.prepare('UPDATE funding_opportunities SET apply_url=?,application_url=? WHERE id=?')
+      .run(selected,mode==='source_only'?null:'https://alpha.grantable.co/login',row.id)
+    db.prepare('INSERT INTO funding_opportunity_geo_index (id,opportunity_id,state,zip,county,source) VALUES (?,?,?,?,?,?)')
+      .run('semantic-geo',row.id,'OH','43215','Franklin','fixture')
+    const app=createApp(db)
+    const list=await request(app).get('/api/opportunities').query({compliance:'all'})
+    const detail=await request(app).get(`/api/opportunities/${row.id}`)
+    const geo=await request(app).get('/api/opportunities/geo/scored').query({state:'OH',geo_zip:'43215'})
+    for(const response of [list,detail,geo]) expect(response.status).toBe(200)
+    const detailRow=detail.body.data || detail.body
+    for(const result of [list.body.data.find(r=>r.id===row.id),detailRow,geo.body.data.find(r=>r.id===row.id)]) {
+      expect(result).toBeTruthy()
+      expect(result.application_url).toBe(selected)
+      expect(result.source_url).toBe(source)
+    }
+    expect(db.prepare('SELECT apply_url FROM funding_opportunities WHERE id=?').get(row.id).apply_url).toBe(selected)
+  }finally{db.close()}
+})

@@ -344,3 +344,126 @@ it('real canonical rescore preserves an unrestricted directory through integrity
     expect(match.match_score).toBeGreaterThanOrEqual(7)
   } finally { raw.close() }
 })
+
+it.each(['web-llm', 'institution-link', 'catalog-rescore-link', 'county-crisis-need-link'])('invalidates a stale %s ACCEPT for a known non-application target using the real engine', async (lane) => {
+  const raw = makeDb()
+  try {
+    raw.exec(`ALTER TABLE profiles ADD COLUMN primary_type TEXT;
+      ALTER TABLE profiles ADD COLUMN state TEXT;
+      ALTER TABLE profiles ADD COLUMN needs TEXT;
+      ALTER TABLE funding_opportunities ADD COLUMN entity_types_allowed TEXT;
+      ALTER TABLE funding_opportunities ADD COLUMN categories TEXT;
+      ALTER TABLE funding_opportunities ADD COLUMN need_types_supported TEXT;`)
+    seedPair(raw, { matcherVersion: lane, explain: PROVEN })
+    raw.prepare('UPDATE profiles SET primary_type=?, state=?, needs=? WHERE id=?')
+      .run('individual', 'OH', JSON.stringify(['housing', 'utilities']), 'p1')
+    raw.prepare('UPDATE profile_sections SET data=? WHERE profile_id=?')
+      .run(JSON.stringify({ state: 'OH', profile_category: 'individual', needs: ['housing', 'utilities'] }), 'p1')
+    raw.prepare(`UPDATE funding_opportunities SET title=?, sponsor=?, description=?, state=?, is_national=0,
+      source='web_search', opportunity_kind='PROGRAM', application_url=?, entity_types_allowed=?, categories=?, need_types_supported=? WHERE id='o1'`)
+      .run('Ohio Housing and Utility Assistance', 'Fixture Housing Foundation', 'For Ohio residents facing eviction or utility shutoff.', 'OH',
+        'https://alpha.grantable.co/login?ref=apply', JSON.stringify(['individual']), JSON.stringify(['housing', 'utilities']), JSON.stringify(['housing', 'utilities']))
+    const result = await runStaleMatchExplainRefresh(wrap(raw))
+    expect(result.ok).toBe(true)
+    expect(result.refreshed).toBe(1)
+    const row = raw.prepare('SELECT * FROM profile_opportunity_matches WHERE id=?').get('m1')
+    expect(row.match_decision).toBe('review')
+    expect(row.matcher_version).toBe(lane)
+    const explain = JSON.parse(row.match_explain_json)
+    expect(explain.signal_version).toBe(PROFILE_SIGNAL_VERSION)
+    expect(explain.application_target).toMatchObject({ status: 'non_application', reason: 'non_application_vendor_content' })
+    expect(explain.four_truth_proof.all_passed).toBe(false)
+    expect(qualifiesForDisplay(row, 0)).toBe(false)
+    expect(raw.prepare('SELECT count(*) AS n FROM funding_opportunities').get().n).toBe(1)
+    expect((await runStaleMatchExplainRefresh(wrap(raw))).refreshed).toBe(0)
+  } finally { raw.close() }
+})
+
+it('a target marker on an unrelated REJECT does not bypass linker retention or delete the pair', async () => {
+  const raw = makeDb()
+  try {
+    seedPair(raw, { matcherVersion: 'catalog-rescore-link', explain: PROVEN })
+    const db = wrap(raw)
+    const rejecting = stubProvingEngine({ decision: 'reject', eligible: false, matchedNeeds: [] })
+    const summary = await runStaleMatchExplainRefresh(db, {
+      pairBudget: 10, writeEnabled: true,
+      deps: { thesisNeedsDefaulted: async () => false, computeMatchDecision: (...args) => {
+        const result = rejecting(...args)
+        result.match_explain.application_target = { status: 'non_application', reason: 'non_application_vendor_content' }
+        return result
+      } },
+    })
+    expect(summary.refreshed).toBe(1)
+    const row = raw.prepare('SELECT * FROM profile_opportunity_matches WHERE id=?').get('m1')
+    expect(row.match_decision).toBe('accept')
+    expect(JSON.parse(row.match_explain_json).four_truth_proof.all_passed).toBe(false)
+    expect(qualifiesForDisplay({ ...row, opportunity_kind: 'SCHOLARSHIP' })).toBe(false)
+    const { normalizePersistedMatchDecisionIntegrity } = await import('../services/matching/matchDecisionIntegrity.js')
+    await normalizePersistedMatchDecisionIntegrity(db, { profileId: 'p1' })
+    expect(raw.prepare('SELECT id FROM profile_opportunity_matches WHERE id=?').get('m1')).toBeTruthy()
+  } finally { raw.close() }
+})
+
+
+it('a concurrent fresh rescore wins over a stale structural target downgrade', async () => {
+  const raw = makeDb()
+  try {
+    seedPair(raw, { matcherVersion: 'web-llm', explain: PROVEN })
+    const original = wrap(raw)
+    const fresh = JSON.stringify({ signal_version: PROFILE_SIGNAL_VERSION, scoring_policy_version: 'need_first_v2', concurrent_correction: true })
+    let raced = false
+    const db = { ...original, prepare(sql) {
+      const stmt = original.prepare(sql)
+      if (!/UPDATE profile_opportunity_matches/.test(sql)) return stmt
+      return { ...stmt, run(...args) {
+        if (!raced) {
+          raced = true
+          raw.prepare("UPDATE funding_opportunities SET application_url='https://fixture-foundation.org/apply' WHERE id='o1'").run()
+          raw.prepare("UPDATE profile_opportunity_matches SET match_decision='accept', match_score=91, match_explain_json=? WHERE id='m1'").run(fresh)
+        }
+        return stmt.run(...args)
+      } }
+    } }
+    const result = await runStaleMatchExplainRefresh(db, { deps: {
+      computeMatchDecision: () => ({ ...stubProvingEngine({ decision: 'review' })(), match_explain: { application_target: { status: 'non_application', reason: 'non_application_vendor_content' } } }),
+      loadProfileContext: async () => ({ profile: { id: 'p1' }, sections: {} }),
+      thesisNeedsDefaulted: async () => false,
+    } })
+    expect(raced).toBe(true)
+    const row = raw.prepare("SELECT * FROM profile_opportunity_matches WHERE id='m1'").get()
+    expect(row.match_decision).toBe('accept')
+    expect(row.match_explain_json).toBe(fresh)
+    expect(result.refreshed).toBe(0)
+    expect(result.concurrent_changes_skipped).toBe(1)
+    expect(result.structural_target_holds).toBe(0)
+  } finally { raw.close() }
+})
+
+it.each(['crawler-os', 'catalog-rescore-link'])('real school-origin rescore invalidates an old positive proof in the %s lane', async matcherVersion => {
+  const raw = makeDb()
+  try {
+    seedPair(raw, { matcherVersion, explain: PROVEN })
+    raw.prepare('UPDATE funding_opportunities SET title=?, sponsor=?, description=?, is_national=1 WHERE id=?').run(
+      'Community Education Scholarship', 'Community Foundation',
+      'Scholarships are restricted to graduates of a public high school in Raleigh County.', 'o1',
+    )
+    const { computeMatchDecision } = await import('../services/matchEngine.js')
+    const summary = await runStaleMatchExplainRefresh(wrap(raw), {
+      pairBudget: 10, writeEnabled: true,
+      deps: {
+        computeMatchDecision, thesisNeedsDefaulted: async () => false,
+        loadProfileContext: async () => ({
+          profile: { id: 'p1', primary_type: 'individual', entity_type: 'individual', state: 'TN', needs: ['education'] },
+          sections: { education: { is_student: true, high_school_name: 'Example High School', high_school_graduation_year: 2020 } },
+        }),
+      },
+    })
+    expect(summary.refreshed).toBe(1)
+    const row = raw.prepare('SELECT * FROM profile_opportunity_matches WHERE id=?').get('m1')
+    const explain = JSON.parse(row.match_explain_json)
+    expect(explain.signal_version).toBe(PROFILE_SIGNAL_VERSION)
+    expect(explain.four_truth_proof.all_passed).toBe(false)
+    expect(explain.four_truth_proof.profile_qualifies.passed).toBe(false)
+    expect(qualifiesForDisplay({ ...row, opportunity_kind: 'SCHOLARSHIP' })).toBe(false)
+  } finally { raw.close() }
+})

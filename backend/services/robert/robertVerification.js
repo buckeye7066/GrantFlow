@@ -1,3 +1,5 @@
+import { classifyApplicationTargetRefusal } from '../../config/applicationTargetPolicy.js'
+import { resolveApplicationUrl } from '../../../shared/applicationTarget.js'
 /**
  * robertVerification.js
  *
@@ -93,10 +95,12 @@ export async function verifyOpportunity({ opportunity, checkUrl = null, config =
   const warnings = []
 
   // ---- Robert pre-flight (cheap, deterministic) ----
-  const url = opportunity.application_url || opportunity.apply_url || opportunity.source_url
+  const url = resolveApplicationUrl(opportunity) || opportunity.source_url
   if (!url) return { ok: false, reason: REJECTION_REASONS.NO_REAL_URL, stage: 'preflight', warnings }
   if (isPlaceholderUrl(url)) return { ok: false, reason: REJECTION_REASONS.PLACEHOLDER_URL, stage: 'preflight', warnings }
   if (isSearchEngineUrl(url)) return { ok: false, reason: REJECTION_REASONS.SEARCH_ENGINE_URL_FOR_DIRECT_OPP, stage: 'preflight', warnings }
+  const targetRefusal = classifyApplicationTargetRefusal(resolveApplicationUrl(opportunity))
+  if (targetRefusal) return { ok: false, reason: targetRefusal.reason, stage: 'application_target', raw: targetRefusal, warnings }
   if (!opportunity.title) return { ok: false, reason: REJECTION_REASONS.MISSING_TITLE, stage: 'preflight', warnings }
   if (!opportunity.sponsor) return { ok: false, reason: REJECTION_REASONS.MISSING_SPONSOR, stage: 'preflight', warnings }
   if (isPlaceholderText(`${opportunity.title} ${opportunity.description || ''}`)) {

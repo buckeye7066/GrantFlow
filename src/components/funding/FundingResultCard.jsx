@@ -1,3 +1,4 @@
+import { resolveApplicationUrl, readApplicationTargetRefusal } from '../../../shared/applicationTarget.js'
 /**
  * FundingResultCard
  *
@@ -132,8 +133,12 @@ export default function FundingResultCard({ result, onPrimaryAction, onSecondary
   const unknownFacts = Array.isArray(result.missing_eligibility_fields)
     ? result.missing_eligibility_fields
     : []
-  const hasApplicationUrl = Boolean(result.application_url || result.apply_url)
-  const url = result.application_url || result.apply_url || result.source_url || result.url || null
+  const applicationUrl = resolveApplicationUrl(result)
+  const targetRefusal = readApplicationTargetRefusal(result)
+  const hasApplicationUrl = Boolean(applicationUrl) && !targetRefusal
+  const sourceUrl = [result.source_url, result.sourceUrl, result.url].find(value =>
+    typeof value === 'string' && value.trim() && (!targetRefusal || value.trim() !== applicationUrl)) || null
+  const url = hasApplicationUrl ? applicationUrl : sourceUrl
   const action = hasApplicationUrl ? pickAction(result) : 'visit'
 
   // The header label is the persisted DECISION first, score tier second — a
@@ -406,7 +411,7 @@ export default function FundingResultCard({ result, onPrimaryAction, onSecondary
               href={url}
               target="_blank"
               rel="noreferrer noopener"
-              onClick={onPrimaryAction ? (e) => onPrimaryAction(e, result) : undefined}
+              onClick={onPrimaryAction && !targetRefusal ? (e) => onPrimaryAction(e, result) : undefined}
               data-needs-confirmation={needsConfirmation ? 'true' : undefined}
               className={
                 needsConfirmation

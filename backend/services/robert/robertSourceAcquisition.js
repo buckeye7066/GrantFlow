@@ -1,3 +1,5 @@
+import { classifyApplicationTargetRefusal } from '../../config/applicationTargetPolicy.js'
+import { resolveApplicationUrl } from '../../../shared/applicationTarget.js'
 /**
  * robertSourceAcquisition.js — Robert as an ACTIVE source-finder.
  *
@@ -263,7 +265,8 @@ export async function classifyPipelineCategory(oppRow, { deps = {} } = {}) {
  */
 export function structuralApplyable(oppRow) {
   if (!hasUsableApplyPath(oppRow)) return false
-  const applyUrl = oppRow?.application_url || oppRow?.apply_url || oppRow?.portal_url || null
+  const applyUrl = resolveApplicationUrl(oppRow) || oppRow?.portal_url || null
+  if (classifyApplicationTargetRefusal(applyUrl)) return false
   if (applyUrl && looksLikeApplicationPath(applyUrl)) return true
   // A decomposed listing award carries its own application_url; if that is
   // present and usable it is apply-ready even when the path is generic.
@@ -406,7 +409,7 @@ async function loadOpportunityRow(db, oppId) {
     // Normalize the fields the gates read (mirror robertPipelineAudit.loadPipelineRows).
     return {
       ...row,
-      application_url: row.application_url || row.apply_url || row.source_url || row.url || null,
+      application_url: resolveApplicationUrl(row) || row.source_url || row.url || null,
       source_url: row.source_url || row.final_url || row.evidence_url || row.url || null,
     }
   } catch { return null }

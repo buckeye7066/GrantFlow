@@ -149,3 +149,25 @@ describe('GET /api/hamilton/automation/profile-summary', () => {
     expect(forbidden.status).toBe(403)
   })
 })
+
+
+it('the actual profile-summary route uses the shared task application alias and refuses stale vendor links', async () => {
+  const sqlite = new Database(':memory:')
+  try {
+    sqlite.dialect = 'sqlite'
+    sqlite.exec('CREATE TABLE profiles (id TEXT PRIMARY KEY, user_id TEXT, created_by TEXT); CREATE TABLE funding_opportunities (id TEXT PRIMARY KEY, title TEXT, sponsor TEXT, apply_url TEXT, application_url TEXT, source_url TEXT);')
+    const db = wrapSqlite(sqlite)
+    _resetSchemaCache()
+    _resetMasterVaultSchemaCache()
+    const target = 'https://fixture-foundation.org/apply'
+    sqlite.prepare('INSERT INTO funding_opportunities VALUES (?, ?, ?, ?, ?, ?)')
+      .run('summary-alias', 'Fixture Scholarship', 'Fixture Foundation', target, 'https://alpha.grantable.co/login', target)
+    const task = await ensureApplicationTask(db, { profileId: PROFILE_ID, opportunityId: 'summary-alias', automationType: 'portal', initialStatus: 'queued' })
+    await updateApplicationTask(db, task.id, { status: 'blocked_login_required' })
+    const res = await request(createApp(db)).get('/api/hamilton/automation/profile-summary?profileId=' + PROFILE_ID)
+    expect(res.status).toBe(200)
+    const item = res.body.needs_you.find((row) => row.task_id === task.id)
+    expect(item.link_url).toBe(target)
+    expect(item.title).toContain('Fixture Scholarship')
+  } finally { sqlite.close() }
+})

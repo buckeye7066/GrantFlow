@@ -1,3 +1,4 @@
+import { readApplicationTargetRefusal } from '../../../shared/applicationTarget.js'
 import React from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
@@ -82,6 +83,7 @@ function getPipelineAddBlockReason(opp) {
   if (!opp || typeof opp !== 'object') return 'Missing opportunity data.';
   const decision = String(opp.match_decision || opp.matchDecision || '').toLowerCase();
   if (decision === 'reject') return 'This source did not pass the profile match gate.';
+  if (readApplicationTargetRefusal(opp)) return 'The application link is not a funder application. Visit the source to find a verified application path.';
   if (opp.link_status === 'broken') return 'The application link is marked broken.';
 
   const kind = String(opp.result_kind || opp.opportunity_kind || opp.kind || opp.type || '').toLowerCase();

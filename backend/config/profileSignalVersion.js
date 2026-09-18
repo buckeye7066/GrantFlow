@@ -54,7 +54,9 @@
 // `evidence_basis {eligibility, geography}` so the card can say "confirm before
 // applying" where the source stated no criteria or no service area. Refreshed
 // proofs gain the block on the boot drain.
-export const PROFILE_SIGNAL_VERSION = '2026.09.17-2'
+// 2026-09-17 (email Phase 2): known non-application targets cannot authorize
+// ACCEPT. Rescore stored pairs and their proofs through the existing boot drain.
+export const PROFILE_SIGNAL_VERSION = '2026.09.17-4'
 
 /** Repo-relative files whose content decides what the engine believes about a profile. */
 export const PROFILE_SIGNAL_DERIVATION_FILES = Object.freeze([
@@ -67,9 +69,15 @@ export const PROFILE_SIGNAL_DERIVATION_FILES = Object.freeze([
   'backend/config/profileDerivedFacts.js',
   'backend/config/profileFactTimeline.js',
   'backend/config/temporalRelatability.js',
+  'backend/config/schoolOriginEligibility.js',
   'backend/config/stageOfLifeEligibility.js',
   'backend/services/matching/needFirstScoringAdapter.js',
   'backend/services/matchEngine.js',
+  'backend/config/applicationSurfaceHosts.js',
+  'backend/config/applicationTargetPolicy.js',
+  'backend/config/urlRules.js',
+  'backend/services/opportunityTrust.js',
+  'shared/applicationTarget.js',
   'backend/services/applicantTypeGate.js',
   'backend/config/applicantBucketTokens.js',
   'backend/crawler-os/fundingTruthPolicy.js',
@@ -82,6 +90,6 @@ export const PROFILE_SIGNAL_DERIVATION_FILES = Object.freeze([
  * sha256 over the LF-normalized concatenation of the files above, pinned by
  * `scripts/pin-signal-version.mjs`. The test recomputes it.
  */
-export const PROFILE_SIGNAL_DERIVATION_HASH = '36bac1f9c5c979af46c9f92457caf5db1c69a8698ede899798788f4b7578df1e'
+export const PROFILE_SIGNAL_DERIVATION_HASH = 'cf7eb5732b1cb4bd08c6994c8e513ecc36202ba28a4609d4f3148fe072cf876b'
 
 export default { PROFILE_SIGNAL_VERSION, PROFILE_SIGNAL_DERIVATION_FILES, PROFILE_SIGNAL_DERIVATION_HASH }

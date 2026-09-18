@@ -92,7 +92,8 @@ async function fetchJson(url, options = {}) {
   return { status: resp.status, json, text }
 }
 
-test('DiscoverGrants: add-to-pipeline does not 500 when grants.profile_id is missing (self-heals)', async () => {
+for (const targetCase of ['legacy', 'explicit', 'preferred_alias', 'catalog', 'stale_id']) {
+test(`DiscoverGrants: schema recovery and selected application target (${targetCase})`, async () => {
   const tmp = mkdtempSync(path.join(tmpdir(), 'grantflow-grants-drift-test-'))
   const dbPath = path.join(tmp, 'test.db')
   const { port, child } = await startServer({ dbPath })
@@ -187,6 +188,23 @@ test('DiscoverGrants: add-to-pipeline does not 500 when grants.profile_id is mis
     }
 
     const opportunityUrl = 'https://www.va.gov/education/how-to-apply/'
+    const catalogId = targetCase === 'catalog' ? 'stored-target-alias-fixture' : null
+    if (catalogId) {
+      const catalogDb = new Database(dbPath)
+      try {
+        catalogDb.prepare(`INSERT INTO funding_opportunities
+          (id,title,sponsor,description,application_url,apply_url,source_url,state,source,record_origin,
+           deadline_type,entity_types_allowed,need_types_supported,categories,eligibility_bullets,opportunity_kind,is_active,is_national)
+          VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(catalogId,
+          'Tennessee Veterans Education Assistance', 'U.S. Department of Veterans Affairs',
+          'Direct education and financial assistance for veterans and military families in Tennessee.',
+          'https://alpha.grantable.co/login', opportunityUrl, 'https://www.va.gov/education/',
+          'TN', 'grants_gov', 'grants_gov', 'rolling', '["individual","veteran"]',
+          '["cash_assistance","emergency"]', '["veteran","education","cash assistance"]',
+          '["Open to individual veterans living in Tennessee."]', 'direct', 1, 0)
+      } finally { catalogDb.close() }
+    }
+
 
     const add = await fetchJson(`http://127.0.0.1:${port}/api/grants/from-opportunity`, {
       method: 'POST',
@@ -199,11 +217,13 @@ test('DiscoverGrants: add-to-pipeline does not 500 when grants.profile_id is mis
         organization_id: null,
         match_score: 88,
         match_reasons: ['veteran assistance', 'emergency assistance', 'profile need'],
-        opportunity_id: null,
+        opportunity_id: targetCase === 'stale_id' ? 'missing-catalog-target-fixture' : catalogId,
         opportunity_data: {
           title: 'Tennessee Veterans Education Assistance',
           sponsor: 'U.S. Department of Veterans Affairs',
-          url: opportunityUrl,
+          ...(targetCase === 'legacy' ? { url: opportunityUrl }
+            : targetCase === 'explicit' ? { application_url: opportunityUrl, url: 'https://alpha.grantable.co/login' }
+              : { apply_url: opportunityUrl, application_url: 'https://alpha.grantable.co/login', url: 'https://www.va.gov/education/' }),
           deadline: 'rolling',
           deadline_type: 'rolling',
           amount_max: 2500,
@@ -237,7 +257,11 @@ test('DiscoverGrants: add-to-pipeline does not 500 when grants.profile_id is mis
     assert.equal(list.status, 200, `expected 200, got ${list.status} (${list.text})`)
     assert.ok(Array.isArray(list.json), 'expected array response')
     assert.ok(list.json.length >= 1, 'expected at least one grant returned for duplicate check')
+    const storedGrant = list.json.find(row => row.id === add.json.id)
+    assert.equal(storedGrant?.application_url, opportunityUrl, 'the stored grant must retain the selected application target')
   } finally {
     await stopServer(child)
   }
 })
+
+}

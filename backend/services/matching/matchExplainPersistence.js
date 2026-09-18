@@ -13,6 +13,7 @@
 
 import { SCORE_SCALE_ID } from '../../config/matchThresholds.js'
 import { PROFILE_SIGNAL_VERSION } from '../../config/profileSignalVersion.js'
+import { schoolOriginPeriod } from '../../config/schoolOriginEligibility.js'
 
 function asObject(value) {
   return value && typeof value === 'object' && !Array.isArray(value) ? value : {}
@@ -109,6 +110,7 @@ export function isStaleMatchExplain(raw) {
   // A verdict made under an older profile-signal derivation is a claim the
   // current code no longer makes (config/profileSignalVersion.js).
   if (String(explain.signal_version ?? '').trim() !== PROFILE_SIGNAL_VERSION) return true
+  if (explain.school_origin_period !== undefined && explain.school_origin_period !== schoolOriginPeriod()) return true
   return !carriesMatchEvidence(explain)
 }
 
@@ -125,6 +127,7 @@ export function staleMatchExplainSql(alias = 'm') {
     OR ${col} LIKE '%"scoring_policy_version":null%'
     OR ${col} LIKE '%"scoring_policy_version": ""%'
     OR ${col} LIKE '%"scoring_policy_version":""%'
+    OR (${col} LIKE '%"school_origin_period"%' AND ${col} NOT LIKE '%"school_origin_period"%"${schoolOriginPeriod()}"%')
     OR NOT (${carriesEvidence})
     OR ${col} NOT LIKE '%"signal_version"%"${PROFILE_SIGNAL_VERSION}"%'
   )`

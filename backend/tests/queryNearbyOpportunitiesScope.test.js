@@ -89,3 +89,17 @@ describe('queryNearbyOpportunities profile isolation', () => {
     expect(ids).not.toContain('other-natl')
   })
 })
+
+it('nearby results preserve the preferred application alias through the SQL-to-UI mapping', async () => {
+  const db = new Database(':memory:')
+  try {
+    seed(db)
+    const selected = 'https://www.tn.gov/collegepays/apply'
+    db.prepare('UPDATE funding_opportunities SET apply_url=?,application_url=? WHERE id=?')
+      .run(selected, 'https://alpha.grantable.co/login', 'global-1')
+    const rows = await queryNearbyOpportunities(db, analysisTN, [], null, 50)
+    expect(rows.find(row => row.id === 'global-1')).toMatchObject({ url: selected, application_url: selected })
+    expect(db.prepare('SELECT application_url FROM funding_opportunities WHERE id=?').get('global-1').application_url)
+      .toBe('https://alpha.grantable.co/login')
+  } finally { db.close() }
+})

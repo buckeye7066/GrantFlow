@@ -316,3 +316,261 @@ describe('pipelinePrecision — an ORG/BUSINESS declares its need through its st
     expect(evaluateDeclaredNeedCoverage({ categories: ['business'] }, individual).pass).toBe(false)
   })
 })
+
+it('the boot net removes a pre-existing unprotected pipeline copy of a non-application target, retaining its catalog source', async () => {
+  const vendor = 'https://alpha.grantable.co/login?ref=apply'
+  const { sqlite, db } = seed([{ id: 'vendor', t: 'Murfreesboro Community Scholarship', s: 'Rutherford County Foundation', ent: ['student'], cats: ['education'], url: vendor }])
+  try {
+    sqlite.prepare("UPDATE grants SET application_url=?, url=?, match_decision='ACCEPT' WHERE id='g-vendor'").run(vendor, vendor)
+    const result = await enforcePipelinePrecision(db)
+    expect(result.ok).toBe(true)
+    expect(sqlite.prepare("SELECT id FROM grants WHERE id='g-vendor'").get()).toBeUndefined()
+    expect(sqlite.prepare("SELECT id FROM funding_opportunities WHERE id='fo-vendor'").get()).toBeTruthy()
+    expect(sqlite.prepare("SELECT reason FROM pipeline_dismissals WHERE profile_id=?").get(PROFILE_ID).reason).toMatch(/non_application_target/)
+    expect((await enforcePipelinePrecision(db)).ok).toBe(true)
+  } finally { sqlite.close() }
+})
+
+it.each(['discovered', 'saved', 'interested', 'gathering_documents', 'submitted'])('reconciles an obsolete pipeline target only when the row is unprotected: %s', async (status) => {
+  const target = 'https://fixture-foundation.org/apply'
+  const vendor = 'https://alpha.grantable.co/login?ref=apply'
+  const { sqlite, db } = seed([{ id: 'target', t: 'Murfreesboro Community Scholarship', s: 'Rutherford County Foundation', ent: ['student'], cats: ['education'], url: target, status }])
+  try {
+    sqlite.prepare("UPDATE grants SET application_url=?, url=?, match_decision='ACCEPT' WHERE id='g-target'").run(vendor, vendor)
+    const result = await enforcePipelinePrecision(db)
+    expect(result.ok).toBe(true)
+    const row = sqlite.prepare("SELECT status,application_url,url,match_decision,ineligibility_reasons FROM grants WHERE id='g-target'").get()
+    expect(row).toBeTruthy()
+    expect(row.status).toBe(status)
+    expect(row.application_url).toBe(status === 'discovered' ? target : vendor)
+    expect(row.url).toBe(status === 'discovered' ? target : vendor)
+    expect(result.applicationTargetsRepaired).toBe(status === 'discovered' ? 1 : 0)
+    if (status === 'discovered') expect(result.repaired).toBeGreaterThanOrEqual(1)
+    if (status !== 'discovered') {
+      expect(row.ineligibility_reasons).toMatch(/non_application_target/)
+      expect(row.match_decision).toBe('REVIEW')
+    }
+    expect(sqlite.prepare("SELECT application_url FROM funding_opportunities WHERE id='fo-target'").get().application_url).toBe(target)
+  } finally { sqlite.close() }
+})
+
+it('a submitted pipeline record with an invalid target is flagged but its history is not deleted or repointed', async () => {
+  const vendor = 'https://alpha.grantable.co/login?ref=apply'
+  const { sqlite, db } = seed([{ id: 'history', t: 'Murfreesboro Community Scholarship', s: 'Rutherford County Foundation', ent: ['student'], cats: ['education'], url: vendor, status: 'submitted' }])
+  try {
+    sqlite.prepare("UPDATE grants SET application_url=?,url=? WHERE id='g-history'").run(vendor,vendor)
+    expect((await enforcePipelinePrecision(db)).ok).toBe(true)
+    const row=sqlite.prepare("SELECT * FROM grants WHERE id='g-history'").get()
+    expect(row.status).toBe('submitted')
+    expect(row.application_url).toBe(vendor)
+    expect(row.url).toBe(vendor)
+    expect(row.ineligibility_reasons).toMatch(/non_application_target/)
+  } finally { sqlite.close() }
+})
+
+it.each(['award', 'submission'])('target reconciliation preserves %s-protected work even with an early pipeline status', async (protection) => {
+  const target='https://fixture-foundation.org/apply'
+  const vendor='https://alpha.grantable.co/login?ref=apply'
+  const {sqlite,db}=seed([{id:'protected-target',t:'Murfreesboro Community Scholarship',s:'Rutherford County Foundation',ent:['student'],cats:['education'],url:target}])
+  try {
+    sqlite.prepare("UPDATE grants SET application_url=?,url=?,amount_awarded=? WHERE id='g-protected-target'").run(vendor,vendor,protection==='award'?100:0)
+    if(protection==='submission') sqlite.prepare('INSERT INTO application_tasks (id,profile_id,grant_id,opportunity_id,status) VALUES (?,?,?,?,?)')
+      .run('uncertain-task',PROFILE_ID,'g-protected-target','fo-protected-target','submit_evidence_pending')
+    const result=await enforcePipelinePrecision(db)
+    expect(result.ok).toBe(true)
+    const row=sqlite.prepare("SELECT application_url,url FROM grants WHERE id='g-protected-target'").get()
+    expect(row).toEqual({application_url:vendor,url:vendor})
+    expect(result.applicationTargetsRepaired).toBe(0)
+  } finally {sqlite.close()}
+})
+
+it('a submission begun after the first protection check prevents the conditional target rewrite', async () => {
+  const target='https://fixture-foundation.org/apply'
+  const vendor='https://alpha.grantable.co/login?ref=apply'
+  const {sqlite,db}=seed([{id:'racing-target',t:'Murfreesboro Community Scholarship',s:'Rutherford County Foundation',ent:['student'],cats:['education'],url:target}])
+  try {
+    sqlite.prepare("UPDATE grants SET application_url=?,url=? WHERE id='g-racing-target'").run(vendor,vendor)
+    const prepare=db.prepare.bind(db)
+    let intercepted=false
+    db.prepare=(sql)=>{
+      if(!intercepted && sql.startsWith('UPDATE grants SET application_url = ?')) {
+        intercepted=true
+        sqlite.prepare('INSERT INTO application_tasks (id,profile_id,grant_id,opportunity_id,status) VALUES (?,?,?,?,?)')
+          .run('racing-task',PROFILE_ID,'g-racing-target','fo-racing-target','submit_evidence_pending')
+      }
+      return prepare(sql)
+    }
+    const result=await enforcePipelinePrecision(db)
+    expect(intercepted).toBe(true)
+    expect(result.ok).toBe(true)
+    expect(sqlite.prepare("SELECT application_url,url FROM grants WHERE id='g-racing-target'").get())
+      .toEqual({application_url:vendor,url:vendor})
+    expect(result.applicationTargetsRepaired).toBe(0)
+  } finally {sqlite.close()}
+})
+
+it.each(['https://facebook.com/foo', 'https://example.org/apply', 'https://google.com/search?q=grant', 'javascript:alert(1)'])('target repair never substitutes a target refused by the existing pipeline trust policy: %s', async (badTarget) => {
+  const { pipelineApplicationTargetRepair } = await import('../services/robert/robertPipelineAudit.js')
+  const { gateOpportunityForPipeline } = await import('../services/opportunityTrust.js')
+  const opportunity = { id: 'target-fixture', title: 'Murfreesboro Community Scholarship', sponsor: 'Rutherford County Foundation', apply_url: badTarget, application_url: badTarget, source: 'web_search', record_origin: 'live_crawl', is_national: true, entity_types_allowed: ['student'], categories: ['education'], need_types_supported: ['education'] }
+  expect(gateOpportunityForPipeline(opportunity).allowed).toBe(false)
+  expect(pipelineApplicationTargetRepair({ grant_application_url: 'https://alpha.grantable.co/login', grant_url: 'https://alpha.grantable.co/login' }, { opportunity, decision: { decision: 'ACCEPT' } })).toBeNull()
+})
+
+it.each(['discovered','submitted'])('the stored-target refusal uses full selected-target rules for %s Facebook copies', async (status) => {
+  const target='https://fixture-foundation.org/apply'
+  const rejected='https://facebook.com/foo'
+  const {sqlite,db}=seed([{id:'social-target',t:'Murfreesboro Community Scholarship',s:'Rutherford County Foundation',ent:['student'],cats:['education'],url:target,status}])
+  try {
+    sqlite.prepare("UPDATE grants SET application_url=?,url=? WHERE id='g-social-target'").run(rejected,rejected)
+    const result=await enforcePipelinePrecision(db)
+    expect(result.ok).toBe(true)
+    const row=sqlite.prepare("SELECT * FROM grants WHERE id='g-social-target'").get()
+    expect(row.status).toBe(status)
+    expect(row.application_url).toBe(status==='discovered'?target:rejected)
+    if(status==='submitted') {
+      expect(row.match_decision).toBe('REVIEW')
+      expect(row.ineligibility_reasons).toMatch(/non_application_target/)
+    }
+  } finally {sqlite.close()}
+})
+
+
+it.each(['saved', 'submitted'])('a concurrent corrected target wins over a stale protected %s relabel', async (status) => {
+  const good = 'https://fixture-foundation.org/apply'
+  const bad = 'https://alpha.grantable.co/login'
+  const { sqlite, db } = seed([{ id: 'protected-race', t: 'Murfreesboro Community Scholarship', s: 'Rutherford County Foundation', ent: ['student'], cats: ['education'], url: good, status }])
+  try {
+    sqlite.prepare("UPDATE grants SET application_url=?, url=?, match_decision='ACCEPT', eligibility_status='true', ineligibility_reasons='[]' WHERE id='g-protected-race'").run(bad, bad)
+    let raced = false
+    const racing = { ...db, prepare(sql) {
+      const stmt = db.prepare(sql)
+      if (!/UPDATE grants SET match_decision/.test(sql)) return stmt
+      return { ...stmt, run(...args) {
+        if (!raced) {
+          raced = true
+          sqlite.prepare("UPDATE grants SET application_url=?,url=?,match_decision='ACCEPT',eligibility_status='true',ineligibility_reasons='[]' WHERE id='g-protected-race'").run(good, good)
+        }
+        return stmt.run(...args)
+      } }
+    } }
+    const result = await enforcePipelinePrecision(racing)
+    expect(raced).toBe(true)
+    const row = sqlite.prepare("SELECT * FROM grants WHERE id='g-protected-race'").get()
+    expect(row.application_url).toBe(good)
+    expect(row.status).toBe(status)
+    expect(row.match_decision).toBe('ACCEPT')
+    expect(row.eligibility_status).toBe('true')
+    expect(row.ineligibility_reasons).toBe('[]')
+    expect(result.relabeled).toBe(0)
+    expect(result.failed).toBe(1)
+  } finally { sqlite.close() }
+})
+
+
+it.each(['saved', 'submitted'])('a corrected %s row wins before the initial decision re-stamp', async (status) => {
+  const good = 'https://fixture-foundation.org/apply'
+  const bad = 'https://alpha.grantable.co/login'
+  const { sqlite, db } = seed([{ id: 'stamp-race', t: 'Murfreesboro Community Scholarship', s: 'Rutherford County Foundation', ent: ['student'], cats: ['education'], url: bad, status }])
+  try {
+    sqlite.prepare("UPDATE grants SET application_url=?, url=?, match_decision='ACCEPT', eligibility_status='true', ineligibility_reasons='[]' WHERE id='g-stamp-race'").run(bad, bad)
+    let raced = false
+    const racing = { ...db, prepare(sql) {
+      const stmt = db.prepare(sql)
+      if (!/UPDATE grants SET match_score/.test(sql)) return stmt
+      return { ...stmt, run(...args) {
+        if (!raced) {
+          raced = true
+          sqlite.prepare("UPDATE funding_opportunities SET application_url=?,source_url=? WHERE id='fo-stamp-race'").run(good, good)
+          sqlite.prepare("UPDATE grants SET application_url=?,url=?,match_decision='ACCEPT',eligibility_status='true',ineligibility_reasons='[]' WHERE id='g-stamp-race'").run(good, good)
+        }
+        return stmt.run(...args)
+      } }
+    } }
+    const result = await enforcePipelinePrecision(racing)
+    expect(raced).toBe(true)
+    const row = sqlite.prepare("SELECT * FROM grants WHERE id='g-stamp-race'").get()
+    expect(row.match_decision).toBe('ACCEPT')
+    expect(row.eligibility_status).toBe('true')
+    expect(row.application_url).toBe(good)
+    expect(row.status).toBe(status)
+    expect(result.restamped).toBe(0)
+    expect(result.relabeled).toBe(0)
+    expect(result.failed).toBe(1)
+  } finally { sqlite.close() }
+})
+
+it('a protected secondary grant URL is diagnosed even when application_url is valid', async () => {
+  const good = 'https://fixture-foundation.org/apply'
+  const bad = 'https://alpha.grantable.co/login'
+  const { sqlite, db } = seed([{ id: 'secondary', t: 'Murfreesboro Community Scholarship', s: 'Rutherford County Foundation', ent: ['student'], cats: ['education'], url: good, status: 'saved' }])
+  try {
+    sqlite.prepare("UPDATE grants SET application_url=?,url=? WHERE id='g-secondary'").run(good, bad)
+    const result = await enforcePipelinePrecision(db)
+    const row = sqlite.prepare("SELECT * FROM grants WHERE id='g-secondary'").get()
+    expect(result.relabeled).toBe(1)
+    expect(result.applicationTargetsRepaired).toBe(0)
+    expect(row.match_decision).toBe('REVIEW')
+    expect(row.application_url).toBe(good)
+    expect(row.url).toBe(bad)
+    expect(row.status).toBe('saved')
+  } finally { sqlite.close() }
+})
+
+it('a task becoming submission-uncertain between planning and repair is not a clean keep', async () => {
+  const target='https://fixture-foundation.org/apply'
+  const vendor='https://alpha.grantable.co/login'
+  const {sqlite,db}=seed([{id:'second-check',t:'Murfreesboro Community Scholarship',s:'Rutherford County Foundation',ent:['student'],cats:['education'],url:target}])
+  try {
+    const warning='["pipeline_precision:engine:non_application_target"]'
+    sqlite.prepare("UPDATE grants SET application_url=?,url=?,match_decision='REVIEW',eligibility_status='ineligible',ineligibility_reasons=? WHERE id='g-second-check'").run(vendor,vendor,warning)
+    const prepare=db.prepare.bind(db)
+    let checks=0
+    db.prepare=sql=>{
+      if(sql.includes('SELECT id') && sql.includes('FROM application_tasks') && sql.includes('LOWER(COALESCE(status')) {
+        checks++
+        if(checks===2) sqlite.prepare('INSERT INTO application_tasks (id,profile_id,grant_id,opportunity_id,status) VALUES (?,?,?,?,?)')
+          .run('second-check-task',PROFILE_ID,'g-second-check','fo-second-check','submit_evidence_pending')
+      }
+      return prepare(sql)
+    }
+    const result=await enforcePipelinePrecision(db)
+    expect(checks).toBeGreaterThanOrEqual(2)
+    expect(result.kept).toBe(0)
+    expect(result.failed).toBe(1)
+    expect(result.applicationTargetsRepaired).toBe(0)
+    expect(sqlite.prepare("SELECT application_url,url,match_decision,eligibility_status,ineligibility_reasons FROM grants WHERE id='g-second-check'").get())
+      .toEqual({application_url:vendor,url:vendor,match_decision:'REVIEW',eligibility_status:'ineligible',ineligibility_reasons:warning})
+  } finally {sqlite.close()}
+})
+
+it.each([
+  { status: 'discovered', county: 'Bradley', expected: 'removed' },
+  { status: 'saved', county: 'Bradley', expected: 'flagged' },
+  { status: 'saved', county: null, expected: 'review' },
+])('existing pipeline reconciliation applies school history: $status / $expected', async ({ status, county, expected }) => {
+  const row = { id: 'school-origin', t: 'Community Education Scholarship', s: 'Community Foundation', ent: ['student'], cats: ['education'], url: 'https://example-rcf.org/apply', status }
+  const { sqlite, db } = seed([row])
+  try {
+    sqlite.prepare('UPDATE funding_opportunities SET description=? WHERE id=?').run('Scholarships are restricted to graduates of a public high school in Raleigh County.', 'fo-school-origin')
+    const old = JSON.parse(sqlite.prepare('SELECT data FROM profile_sections WHERE profile_id=? AND section_key=?').get(PROFILE_ID, 'education').data)
+    sqlite.prepare('UPDATE profile_sections SET data=? WHERE profile_id=? AND section_key=?').run(JSON.stringify({ ...old, high_school_graduation_year: 2020, high_school_county: county, high_school_type: 'public' }), PROFILE_ID, 'education')
+    sqlite.prepare('UPDATE grants SET match_decision=?, match_score=? WHERE id=?').run('ACCEPT', 90, 'g-school-origin')
+    const result = await enforcePipelinePrecision(db)
+    expect(result.ok).toBe(true)
+    expect(result.rescored).toBe(1)
+    expect(result.failed).toBe(0)
+    expect(sqlite.prepare('SELECT id FROM funding_opportunities WHERE id=?').get('fo-school-origin')).toBeTruthy()
+    const grant = sqlite.prepare('SELECT * FROM grants WHERE id=?').get('g-school-origin')
+    if (expected === 'removed') {
+      expect(grant).toBeUndefined()
+      expect(result.removed).toBe(1)
+    } else {
+      expect(grant.status).toBe(status)
+      expect(grant.funding_opportunity_id).toBe('fo-school-origin')
+      expect(grant.match_decision).toBe(expected === 'review' ? 'REVIEW' : 'REJECT')
+      if (expected === 'flagged') expect(grant.eligibility_status).toBe('ineligible')
+      if (expected === 'review') expect(grant.eligibility_status).not.toBe('ineligible')
+    }
+  } finally { sqlite.close() }
+})

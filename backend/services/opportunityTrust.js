@@ -1,3 +1,5 @@
+import { resolveApplicationUrl } from '../../shared/applicationTarget.js'
+
 /**
  * opportunityTrust.js
  *
@@ -117,8 +119,7 @@ function pickUsableUrl(opp) {
   if (primary && !isNonActionableUrl(primary)) return primary
 
   const candidates = [
-    opp?.application_url,
-    opp?.apply_url,
+    resolveApplicationUrl(opp),
     opp?.url,
     opp?.source_url,
     opp?.evidence_url,
@@ -237,7 +238,7 @@ export function assessOpportunityTrust(opp, opts = {}) {
   // 2. URL integrity
   const usableUrl = pickUsableUrl(opp)
   const rawPrimaryUrl =
-    opp.application_url || opp.apply_url || opp.url || opp.source_url || null
+    resolveApplicationUrl(opp) || opp.url || opp.source_url || null
 
   if (!usableUrl) {
     flags.no_real_url = true

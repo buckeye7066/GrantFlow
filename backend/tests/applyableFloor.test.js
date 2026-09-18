@@ -298,7 +298,7 @@ function makeDb() {
 function addApplyableTypedRow(db) {
   db.prepare(`INSERT INTO funding_opportunities (id, title, opportunity_kind, application_url, is_active)
               VALUES (?,?,?,?,1)`)
-    .run('opp-1', 'State Small Business Relief Grant', 'grant', 'https://grants.example.org/apply')
+    .run('opp-1', 'State Small Business Relief Grant', 'grant', 'https://grants.fixture-foundation.org/apply')
   db.prepare('INSERT INTO profile_opportunity_matches VALUES (?,?,?,?,?,?)')
     .run('olivia', 'opp-1', 60, 'ACCEPT', 'crawler-os', verifiedFourTruthExplain())
 }

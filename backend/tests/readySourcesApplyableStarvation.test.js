@@ -59,7 +59,7 @@ async function makeDb({ noise = 120, applyableCount = 5 } = {}) {
     await db.prepare(
       `INSERT INTO funding_opportunities (id, application_url, opportunity_kind)
        VALUES (?, ?, 'direct_grant')`,
-    ).run(`opp-apply-${i}`, `https://apply.example.org/form/${i}`)
+    ).run(`opp-apply-${i}`, `https://apply.fixture-foundation.org/form/${i}`)
     await db.prepare(
       `INSERT INTO grants (id, profile_id, funding_opportunity_id, title, status, application_url, pipeline_category, updated_at)
        VALUES (?, ?, ?, ?, 'ready_to_start', ?, NULL, ?)`,
@@ -68,7 +68,7 @@ async function makeDb({ noise = 120, applyableCount = 5 } = {}) {
       PROFILE,
       `opp-apply-${i}`,
       `Real application form ${i}`,
-      `https://apply.example.org/form/${i}`,
+      `https://apply.fixture-foundation.org/form/${i}`,
       `2026-01-0${(i % 9) + 1}T00:00:00Z`, // OLD
     )
   }
@@ -78,7 +78,7 @@ async function makeDb({ noise = 120, applyableCount = 5 } = {}) {
     await db.prepare(
       `INSERT INTO funding_opportunities (id, source_url, opportunity_kind)
        VALUES (?, ?, 'directory')`,
-    ).run(`opp-noise-${i}`, `https://directory.example.org/list/${i}`)
+    ).run(`opp-noise-${i}`, `https://directory.fixture-foundation.org/list/${i}`)
     await db.prepare(
       `INSERT INTO grants (id, profile_id, funding_opportunity_id, title, status, url, pipeline_category, updated_at)
        VALUES (?, ?, ?, ?, 'ready_to_start', ?, NULL, ?)`,
@@ -87,7 +87,7 @@ async function makeDb({ noise = 120, applyableCount = 5 } = {}) {
       PROFILE,
       `opp-noise-${i}`,
       `Directory listing ${i}`,
-      `https://directory.example.org/list/${i}`,
+      `https://directory.fixture-foundation.org/list/${i}`,
       `2026-08-2${i % 10}T00:00:00Z`, // RECENT
     )
   }
@@ -181,7 +181,7 @@ describe('listReadySources does not let the LIMIT starve applyable sources', () 
       await db.prepare(
         `INSERT INTO grants (id, profile_id, title, status, application_url, pipeline_category, updated_at)
          VALUES (?, ?, ?, ?, ?, NULL, '2026-08-30T00:00:00Z')`,
-      ).run(id, PROFILE, id, status, `https://apply.example.org/${id}`)
+      ).run(id, PROFILE, id, status, `https://apply.fixture-foundation.org/${id}`)
     }
 
     const ready = await listReadySources(db, PROFILE)
@@ -194,7 +194,7 @@ describe('listReadySources does not let the LIMIT starve applyable sources', () 
     db = await makeDb({ noise: 120, applyableCount: 0 })
     await db.prepare(
       `INSERT INTO grants (id, profile_id, title, status, application_url, pipeline_category, updated_at)
-       VALUES ('grant-orphan', ?, 'Orphan with a real form', 'ready_to_start', 'https://apply.example.org/orphan', NULL, '2026-01-01T00:00:00Z')`,
+       VALUES ('grant-orphan', ?, 'Orphan with a real form', 'ready_to_start', 'https://apply.fixture-foundation.org/orphan', NULL, '2026-01-01T00:00:00Z')`,
     ).run(PROFILE)
 
     const ready = await listReadySources(db, PROFILE)

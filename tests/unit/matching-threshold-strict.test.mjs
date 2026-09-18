@@ -1,3 +1,4 @@
+import { mapDiscoverCatalogRow } from '../../src/lib/discoverCatalogKeep.js'
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
@@ -171,7 +172,9 @@ test('live discovery surfaces do not re-admit records with retired browser thres
   assert.match(fundingResults, /canonicalMatchDisplay/)
   assert.match(fundingResults, /display\.decision === ['"]ACCEPT['"]/)
   assert.doesNotMatch(fundingResults, /match_score\s*(?:>=|>)\s*70/)
-  assert.match(discoverGrants, /match_decision\s*\?\?\s*opp\.decision/)
+  assert.match(discoverGrants, /\.map\(mapDiscoverCatalogRow\)/)
+  assert.equal(mapDiscoverCatalogRow({ match_decision: 'review', decision: 'accept', match_score: 99 }).match_decision, 'review')
+  assert.equal(mapDiscoverCatalogRow({ decision: 'reject', match_score: 99 }).match_decision, 'reject')
   assert.match(discoverGrants, /canonicalDecision === ['"]ACCEPT['"]/)
   assert.doesNotMatch(discoveryHelpers, /below_80|matchScore\s*<\s*80/)
 })

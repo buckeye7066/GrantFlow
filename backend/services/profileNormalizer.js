@@ -7,6 +7,7 @@
  */
 
 import { createHash } from 'crypto'
+import { normalizeSchoolOrigin } from '../config/schoolOriginEligibility.js'
 import { normalizeConditionTerm } from '../config/conditionTerms.js'
 import { resolveApplicantType } from './profileHelpers.js'
 import { crawlerApplicantTypesFor, resolveProfileType } from './profileTypeRegistry.js'
@@ -1946,6 +1947,7 @@ export function normalizeProfile(rawProfile, sections = null, signals = null, do
     affiliations,
     geographicQualifiers,
     // Structured signal groups
+    schoolOrigin: normalizeSchoolOrigin(profileSections, rawType),
     academics,
     financial,
     occupation,
@@ -2028,6 +2030,7 @@ export function computeProfileFingerprint(normalizedProfile) {
     geographicQualifiers: (normalizedProfile.geographicQualifiers ?? []).slice().sort(),
     assistanceFlags: (normalizedProfile.assistanceFlags ?? []).slice().sort(),
     immigrationStatus: normalizedProfile.immigrationStatus ?? null,
+    schoolOrigin: normalizedProfile.schoolOrigin ?? null,
   }
   return createHash('sha256')
     .update(JSON.stringify(relevant))

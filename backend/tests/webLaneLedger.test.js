@@ -295,3 +295,22 @@ describe('stage ledger — gate rejections, duplicates and admissions are counte
     expect(res.provider_health).toEqual(expect.objectContaining({ search: 'unknown', llm: 'unknown' }))
   })
 })
+
+it('attributes an existing non-application URL to apply-target hold, not eligibility or search', async () => {
+  const pageUrl = 'https://nyf.org/grant'
+  const res = await runWebDiscoveryLane(
+    {
+      store: createMemoryStore(),
+      fetcher: fakeFetcher({ [pageUrl]: '<body>real program page fixture</body>' }),
+      searchWeb: async () => withMeta([{ url: pageUrl, title: 'Youth grant', snippet: '' }], { provider: 'searxng', provenance: 'live', status: 'ok' }),
+      extractOpportunities: async () => [realOpp({ apply_url: 'https://alpha.grantable.co/login?ref=apply', info_url: pageUrl })],
+    },
+    { thesis, runId: 'non-application-target', maxQueries: 1, seed: 0 },
+  )
+  expect(res.stage_ledger.candidates_extracted).toBe(1)
+  expect(res.stage_ledger.apply_target_rejected).toBe(1)
+  expect(res.stage_ledger.qualified_admitted).toBe(0)
+  expect(res.stage_ledger.eligibility_rejected).toBe(0)
+  expect(res.page_ledger[0].gate_rejected.apply_target).toBe(1)
+  expect(res.provider_health.search).toBe('healthy')
+})

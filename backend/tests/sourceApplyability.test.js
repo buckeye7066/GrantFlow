@@ -159,3 +159,29 @@ _d2('aggregator / wrapper hosts are info_only, real award hosts stay applyable',
     _e2(_classify({ application_url: 'https://cpcc.academicworks.com/opportunities/1' }).isApplyable).toBe(true)
   })
 })
+
+describe('declared offline channels versus informational URLs', () => {
+  for (const [mode, contacts] of [
+    ['email', { apply_email: 'apply@foundation.test' }],
+    ['fax', { apply_fax: '+1-202-555-0100' }],
+    ['mail', { mailing_address: '100 Example St, Nashville TN 37201' }],
+  ]) {
+    for (const explicitMode of [true, false]) {
+      it(`keeps ${mode} applyable with an informational social URL (mode=${explicitMode})`, () => {
+        const source = { title: 'Community assistance award', opportunity_kind: 'direct',
+          source_url: 'https://www.facebook.com/foundation', ...contacts,
+          ...(explicitMode ? { application_mode: mode } : {}) }
+        expect(classifyApplyability(source)).toMatchObject({ tier: 'mail_or_pdf', isApplyable: true })
+      })
+    }
+  }
+  it('does not invent an offline channel or turn a directory into an application', () => {
+    expect(classifyApplyability({ source_url: 'https://www.facebook.com/foundation' }).isApplyable).toBe(false)
+    expect(classifyApplyability({ source_url: 'https://www.facebook.com/foundation',
+      opportunity_kind: 'directory', application_mode: 'email', apply_email: 'apply@foundation.test' }).isApplyable).toBe(false)
+  })
+  it('still refuses a declared bad web application target rather than treating it as informational', () => {
+    expect(classifyApplyability({ application_url: 'https://alpha.grantable.co/login',
+      application_mode: 'email', apply_email: 'apply@foundation.test' }).isApplyable).toBe(false)
+  })
+})

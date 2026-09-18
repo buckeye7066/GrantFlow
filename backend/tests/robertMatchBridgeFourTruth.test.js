@@ -152,3 +152,17 @@ describe('Robert match bridge four-truth authority', () => {
     })
   })
 })
+
+it.each([false,true])('Robert scores the preferred target without stale-alias inversion (refused=%s)', async (refused) => {
+  const good = 'https://www.tn.gov/collegepays/tsaa/apply'
+  const bad = 'https://alpha.grantable.co/login'
+  const selected = refused ? bad : good
+  const single = verifiedCatalogRow({ application_url:selected })
+  const conflict = verifiedCatalogRow({ apply_url:selected,application_url:refused ? good : bad })
+  expect(catalogRowToCrawlerOsOpportunity(conflict).apply_url).toBe(selected)
+  const control = await scoreOpportunityForProfile({opportunity:single,profileContext:PROFILE_CONTEXT})
+  const result = await scoreOpportunityForProfile({opportunity:conflict,profileContext:PROFILE_CONTEXT})
+  expect(result.decision).toBe(control.decision)
+  expect(result.score).toBe(control.score)
+  expect(result.matchExplain.application_target).toEqual(control.matchExplain.application_target)
+})

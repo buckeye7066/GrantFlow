@@ -1,3 +1,4 @@
+import { resolveApplicationUrl } from '../../shared/applicationTarget.js'
 import express from 'express'
 import { ensureAuth, ensureAdmin } from '../middleware/auth.js'
 import { standardRateLimiter } from '../middleware/rateLimiting.js'
@@ -224,9 +225,9 @@ export async function queryNearbyOpportunities(db, analysis, curatedTitles, prof
         title: row.title,
         name: row.title,
         description: row.description,
-        url: row.application_url || row.apply_url || row.source_url || null,
-        application_url: row.application_url || row.apply_url || null,
-        source_url: row.source_url || row.application_url || null,
+        url: resolveApplicationUrl(row) || row.source_url || null,
+        application_url: resolveApplicationUrl(row),
+        source_url: row.source_url || resolveApplicationUrl(row) || null,
         // Default to the canonical floor when a row cannot be scored: unknown
         // relevance must rank last, never masquerade as an evaluated match.
         match_score: profileContext ? (scoreOpportunity(profileContext, row)?.score ?? SCORE_FLOOR) : SCORE_FLOOR,
@@ -407,9 +408,9 @@ export function mapResultToFrontendShape(result) {
     title: result.name,
     name: result.name,
     description: result.description,
-    url: result.url || result.applicationUrl || null,
-    application_url: result.applicationUrl || result.url || null,
-    source_url: result.url || null,
+    url: resolveApplicationUrl(result) || result.url || null,
+    application_url: resolveApplicationUrl(result),
+    source_url: result.sourceUrl || result.source_url || result.url || null,
     match_score: result.matchScore ?? result.match_score ?? null,
     match_confidence: result.matchConfidence ?? result.match_confidence ?? null,
     match_decision: result.matchDecision ?? result.match_decision ?? null,

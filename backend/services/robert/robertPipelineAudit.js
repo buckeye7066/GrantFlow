@@ -1,3 +1,8 @@
+import { classifyApplicationTargetRefusal } from '../../config/applicationTargetPolicy.js'
+import { gateOpportunityForPipeline } from '../opportunityTrust.js'
+
+import { resolveApplicationUrl } from '../../../shared/applicationTarget.js'
+
 /**
  * robertPipelineAudit.js — Robert's FOUR-GATE pipeline verifier.
  *
@@ -151,6 +156,30 @@ export function gateEngine(row, scored) {
   }
 }
 
+/**
+ * Repair only known-bad denormalized targets from the current ACCEPT catalog
+ * target. This chooses no new URL and never changes grant identity. The boot
+ * caller owns protection checks and conditional persistence.
+ */
+export function pipelineStoredTargetRefusal(row) {
+  return [row?.grant_application_url, row?.grant_url].map(classifyApplicationTargetRefusal).find(Boolean) || null
+}
+
+export function pipelineApplicationTargetRepair(row, scored) {
+  if (String(scored?.decision?.decision ?? '').toUpperCase() !== 'ACCEPT') return null
+  const target = resolveApplicationUrl(scored?.opportunity)
+  if (!target || classifyApplicationTargetRefusal(target)) return null
+  // Apply the complete existing write-side trust policy as well. A trusted
+  // reference source must not authorize an unusable replacement target.
+  if (!gateOpportunityForPipeline({ ...scored.opportunity, apply_url: target, application_url: target }).allowed) return null
+  const changes = [
+    ['application_url', row?.grant_application_url],
+    ['url', row?.grant_url],
+  ].filter(([, previous]) => classifyApplicationTargetRefusal(previous))
+    .map(([column, previous]) => ({ column, previous, value: target }))
+  return changes.length ? changes : null
+}
+
 /** Load the catalog row behind a pipeline row and run the canonical engine on it. */
 export async function scoreRowWithEngine(db, facts, row, { computeMatchDecision } = {}) {
   const opportunityId = row?.funding_opportunity_id ?? row?.opportunity_id ?? null
@@ -173,7 +202,7 @@ const STAMP_COLUMNS = Object.freeze(['match_score', 'match_decision', 'match_exp
  * Re-stamp a pipeline row with the engine's current verdict. Column-aware so
  * an older schema never breaks the sweep. Returns true when a write happened.
  */
-export async function stampPipelineRowFromDecision(db, grantId, decision, grantCols) {
+export async function stampPipelineRowFromDecision(db, grantId, decision, grantCols, expectedRow = null) {
   if (!grantId || !decision || !grantCols?.has) return false
   const explain = decision.match_explain ?? {}
   const values = {
@@ -188,9 +217,31 @@ export async function stampPipelineRowFromDecision(db, grantId, decision, grantC
   }
   const cols = STAMP_COLUMNS.filter((c) => grantCols.has(c))
   if (cols.length === 0) return false
-  const sql = `UPDATE grants SET ${cols.map((c) => `${c} = ?`).join(', ')} WHERE id = ?`
-  const res = await db.prepare(sql).run(...cols.map((c) => values[c]), String(grantId))
-  return Number(res?.changes ?? res?.rowCount ?? 0) > 0
+  const guards = ['id = ?']
+  const expected = [String(grantId)]
+  if (expectedRow) {
+    for (const [column, value] of [
+      ['profile_id', expectedRow.profile_id], ['status', expectedRow.grant_status],
+      ['application_url', expectedRow.grant_application_url], ['url', expectedRow.grant_url],
+      ['match_decision', expectedRow.match_decision],
+    ]) {
+      if (grantCols.has(column)) {
+        guards.push(`COALESCE(${column}, '') = ?`)
+        expected.push(value ?? '')
+      }
+    }
+    if (grantCols.has('match_score')) {
+      guards.push('COALESCE(match_score, -1) = ?')
+      expected.push(expectedRow.match_score ?? -1)
+    }
+  }
+  // audit:allow dynamic-sql -- names are from STAMP_COLUMNS and the fixed
+  // snapshot fields above; all values and identities remain bound.
+  const sql = `UPDATE grants SET ${cols.map((c) => `${c} = ?`).join(', ')} WHERE ${guards.join(' AND ')}`
+  const res = await db.prepare(sql).run(...cols.map((c) => values[c]), ...expected)
+  const applied = Number(res?.changes ?? res?.rowCount ?? 0) > 0
+  if (expectedRow && !applied) throw new Error('Pipeline row changed before decision re-stamp; reconciliation must retry')
+  return applied
 }
 
 /** Bounded retries for the REAL gate before a row is called `unverifiable`. */
@@ -451,7 +502,7 @@ export async function loadPipelineRows(db, profileId) {
       sponsor,
       funder: sponsor,
       deadline: r.opp_deadline || r.grant_deadline || null,
-      application_url: r.opp_application_url || r.apply_url || r.grant_application_url || null,
+      application_url: resolveApplicationUrl({ application_url: r.opp_application_url, apply_url: r.apply_url }) || r.grant_application_url || null,
       source_url: r.source_url || r.final_url || r.evidence_url || r.grant_url || null,
       entity_types_allowed: r.entity_types_allowed,
     }

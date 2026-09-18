@@ -1,3 +1,5 @@
+import { resolveApplicationUrl } from '../../shared/applicationTarget.js'
+import { classifyApplicationTargetRefusal } from '../config/applicationTargetPolicy.js'
 /**
  * Funding Library Service
  *
@@ -210,8 +212,10 @@ function defaultFacets() {
 
 function decodeRow(row) {
   if (!row) return null
+  const targetRefusal = classifyApplicationTargetRefusal(resolveApplicationUrl(row))
   return {
     ...row,
+    ...(targetRefusal ? { application_target: { status: 'non_application', ...targetRefusal } } : {}),
     categories: parseJsonArray(row.categories),
     keywords: parseJsonArray(row.keywords),
     is_national: row.is_national === true || row.is_national === 1,

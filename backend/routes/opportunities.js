@@ -1,3 +1,4 @@
+import { resolveApplicationUrl } from '../../shared/applicationTarget.js'
 import express from 'express';
 import crypto from 'crypto';
 import { requireAuthenticatedUser, ensureProfileAccess } from '../utils/accessControl.js'
@@ -313,7 +314,7 @@ function deriveCompliance(opportunity) {
 
 function decorateOpportunity(row) {
   if (!row) return null;
-  const parsed = { ...row };
+  const parsed = { ...row, application_url: resolveApplicationUrl(row) };
   // Internal query-only fields must never leak to API clients.
   if (Object.prototype.hasOwnProperty.call(parsed, '__rn')) delete parsed.__rn;
 
@@ -364,9 +365,7 @@ function decorateOpportunity(row) {
     parsed.trust_reasons = meta.trust_reasons;
     parsed.trust_downgrade = meta.trust_downgrade;
     parsed.trust_downgrade_reason = meta.trust_downgrade_reason;
-    if (meta.actionable_url && !parsed.application_url) {
-      parsed.application_url = meta.actionable_url;
-    }
+    // Trust may identify a usable source page. It is not an application alias.
   }
   // Non-enumerable trust decision trail for debugging / tests.
   Object.defineProperty(parsed, '_trust', {

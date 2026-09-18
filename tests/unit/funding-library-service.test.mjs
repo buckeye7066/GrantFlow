@@ -228,3 +228,21 @@ test('parseJsonArray helper handles malformed input', () => {
   assert.deepEqual(parseJsonArray('["a","b"]'), ['a', 'b'])
   assert.deepEqual(parseJsonArray(['x']), ['x'])
 })
+
+test('library list and detail preserve declared URLs and add the canonical target-refusal evidence', async () => {
+  const db=makeDb()
+  try {
+    const rejected='https://alpha.grantable.co/login'
+    ins(db,{id:'refused-target',title:'Community grant',apply_url:rejected,
+      application_url:'https://www.tn.gov/collegepays/apply',source_url:'https://www.tn.gov/collegepays'})
+    const listed=await listFundingLibrary(db)
+    const detail=await getFundingLibraryItem(db,'refused-target')
+    for(const row of [listed.items.find(r=>r.id==='refused-target'),detail]) {
+      assert.ok(row)
+      assert.equal(row.apply_url,rejected)
+      assert.equal(row.application_target?.status,'non_application')
+      assert.equal(row.application_target?.reason,'non_application_vendor_content')
+    }
+    assert.equal(db._raw.prepare('SELECT apply_url FROM funding_opportunities WHERE id=?').get('refused-target').apply_url,rejected)
+  } finally {db._raw.close()}
+})

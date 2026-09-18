@@ -166,3 +166,11 @@ describe('attachTaskPresentation', () => {
     expect(await attachTaskPresentation(fakeDb({}), [])).toEqual([])
   })
 })
+
+it('task presentation uses the same explicit application alias as the matching and writer boundaries', async () => {
+  const selected='https://fixture-foundation.org/apply'
+  const stale='https://alpha.grantable.co/login'
+  const db=fakeDb({opportunities:[{id:'alias-opp',title:'Fixture Award',sponsor:'Fixture Foundation',apply_url:selected,application_url:stale}]})
+  const [task]=await attachTaskPresentation(db,[{id:'alias-task',profile_id:'p1',opportunity_id:'alias-opp',status:'queued'}])
+  expect(task.apply_url).toBe(selected)
+})
