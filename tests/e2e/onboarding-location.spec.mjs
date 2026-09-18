@@ -29,7 +29,7 @@ for (const viewport of [{ width: 1280, height: 800 }, { width: 390, height: 844 
  await expect(page.locator('#city')).toHaveValue('Cleveland')
  await expect(page.locator('#county')).toHaveValue('Bradley')
  const submitted = page.waitForRequest((request) =>
- new URL(request.url()).pathname === '/api/onboarding/answer' && request.method() === 'POST')
+ new URL(request.url()).pathname.endsWith('/api/onboarding/answer') && request.method() === 'POST', { timeout: 10000 })
  await page.getByRole('button', { name: 'Continue', exact: true }).click()
  expect((await submitted).postDataJSON().answer).toEqual({
  zip: '37312', state: 'TN', city: 'Cleveland', county: 'Bradley',
@@ -60,7 +60,7 @@ test('Foundation cannot submit stale geography while the new ZIP lookup is pendi
   const lookupStarted = new Promise((resolve) => { markLookupStarted = resolve })
   const submitted = []
   page.on('request', (request) => {
-    if (new URL(request.url()).pathname === '/api/onboarding/answer' && request.method() === 'POST') {
+    if (new URL(request.url()).pathname.endsWith('/api/onboarding/answer') && request.method() === 'POST') {
       submitted.push(request.postDataJSON())
     }
   })
