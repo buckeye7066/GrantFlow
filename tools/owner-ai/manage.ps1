@@ -60,7 +60,7 @@ switch ($Action) {
     Remove-Item -LiteralPath $secretPath, $urlPath -Force -ErrorAction SilentlyContinue
   }
   'Run' {
-    $secure = Get-Content -LiteralPath $secretPath -Raw | ConvertTo-SecureString
+    $secure = (Get-Content -LiteralPath $secretPath -Raw).Trim() | ConvertTo-SecureString
     $pointer = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($secure)
     try {
       $env:OWNER_AI_BRIDGE_TOKEN = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($pointer)
