@@ -1,16 +1,20 @@
 import { randomBytes, timingSafeEqual, createHash } from 'node:crypto'
 import { getOwnerAiScope } from './ownerAiScope.js'
+export const OWNER_AI_BRIDGE_ENV_KEYS = Object.freeze({
+  ENABLED: 'OWNER_AI_BRIDGE_ENABLED',
+  TOKEN: 'OWNER_AI_BRIDGE_TOKEN',
+})
 const names = ['codex', 'claude']
 const digest = x => createHash('sha256').update(x).digest()
 export function authenticateWorker(header, env = process.env) {
-  const secret = env.OWNER_AI_BRIDGE_TOKEN
+  const secret = env[OWNER_AI_BRIDGE_ENV_KEYS.TOKEN]
   return typeof secret === 'string' && secret.length >= 32 && typeof header === 'string' &&
     header.length <= 1024 && timingSafeEqual(digest(header), digest('Bearer ' + secret))
 }
 export function createOwnerAiBroker({ env = process.env, now = Date.now } = {}) {
   let worker = null
   let pending = null
-  const enabled = () => env.OWNER_AI_BRIDGE_ENABLED === 'true' && typeof env.OWNER_AI_BRIDGE_TOKEN === 'string' && env.OWNER_AI_BRIDGE_TOKEN.length >= 32
+  const enabled = () => env[OWNER_AI_BRIDGE_ENV_KEYS.ENABLED] === 'true' && typeof env[OWNER_AI_BRIDGE_ENV_KEYS.TOKEN] === 'string' && env[OWNER_AI_BRIDGE_ENV_KEYS.TOKEN].length >= 32
   const fresh = () => worker && now() - worker.at < 15000
   const sweep = () => { if (pending && (!enabled() || now() >= pending.deadline)) pending.finish(null) }
   function status() {

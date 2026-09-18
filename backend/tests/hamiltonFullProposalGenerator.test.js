@@ -270,3 +270,11 @@ describe('saveProposalDocument — persistence', () => {
       .rejects.toThrow(/sections required/)
   })
 })
+
+it('keeps a structured provider failure readable without returning an object as error text', async () => {
+  const res = await generateMbaProposal(null, {
+    profile: INDIVIDUAL_PROFILE, opportunity: OPPORTUNITY,
+    _deps: { invokeJson: async () => ({ ok: false, anthropicError: { status: 529, message: 'provider_request_failed', transient: true } }), getOpenAIOptional: () => null },
+  })
+  expect(res.error).toBe('provider_request_failed')
+})

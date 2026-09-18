@@ -139,7 +139,7 @@ export async function translatePacketContent(packet, targetLang, deps = {}) {
 
   if (!result?.ok || !result.json || typeof result.json !== 'object') {
     throw new Error(
-      `translation failed (${result?.provider || 'none'}): ${result?.anthropicError || result?.openaiError || result?.error?.message || 'no output'}`,
+      `translation failed (${result?.provider || 'none'}): ${result?.anthropicError?.message || (typeof result?.anthropicError === 'string' ? result.anthropicError : null) || result?.openaiError?.message || (typeof result?.openaiError === 'string' ? result.openaiError : null) || result?.error?.message || 'no output'}`,
     )
   }
 

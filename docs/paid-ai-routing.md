@@ -80,7 +80,7 @@ transient classifications survive cooldowns; Hamilton continues retrying outages
 instead of interpreting them as zero-result page facts. Retryable 429 cools
 only that model, honoring Retry-After (seconds or HTTP date), bounded to 1–300
 seconds (30 seconds if absent/invalid). Other failures cool the model for five
-seconds. State holds at most 256 process-keyed account/model fingerprints with expiring
+seconds. State holds at most 256 process-salted account/model fingerprints with expiring
 timestamps and sanitized failure causes; credential rotation changes the account identity. Configured ladders
 share process-local state across chat and Responses API shapes for the same
 account/model; legacy calls use request-local state for compatibility.
@@ -114,9 +114,15 @@ This is a single-request dependency proof, not the full acceptance benchmark.
 
 Review follow-up: sanitized provider status and retryability now survive account
 cooldowns, model-only 403s no longer block an entire paid account, and account
-identities use ephemeral keyed fingerprints rather than reusable API-key hashes.
+identities use process-salted KDF identifiers rather than reusable API-key hashes.
 The owner bridge rejects impossible token caps, preserves cancellation through
 closed response contexts, checks installation prerequisites, and handles native
 Windows termination failure. Owner UI loading/error states remain visible.
 Verification: 39 Node tests and 97 related Vitest cases passed with no skips;
 changed-file lint passed. Final-head CI and deployment remain separate gates.
+
+The full-scan policy also treats API-key fingerprints as credential derivation.
+Those identifiers now use process-salted scrypt, memoized within each routing pass
+so multiple models on one account share one derivation. No scan threshold is
+relaxed. Final failure metadata retains any earlier transient outage, and
+Hamilton also recognizes final free-route 429s as retryable.

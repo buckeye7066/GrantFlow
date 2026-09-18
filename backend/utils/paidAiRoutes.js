@@ -1,11 +1,11 @@
-import { createHmac, randomBytes } from 'node:crypto'
+import { scryptSync, randomBytes } from 'node:crypto'
 import { createLogger } from './logger.js'
 const configLog = createLogger('utils:paidAiRoutes')
 const reasoningEfforts = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']
 const adaptiveModels = new Set(['claude-fable-5-1', 'claude-opus-5', 'claude-sonnet-5'])
 
-// Ephemeral keyed fingerprints identify rotated credentials without publishing a reusable key hash.
-const fingerprintKey = randomBytes(32)
+// Process-salted KDF identifiers are never authentication verifiers or persisted credentials.
+const fingerprintSalt = randomBytes(32)
 const sharedState = new Map()
 export function resetPaidAiCircuitState() { sharedState.clear() }
 export function paidCircuitState() { return sharedState }
@@ -21,6 +21,8 @@ export function resolvePaidAiRoutes({ openai, openaiModel, anthropicModel }) {
     try { entries = JSON.parse(process.env.AI_PAID_ROUTES) } catch { entries = [] }
   }
   if (!Array.isArray(entries)) entries = []
+  // Derive once per account per routing pass, not once per model.
+  const accountIds = new Map()
   const parse = candidates => candidates.slice(0, 24).flatMap(entry => {
     if (!entry || !['openai', 'anthropic', 'compatible'].includes(entry.provider)) return []
     const { provider, model } = entry
@@ -44,7 +46,9 @@ export function resolvePaidAiRoutes({ openai, openaiModel, anthropicModel }) {
       key = process.env[entry.api_key_env]
     } else if (entry.base_url || entry.api_key_env) return []
     if (provider !== 'openai' && !String(key || '').trim()) return []
-    const account = createHmac('sha256', fingerprintKey).update(`${provider}|${baseURL || ''}|${key || ''}`).digest('hex')
+    const credential = `${provider}|${baseURL || ''}|${key || ''}`
+    if (!accountIds.has(credential)) accountIds.set(credential, scryptSync(credential, fingerprintSalt, 32).toString('hex'))
+    const account = accountIds.get(credential)
     return [{ provider, model, api, reasoningEffort: entry.reasoning_effort, thinking: entry.thinking, effort: entry.effort, baseURL, apiKeyEnv: entry.api_key_env, account,
       reasoning: entry.reasoning === true || (provider === 'openai' && /^(gpt-[5-9]|o[1-9])/.test(model)) }]
   })

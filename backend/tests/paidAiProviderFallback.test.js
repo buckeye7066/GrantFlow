@@ -19,6 +19,14 @@ beforeEach(() => {
 })
 afterEach(() => { vi.unstubAllEnvs(); vi.useRealTimers() })
 describe('ranked paid gateway', () => {
+  it('keeps an earlier retryable outage after later models reject the request', async () => {
+    sdk.openai.mockRejectedValueOnce(Object.assign(new Error('temporarily unavailable'), { status: 503 }))
+      .mockRejectedValue(Object.assign(new Error('unsupported request'), { status: 400 }))
+    sdk.anthropic.mockRejectedValue(Object.assign(new Error('invalid api key'), { status: 401 }))
+    const result = await run()
+    expect(isTransientLlmFailure(result)).toBe(true)
+  })
+
   it('keeps Anthropic overload retryable with sanitized status', async () => {
     sdk.openai.mockRejectedValue(new Error('unavailable'))
     sdk.anthropic.mockRejectedValue(Object.assign(new Error('overloaded private-document-text'), { status: 529 }))
@@ -276,4 +284,8 @@ describe('native API options and recovery', () => {
     expect(JSON.stringify(getRecentLogs())).not.toContain('private-secret-invalid')
     expect(JSON.stringify(getRecentLogs())).toContain('paid_routes_default_recovery')
   })
+})
+
+it('retains retryability when the final free route is rate-limited', () => {
+  expect(isTransientLlmFailure({ ok: false, freeRouteErrors: [{ status: 429, message: 'rate_limited' }] })).toBe(true)
 })

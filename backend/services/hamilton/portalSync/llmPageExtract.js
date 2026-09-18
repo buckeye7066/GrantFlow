@@ -302,6 +302,7 @@ export function isTransientLlmFailure(errOrResult) {
   if (!errOrResult) return false
   // The shared gateway preserves sanitized outage causes across circuit cooldowns.
   if (errOrResult.timedOut === true || [errOrResult, errOrResult.anthropicError, errOrResult.openaiError].some(error => error?.transient === true)) return true
+  const freeErrors = Array.isArray(errOrResult.freeRouteErrors) ? errOrResult.freeRouteErrors : []
   const texts = []
   const push = (v) => { const t = errToText(v); if (t) texts.push(String(t)) }
   // A thrown error, or the wrapper's collected provider errors.
@@ -309,7 +310,8 @@ export function isTransientLlmFailure(errOrResult) {
   push(errOrResult?.anthropicError)
   push(errOrResult?.openaiError)
   push(errOrResult?.error)
-  const statuses = [errOrResult?.status, errOrResult?.anthropicError?.status, errOrResult?.openaiError?.status, errOrResult?.error?.status]
+  freeErrors.forEach(push)
+  const statuses = [errOrResult?.status, errOrResult?.anthropicError?.status, errOrResult?.openaiError?.status, errOrResult?.error?.status, ...freeErrors.map(error => error?.status)]
     .map((s) => Number(s)).filter((n) => Number.isFinite(n))
   if (statuses.some((s) => s === 429 || s === 408 || s === 425 || (s >= 500 && s <= 599))) return true
   const hay = texts.join(' | ').toLowerCase()

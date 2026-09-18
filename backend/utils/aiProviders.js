@@ -205,12 +205,14 @@ async function invokePaidLadder({
   let anthropicError = null
   let timedOut = false
   let failed = false
+  let transient = false
   let exhausted = false
   for (let index = 0; index < routes.length; index += 1) {
     if (signal?.aborted) return abortedResult(signal)
     const route = routes[index]
     const blocked = circuitFailure(state, route)
     if (blocked) {
+      transient ||= blocked.transient === true
       failed = true
       timedOut ||= blocked.reason === 'timed_out'
       exhausted ||= blocked.reason === 'credit_or_quota_exhausted'
@@ -292,6 +294,7 @@ async function invokePaidLadder({
       failed = true
       timedOut ||= isLLMTimeout(error)
       const diagnostics = providerFailureDiagnostics(error)
+      transient ||= diagnostics.transient === true
       const cause = { ...diagnostics, message: diagnostics.reason }
       exhausted = recordPaidFailure(state, route, error, cause) || exhausted
       // Preserve classified status/retryability, never upstream messages.
@@ -311,7 +314,7 @@ async function invokePaidLadder({
   if (signal?.aborted) return abortedResult(signal)
   if (freeResult.ok) return { ...freeResult, billing_mode: 'free_or_local', openaiError, anthropicError,
     fallback_reason: exhausted ? 'paid_provider_credit_or_quota_exhausted' : failed || routes.length ? 'paid_provider_failure' : 'paid_provider_not_configured' }
-  return { ok: false, provider: 'fallback', ...(jsonOnly ? { json: null } : { text: null }), raw: null, timedOut,
+  return { ok: false, provider: 'fallback', ...(jsonOnly ? { json: null } : { text: null }), raw: null, timedOut, transient,
     error: new Error(timedOut ? 'AI service timed out — please try again.' : 'No AI provider configured or provider failure'),
     openaiError, anthropicError, freeRouteErrors: freeResult.freeRouteErrors }
 }

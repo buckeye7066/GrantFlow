@@ -145,6 +145,8 @@ export function extractEnvVars(source) {
 // ceilings. Centralizing these values here also prevents a regenerated example
 // from silently weakening or obscuring those production limits.
 const DOCUMENTED_RUNTIME_DEFAULTS = Object.freeze({
+  OWNER_AI_BRIDGE_ENABLED: 'false',
+  OWNER_AI_SUBSCRIPTION_TIMEOUT_MS: '20000',
   CLAMAV_PORT: '3310',
   CLAMAV_REQUIRED: 'false',
   CLAMAV_TIMEOUT_MS: '10000',
