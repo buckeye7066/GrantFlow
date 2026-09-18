@@ -22,3 +22,28 @@ export function runWithOwnerAiScope(req, work) {
   req.res.once('finish', close)
   return scopes.run({ signal: controller.signal }, work)
 }
+
+
+// Capture authority before acknowledging a user-requested background job.
+// Its own bounded lifetime, not the completed HTTP response, owns cancellation.
+export function captureOwnerAiJobScope(req, { timeoutMs = 240000 } = {}) {
+  const owner = isCanonicalOwner(req)
+  if (owner && (req.res?.destroyed || req.res?.writableEnded)) throw new Error('Cannot start owner job from a completed request')
+  const controller = new AbortController()
+  const numeric = Number(timeoutMs)
+  const budget = Number.isFinite(numeric) ? Math.max(1, Math.min(240000, numeric)) : 240000
+  let started = false
+  return {
+    owner,
+    cancel: () => controller.abort(),
+    async run(work) {
+      if (started) throw new Error('Owner job scope is single-use')
+      started = true
+      const timer = setTimeout(() => controller.abort(), budget)
+      try {
+        controller.signal.throwIfAborted()
+        return await scopes.run(owner ? { signal: controller.signal } : null, work)
+      } finally { clearTimeout(timer); controller.abort() }
+    },
+  }
+}
