@@ -1,14 +1,34 @@
 name: Tier journey probe
 
 on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'src/**'
+      - 'backend/**'
+      - 'shared/**'
+      - 'tests/**'
+      - 'scripts/**'
+      - 'package*.json'
+      - '*config*'
+      - '.github/workflows/tier-journey-probe.yml'
   push:
-    branches: [fix/tier-journey-20260918]
+    branches: [main]
+    paths:
+      - 'src/**'
+      - 'backend/**'
+      - 'shared/**'
+      - 'tests/**'
+      - 'scripts/**'
+      - 'package*.json'
+      - '*config*'
+      - '.github/workflows/tier-journey-probe.yml'
 
 permissions:
   contents: read
 
 concurrency:
-  group: tier-journey-probe-${{ github.ref }}
+  group: tier-journey-probe-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:
