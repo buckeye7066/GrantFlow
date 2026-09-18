@@ -34,7 +34,7 @@ async function invokeOwnerRequest(provider, operation, request = {}, options = {
       throw unavailable()
     })
     const {invokeAnyaToolTurn} = await import('../services/anyaToolTransport.js')
-    const planned = await invokeAnyaToolTurn({messages:[{role:'system',content:system},...normalized.filter(m=>!['system','developer'].includes(m.role))],tools:functions,maxTokens:request.max_tokens ?? request.max_completion_tokens ?? request.max_output_tokens ?? 1800,timeoutMs:options.timeout ?? 30000})
+    const planned = await invokeAnyaToolTurn({messages:[{role:'system',content:system},...normalized.filter(m=>!['system','developer'].includes(m.role))],tools:functions,maxTokens:request.max_tokens ?? request.max_completion_tokens ?? request.max_output_tokens ?? 1800,timeoutMs:options.timeout ?? 30000,signal:options.signal})
     toolCalls = planned.choices[0].message.tool_calls
     result = {ok:true,raw:planned.choices[0].message.content,model:planned.model,provider:planned.provider,billing_mode:planned.billing_mode,usage:planned.usage}
   } else {
