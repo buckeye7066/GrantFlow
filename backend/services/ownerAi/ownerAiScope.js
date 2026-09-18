@@ -49,3 +49,24 @@ export function captureOwnerAiJobScope(req, { timeoutMs = 240000 } = {}) {
     },
   }
 }
+
+// Capture only the server-established owner scope at an explicit queue boundary.
+// Queue bookkeeping remains neutral; each actual handler gets its own deadline.
+export function captureDetachedOwnerAiRunner() {
+  const inherited = scopes.getStore()
+  const alreadyAborted = inherited?.signal.aborted === true
+  return async (work, { timeoutMs = 240000, signal } = {}) => {
+    if (alreadyAborted) throw inherited.signal.reason || new Error('Owner request already aborted')
+    const duration = Number(timeoutMs)
+    if (!Number.isFinite(duration) || duration <= 0) throw new Error('A bounded job timeout is required')
+    const controller = new AbortController()
+    const active = signal ? AbortSignal.any([signal, controller.signal]) : controller.signal
+    const timeout = setTimeout(() => controller.abort(new DOMException('Job time budget exhausted', 'AbortError')), Math.min(duration, 21600000))
+    try {
+      active.throwIfAborted()
+      return await scopes.run(inherited ? {signal:active} : null, () => work(active))
+    } finally { clearTimeout(timeout); controller.abort() }
+  }
+}
+
+export function runWithoutOwnerAiScope(work) { return scopes.run(null, work) }

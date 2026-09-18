@@ -263,11 +263,12 @@ async function _runAutonomousCrawlerSweep({ profileIds, db, context, fleetLease 
   report.profiles_processed = profiles.length
 
   for (const profile of profiles) {
+    context.signal?.throwIfAborted()
     // Keep the fleet lease alive across a multi-hour sweep so a concurrent
     // trigger can never take it over mid-run and start an overlapping sweep.
     if (fleetLease) await renewFleetLease(db, fleetLease.lease.ownerToken)
     try {
-      const { run, persisted } = await runProfileDiscoveryLive({ db, profileId: profile.id, trigger: 'fleet' })
+      const { run, persisted } = await runProfileDiscoveryLive({ db, profileId: profile.id, trigger: 'fleet', ...(context.signal ? {signal:context.signal} : {}) })
       if (run?.skipped) {
         report.jobs.push({
           profile_id: profile.id, profile_name: profile.display_name,

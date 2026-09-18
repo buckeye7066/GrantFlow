@@ -1,3 +1,4 @@
+import {captureDetachedOwnerAiRunner} from './ownerAi/ownerAiScope.js'
 import { runAutonomousCodeCrawl } from './anyaAutonomousCrawler.js'
 import { runAutonomousCrawlers } from './anyaAutonomousFunctionRunner.js'
 import { runAutonomousFunctionTests } from './anyaAutonomousFunctionTesting.js'
@@ -582,7 +583,7 @@ export function startBackgroundCodeCrawlAndRepair(context) {
   backgroundCodeCrawlState.lastResult = null
   backgroundCodeCrawlState.lastError = null
 
-  runCodeCrawlAndRepairOnly(context)
+  captureDetachedOwnerAiRunner()(signal => runCodeCrawlAndRepairOnly({...context, signal}), {timeoutMs:21600000})
     .then((result) => {
       backgroundCodeCrawlState.lastResult = result
     })
@@ -647,7 +648,7 @@ export function startBackgroundCrawlerRun(options, context) {
   backgroundCrawlerRunState.lastResult = null
   backgroundCrawlerRunState.lastError = null
 
-  runAutonomousCrawlers(options, context)
+  captureDetachedOwnerAiRunner()(signal => runAutonomousCrawlers(options, {...context, signal}), {timeoutMs:21600000})
     .then((result) => {
       backgroundCrawlerRunState.lastResult = result
     })

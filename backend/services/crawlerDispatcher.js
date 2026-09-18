@@ -1,4 +1,5 @@
 import fs from 'fs'
+import {captureDetachedOwnerAiRunner, runWithoutOwnerAiScope} from './ownerAi/ownerAiScope.js'
 import crypto from 'crypto'
 import { fileURLToPath } from 'url'
 import { dirname, join, resolve } from 'path'
@@ -332,7 +333,12 @@ async function ensureJobSnapshot(db, job) {
   return { snapshotJson: persisted || snapshotJson, repaired: wrote, snapshotHash }
 }
 
-export function dispatchCrawlerJob({ db, jobId, uploadDir, getOpenAI }) {
+export function dispatchCrawlerJob(options) {
+  const runAiJob = captureDetachedOwnerAiRunner()
+  return dispatchScopedCrawlerJob(options, runAiJob)
+}
+
+function dispatchScopedCrawlerJob({ db, jobId, uploadDir, getOpenAI }, runAiJob) {
   const handle = async () => {
     const job = await db.prepare('SELECT * FROM crawler_jobs WHERE id = ? LIMIT 1').get(jobId)
     if (!job) {
@@ -380,7 +386,7 @@ export function dispatchCrawlerJob({ db, jobId, uploadDir, getOpenAI }) {
         const waitMs = nextAt.getTime() - Date.now()
         if (waitMs > 250) {
           setTimeout(() => {
-            dispatchCrawlerJob({ db, jobId, uploadDir, getOpenAI }).catch(e => console.warn('[crawlerDispatcher] Deferred dispatch error for job', jobId, e?.message || e))
+            dispatchScopedCrawlerJob({ db, jobId, uploadDir, getOpenAI }, runAiJob).catch(e => console.warn('[crawlerDispatcher] Deferred dispatch error for job', jobId, e?.message || e))
           }, Math.min(waitMs, 60_000))
           return
         }
@@ -522,7 +528,7 @@ export function dispatchCrawlerJob({ db, jobId, uploadDir, getOpenAI }) {
         }
 
         setTimeout(() => {
-          dispatchCrawlerJob({ db, jobId, uploadDir, getOpenAI }).catch(e => console.warn('[crawlerDispatcher] Re-queue dispatch error for job', jobId, e?.message || e))
+          dispatchScopedCrawlerJob({ db, jobId, uploadDir, getOpenAI }, runAiJob).catch(e => console.warn('[crawlerDispatcher] Re-queue dispatch error for job', jobId, e?.message || e))
         }, requeueDelayMs)
         return
       }
@@ -546,7 +552,7 @@ export function dispatchCrawlerJob({ db, jobId, uploadDir, getOpenAI }) {
       }
 
       setTimeout(() => {
-        dispatchCrawlerJob({ db, jobId, uploadDir, getOpenAI }).catch(e => console.warn('[crawlerDispatcher] Backoff dispatch error for job', jobId, e?.message || e))
+        dispatchScopedCrawlerJob({ db, jobId, uploadDir, getOpenAI }, runAiJob).catch(e => console.warn('[crawlerDispatcher] Backoff dispatch error for job', jobId, e?.message || e))
       }, delayMs)
       return
     }
@@ -649,7 +655,7 @@ export function dispatchCrawlerJob({ db, jobId, uploadDir, getOpenAI }) {
       context.heartbeat = () => updateJobHeartbeat(db, jobId)
 
       result = await withTimeout(
-        handler(context),
+        runAiJob(signal => handler({...context, signal}), {timeoutMs, signal:abortController.signal}),
         timeoutMs,
         `Job ${jobId} (${job.type})`,
         abortController,
@@ -785,14 +791,14 @@ export function dispatchCrawlerJob({ db, jobId, uploadDir, getOpenAI }) {
   }
 
   // Return a Promise that resolves when the job completes
-  return new Promise((resolve) => {
+  return runWithoutOwnerAiScope(() => new Promise((resolve) => {
     setImmediate(() => {
       handle().then(resolve).catch((err) => {
         console.error('[crawlerDispatcher] Unhandled job error:', err)
         resolve() // Resolve anyway to not block
       })
     })
-  })
+  }))
 }
 
 /**
