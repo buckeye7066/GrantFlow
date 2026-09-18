@@ -1207,8 +1207,8 @@ export const DIAGNOSTIC_CHECKS = Object.freeze([
       try {
         const row = await db.prepare("SELECT value FROM system_kv WHERE key = 'enforce_invariants_last_run'").get()
         parsed = row?.value ? JSON.parse(row.value) : null
-      } catch (err) {
-        return { ok: true, skipped: true, summary: `sweep summary unavailable: ${err?.message || err}` }
+      } catch {
+        parsed = { steps: [{ name: 'invariant_boot_evidence', ok: false, status: 'unavailable' }] }
       }
       parsed = await withLatestStaleRefreshReceipt(db, parsed)
       if (!parsed || !Array.isArray(parsed.steps)) {

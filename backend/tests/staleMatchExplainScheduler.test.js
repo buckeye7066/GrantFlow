@@ -2,6 +2,8 @@ import fs from 'node:fs'
 import { compileFunction } from 'node:vm'
 import { describe, expect, it, vi } from 'vitest'
 
+const TEST_LEASE = { lockName: 'scheduler:link-verification', ownerToken: 'test-owner' }
+
 // Execute the actual scheduling function without opening a server or external connections.
 function schedulerFixture({ boot, signal, refreshResult = { ok: true, scanned: 2, repaired: 2, truncated: true } } = {}) {
   const source = fs.readFileSync(new URL('../server.js', import.meta.url), 'utf8')
@@ -20,7 +22,7 @@ function schedulerFixture({ boot, signal, refreshResult = { ok: true, scanned: 2
   const logger = { log: vi.fn(), warn: vi.fn() }
   const factory = compileFunction(body + '\nreturn scheduleLinkVerification', ['app', 'runLinkVerification', 'runWithSchedulerLock', 'console', 'setTimeout', 'setInterval', 'dependencyImport'])
   const schedule = factory({ locals: { bootMaintenancePromise: boot } }, async () => { sequence.push('links'); return {} },
-    async (_db, _options, callback) => callback({ signal }), logger,
+    async (_db, _options, callback) => callback({ ...TEST_LEASE, signal }), logger,
     callback => timers.push(callback), () => {}, dependencyImport)
   return { schedule, sequence, timers, refresh, logger }
 }
@@ -39,7 +41,7 @@ describe('existing link-verification scheduler resumes stale evidence', () => {
     release()
     await pending
     expect(sequence).toEqual(['links', 'repair', 'refresh', 'truth'])
-    expect(refresh).toHaveBeenCalledExactlyOnceWith(db, { signal, persistReceipt: true })
+    expect(refresh).toHaveBeenCalledExactlyOnceWith(db, { signal, lease: { ...TEST_LEASE, signal }, persistReceipt: true })
   })
 
   it('logs an explicit failed refresh without suppressing unrelated task-truth maintenance', async () => {

@@ -13,3 +13,7 @@ GitHub Actions run 35321336644, job 105524282422, checked the exact unchanged ma
 Tests cover real SQLite batches and durable readback, cancellation before access/during profile loading/after an in-flight write, conditional publication, current/old/stale receipt precedence, Sam consumption, and the actual scheduling function. Existing proof-preservation, incomplete-audit, malformed-data, disabled-work, and query-failure controls remain intact.
 
 The one-use repair workflow and templates have been removed from the release tree; they are not a permanent production component. Full exact-head CI, review, merge and exact-revision production readback remain release gates at this checkpoint. Home remains disconnected, so local synchronization is not claimed. No cleared production backlog or new funding/application outcome is claimed. Phases 3-5 remain open.
+
+## Lease fencing and unavailable boot evidence
+
+Receipt claims and terminal writes require the real scheduler owner token and unexpired database lease in the same conditional SQL as the generation check. Local timestamps are diagnostic only. Tests cover delayed reads with equal/skewed process clocks, expired/wrong owners, and lease loss before publication. Sam still consumes recurring evidence when boot JSON is malformed; a completed single batch never certifies absent evidence for unrelated boot sweeps. Existing race, cancellation and scheduler tests now supply explicit fixture leases without weakening assertions. The temporary verifier also checks the same SQL against an ephemeral PostgreSQL database.

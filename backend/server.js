@@ -4054,7 +4054,7 @@ if (process.env.NODE_ENV !== 'test') {
           lease.signal?.throwIfAborted()
           console.log('[link-repair] recurring lifecycle pass:', lifecycle)
           const { enforceStaleMatchExplainRefresh } = await import('./startup/enforceInvariants.js')
-          const explainRefresh = await enforceStaleMatchExplainRefresh(dbInstance, { signal: lease.signal, persistReceipt: true })
+          const explainRefresh = await enforceStaleMatchExplainRefresh(dbInstance, { signal: lease.signal, lease, persistReceipt: true })
           lease.signal?.throwIfAborted()
           console.log('[stale-match-explain] recurring refresh:', explainRefresh)
           if (!explainRefresh.ok) console.warn('[stale-match-explain] recurring refresh failed:', explainRefresh)

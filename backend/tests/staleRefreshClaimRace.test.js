@@ -1,12 +1,16 @@
 import assert from 'node:assert/strict'
 import { it as test } from 'vitest'
 import Database from 'better-sqlite3'
-import { beginStaleRefreshReceipt, finishStaleRefreshReceipt, STALE_REFRESH_RECEIPT_KEY } from '../services/matching/staleMatchRefreshReceipt.js'
+import { beginStaleRefreshReceipt as beginReceipt, finishStaleRefreshReceipt, STALE_REFRESH_RECEIPT_KEY } from '../services/matching/staleMatchRefreshReceipt.js'
+
+const TEST_LEASE = { lockName: 'scheduler:link-verification', ownerToken: 'test-owner' }
+const beginStaleRefreshReceipt = (db, opts = {}) => beginReceipt(db, { ...opts, lease: TEST_LEASE })
 
 for (const existing of [false, true]) {
   test(`a delayed cancelled claim cannot replace a newer completed receipt (existing=${existing})`, async () => {
     const raw = new Database(':memory:')
     raw.exec('CREATE TABLE system_kv (key TEXT PRIMARY KEY, value TEXT, updated_at TEXT)')
+  raw.exec("CREATE TABLE agent_control_locks (lock_name TEXT PRIMARY KEY, owner_token TEXT, expires_at TEXT); INSERT INTO agent_control_locks VALUES ('scheduler:link-verification', 'test-owner', '2099-01-01T00:00:00Z')")
     if (existing) raw.prepare('INSERT INTO system_kv VALUES (?, ?, ?)').run(STALE_REFRESH_RECEIPT_KEY, '{}', '2000-01-01T00:00:00Z')
     let release, writes = 0
     const db = { prepare(sql) {
@@ -35,6 +39,7 @@ for (const existing of [false, true]) {
 test('two legitimate claims in one clock millisecond still use distinct generations', async () => {
   const raw = new Database(':memory:')
   raw.exec('CREATE TABLE system_kv (key TEXT PRIMARY KEY, value TEXT, updated_at TEXT)')
+  raw.exec("CREATE TABLE agent_control_locks (lock_name TEXT PRIMARY KEY, owner_token TEXT, expires_at TEXT); INSERT INTO agent_control_locks VALUES ('scheduler:link-verification', 'test-owner', '2099-01-01T00:00:00Z')")
   const db = { prepare: sql => raw.prepare(sql) }
   const OriginalDate = globalThis.Date
   globalThis.Date = class extends OriginalDate { constructor(...args) { super(...(args.length ? args : ['2026-09-18T01:00:00Z'])) } }

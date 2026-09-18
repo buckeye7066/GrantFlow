@@ -1,9 +1,11 @@
 import { afterEach, describe, expect, it } from 'vitest'
 import Database from 'better-sqlite3'
 import { runStaleMatchExplainRefresh } from '../services/matching/staleMatchExplainRefresh.js'
-import { enforceStaleMatchExplainRefresh } from '../startup/enforceInvariants.js'
+import { enforceStaleMatchExplainRefresh as enforceRefresh } from '../startup/enforceInvariants.js'
 import { getCheckById } from '../services/sam/samRegistry.js'
 
+const TEST_LEASE = { lockName: 'scheduler:link-verification', ownerToken: 'test-owner' }
+const enforceStaleMatchExplainRefresh = (db, opts) => enforceRefresh(db, { ...opts, lease: TEST_LEASE })
 const opened = []
 afterEach(() => { for (const db of opened.splice(0)) db.close() })
 const KEY = 'stale_match_explain_last_run'
@@ -23,6 +25,7 @@ function fixture(count = 3) {
     raw.prepare('INSERT INTO funding_opportunities VALUES (?, ?, 1)').run(id, 'Education award')
     raw.prepare("INSERT INTO profile_opportunity_matches VALUES (?, 'profile', ?, 'institution-link', '{}', 'accept', 80, '', NULL, NULL)").run(id, id)
   }
+  raw.exec("CREATE TABLE agent_control_locks (lock_name TEXT PRIMARY KEY, owner_token TEXT, expires_at TEXT); INSERT INTO agent_control_locks VALUES ('scheduler:link-verification', 'test-owner', '2099-01-01T00:00:00Z')")
   const db = { dialect: 'sqlite', prepare: sql => raw.prepare(sql) }
   const deps = {
     loadProfileContext: async () => ({ profile: { id: 'profile' }, sections: {} }),
