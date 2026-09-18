@@ -409,7 +409,7 @@ export function mapResultToFrontendShape(result) {
     name: result.name,
     description: result.description,
     url: resolveApplicationUrl(result) || result.url || null,
-    application_url: resolveApplicationUrl(result) || result.url || null,
+    application_url: resolveApplicationUrl(result),
     source_url: result.sourceUrl || result.source_url || result.url || null,
     match_score: result.matchScore ?? result.match_score ?? null,
     match_confidence: result.matchConfidence ?? result.match_confidence ?? null,

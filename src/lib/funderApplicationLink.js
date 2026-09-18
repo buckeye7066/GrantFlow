@@ -8,12 +8,14 @@ export function resolveFunderApplicationLink(row) {
   const target = resolveApplicationUrl(row)
   const refused = readApplicationTargetRefusal(row) || classifyApplicationTargetRefusal(target)
   if (target && !refused) return target
+  let rejectedHref = null
+  try { rejectedHref = target ? new URL(target).href : null } catch { /* invalid targets have no comparable href */ }
   for (const value of [row?.source_url, row?.sourceUrl, row?.url, row?.portal_url, row?.contact_info?.website]) {
     if (typeof value !== 'string' || !value.trim()) continue
     try {
       const url = new URL(value.trim())
       if (!['https:', 'http:'].includes(url.protocol) || url.username || url.password) continue
-      if (refused && target && url.href === new URL(target).href) continue
+      if (refused && rejectedHref && url.href === rejectedHref) continue
       return value.trim()
     } catch { /* malformed navigation data is not a link */ }
   }

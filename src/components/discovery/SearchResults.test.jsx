@@ -157,3 +157,17 @@ it('Discover mapping keeps the selected application link through the actual Sear
   await waitFor(() => expect(onAdd).toHaveBeenCalled())
   expect(onAdd.mock.calls[0][0].application_url).toBe(applyUrl)
 })
+
+it('a recorded application-target refusal disables single and bulk pipeline selection', () => {
+  const onAdd = vi.fn()
+  const row = mapDiscoverCatalogRow(makeOpp({ apply_url:'https://alpha.grantable.co/login',
+    match_decision:'REVIEW',match_explain:{application_target:{status:'non_application',reason:'non_application_vendor_content'}} }))
+  render(wrap(<SearchResults results={[row]} profileId="p-refusal" onAddToPipeline={onAdd} organizationName="Org" />))
+  for (const button of screen.queryAllByRole('button',{name:/Add to Pipeline/i})) {
+    expect(button.disabled).toBe(true)
+    fireEvent.click(button)
+  }
+  const boxes=screen.queryAllByRole('checkbox')
+  expect(boxes.every(box=>box.getAttribute('aria-disabled')==='true' || box.disabled)).toBe(true)
+  expect(onAdd).not.toHaveBeenCalled()
+})

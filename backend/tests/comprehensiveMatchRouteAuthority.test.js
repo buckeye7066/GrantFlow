@@ -281,3 +281,20 @@ it('the discovery HTTP response preserves the selected application URL when cata
     expect(returned.url).toBe(validTarget)
   } finally {db.close()}
 })
+
+it('the discovery HTTP formatter never promotes a source-only URL to an application alias', async () => {
+  const db=makeDb()
+  try {
+    seedCapture(db)
+    const before=await post(makeApp(db),{profile_json:FIXTURE_PROFILE_ID})
+    const selected=before.body.opportunities.find(row=>row.application_url && !row.is_directory)
+    expect(selected).toBeTruthy()
+    db.prepare('UPDATE funding_opportunities SET apply_url=NULL,application_url=NULL WHERE id=?').run(selected.id)
+    const after=await post(makeApp(db),{profile_json:FIXTURE_PROFILE_ID})
+    expect(after.status).toBe(200)
+    const row=after.body.opportunities.find(item=>item.id===selected.id)
+    // A preserved historical result can still be informative, not apply-now.
+    if(row) { expect(row.application_url).toBeNull(); expect(row.source_url || row.url).toBeTruthy() }
+    expect(after.body.opportunities.some(item=>item.id===selected.id && item.application_url)).toBe(false)
+  } finally {db.close()}
+})

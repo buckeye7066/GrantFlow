@@ -83,7 +83,7 @@ function formatProfileSearchResult(opp) {
     sponsor: opp.sponsor || opp.funder,
     funder: opp.funder || opp.sponsor,
     url: resolveApplicationUrl(opp) || opp.url || opp.actionable_url || opp.source_url || null,
-    application_url: resolveApplicationUrl(opp) || opp.actionable_url || opp.url || opp.source_url || null,
+    application_url: resolveApplicationUrl(opp),
     deadline: opp.deadline,
     award_min: opp.amount_min ?? opp.award_min ?? null,
     award_max: opp.amount_max ?? opp.award_max ?? null,

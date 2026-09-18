@@ -31,8 +31,8 @@ describe('live crawler result application target', () => {
     expect(mapResultToFrontendShape({ id:'row',name:'Test',apply_url:selected,applicationUrl:stale,url:info,sourceUrl:info }))
       .toMatchObject({ application_url:selected,url:selected,source_url:info })
   })
-  it('keeps the existing generic URL-only compatibility contract', () => {
+  it('keeps a generic source-only URL informational, not an application', () => {
     expect(mapResultToFrontendShape({ id:'row',name:'Test',url:selected }))
-      .toMatchObject({ application_url:selected,url:selected,source_url:selected })
+      .toMatchObject({ application_url:null,url:selected,source_url:selected })
   })
 })
