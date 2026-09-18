@@ -1,28 +1,33 @@
-# Stale-match refresh: a batch is not the whole backlog
+# Stale-match refresh: verified backlog and durable diagnostics
 
-## Verified production checkpoint
+## Production finding
 
-Main/deployment revision: `1ea976423a9150ee97f493611e8b3a879b6903ea` (PR #1748).
-Railway deployment: `1abbd370-0047-4b15-9117-21364ca3f53d`.
+Main at investigation: `1ea976423a9150ee97f493611e8b3a879b6903ea` (PR #1748), Railway deployment `1abbd370-0047-4b15-9117-21364ca3f53d`.
+The 2026-09-18T05:18:20Z boot summary reported exactly 800 matches scanned and repaired, its default page limit. The SQL query could not expose a next row, so the loop could not report that more work remained. A completed batch did not establish an empty backlog.
 
-The 2026-09-18T05:18:20Z boot summary reports stale-match refresh scanned 800 and repaired 800, exactly its default page limit. Separately, pipeline precision scanned 140, kept 121, relabeled 19, removed zero, and reported zero write failures. Its nine unscorable rows are NOT explained by the 19 policy-gate reasons. Without a direct database read, the causes of those nine rows, the remaining stale count, and the latest golden-outcome result remain unknown. Home is offline; do not equate a successful deployment with these missing checks.
+Separately, pipeline precision scanned 140, kept 121, relabeled 19, removed zero, and reported zero write failures. Its nine unscorable rows are not explained by those 19 policy-reason counts. Home is offline; direct database attribution for those nine rows and a fresh golden-outcome readback remain unavailable.
 
-## Reproduced defect and bounded correction
+## Correction
 
-The refresh SELECT limited its result to the work budget. The loop could only mark truncation when it encountered another row, so a full page with additional candidates outside the SELECT incorrectly returned `truncated: false`.
+- Read one lookahead candidate but score and write no more than the existing pair budget. Keep the 800-pair default, 45-second processing budget, canonical decisions, proof history, compare-and-swap conditions and lane identity.
+- Count remaining candidates after the attempt with the same active-catalog scope and a freshly constructed calendar-sensitive predicate. Invalid or failed counts remain null, never zero.
+- A SQL zero is not enough: marker-based SQL can miss malformed JSON. Before reporting completion, inspect the active-scope explanations through the canonical JavaScript freshness predicate, with a read-only 10,000-row maximum and the remaining processing time budget. A partial, timed-out, failed or calendar-crossing audit remains incomplete.
+- Distinguish `remaining_candidates` from exact `remaining_stale`. Preserve explicit null, false and zero, verification counters/timestamps, and complete/pending/disabled/failed status.
+- Carry those facts and service failures through the existing invariant wrapper and its persisted projection, so Sam and Anya do not see a successful boot step after verification failed. Other invariant projections are unchanged.
+- Emit an aggregate-only receipt without applicant identifiers, URLs, source titles or profile evidence. No new scheduler, direct profile edits, source deletion, application-history mutation, acceptance relaxation or unbounded retries.
 
-- Read one lookahead candidate; score and write no more than the existing work budget. The 800-pair default and 45-second processing budget are unchanged.
-- After the attempt, count the same active-catalog candidate scope. Return `remaining_candidates`, `verified_at`, `verification_failed`, `complete`, and `status` in addition to existing fields.
-- `remaining_candidates` is the existing SQL predicate's conservative candidate count, not a claim that every candidate fails the JavaScript freshness check. Only a verified zero, enabled writes, successful processing, and no unresolved profile/scoring skips can mark this drain complete.
-- Failed readback leaves the count null, not zero. Count-only, failed, and pending outcomes remain distinct. An aggregate-only log receipt makes these facts available without database credentials or applicant data.
-- Preserve all canonical decisions, proof refresh/history, compare-and-swap checks, source records, lane identity, and application history. No new scheduler, unbounded retry loop, scoring changes, or admission relaxation.
+## Verification and fixtures
 
-This patch establishes truthful completion evidence. It does not itself schedule another batch, repair missing-catalog pipeline records, or certify the golden outcomes. The existing invariant wrapper reports its legacy fields; the new per-batch receipt is the authoritative detailed result for this scope, not the generic boot `ok` field.
+The new controls first failed on the prior source, then passed after correction. The Node suite covers 27 cases: page-boundary lookahead, exact-size completion, bounded continuation, disabled writes, time exhaustion, missing profiles/policy, engine/write/query failures, concurrent corrections, inactive-source scope, conservative SQL matches, typed count handling, calendar rollover, malformed JSON, partial exact audits and aggregate receipts.
 
-## Verification
+Nine new Vitest cases use the real invariant wrapper and persisted projection, including real SQLite JSON round-trip, failure propagation and unrelated-step preservation. Existing stale-refresh, four-truth-proof and full invariant-runner suites also passed in Actions run `35318852037`, followed by lint, typecheck and the unchanged signal pin check. That run published source commit `ede823f022b792716fcfb4ffd5ecabdd6c643d61`.
 
-Local reproduction used byte-verified production refresh and persistence modules with real SQLite, injected deterministic engine/profile inputs, and isolated imports for unrelated logger/proof dependencies. Original refresh blob: `0dae55768e5c92862fdf79922a8d9e54c2418417`; unchanged persistence blob: `57af34847eda8f1c19961ec2acf290ee28b5a772`.
+The healthy runner fixture now includes empty match, catalog and profile-section tables; the unchanged 70-step inventory and zero-failure assertion are retained, with an explicit failed-step assertion added. A test hook was corrected to avoid returning a mock as a teardown callback.
 
-Initial red: 15 assertions failed, including the actual full-page truncation defect. An additional malformed-count control exposed empty string/false being coerced to zero; both were corrected. Final isolated tests: 22 passed, zero failed/skipped, including exact-budget completion, bounded continuation, count-only preservation, time exhaustion, missing profiles/policy, scoring and write errors, concurrent updates, inactive source scope, conservative SQL false positives, string counts and aggregate-only receipts.
+A temporary exact-base Actions job reproduced the failures and applied only the hashed source/test edits. Its workflow and patch script are removed from the final PR tree. Full exact-head CI and production readback remain the release gates, not this checkpoint's targeted-test evidence.
 
-The tests are registered under the existing `tests/unit` Node runner. The local harness is not a full project installation and is not shipped. Exact-head project CI and production log readback remain release gates. No new funding outcome, broader discovery-coverage improvement, or completion of later Amy/web-parity phases is claimed.
+## Remaining follow-through
+
+This patch reports the backlog honestly; it does not itself schedule another batch. PR #1749 separately contains bounded recurring refresh and cancellation work and must be reconciled with these diagnostics before merging. Its recurring result also needs a durable consumer-visible record, not only a console message. The two overlapping branches must not be merged blindly.
+
+No new funding outcome or completed application is claimed, and the later discovery-recall, Amy cohort and web-parity phases remain open. A deployment success does not establish that historical matches have all finished refreshing.
