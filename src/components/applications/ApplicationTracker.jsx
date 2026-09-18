@@ -483,6 +483,18 @@ export default function ApplicationTracker() {
 
   const isLoading = appsQuery.isLoading || profilesQuery.isLoading
 
+  if (appsQuery.isError) {
+    return (
+      <div role="alert" className="p-6 md:p-8 space-y-3">
+        <h1 className="text-3xl font-bold text-foreground">Application Tracker</h1>
+        <p>Applications could not be loaded. Your saved applications have not been changed.</p>
+        <Button onClick={() => appsQuery.refetch()} disabled={appsQuery.isFetching}>
+          Retry loading applications
+        </Button>
+      </div>
+    )
+  }
+
   return (
     <div className="p-6 md:p-8 space-y-6">
       {/* Header */}

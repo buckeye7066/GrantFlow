@@ -117,6 +117,7 @@ async function makeDb({ migrate = true } = {}) {
     );
     CREATE TABLE grants (
       id TEXT PRIMARY KEY,
+      profile_id TEXT,
       title TEXT,
       funder TEXT
     );

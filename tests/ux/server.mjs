@@ -46,8 +46,10 @@ for (const type of ['individual', 'family', 'college_student']) {
 }
 const profiles = await db.prepare('SELECT id, primary_type FROM profiles').all()
 for (const profile of profiles) {
-  await ensureBillingAccount(db, profile.id, { defaultTier: 'large_org', assignedBy: 'local-ux-fixture' })
-  await db.prepare('UPDATE billing_accounts SET is_pro_bono=1, pro_bono_reason=? WHERE profile_id=?').run('Isolated UX fixture, never production', profile.id)
+  // Personal accounts exercise real free billing without a pro-bono waiver.
+  const personal = ['individual', 'family', 'college_student'].includes(profile.primary_type)
+  await ensureBillingAccount(db, profile.id, { defaultTier: personal ? 'individual' : 'large_org', assignedBy: 'local-ux-fixture' })
+  await db.prepare('UPDATE billing_accounts SET is_pro_bono=?, pro_bono_reason=? WHERE profile_id=?').run(personal ? 0 : 1, personal ? null : 'Isolated UX fixture, never production', profile.id)
   const sections = {
     organization_details: { organization_type: profile.primary_type === 'nonprofit' ? 'nonprofit' : 'business' },
     narrative: { mission: 'Provide community services and practical assistance.' },
@@ -59,6 +61,13 @@ for (const profile of profiles) {
     "INSERT INTO profile_sections (id, profile_id, section_key, data, updated_by) VALUES (?, ?, ?, ?, 'ux-fixture') ON CONFLICT(profile_id, section_key) DO UPDATE SET data=excluded.data"
   ).run(crypto.randomUUID(), profile.id, key, JSON.stringify(data))
 }
+// Run the real boot verification on the disposable fixture, not a fabricated green snapshot.
+const { enforcePipelinePrecision } = await import('../../backend/startup/enforceInvariants.js')
+const { readHamiltonTaskTruthSnapshot } = await import('../../backend/services/hamilton/hamiltonTaskTruthSnapshot.js')
+await enforcePipelinePrecision(db)
+const truth = await readHamiltonTaskTruthSnapshot(db)
+if (!truth.queueReadable) throw new Error('Local UX task verification failed: ' + truth.status)
+console.log('UX task verification:', truth.status)
 const port = 18133
 const server = app.listen(port, '127.0.0.1', () => console.log('UX fixture ready on loopback port ' + port))
 const close = () => server.close(() => process.exit(0))

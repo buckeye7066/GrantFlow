@@ -71,7 +71,7 @@ export function buildProfileNeedSuggestions({ profile = {}, sections = {}, limit
         name: n.label,
         category: Array.isArray(n.funding_categories) && n.funding_categories.length > 0 ? n.funding_categories[0] : null,
         score: null,
-        reasons: [`Needs plan for a ${String(plan.blueprint ?? profile?.primary_type ?? 'profile').replace(/_/g, ' ')}`],
+        reasons: [`Needs plan for a ${String(plan.blueprint?.key ?? profile?.primary_type ?? 'profile').replace(/_/g, ' ')}`],
         source: n.source ?? 'profile_type_blueprint',
         evidence: n.blueprint ?? null,
         need_text: n.search_subject ?? n.label,

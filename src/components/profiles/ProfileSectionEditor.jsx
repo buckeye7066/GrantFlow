@@ -25,6 +25,7 @@ import ProfileFieldWithAI from "@/components/profiles/ProfileFieldWithAI"
 import { SECTION_METADATA } from "@/config/sectionMetadata"
 import FieldHelpTip from "@/components/help/FieldHelpTip"
 import { fieldAppliesToProfileType } from "../../../shared/profileSectionApplicability.js"
+import { normalizeProfileSectionAliases } from "@/utils/profileSuggestionGuards"
 
 function isPlainObject(value) {
   if (!value || typeof value !== 'object') return false
@@ -116,12 +117,12 @@ function normalizeTextValue(fieldName, value) {
   return String(value)
 }
 
-function normalizeInitialData(config, initialData) {
+function normalizeInitialData(config, initialData, sectionKey) {
   if (!config) return {}
   if (!initialData || typeof initialData !== 'object') return {}
 
   const allowed = new Set((config.fields ?? []).map((field) => field.name))
-  const out = Object.fromEntries(Object.entries(initialData).filter(([key]) => allowed.has(key)))
+  const out = Object.fromEntries(Object.entries(normalizeProfileSectionAliases(initialData, sectionKey).data).filter(([key]) => allowed.has(key)))
 
   for (const field of config.fields ?? []) {
     if (!field?.name) continue
@@ -1340,7 +1341,7 @@ export const SECTION_CONFIG = {
       { name: "focus_areas", label: "Focus areas (list)", component: Textarea, props: { rows: 2, placeholder: "Enter items separated by commas or new lines" } },
       { name: "interests", label: "Interests (list)", component: Textarea, props: { rows: 2, placeholder: "Enter items separated by commas or new lines" } },
       { name: "keywords", label: "Keywords (list)", component: Textarea, props: { rows: 2, placeholder: "Enter items separated by commas or new lines" } },
-      { name: "notes", label: "Programs/services notes", component: Textarea, props: { rows: 3 } },
+      { name: "notes", label: "Notes", component: Textarea, props: { rows: 3 } },
     ],
   },
   family_life: {
@@ -1467,7 +1468,7 @@ export const SECTION_CONFIG = {
     },
     fields: [
       { name: "rural_resident", label: "Rural resident", type: "boolean" },
-      { name: "appalachian_region", label: "Located in Appalachian region", type: "boolean" },
+      { name: "appalachian_region", label: "Appalachian region", type: "boolean" },
       { name: "urban_underserved", label: "Urban underserved community", type: "boolean" },
       { name: "geographic_focus", label: "Geographic focus", component: Input, props: { placeholder: "Primary service area, city, or county" } },
       { name: "notes", label: "Location notes", component: Textarea, props: { rows: 3, placeholder: "Census tract, region, or other details" } },
@@ -1570,7 +1571,7 @@ export default function ProfileSectionEditor({
 }) {
   const config = SECTION_CONFIG[sectionKey]
   const defaults = config?.defaults ?? {}
-  const normalizedData = config ? normalizeInitialData(config, initialData) : {}
+  const normalizedData = config ? normalizeInitialData(config, initialData, sectionKey) : {}
   const initialValues = config ? { ...defaults, ...(normalizedData ?? {}) } : {}
   const hiddenFields = Array.isArray(config?.hidden_fields) ? config.hidden_fields : []
   // Field-level profile-type gating: only show fields that apply to this
@@ -1588,7 +1589,7 @@ export default function ProfileSectionEditor({
     (field) => field.deprecated || !fieldAppliesToProfileType(field, visibilityProfile),
   )
   const metadataFieldNames = new Set((config?.fields ?? []).map((field) => field.name))
-  const legacyEntries = Object.entries(initialData ?? {}).filter(([key]) => !metadataFieldNames.has(key))
+  const legacyEntries = Object.entries(normalizeProfileSectionAliases(initialData, sectionKey).data).filter(([key]) => !metadataFieldNames.has(key))
   const [dropLegacyOnSave, setDropLegacyOnSave] = useState(true)
   const [aiStatus, setAiStatus] = useState('idle')
   const [aiError, setAiError] = useState(null)
@@ -1600,12 +1601,12 @@ export default function ProfileSectionEditor({
 
   useEffect(() => {
     if (config) {
-      form.reset({ ...defaults, ...(normalizeInitialData(config, initialData) ?? {}) })
+      form.reset({ ...defaults, ...(normalizeInitialData(config, initialData, sectionKey) ?? {}) })
       setDropLegacyOnSave(true)
       setAiStatus('idle')
       setAiError(null)
     }
-  }, [config, defaults, initialData, form])
+  }, [config, defaults, initialData, sectionKey, form])
 
   // Deep-link focus: when opened via a "Fix in profile" link that names a
   // specific field, scroll it into view and focus it once the dialog mounts.
