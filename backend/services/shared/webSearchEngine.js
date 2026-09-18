@@ -1,3 +1,4 @@
+import { createDeadlineBudget } from '../../crawler-os/deadlineBudget.js'
 /**
  * Shared live web-search engine.
  *
@@ -23,7 +24,8 @@
  *      (202 anti-bot challenge), so in prod it no-ops; kept for local/dev.
  *
  * Every back-end is failure-tolerant: any error or non-OK response yields `[]`,
- * never a throw, so callers can merge results without guarding every call.
+ * never a throw for a provider failure. Explicit caller cancellation/deadline
+ * throws AbortError so a cancelled search cannot start fallback calls.
  *
  * This exists so profile-driven discovery of LOCAL/non-federal funding (which
  * has no public API) shares one definition of "search the web" instead of each
@@ -289,11 +291,12 @@ export function looksEngineCollapse(meta) {
   return engines.length > 0 && engines.every((e) => e === 'bing') && unresponsive.length >= 2
 }
 
-async function duckDuckGoSearch(query, count, timeoutMs) {
+async function duckDuckGoSearch(query, count, timeoutMs, signal = null) {
+  signal?.throwIfAborted()
   const searchUrl = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`
   const response = await getWithRetry(
     searchUrl,
-    { headers: { 'User-Agent': UA, Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8', 'Accept-Language': 'en-US,en;q=0.5' } },
+    { headers: { 'User-Agent': UA, Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8', 'Accept-Language': 'en-US,en;q=0.5' }, ...(signal ? { signal } : {}) },
     // retries:0 — a blocked datacenter IP is a stable fact, not a transient
     // error, so a retry just doubles the wasted per-query timeout. The
     // process-level breaker (below) short-circuits every query after the first.
@@ -361,7 +364,10 @@ async function duckDuckGoSearch(query, count, timeoutMs) {
  * @param {number} [opts.timeoutMs=8000] Per-query network budget (DuckDuckGo path).
  * @returns {Promise<Array<{url:string,title:string,snippet:string}>>}
  */
-export async function searchWeb(query, { count = 8, timeoutMs = 8000 } = {}) {
+export async function searchWeb(query, { count = 8, timeoutMs = 8000, deadlineMs = null, signal = null } = {}) {
+  const budget = createDeadlineBudget({ deadlineMs, signal })
+  budget.throwIfStopped()
+  const invoke = (provider, args) => budget.run(options => provider({ ...args, ...(options.signal ? { signal: options.signal } : {}) }))
   const q = String(query || '').trim()
   if (!q) return withSearchMeta([], { provider: 'none', provenance: 'none', status: 'not_attempted', reason: 'empty_query' })
 
@@ -375,7 +381,7 @@ export async function searchWeb(query, { count = 8, timeoutMs = 8000 } = {}) {
   // upstream engines. A query answered within the TTL never re-hits an
   // engine. Only HEALTHY sets are ever cached (below), so junk from a bad
   // night cannot be replayed. Best-effort: no DB → plain miss.
-  const cached = await getCachedSearch(q, { count })
+  const cached = await budget.run(() => getCachedSearch(q, { count }))
   if (cached) {
     // webSearchCache's current contract does not return created_at, so age is
     // explicitly unknown rather than guessed from the configured TTL.
@@ -388,7 +394,7 @@ export async function searchWeb(query, { count = 8, timeoutMs = 8000 } = {}) {
     })
   }
   const cacheAndReturn = async (results, meta) => {
-    const cacheWriteSucceeded = await putCachedSearch(q, results)
+    const cacheWriteSucceeded = await budget.run(() => putCachedSearch(q, results))
     return withSearchMeta(results, { ...meta, cache_write_succeeded: cacheWriteSucceeded === true })
   }
 
@@ -400,10 +406,10 @@ export async function searchWeb(query, { count = 8, timeoutMs = 8000 } = {}) {
   // not become the cached answer for the day.
   const google = getGoogleProvider()
   if (google && Date.now() >= _googleDegradedUntil) {
-    const budget = await tryConsumeGoogleQuery({})
-    if (budget.allowed) {
+    const googleBudget = await budget.run(() => tryConsumeGoogleQuery({}))
+    if (googleBudget.allowed) {
       try {
-        const results = await google({ query: q, count, timeoutMs })
+        const results = await invoke(google, { query: q, count, timeoutMs })
         if (Array.isArray(results) && results.length) {
           const cleaned = results
             .filter((r) => r?.url && !shouldSkip(r.url))
@@ -419,6 +425,7 @@ export async function searchWeb(query, { count = 8, timeoutMs = 8000 } = {}) {
           }
         }
       } catch (err) {
+        budget.throwIfStopped()
         if (err?.code === 'google_quota') {
           _googleDegradedUntil = nextUtcMidnight()
           log.warn(`[webSearchEngine] Google CSE quota refused — skipping the Google rung until the UTC reset (${new Date(_googleDegradedUntil).toISOString()})`)
@@ -438,7 +445,7 @@ export async function searchWeb(query, { count = 8, timeoutMs = 8000 } = {}) {
   let heldDegenerate = null
   const searxng = getSearxngProvider()
   const searxngClean = async (engines) => {
-    const results = await searxng({ query: q, count, timeoutMs, ...(engines !== undefined ? { engines } : {}) })
+    const results = await invoke(searxng, { query: q, count, timeoutMs, ...(engines !== undefined ? { engines } : {}) })
     if (!Array.isArray(results) || !results.length) return null
     const cleaned = results
       .filter((r) => r?.url && !shouldSkip(r.url))
@@ -494,6 +501,7 @@ export async function searchWeb(query, { count = 8, timeoutMs = 8000 } = {}) {
         defaultCameUpEmpty = true
       }
     } catch (err) {
+      budget.throwIfStopped()
       // A transport-level throw means the INSTANCE is unreachable — the
       // fallback rung would hit the same dead endpoint, so it is not
       // triggered on this branch (Brave/DDG still run below).
@@ -530,6 +538,7 @@ export async function searchWeb(query, { count = 8, timeoutMs = 8000 } = {}) {
         }
         if (cleaned && !heldDegenerate) heldDegenerate = cleaned
       } catch (err) {
+        budget.throwIfStopped()
         log.warn(`[webSearchEngine] SearXNG fallback-engines search failed for "${q}": ${err?.message ?? err}`)
       }
     }
@@ -541,7 +550,7 @@ export async function searchWeb(query, { count = 8, timeoutMs = 8000 } = {}) {
   let braveAllFiltered = false
   if (brave) {
     try {
-      const results = await brave({ query: q })
+      const results = await invoke(brave, { query: q })
       if (Array.isArray(results) && results.length) {
         const cleaned = results
           .filter((r) => r?.url && !shouldSkip(r.url))
@@ -568,6 +577,7 @@ export async function searchWeb(query, { count = 8, timeoutMs = 8000 } = {}) {
         log.warn(`[webSearchEngine] Brave returned ${results.length} row(s) for "${q}" but every one was skip-listed — continuing down the ladder`)
       }
     } catch (err) {
+      budget.throwIfStopped()
       log.warn(`[webSearchEngine] Brave search failed for "${q}": ${err?.message ?? err}`)
     }
   }
@@ -580,7 +590,7 @@ export async function searchWeb(query, { count = 8, timeoutMs = 8000 } = {}) {
   const openai = getOpenAIProvider()
   if (openai) {
     try {
-      const results = await openai({ query: q, count })
+      const results = await invoke(openai, { query: q, count })
       const cleaned = (Array.isArray(results) ? results : [])
         .filter((r) => r?.url && !shouldSkip(r.url))
         .slice(0, count)
@@ -591,6 +601,7 @@ export async function searchWeb(query, { count = 8, timeoutMs = 8000 } = {}) {
         })
       }
     } catch (err) {
+      budget.throwIfStopped()
       log.warn(`[webSearchEngine] OpenAI web search failed for "${q}": ${err?.message ?? err}`)
     }
   }
@@ -619,7 +630,7 @@ export async function searchWeb(query, { count = 8, timeoutMs = 8000 } = {}) {
     })
   }
   try {
-    const results = await duckDuckGoSearch(q, count, timeoutMs)
+    const results = await budget.run(options => duckDuckGoSearch(q, count, timeoutMs, options.signal))
     return withSearchMeta(results, {
       provider: 'duckduckgo',
       provenance: 'live',
@@ -628,6 +639,7 @@ export async function searchWeb(query, { count = 8, timeoutMs = 8000 } = {}) {
       reason: _ddgBlocked ? 'provider_blocked' : null,
     })
   } catch (err) {
+    budget.throwIfStopped()
     // A THROW here (almost always a timeout from a datacenter IP that DDG never
     // answers) is the block manifesting as a hang instead of a 202. Trip the
     // breaker so the rest of the run's queries don't each pay the full timeout —

@@ -134,3 +134,19 @@ Those identifiers now use process-salted scrypt, memoized within each routing pa
 so multiple models on one account share one derivation. No scan threshold is
 relaxed. Final failure metadata retains any earlier transient outage, and
 Hamilton also recognizes final free-route 429s as retryable.
+
+## Grounded page-extraction deadline
+
+The default whole-page extraction budget is 60 seconds. The ranked gateway
+still divides one deadline among paid routes and the free reserve. The previous
+20-second page budget gave the primary about seven seconds with free routes
+enabled, cancelling a measured healthy 14.6-second Astra extraction. Explicit
+caller deadlines and cancellation are unchanged; acceptance dependency probes
+still use their own shorter bound. This does not change grounding, eligibility,
+cohort membership, matching thresholds, or the web-parity pass policy.
+
+Interactive discovery carries its original absolute deadline and cancellation
+signal through the web lane, every search provider transport, page fetches,
+extraction, and optional blind shadow/verification. Expired work starts no
+later page or provider and does not store late results. Background discovery
+without a caller deadline retains the bounded per-page extraction default.

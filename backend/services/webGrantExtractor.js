@@ -40,7 +40,11 @@ const log = createLogger('service:webGrantExtractor');
 export const MAX_WEB_EXTRACTION_HTML_CHARS = 500_000;
 export const MAX_WEB_EXTRACTION_TEXT_CHARS = 12_000;
 const MIN_TRUSTWORTHY_PAGE_TEXT_CHARS = 200;
-const DEFAULT_EXTRACTION_TIMEOUT_MS = 20_000;
+// Strong ranked models need time for a complete grounded page extraction.
+// A measured healthy response took 14.6s; the former 20s whole budget left
+// only about 7s for the primary after fallback reserves, cancelling good work.
+// Explicit caller deadlines and cancellation remain authoritative.
+const DEFAULT_EXTRACTION_TIMEOUT_MS = 60_000;
 
 /** Strip a web page to readable text for the model (bounded). */
 export function htmlToText(html, maxChars = 6000) {

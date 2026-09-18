@@ -1,0 +1,30 @@
+import { afterEach, beforeEach, expect, it, vi } from 'vitest'
+const mock = vi.hoisted(() => ({ google: vi.fn(), searxng: vi.fn(), brave: vi.fn(), openai: vi.fn(), cache: vi.fn() }))
+vi.mock('../services/shared/googleCseProvider.js', () => ({ makeGoogleCseProvider: () => mock.google }))
+vi.mock('../services/shared/searxngProvider.js', () => ({ makeSearxngProvider: () => mock.searxng }))
+vi.mock('../services/yana/webSearchProvider.js', () => ({ makeBraveSearchProvider: () => mock.brave }))
+vi.mock('../services/shared/openaiWebSearchProvider.js', () => ({ makeOpenAIWebSearchProvider: () => mock.openai }))
+vi.mock('../services/shared/googleBudget.js', () => ({ tryConsumeGoogleQuery: async () => ({ allowed: true }) }))
+vi.mock('../services/shared/webSearchCache.js', () => ({ getCachedSearch: async () => null, putCachedSearch: mock.cache }))
+beforeEach(() => {
+  vi.resetModules(); vi.clearAllMocks(); vi.useFakeTimers()
+  vi.stubEnv('GOOGLE_CSE_KEY', 'fixture'); vi.stubEnv('GOOGLE_CSE_CX', 'fixture')
+  vi.stubEnv('SEARXNG_URL', 'https://fixture.invalid'); vi.stubEnv('BRAVE_SEARCH_API_KEY', 'fixture')
+  vi.stubEnv('OPENAI_API_KEY', 'fixture'); vi.stubEnv('GRANTFLOW_ALLOW_LIVE_WEB_IN_TESTS', 'true')
+  mock.google.mockResolvedValue([{ url: 'https://fixture.invalid/grant', title: 'Youth funding grant', snippet: '' }])
+})
+afterEach(() => { vi.clearAllTimers(); vi.useRealTimers(); vi.unstubAllEnvs() })
+it('an aborted search starts no provider or cache write', async () => {
+  const { searchWeb } = await import('../services/shared/webSearchEngine.js')
+  await expect(searchWeb('youth funding grant', { signal: AbortSignal.abort() })).rejects.toMatchObject({ name: 'AbortError' })
+  expect(mock.google).not.toHaveBeenCalled(); expect(mock.openai).not.toHaveBeenCalled(); expect(mock.cache).not.toHaveBeenCalled()
+})
+it('a discovery deadline cancels the active search and forbids fallback providers', async () => {
+  const { searchWeb } = await import('../services/shared/webSearchEngine.js')
+  let activeSignal, failure
+  mock.google.mockImplementation(options => { activeSignal = options.signal; return new Promise(() => {}) })
+  searchWeb('youth funding grant', { deadlineMs: Date.now() + 100 }).catch(error => { failure = error })
+  await vi.advanceTimersByTimeAsync(101)
+  expect(failure).toMatchObject({ name: 'AbortError' }); expect(activeSignal?.aborted).toBe(true)
+  expect(mock.searxng).not.toHaveBeenCalled(); expect(mock.brave).not.toHaveBeenCalled(); expect(mock.openai).not.toHaveBeenCalled()
+})

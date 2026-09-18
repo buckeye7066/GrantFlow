@@ -1,3 +1,4 @@
+import { createDeadlineBudget } from './deadlineBudget.js';
 import { resolveApplicationUrl } from '../../shared/applicationTarget.js';
 // crawler-os/webLane.js
 //
@@ -506,6 +507,7 @@ async function verifyBlindTargets(shadow, fetcher, fetchedSourceKeys, minSliceMs
  */
 export async function runWebDiscoveryLane(deps, opts = {}) {
   const { store, fetcher, searchWeb, extractOpportunities, blindShadow } = deps;
+  const budget = createDeadlineBudget(opts);
   const result = {
     ok: false,
     // EXECUTED queries (webq-1). The plan is `queries_planned` / `query_ledger`.
@@ -545,6 +547,11 @@ export async function runWebDiscoveryLane(deps, opts = {}) {
   };
   if (!store || !fetcher?.fetch || typeof searchWeb !== 'function' || typeof extractOpportunities !== 'function') {
     result.reason = 'web_lane_deps_missing';
+    return result;
+  }
+  if (budget.stopped()) {
+    result.reason = budget.reason();
+    result.skipped = true;
     return result;
   }
   // Profile-BLIND shadow accumulator (Phase 1b). Non-null ONLY when the caller
@@ -775,11 +782,11 @@ export async function runWebDiscoveryLane(deps, opts = {}) {
 
   let executedCount = 0;
   for (const [queryIndex, q] of queries.entries()) {
-    if (pages.length - result.seeded >= maxPages) break;
+    if (budget.stopped() || pages.length - result.seeded >= maxPages) break;
     executedCount += 1;
     let hits = [];
     let threw = false;
-    try { hits = await searchWeb(q, { count: resultsPerQuery }); }
+    try { hits = await budget.run(options => searchWeb(q, { count: resultsPerQuery, ...options, ...(Number.isFinite(options.timeoutMs) ? { timeoutMs: Math.min(8000, options.timeoutMs) } : {}) })); }
     catch { threw = true; hits = []; }
     const provenance = searchProvenanceFor(hits, queryIndex, threw, q);
     result.search_provenance.push(provenance);
@@ -833,11 +840,13 @@ export async function runWebDiscoveryLane(deps, opts = {}) {
   const llmStats = { ok_pages: 0, llm_failed_pages: 0 };
   const primaryProfileId = thesis.profile_id ?? matchProfiles[0]?.profile_id ?? null;
   for (const page of pages) {
+    if (budget.stopped()) break;
     const entry = ledgerByPage.get(page);
     let resp;
-    try { resp = await fetcher.fetch(page.url, { method: 'GET' }); }
+    try { resp = await budget.run(options => fetcher.fetch(page.url, { method: 'GET', ...options })); }
     catch (err) { resp = { ok: false, error: String(err?.message ?? err) }; }
     if (entry) entry.fetch_status = resp?.status ?? (resp?.ok ? 200 : (resp?.error ? `error:${String(resp.error).slice(0, 80)}` : 'failed'));
+    if (budget.stopped()) break;
     if (!resp?.ok || resp.body == null) continue;
     result.fetched += 1;
     result.stage_ledger.response_received += 1;
@@ -855,7 +864,9 @@ export async function runWebDiscoveryLane(deps, opts = {}) {
     let extracted = [];
     let failureClass = null;
     try {
-      extracted = await extractOpportunities({ pageUrl: evidence.url, html: resp.body });
+      extracted = await budget.run(options => Object.keys(options).length
+        ? extractOpportunities({ pageUrl: evidence.url, html: resp.body }, options)
+        : extractOpportunities({ pageUrl: evidence.url, html: resp.body }));
       failureClass = extractionFailureClassOf(extracted);
     } catch (err) {
       extracted = [];
@@ -876,6 +887,7 @@ export async function runWebDiscoveryLane(deps, opts = {}) {
     // touched ONLY when the shadow is active, so a flag-off run does no extra work.
     let pageCurrentCandidates = 0;
     for (const ex of Array.isArray(extracted) ? extracted : []) {
+      if (budget.stopped()) break;
       const cand = toCandidate(ex, evidence, thesis, page);
       if (!cand) continue;
       result.extracted += 1;
@@ -1027,7 +1039,7 @@ export async function runWebDiscoveryLane(deps, opts = {}) {
     // deadline (and the extractPage AbortSignal fired) so a hung provider can
     // never stall the live lane, and once the budget is spent the shadow stops.
     if (shadow) {
-      const remainingBudget = shadow.totalBudgetMs - shadow.elapsedMs;
+      const remainingBudget = Math.min(shadow.totalBudgetMs - shadow.elapsedMs, budget.remaining() ?? Infinity);
       if (shadow.pagesRun >= shadow.maxPages || remainingBudget < SHADOW_MIN_SLICE_MS) {
         shadow.capped = true;
       } else {
@@ -1044,9 +1056,10 @@ export async function runWebDiscoveryLane(deps, opts = {}) {
           // Thread the deadline (timeoutMs) + AbortSignal into extractPage so the
           // blind extractor self-bounds AND the provider call can be cancelled;
           // the lane's own race is the authoritative live-latency bound.
-          const work = Promise.resolve(
-            shadow.extractPage({ pageUrl: evidence.url, html: resp.body, timeoutMs: sliceMs, signal: controller.signal }),
-          );
+          const work = budget.run(options => shadow.extractPage({
+            pageUrl: evidence.url, html: resp.body, timeoutMs: sliceMs,
+            signal: options.signal || controller.signal,
+          }), controller.signal);
           const blind = await Promise.race([work, deadline]);
           const list = Array.isArray(blind) ? blind : [];
           shadow.pages_shadowed += 1;
@@ -1198,8 +1211,11 @@ export async function runWebDiscoveryLane(deps, opts = {}) {
   if (shadow) {
     result.targetVerification = (async () => {
       try {
-        if (shadow.targets.length) {
-          await verifyBlindTargets(shadow, fetcher, fetchedSourceKeys, TARGET_VERIFY_MIN_SLICE_MS);
+        if (shadow.targets.length && !budget.stopped()) {
+          const boundedFetcher = { fetch: (url, init = {}) => budget.run(options => fetcher.fetch(url, {
+            ...init, ...(options.signal ? { signal: options.signal } : {}),
+          }), init.signal) };
+          await verifyBlindTargets(shadow, boundedFetcher, fetchedSourceKeys, TARGET_VERIFY_MIN_SLICE_MS);
         }
       } catch {
         // Best-effort isolation: target verification can never fail the lane.
@@ -1231,6 +1247,11 @@ export async function runWebDiscoveryLane(deps, opts = {}) {
     })();
   }
 
+  if (budget.stopped()) {
+    result.ok = false;
+    result.partial = true;
+    result.reason = budget.reason();
+  }
   return result;
 }
 

@@ -329,29 +329,16 @@ export async function makeBlindShadow() {
         import('../utils/aiProviders.js'),
       ]);
     const openai = aiProviders.getOpenAIOptional();
-    // Injected LLM adapter: async ({system,prompt,signal}) => object. Reuses the
-    // repo's OpenAI→Anthropic JSON fallback; the extractor's coerceLlmJson reads
-    // the returned { json } shape. `invokeJsonWithFallback` has no AbortSignal
-    // parameter (its HTTP call cannot be truly cancelled), so on abort we STOP
-    // AWAITING it — the underlying call resolves on its own internal LLM deadline
-    // and is GC'd; what matters is that neither this adapter nor the live lane
-    // keeps awaiting past the timeout.
+    // The shadow uses the same cancellable gateway as live extraction. An
+    // expired shadow budget cancels the actual provider request, not only our await.
     const blindLlm = async ({ system, prompt, signal }) => {
-      const call = aiProviders.invokeJsonWithFallback({
-        openai,
-        system,
-        prompt,
-        temperature: 0.1,
-        maxTokens: 1600,
+      if (signal?.aborted) return null;
+      return aiProviders.invokeJsonWithFallback({
+        openai, system, prompt, signal,
+        temperature: 0.1, maxTokens: 1600,
         anthropicModel: process.env.WEB_DISCOVERY_MODEL_ANTHROPIC || 'claude-haiku-4-5',
         openaiModel: process.env.WEB_DISCOVERY_MODEL_OPENAI || 'gpt-4o-mini',
       });
-      if (!signal) return call;
-      if (signal.aborted) return null;
-      return Promise.race([
-        call,
-        new Promise((resolve) => { signal.addEventListener('abort', () => resolve(null), { once: true }); }),
-      ]);
     };
     const maxPages = Number(process.env.WEB_LANE_PROFILE_BLIND_MAX_PAGES) || 8;
     const totalBudgetMs = Number(process.env.WEB_LANE_PROFILE_BLIND_TOTAL_BUDGET_MS) || 6000;
@@ -733,6 +720,7 @@ export async function runProfileDiscoveryLive({ db = getDb(), profileId, fetcher
         { store, fetcher: liveFetcher, searchWeb, extractOpportunities: extractOpportunitiesFromPage, blindShadow },
         {
           thesis, matchProfiles: effMatchProfiles, floor, runId: run.run_id, seedPages,
+          deadlineMs: resolvedDeadline, signal,
           // Archetype query patterns run ALONGSIDE the profile's own web queries.
           extraQueries: Array.isArray(extraQueries) ? extraQueries : [],
         },
