@@ -118,6 +118,7 @@ import { spaEntryDocument } from './utils/spaEntryDocument.js';
 import { reportErrorToOwner } from './services/errorReporter.js';
 import { profileContextMiddleware } from './middleware/profileContext.js';
 import { attachRequestContext, isSyntheticServiceAdmin } from './middleware/requestContext.js';
+import { ownerAiWorkerRouter, ownerAiStatusRouter } from './routes/ownerAi.js';
 import { enforceResolvedIdentity } from './middleware/enforceResolvedIdentity.js';
 import { ensureAuth, ensureAdmin } from './middleware/auth.js';
 import { pipelineMonitor, getPipelineHealth } from './middleware/pipelineMonitor.js';
@@ -654,6 +655,8 @@ app.use('/api/eva', express.raw({ type: '*/*', limit: '2mb' }), lazyRouter('./ro
 // the raw request — see backend/routes/smsInbound.js. req.db is already attached.
 app.use('/api/sms', lazyRouter('./routes/smsInbound.js'));
 
+// Worker router owns its authenticated, bounded JSON parser.
+app.use('/api/owner-ai/worker', ownerAiWorkerRouter);
 app.use(express.json({ limit: MAX_JSON_BODY_SIZE }));
 
 // Mount health check routes EARLY to ensure they're always available
@@ -2006,6 +2009,7 @@ app.use(async (req, _res, next) => {
 // Attach canonical request context (MUST run after auth middleware)
 // This provides req.ctx with userId, email, isAdmin (DB-backed), accessible profiles/orgs
 app.use(attachRequestContext())
+app.use('/api/admin/owner-ai', ownerAiStatusRouter)
 
 // STRUCTURAL fail-closed identity gate: for a request whose identity did NOT
 // resolve to a trusted principal (deleted-user JWT / synthetic-id collision) and

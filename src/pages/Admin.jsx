@@ -28,6 +28,7 @@ import AdminLaptopInbox from '@/components/admin/AdminLaptopInbox.jsx'
 import AdminBroadcast from '@/components/admin/AdminBroadcast.jsx'
 import AdminMaintenanceWindow from '@/components/admin/AdminMaintenanceWindow.jsx'
 import AdminPortalAssist from '@/components/admin/AdminPortalAssist.jsx'
+import AdminOwnerAi from '@/components/admin/AdminOwnerAi.jsx'
 // Use lazyWithRetry (not raw React.lazy) so a stale-deploy chunk failure when
 // switching to the Billing/Automation tabs auto-recovers with one reload
 // instead of tripping the RouteErrorBoundary.
@@ -72,6 +73,7 @@ export default function Admin() {
           </p>
         </div>
 
+        <AdminOwnerAi />
         <Tabs defaultValue="applications" className="w-full">
           {/* Single-row, horizontally scrollable tablist. `flex-wrap` previously
               wrapped tabs into rows that overlapped the panel (fixed-height
