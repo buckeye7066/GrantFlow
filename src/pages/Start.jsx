@@ -149,12 +149,13 @@ function LocationQuestion({ question, onSubmit, busy }) {
   const [stateCode, setStateCode] = useState('')
   const [city, setCity] = useState('')
   const [county, setCounty] = useState('')
+  const countyManuallyEdited = useRef(false)
   const [zipLooking, setZipLooking] = useState(false)
   const canSubmit = /^\d{5}(-\d{4})?$/.test(zip.trim()) && /^[A-Z]{2}$/.test(stateCode.trim().toUpperCase())
 
-  // Auto-fill city + state the moment a valid 5-digit ZIP is entered. We
-  // overwrite city/state (the ZIP is authoritative) but only fill county when
-  // it's still blank, so a user who typed their own county isn't overridden.
+  // Auto-filled geography follows the ZIP. Only a county explicitly entered
+  // by the applicant is preserved; an earlier lookup is not a manual override.
+  // Clearing a manual county lets later ZIP lookups fill it again.
   useEffect(() => {
     const z = zip.trim()
     if (!/^\d{5}$/.test(z)) return
@@ -165,7 +166,7 @@ function LocationQuestion({ question, onSubmit, busy }) {
         if (cancelled || !loc) return
         if (loc.state) setStateCode(loc.state.toUpperCase())
         if (loc.city) setCity(loc.city)
-        if (loc.county) setCounty((prev) => prev.trim() ? prev : loc.county)
+        if (!countyManuallyEdited.current) setCounty(loc.county || '')
       })
       .catch(() => { /* unknown ZIP — leave fields for manual entry */ })
       .finally(() => { if (!cancelled) setZipLooking(false) })
@@ -228,7 +229,15 @@ function LocationQuestion({ question, onSubmit, busy }) {
         </div>
         <div>
           <Label htmlFor="county">County <span className="text-xs text-slate-500">(optional)</span></Label>
-          <Input id="county" value={county} onChange={(e) => setCounty(e.target.value)} placeholder="Davidson" />
+          <Input
+            id="county"
+            value={county}
+            onChange={(e) => {
+              countyManuallyEdited.current = Boolean(e.target.value.trim())
+              setCounty(e.target.value)
+            }}
+            placeholder="Davidson"
+          />
         </div>
       </div>
       <div className="flex justify-end">
