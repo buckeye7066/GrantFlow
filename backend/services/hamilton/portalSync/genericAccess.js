@@ -57,3 +57,26 @@ export async function observeGenericAccess(page, ctx = {}, requestedUrl) {
       chars: Number.isFinite(snapshot?.chars) ? snapshot.chars : null, access },
   }
 }
+
+/** Follow at most one visible, same-origin account entry using the existing session. */
+export async function findGenericAccountEntry(page, requestedUrl) {
+  try {
+    const requested = new URL(requestedUrl)
+    const current = new URL(page.url())
+    if (requested.protocol !== 'https:' || current.origin !== requested.origin) return null
+    const candidates = await page.evaluate(() => Array.from(document.querySelectorAll('a[href]'))
+      .slice(0,2000).filter(element => {
+        const style = window.getComputedStyle(element)
+        const text = String(element.innerText || element.getAttribute('aria-label') || '').trim()
+        return style.display !== 'none' && style.visibility !== 'hidden' && element.getClientRects().length > 0 &&
+          /^(?:log\s*in|sign\s*in|my account|account home|dashboard)$/i.test(text)
+      }).map(element => element.href).slice(0,8))
+    for (const value of Array.isArray(candidates) ? candidates : []) {
+      const target = new URL(value)
+      if (target.protocol !== 'https:' || target.origin !== current.origin || target.username || target.password) continue
+      if (target.href === current.href || /logout|signout|sign-out|submit|payment|purchase|delete|apply/i.test(target.pathname + target.search)) continue
+      return target.href
+    }
+  } catch { /* A missing or unreadable account entry is not a successful login. */ }
+  return null
+}

@@ -21,7 +21,7 @@
 
 import { registrableDomain } from '../../hamiltonPortalCredentialService.js'
 import { extractPortalDataWithLLM } from '../llmPageExtract.js'
-import { observeGenericAccess } from '../genericAccess.js'
+import { observeGenericAccess, findGenericAccountEntry } from '../genericAccess.js'
 
 const GENERIC_NOTE =
   'Authenticated access was observed, but no supported personal fields or awards were extracted. ' +
@@ -110,7 +110,18 @@ const generic = {
       }
     }
 
-    const observed = await observeGenericAccess(page, ctx, nav.url)
+    let observed = await observeGenericAccess(page, ctx, nav.url)
+    // Captured sessions often land on a public home page. A visible GET login
+    // entry can restore the account surface without typing credentials or submitting.
+    if (observed.access === 'unknown' && ctx.hasSession === true) {
+      const entry = await findGenericAccountEntry(page, nav.url)
+      if (entry) {
+        try {
+          await page.goto(entry, { waitUntil: 'domcontentloaded', timeout: 30000 })
+          observed = await observeGenericAccess(page, ctx, entry)
+        } catch { /* Keep unverified access; navigation failure is not authentication. */ }
+      }
+    }
     const refuse = observation => ({
       reached: true, access: observation.access, fields: [], awards: [], rejected: [],
       notFound: [observation.access === 'signin_wall' ? 'The portal requires a fresh sign-in session.'
