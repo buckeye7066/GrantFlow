@@ -1,0 +1,41 @@
+name: Production release smoke
+
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    # This fixed-production check is separate from the existing manual smoke,
+    # which must always honor its explicitly selected environment without fallback.
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.head_branch == 'main' &&
+      github.event.workflow_run.head_repository.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout the successful main revision
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+          persist-credentials: false
+      - name: Setup Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 24.19.0
+          cache: npm
+      - name: Install locked dependencies
+        run: npm ci --no-audit --no-fund
+      - name: Verify live production without changing customer data
+        env:
+          SMOKE_BASE_URL: https://app.axiombiolabs.org
+          SMOKE_BASE_PATH: /
+          SMOKE_READY_URL: https://grantflow-production.up.railway.app/readyz
+        run: node scripts/smoke-prod-readonly.mjs
