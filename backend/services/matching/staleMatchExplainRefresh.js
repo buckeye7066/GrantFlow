@@ -20,8 +20,19 @@ import {
   hasPositiveFourTruthProof,
 } from '../../config/fundingTruthPolicy.js'
 import { isFundingResource } from './fundingSourcePresentation.js'
+import { createStaleMatchRefreshRunner, isStaleMatchRefreshWriteEnabled } from './staleMatchRefreshContinuation.js'
 
 const log = createLogger('stale-match-explain')
+const refreshRunner = createStaleMatchRefreshRunner(runStaleMatchExplainRefreshBatch, {
+  report: result => log.info('refresh continuation', {
+    ok: result.ok, complete: result.complete, stale_before: result.stale_before ?? null,
+    remaining_stale: result.remaining_stale ?? null, scanned: result.scanned ?? 0,
+    refreshed: result.refreshed ?? 0, unscorable: result.unscorable ?? 0,
+    skipped_no_profile: result.skipped_no_profile ?? 0,
+    convergence_errors: result.convergence_errors ?? 0,
+    continuation_status: result.continuation_status, continuation_pass: result.continuation_pass ?? 0,
+  }),
+})
 
 /** Lanes whose rows crawler-os authored: the four-truth gate is theirs. */
 const CRAWLER_OS_LANES = new Set(['crawler-os', 'crawler-os-xmatch'])
@@ -83,16 +94,20 @@ function gateMetaFromStub(stub) {
  * @param {number} [opts.pairBudget]
  * @param {number} [opts.timeBudgetMs]
  * @param {boolean} [opts.writeEnabled]
+ * @param {boolean} [opts.autoContinue] Defaults on in production; false runs one bounded batch.
  * @param {object} [opts.deps]
  */
-export async function runStaleMatchExplainRefresh(db, opts = {}) {
+export function runStaleMatchExplainRefresh(db, opts = {}) {
+  return refreshRunner(db, opts)
+}
+
+async function runStaleMatchExplainRefreshBatch(db, opts = {}) {
   const startedAt = Date.now()
   const pairBudget = Number.isFinite(opts.pairBudget) ? opts.pairBudget
     : envInt(process.env.STALE_MATCH_EXPLAIN_PAIR_BUDGET, 800)
   const timeBudgetMs = Number.isFinite(opts.timeBudgetMs) ? opts.timeBudgetMs
     : envInt(process.env.STALE_MATCH_EXPLAIN_TIME_BUDGET_MS, 45000)
-  const writeEnabled = opts.writeEnabled !== false &&
-    !/^(0|false|no|off)$/i.test(String(process.env.ENFORCE_STALE_MATCH_EXPLAIN ?? '1').trim())
+  const writeEnabled = isStaleMatchRefreshWriteEnabled(opts)
 
   const deps = opts.deps ?? {}
   const { computeMatchDecision } = deps.computeMatchDecision
@@ -121,10 +136,26 @@ export async function runStaleMatchExplainRefresh(db, opts = {}) {
     held_at_review: 0,
     structural_target_holds: 0,
     truncated: false,
+    stale_before: null,
+    remaining_stale: null,
+    complete: false,
+  }
+
+  const countRemaining = async () => {
+    // audit:allow dynamic-sql -- shared static predicate and dialect flag, no caller SQL.
+    const row = await db.prepare(`SELECT COUNT(*) AS remaining
+      FROM profile_opportunity_matches m
+      JOIN funding_opportunities fo ON fo.id = m.opportunity_id
+      WHERE ${stalePred} AND (fo.is_active IS NULL OR fo.is_active = ${isPg ? 'TRUE' : '1'})`).get()
+    const value = row?.remaining
+    const count = (typeof value === 'number' || (typeof value === 'string' && /^\d+$/.test(value))) ? Number(value) : NaN
+    if (!Number.isSafeInteger(count) || count < 0) throw new Error('Invalid stale-match census')
+    return count
   }
 
   let rows
   try {
+    summary.stale_before = await countRemaining()
     rows = await db.prepare(
       `SELECT
               m.id AS match_id,
@@ -141,10 +172,10 @@ export async function runStaleMatchExplainRefresh(db, opts = {}) {
           AND (fo.is_active IS NULL OR fo.is_active = ${isPg ? 'TRUE' : '1'})
         ORDER BY m.profile_id, m.opportunity_id
         LIMIT ?`,
-    ).all(Math.max(pairBudget, 1))
+    ).all(Math.max(pairBudget, 1) + 1)
   } catch (err) {
     log.warn('stale-match-explain candidate query failed (non-fatal)', { error: String(err?.message || err) })
-    return { ...summary, ok: false, skipped: 'query' }
+    return { ...summary, ok: false, truncated: true, skipped: 'query' }
   }
 
   const ctxCache = new Map()
@@ -333,6 +364,14 @@ export async function runStaleMatchExplainRefresh(db, opts = {}) {
     }
   }
 
+  try {
+    summary.remaining_stale = await countRemaining()
+    summary.complete = summary.remaining_stale === 0 && summary.convergence_errors === 0
+  } catch {
+    summary.ok = false
+    summary.truncated = true
+    summary.skipped = 'verification_query'
+  }
   summary.elapsed_ms = Date.now() - startedAt
   if (summary.convergence_errors > 0) summary.ok = false
   return summary
