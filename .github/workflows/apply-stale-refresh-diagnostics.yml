@@ -1,0 +1,62 @@
+name: Apply bounded stale-refresh diagnostics repair
+
+on:
+  push:
+    branches:
+      - fix/stale-refresh-backlog-receipt
+    paths:
+      - scripts/apply-stale-refresh-diagnostics.mjs
+      - .github/workflows/apply-stale-refresh-diagnostics.yml
+
+permissions:
+  contents: write
+
+concurrency:
+  group: apply-stale-refresh-diagnostics
+  cancel-in-progress: false
+
+jobs:
+  apply:
+    if: github.repository == 'buckeye7066/GrantFlow'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Checkout the exact repair commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Setup Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 24.19.0
+          cache: npm
+      - name: Install locked dependencies
+        run: npm ci --include=optional
+      - name: Reproduce failures and apply exact corrections
+        run: node scripts/apply-stale-refresh-diagnostics.mjs
+      - name: Verify source and diagnostic contracts
+        run: |
+          npm run lint
+          npm run typecheck
+          node scripts/pin-signal-version.mjs --check
+          git diff --check
+      - name: Publish only the verified source and tests
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          branch='fix/stale-refresh-backlog-receipt'
+          current="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/${branch}" --jq .object.sha)"
+          test "$current" = "$GITHUB_SHA"
+          git add backend/services/matching/staleMatchExplainRefresh.js \
+            backend/startup/enforceInvariants.js \
+            tests/unit/stale-match-refresh-budget.test.mjs \
+            backend/tests/staleRefreshInvariantReceipt.test.js
+          test "$(git diff --cached --name-only | wc -l)" -eq 4
+          git -c user.name='github-actions[bot]' \
+            -c user.email='41898282+github-actions[bot]@users.noreply.github.com' \
+            commit -m 'fix(matching): verify exact backlog and retain durable diagnostics'
+          git push "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" "HEAD:${branch}"
+          git rev-parse HEAD
