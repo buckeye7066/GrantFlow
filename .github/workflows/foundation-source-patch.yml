@@ -1,0 +1,79 @@
+name: Apply bounded Foundation source repair
+on:
+  push:
+    branches: [fix/foundation-location-submit-20260918]
+    paths: [.github/workflows/foundation-source-patch.yml]
+permissions:
+  contents: read
+jobs:
+  apply-source-repair:
+    if: github.repository == 'buckeye7066/GrantFlow'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 24.19.0
+          package-manager-cache: false
+      - name: Apply only exact reviewed replacements
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          if Path('.agent-edit-lock').exists():
+              raise SystemExit('Another editor holds the repository lock; refusing writes')
+          patches = {
+            'backend/services/anyaInterviewEngine.js': [
+              ("  next.patch.primary_type = canonicalizeProfileTypeId(rawType) || rawType\n  return next\n", "  next.patch.primary_type = canonicalizeProfileTypeId(rawType) || rawType\n  // Persist the applicant's explicit choice separately from legacy defaults.\n  return mergeSection(next, 'basic_information', { profile_type: next.patch.primary_type })\n"),
+              ("      // Surface housing intent on the housing section so the matching engine\n", "      next = appendToList(next, 'financial_information', 'assistance_needs', canonical)\n      // Surface housing intent on the housing section so the matching engine\n"),
+            ],
+            'backend/services/profileHelpers.js': [
+              ("  const inferred = inferProfileTypeFromDisplayName(profile?.display_name)\n", "  // A declared personal type is an answer, not a legacy database default.\n  // Keep stronger structured section evidence above, but never turn a person\n  // into an organization just because their name includes Church or Foundation.\n  const declaredType = normalizeProfileTypeCandidate(basic.profile_type)\n  if (declaredType && ['individual', 'individual_need', 'family'].includes(declaredType.toLowerCase())) {\n    return resolveProfileType(declaredType) ?? declaredType\n  }\n\n  const inferred = inferProfileTypeFromDisplayName(profile?.display_name)\n"),
+            ],
+            'backend/routes/onboarding.js': [
+              ('SET has_completed_onboarding = 1,', 'SET has_completed_onboarding = TRUE,'),
+            ],
+            'backend/config/profileSignalVersion.js': [
+              ("export const PROFILE_SIGNAL_VERSION = '2026.09.17-4'", "// Explicit personal onboarding choices outrank display-name inference.\nexport const PROFILE_SIGNAL_VERSION = '2026.09.18-1'"),
+            ],
+          }
+          replacements = {}
+          for filename, edits in patches.items():
+              original = Path(filename).read_text()
+              updated = original
+              for old, new in edits:
+                  if updated.count(old) != 1:
+                      raise SystemExit(f'Expected exactly one known source pattern: {filename}')
+                  updated = updated.replace(old, new, 1)
+              replacements[filename] = updated
+          for filename, updated in replacements.items():
+              Path(filename).write_text(updated)
+          PY
+          node scripts/pin-signal-version.mjs
+          node scripts/pin-signal-version.mjs --check
+          git diff --check
+          git diff --stat
+      - name: Commit the exact source repair to this branch only
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add backend/services/anyaInterviewEngine.js backend/services/profileHelpers.js backend/routes/onboarding.js backend/config/profileSignalVersion.js
+          git commit -m 'fix(onboarding): retain declared personal identity and completed state'
+          AUTH_HEADER="$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)"
+          git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic $AUTH_HEADER" push origin HEAD:refs/heads/fix/foundation-location-submit-20260918
+      - name: Keep exact repaired source for verification
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: foundation-repaired-source
+          path: |
+            backend/services/anyaInterviewEngine.js
+            backend/services/profileHelpers.js
+            backend/routes/onboarding.js
+            backend/config/profileSignalVersion.js
+          retention-days: 7
