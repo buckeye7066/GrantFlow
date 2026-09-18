@@ -37,7 +37,7 @@ const CASES = [
     'POST',
     `${B}/api/hamilton/portal-sync/read`,
     true,
-    { allowPortalRead: true, allowedPortalHosts: ['studentaid.gov'] },
+    { allowPortalRead: true, allowedPortalHosts: ['studentaid.gov'], allowedProfileIds: ['fixture-profile'], requestBody: { profileId: 'fixture-profile', portalHost: 'studentaid.gov' } },
     'read-only sync, explicitly requested with a named host',
   ],
   [
@@ -78,7 +78,7 @@ let pass = 0;
 const failures = [];
 
 for (const [method, url, expectAllow, opts, why] of CASES) {
-  const got = classify(method, url, opts).allow === true;
+  const got = classify(method, url, { auditOrigin: B, ...opts }).allow === true;
   if (got === expectAllow) pass += 1;
   else {
     failures.push(
@@ -95,7 +95,7 @@ const RED_FLAG_EXPECTED = [
   `${B}/api/hamilton/automation/payment-authorizations`,
   `${B}/api/application-tasks/1/auto-submit`,
 ];
-const missedFlags = RED_FLAG_EXPECTED.filter((u) => !classify('POST', u).redFlag);
+const missedFlags = RED_FLAG_EXPECTED.filter((u) => !classify('POST', u, { auditOrigin: B }).redFlag);
 
 console.log(`${pass}/${CASES.length} policy cases correct`);
 console.log(`${RED_FLAG_EXPECTED.length - missedFlags.length}/${RED_FLAG_EXPECTED.length} red-flag routes detected`);

@@ -137,7 +137,8 @@ function composeReport(outDir) {
   L.push(
     'Everything here was produced by a READ ONLY transaction on a non-superuser, expiring database role, ' +
       'plus an authenticated browser session whose network layer denied every mutating request by default. ' +
-      'No production row was created, changed, or deleted. No application was submitted.',
+      'The database lane made no writes. Browser login/session maintenance and explicitly requested ' +
+      'portal pulls can update internal records and sync history; external writes and submissions remain blocked.',
   );
   L.push('');
   L.push(

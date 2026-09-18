@@ -94,24 +94,37 @@ const RED_FLAG = [
  * it blocks WITHOUT launching a browser — a policy that is only ever exercised
  * live is a policy nobody has actually tested.
  */
-export function classify(method, url, { allowPortalRead = false, allowedPortalHosts = [] } = {}) {
+export function classify(method, url, {
+  allowPortalRead = false, allowedPortalHosts = [], allowedProfileIds = [], auditOrigin = null, requestBody = null,
+} = {}) {
   const m = String(method || '').toUpperCase();
   if (m === 'GET' || m === 'HEAD' || m === 'OPTIONS') return { allow: true, why: 'read' };
-
-  const hit = MUTATION_ALLOWLIST.find((r) => r.method === m && r.pattern.test(url));
-  if (hit) return { allow: true, why: hit.why };
-
-  if (m === 'POST' && PORTAL_READ_PATTERN.test(url)) {
-    if (!allowPortalRead) {
-      return { allow: false, redFlag: false, why: 'portal reads not requested for this run' };
+  const deny = (why) => ({ allow: false, redFlag: RED_FLAG.some(re => re.test(String(url))), why });
+  let target;
+  try {
+    target = new URL(url);
+    if (!auditOrigin || target.origin !== new URL(auditOrigin).origin || target.username || target.password) {
+      return deny('mutation origin is outside the selected audit site');
     }
-    if (!allowedPortalHosts.length) {
-      return { allow: false, redFlag: false, why: 'no portal host was explicitly named' };
+  } catch { return deny('invalid or missing audit origin'); }
+  // Match only the actual endpoint, never a path embedded in a query string.
+  const apiPath = target.pathname.replace(/^\/grantflow(?=\/api\/)/, '');
+  const hit = MUTATION_ALLOWLIST.find(r => r.method === m && r.pattern.exec(apiPath)?.index === 0);
+  if (hit) return { allow: true, why: hit.why };
+  if (m === 'POST' && PORTAL_READ_PATTERN.exec(apiPath)?.index === 0) {
+    if (!allowPortalRead) return deny('portal reads not requested for this run');
+    if (!requestBody || typeof requestBody !== 'object' || Array.isArray(requestBody)
+      || Object.keys(requestBody).some(key => !['profileId', 'portalHost'].includes(key))) {
+      return deny('portal read requires an exact profile and host payload');
+    }
+    const profileId = typeof requestBody.profileId === 'string' ? requestBody.profileId : null;
+    const host = typeof requestBody.portalHost === 'string' ? requestBody.portalHost : null;
+    if (!profileId || !host || !allowedProfileIds.includes(profileId) || !allowedPortalHosts.includes(host)) {
+      return deny('portal read is outside the explicitly requested profile and host scope');
     }
     return { allow: true, why: 'read-only portal sync (explicitly requested)' };
   }
-
-  return { allow: false, redFlag: RED_FLAG.some((re) => re.test(url)) };
+  return deny('not on the allowlist');
 }
 
 export function isSuccessfulApiResponse(result) {
@@ -256,7 +269,7 @@ export function summarizeHamiltonPreflight(result) {
 
 // ---------------------------------------------------------------------------
 
-function parseArgs(argv) {
+export function parseArgs(argv) {
   const get = (flag, dflt = null) => {
     const i = argv.indexOf(flag);
     return i >= 0 && argv[i + 1] ? argv[i + 1] : dflt;
@@ -268,8 +281,8 @@ function parseArgs(argv) {
       .filter(Boolean);
   return {
     outDir: get('--out', path.join(process.cwd(), 'audit-out')),
-    profiles: csv('--profiles'),
-    portalHosts: csv('--portal-hosts'),
+    profiles: [...new Set(csv('--profiles'))],
+    portalHosts: [...new Set(csv('--portal-hosts').map(host => host.toLowerCase()))],
     portalReads: argv.includes('--portal-reads'),
     screenshots: !argv.includes('--no-screenshots'),
     headed: argv.includes('--headed'),
@@ -283,6 +296,75 @@ function requireEnv(name) {
     process.exit(2);
   }
   return v.trim();
+}
+
+// The authentication realm never navigates after login. Visual captures share
+// the browser context but cannot destroy or export its in-memory credential.
+export async function createAuditPages(context) {
+  const page = await context.newPage();
+  const capturePage = await context.newPage();
+  return { page, capturePage };
+}
+
+export function summarizePortalRead(result) {
+  const body = result?.body ?? {};
+  const status = Number(result?.status) || 0;
+  const bodyOk = body.ok === true;
+  const readAccess = body.read?.access ?? body.summary?.read?.access ?? null;
+  const hitLoginWall = body.hit_login_wall === true || body.summary?.hit_login_wall === true || readAccess === 'signin_wall';
+  const needsSession = hitLoginWall || body.needs_session === true || body.summary?.needs_session === true
+    || (!bodyOk && /session|sign[- ]?in|login/i.test(String(body.error ?? '')));
+  let outcome = 'refused_or_failed';
+  if (needsSession) outcome = 'needs_session';
+  else if (status >= 200 && status < 300 && bodyOk) {
+    outcome = readAccess === 'authenticated' ? 'read_completed' : 'access_unproven';
+  }
+  return { http_status: status, body_ok: bodyOk, hit_login_wall: hitLoginWall, read_access: readAccess,
+    needs_session: needsSession, outcome, fields_found: body.read?.fields_found ?? null,
+    awards_found: body.read?.awards_found ?? null, error: body.error ?? null };
+}
+
+export function assessPortalReads(results = [], { requested = false, hosts = [], profileIds = [] } = {}) {
+  if (!requested) return { ok: true, requested: false, expected_count: 0, completed_count: 0, failures: [] };
+  const expected = [...new Set(profileIds.map(String))].flatMap(profileId =>
+    [...new Set(hosts.map(String))].map(host => ({ profileId, host })));
+  const failures = [];
+  let completed = 0;
+  for (const { profileId, host } of expected) {
+    const matches = results.filter(row => row.profile_id === profileId && row.portal_host === host);
+    const row = matches[0];
+    const pass = matches.length === 1 && Number(row.http_status) >= 200 && Number(row.http_status) < 300
+      && row.body_ok === true && row.needs_session !== true && row.hit_login_wall !== true
+      && row.read_access === 'authenticated' && row.outcome === 'read_completed';
+    if (pass) completed++;
+    else failures.push({ profile_id: profileId, portal_host: host, http_status: Number(row?.http_status) || 0,
+      outcome: row?.outcome || 'missing_result', result_count: matches.length });
+  }
+  if (!expected.length || results.length !== expected.length) failures.push({ outcome: 'portal_scope_or_result_count_mismatch' });
+  return { ok: failures.length === 0, requested: true, expected_count: expected.length, completed_count: completed, failures };
+}
+
+export async function postAuditRead(page, pathname, body, profileId = null) {
+  if (!['/api/hamilton/automation/preflight', '/api/hamilton/portal-sync/read'].includes(pathname)) {
+    throw new Error('Audit POST must use an explicit same-origin read-only endpoint');
+  }
+  return page.evaluate(async ({ p, payload, pid }) => {
+    try {
+      const headers = { accept: 'application/json', 'content-type': 'application/json' };
+      const token = globalThis.__GRANTFLOW_AUDIT_ACCESS_TOKEN__;
+      if (typeof token === 'string' && token) headers.authorization = `Bearer ${token}`;
+      if (pid) headers['X-Profile-Id'] = pid;
+      const res = await fetch(p, {
+        method: 'POST', credentials: 'include', headers, body: JSON.stringify(payload),
+      });
+      const text = await res.text();
+      let responseBody;
+      try { responseBody = JSON.parse(text); } catch { responseBody = { _non_json: text.slice(0, 500) }; }
+      return { status: res.status, ok: res.ok, body: responseBody };
+    } catch (err) {
+      return { status: 0, ok: false, error: String(err && err.message) };
+    }
+  }, { p: pathname, payload: body, pid: profileId });
 }
 
 async function main() {
@@ -333,9 +415,16 @@ async function main() {
 
   await context.route('**/*', async (route) => {
     const req = route.request();
+    let requestBody = null;
+    if (req.method() === 'POST') {
+      try { requestBody = req.postDataJSON(); } catch { /* malformed portal bodies fail closed */ }
+    }
     const verdict = classify(req.method(), req.url(), {
       allowPortalRead,
       allowedPortalHosts: args.portalHosts,
+      allowedProfileIds: args.profiles,
+      auditOrigin: baseUrl,
+      requestBody,
     });
     if (verdict.allow) {
       if (req.method() !== 'GET') {
@@ -353,17 +442,20 @@ async function main() {
     return route.abort('blockedbyclient');
   });
 
-  const page = await context.newPage();
-  page.on('console', (msg) => {
-    if (msg.type() === 'error') consoleErrors.push(redactString(msg.text()).slice(0, 500));
-  });
-  page.on('requestfailed', (req) => {
-    const failure = req.failure()?.errorText || '';
-    // Our own aborts are already recorded as policy blocks; re-reporting them
-    // as network failures would make a working control look like breakage.
-    if (failure.includes('blockedbyclient')) return;
-    failedRequests.push({ method: req.method(), url: redactString(req.url()), error: failure });
-  });
+  const { page, capturePage } = await createAuditPages(context);
+  for (const observedPage of [page, capturePage]) {
+    observedPage.on('console', (msg) => {
+      if (msg.type() === 'error') consoleErrors.push(redactString(msg.text()).slice(0, 500));
+    });
+    observedPage.on('requestfailed', (req) => {
+      const failure = req.failure()?.errorText || '';
+      // Our own aborts are already recorded as policy blocks; re-reporting them
+      // as network failures would make a working control look like breakage.
+      if (/blockedbyclient|ERR_BLOCKED_BY_CLIENT/i.test(failure)) return;
+      failedRequests.push({ method: req.method(), url: redactString(req.url()), error: failure });
+    });
+
+  }
 
   const steps = [];
   const step = async (name, fn) => {
@@ -379,12 +471,12 @@ async function main() {
     }
   };
 
-  const shot = async (name) => {
+  const shot = async (name, targetPage = page) => {
     if (!args.screenshots) return;
-    await page.screenshot({ path: path.join(shotsDir, `${name}.png`), fullPage: true }).catch(() => {});
+    await targetPage.screenshot({ path: path.join(shotsDir, `${name}.png`), fullPage: true }).catch(() => {});
   };
 
-  /** Authenticated GET issued from inside the page using the current cookie session. */
+  /** Reads use the stable login realm, never the page that navigates for screenshots. */
   const apiGet = async (pathname, profileId = null) => {
     return page.evaluate(async ({ p, pid }) => {
       try {
@@ -407,26 +499,7 @@ async function main() {
     }, { p: pathname, pid: profileId });
   };
 
-  /** Authenticated, side-effect-free POST used only for Hamilton preflight. */
-  const apiPostRead = async (pathname, body, profileId = null) => {
-    return page.evaluate(async ({ p, payload, pid }) => {
-      try {
-        const headers = { accept: 'application/json', 'content-type': 'application/json' };
-        const token = globalThis.__GRANTFLOW_AUDIT_ACCESS_TOKEN__;
-        if (typeof token === 'string' && token) headers.authorization = `Bearer ${token}`;
-        if (pid) headers['X-Profile-Id'] = pid;
-        const res = await fetch(p, {
-          method: 'POST', credentials: 'include', headers, body: JSON.stringify(payload),
-        });
-        const text = await res.text();
-        let responseBody;
-        try { responseBody = JSON.parse(text); } catch { responseBody = { _non_json: text.slice(0, 500) }; }
-        return { status: res.status, ok: res.ok, body: responseBody };
-      } catch (err) {
-        return { status: 0, ok: false, error: String(err && err.message) };
-      }
-    }, { p: pathname, payload: body, pid: profileId });
-  };
+  const apiPostRead = (pathname, body, profileId = null) => postAuditRead(page, pathname, body, profileId);
 
   console.log('Authenticated read-only pass:');
 
@@ -554,12 +627,12 @@ async function main() {
       await page.evaluate((pid) => {
         window.localStorage.setItem('grantflow:active-profile-id', pid);
       }, profileId);
-      await page
+      await capturePage
         .goto(`${baseUrl}/FundingResults`, { waitUntil: 'domcontentloaded', timeout: 45_000 })
         .catch(() => {});
-      await page.waitForLoadState('networkidle', { timeout: 25_000 }).catch(() => {});
-      await shot(`10-funding-${String(i + 1).padStart(2, '0')}`);
-      return page.url();
+      await capturePage.waitForLoadState('networkidle', { timeout: 25_000 }).catch(() => {});
+      await shot(`10-funding-${String(i + 1).padStart(2, '0')}`, capturePage);
+      return capturePage.url();
     });
 
     profileCaptures.push(capture);
@@ -572,10 +645,10 @@ async function main() {
     ['22-hamilton', '/HamiltonProcessing'],
   ]) {
     await step(`screenshot ${route}`, async () => {
-      await page.goto(`${baseUrl}${route}`, { waitUntil: 'domcontentloaded', timeout: 45_000 }).catch(() => {});
-      await page.waitForLoadState('networkidle', { timeout: 25_000 }).catch(() => {});
-      await shot(name);
-      return page.url();
+      await capturePage.goto(`${baseUrl}${route}`, { waitUntil: 'domcontentloaded', timeout: 45_000 }).catch(() => {});
+      await capturePage.waitForLoadState('networkidle', { timeout: 25_000 }).catch(() => {});
+      await shot(name, capturePage);
+      return capturePage.url();
     });
   }
 
@@ -588,70 +661,10 @@ async function main() {
     for (const host of args.portalHosts) {
       for (const profileId of args.profiles) {
         await step(`portal READ ${host} (profile ${profileId})`, async () => {
-          const result = await page.evaluate(
-            async ({ p, h }) => {
-              try {
-                const headers = {
-                  'content-type': 'application/json',
-                  accept: 'application/json',
-                  'X-Requested-With': 'XMLHttpRequest',
-                };
-                if (p) headers['X-Profile-Id'] = p;
-                const res = await fetch('/api/hamilton/portal-sync/read', {
-                  method: 'POST',
-                  credentials: 'include',
-                  headers,
-                  body: JSON.stringify({ profileId: p, portalHost: h }),
-                });
-                const text = await res.text();
-                let body;
-                try {
-                  body = JSON.parse(text);
-                } catch {
-                  body = { _non_json: text.slice(0, 500) };
-                }
-                return { status: res.status, ok: res.ok, body };
-              } catch (err) {
-                return { status: 0, ok: false, error: String(err && err.message) };
-              }
-            },
-            { p: profileId, h: host },
-          );
-          // Classify on the BODY, never the HTTP status.
-          //
-          // This route answers HTTP 200 with `{"ok": false, "error": "no
-          // authenticated session or saved login for this profile + portal
-          // host"}`. An earlier version keyed off res.ok (the HTTP status) and
-          // therefore reported three no-session failures as `read_completed` —
-          // the exact dishonesty this lane is supposed to avoid. A portal that
-          // could not be read must never be recorded as read.
-          const body = result?.body ?? {};
-          const bodyOk = body.ok === true;
-          const needsSession =
-            body.needs_session === true ||
-            body.summary?.needs_session === true ||
-            (!bodyOk && /session|sign[- ]?in|login/i.test(String(body.error ?? '')));
-
-          let outcome;
-          if (bodyOk) outcome = 'read_completed';
-          else if (needsSession) outcome = 'needs_session';
-          else outcome = 'refused_or_failed';
-
-          portalReadResults.push({
-            portal_host: host,
-            profile_id: profileId,
-            http_status: result?.status ?? 0,
-            body_ok: bodyOk,
-            needs_session: needsSession,
-            outcome,
-            // What the read actually PERSISTED, so "completed" can be checked
-            // against "found nothing", which are different facts.
-            fields_found: body.read?.fields_found ?? null,
-            awards_found: body.read?.awards_found ?? null,
-            error: body.error ?? null,
-            body,
-          });
-          return `HTTP ${result?.status} body.ok=${bodyOk} outcome=${outcome}`;
+          const result = await apiPostRead('/api/hamilton/portal-sync/read', { profileId, portalHost: host }, profileId);
+          const summary = summarizePortalRead(result);
+          portalReadResults.push({ portal_host: host, profile_id: profileId, ...summary, body: result?.body ?? {} });
+          return `HTTP ${summary.http_status} body.ok=${summary.body_ok} outcome=${summary.outcome}`;
         });
       }
     }
@@ -681,6 +694,8 @@ async function main() {
   await browser.close();
   const profileCaptureAssessment = assessProfileCaptures(profileCaptures, args.profiles);
 
+  const portalReadAssessment = assessPortalReads(portalReadResults, { requested: args.portalReads, hosts: args.portalHosts, profileIds: args.profiles });
+
   const report = {
     lane: 'application',
     base_url: baseUrl,
@@ -705,6 +720,7 @@ async function main() {
       permitted: allowPortalRead,
       hosts: args.portalHosts,
       results: portalReadResults,
+      assessment: portalReadAssessment,
     },
     mutations_allowed: allowedMutations,
     mutations_blocked: blocked,
@@ -735,6 +751,10 @@ async function main() {
   if (failed.length) {
     console.error(`\n${failed.length} step(s) failed (recorded in the artifact, not fatal):`);
     failed.forEach((f) => console.error(`  - ${f.name}: ${f.error}`));
+  }
+  if (!portalReadAssessment.ok) {
+    console.error(`FAILED: ${portalReadAssessment.failures.length} requested portal read(s) did not complete; evidence retained.`);
+    process.exit(1);
   }
   if (!identityScope.ok) {
     console.error(`\nFAILED: authenticated identity/scope proof failed (${identityScope.reason}).`);

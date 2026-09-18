@@ -135,6 +135,9 @@ jobs:
       - name: Install Playwright browser (repo-pinned version)
         run: npx playwright install --with-deps chromium
 
+      - name: Verify isolated audit browser session
+        run: node --test scripts/production-audit/browser-session.test.mjs
+
       - name: Run authenticated application audit
         id: application_audit
         continue-on-error: true

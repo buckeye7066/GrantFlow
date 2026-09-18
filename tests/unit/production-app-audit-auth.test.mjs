@@ -118,7 +118,7 @@ test('production audit keeps its login bearer token in memory and uses CSRF-safe
 
 test('production audit uploads sanitized evidence before enforcing a browser-lane failure', () => {
   const workflow = fs.readFileSync('.github/workflows/production-audit.yml', 'utf8')
-  assert.match(workflow, /id: application_audit\n\s+continue-on-error: true/)
+  assert.match(workflow, /id: application_audit\r?\n\s+continue-on-error: true/)
   assert.match(workflow, /name: Upload sanitized artifact[\s\S]+name: Enforce application audit result/)
   assert.match(workflow, /steps\.application_audit\.outcome != 'success'/)
 })
