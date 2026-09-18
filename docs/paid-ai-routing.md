@@ -98,3 +98,13 @@ was changed. Mocked tests cover order, fallback, invalid output, cancellation,
 cooldown expiry/rotation/bounds, credentials, safe logs, and legacy extraction.
 Live inference, production route order, deployment, and improved submitted or
 confirmed application counts are outside this verification.
+
+## Live validation follow-up, September 18, 2026
+
+A fixed synthetic request reproduced HTTP 400 because Responses JSON mode
+requires the input messages themselves to contain the word JSON; instructions
+alone do not satisfy that guard. The gateway now includes its JSON instruction
+in the input, with a red/green regression test. All 61 gateway/provider tests
+passed. The same live request then completed with gpt-6-astra in 2381 ms,
+returned the expected object, and reported paid_api billing and real usage.
+This is a single-request dependency proof, not the full acceptance benchmark.

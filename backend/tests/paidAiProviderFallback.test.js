@@ -153,9 +153,19 @@ const nativeResponse = (overrides = {}) => ({ status: 'completed', model: 'gpt-6
 const responseRoute = { provider: 'openai', model: 'gpt-6-astra', api: 'responses', reasoning_effort: 'low' }
 describe('native API options and recovery', () => {
   beforeEach(() => { config([responseRoute]); sdk.responses.mockResolvedValue(nativeResponse()) })
+  it('includes the JSON instruction in Responses input, not only instructions', async () => {
+    sdk.responses.mockImplementation(async body => {
+      if (!/json/i.test(JSON.stringify(body.input))) {
+        throw Object.assign(new Error("Response input must contain the word json"), { status: 400, param: 'input' })
+      }
+      return nativeResponse()
+    })
+    expect(await run({ prompt: 'Extract the funding fields.', system: 'Return JSON.' })).toMatchObject({ ok: true, provider: 'openai' })
+    expect(sdk.responses.mock.calls[0][0].input).toContain('Extract the funding fields.')
+  })
   it('uses native Responses JSON options and preserves model and usage', async () => {
     expect(await run({ system: 'grounding', maxTokens: 1800 })).toMatchObject({ ok: true, model: 'gpt-6-astra', usage: { input_tokens: 10, output_tokens: 20 } })
-    expect(sdk.responses.mock.calls[0][0]).toMatchObject({ model: 'gpt-6-astra', max_output_tokens: 1800, store: false, instructions: expect.stringContaining('grounding'), input: 'fixture', text: { format: { type: 'json_object' } }, reasoning: { effort: 'low' } })
+    expect(sdk.responses.mock.calls[0][0]).toMatchObject({ model: 'gpt-6-astra', max_output_tokens: 1800, store: false, instructions: expect.stringContaining('grounding'), input: expect.stringContaining('fixture'), text: { format: { type: 'json_object' } }, reasoning: { effort: 'low' } })
     expect(sdk.openai).not.toHaveBeenCalled()
   })
   it('uses Responses text mode without a JSON format and retains returned model', async () => {

@@ -240,7 +240,9 @@ async function invokePaidLadder({
           const systemText = [system, jsonOnly ? 'Return ONLY a complete, valid JSON object (no markdown, no prose).' : null].filter(Boolean).join('\n\n')
           if (route.api === 'responses') return client.responses.create({
             model: route.model, max_output_tokens: outputLimit, store: false,
-            ...(systemText ? { instructions: systemText } : {}), input: safePrompt,
+            ...(systemText ? { instructions: systemText } : {}),
+            // Responses JSON mode validates input messages, not instructions.
+            input: jsonOnly ? safePrompt + '\n\nReturn ONLY a complete, valid JSON object.' : safePrompt,
             ...(jsonOnly ? { text: { format: { type: 'json_object' } } } : {}),
             ...(route.reasoningEffort ? { reasoning: { effort: route.reasoningEffort } } : {}),
           }, requestOptions)
