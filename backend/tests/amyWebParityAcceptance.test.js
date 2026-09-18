@@ -677,3 +677,20 @@ describe('controlled acceptance receipt paths', () => {
     }
   })
 })
+
+
+it('preflight allows a healthy strong extractor to finish inside the bounded page budget', async()=>{
+  vi.useFakeTimers()
+  const rows=[{url:'https://grants.gov/fixture',title:'Funding'}]
+  Object.defineProperty(rows,'searchMeta',{value:{provider:'searxng',provenance:'live',status:'ok'}})
+  const extract=vi.fn(async (_input,options)=>{
+    await new Promise(resolve=>setTimeout(resolve,16000))
+    expect(options.timeoutMs).toBeGreaterThan(16000)
+    return [{title:'Grounded fixture',sponsor:'Fixture',raw:{blind_extraction:true}}]
+  })
+  try {
+    const pending=runDependencyPreflight({env:{SEARXNG_URL:'https://search.fixture.invalid',OPENAI_API_KEY:'fixture'},allowedProviders:['searxng'],searchWeb:async()=>rows,extractOpportunitiesFromPage:extract})
+    await vi.advanceTimersByTimeAsync(17000)
+    expect((await pending).ok).toBe(true)
+  } finally {vi.useRealTimers()}
+})

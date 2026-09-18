@@ -1,6 +1,7 @@
 import { tryOwnerSubscription } from '../services/ownerAi/ownerAiBroker.js'
 import { getOwnerAiScope } from '../services/ownerAi/ownerAiScope.js'
 import OpenAI from 'openai'
+import { wrapOwnerSdkClient, unwrapOwnerSdkClient } from './ownerSdkRouting.js'
 import { resolvePaidAiRoutes, paidCircuitState, circuitFailure, circuitBlocked, recordPaidFailure, isHardPaidFailure } from './paidAiRoutes.js'
 import { createOpenAIClient, summarizeOpenAIError } from './openaiClient.js'
 import { safeParseJSON } from './safeJson.js'
@@ -86,7 +87,7 @@ export function getOpenAIOptional({ timeoutMs = null, maxRetries = null } = {}) 
  */
 export async function getAnthropicOptional() {
   try {
-    return await getAnthropicClient()
+    return wrapOwnerSdkClient(await getAnthropicClient(), 'anthropic')
   } catch {
     return null
   }
@@ -247,7 +248,7 @@ async function invokePaidLadder({
               messages: [{ role: 'user', content: safePrompt }],
             }, requestOptions)
           }
-          const client = route.provider === 'openai' ? openai : new OpenAI({
+          const client = route.provider === 'openai' ? unwrapOwnerSdkClient(openai) : new OpenAI({
             apiKey: process.env[route.apiKeyEnv], baseURL: route.baseURL, maxRetries: 0,
           })
           attemptSignal.throwIfAborted()

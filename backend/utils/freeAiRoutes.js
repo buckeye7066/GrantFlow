@@ -189,7 +189,7 @@ function activeFreeCooldown(state, route) {
   return entry?.failure || null
 }
 function recordFreeCooldown(state, route, error, failure) {
-  if (![401, 402, 403, 429].includes(failure.status)) return
+  if (!failure.credit_exhausted && ![401, 402, 403, 429].includes(failure.status)) return
   const header = error?.headers?.get?.('retry-after') ?? error?.headers?.['retry-after']
   const seconds = Number(header)
   const requested = (header === null || header === undefined) ? 60000 : Number.isFinite(seconds) ? seconds * 1000 : Date.parse(header) - Date.now()

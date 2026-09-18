@@ -1,4 +1,6 @@
 import OpenAI from 'openai'
+import { wrapOwnerSdkClient } from './ownerSdkRouting.js'
+import { getOwnerAiScope } from '../services/ownerAi/ownerAiScope.js'
 
 function stripWrappingQuotes(value) {
   const v = String(value ?? '').trim()
@@ -57,6 +59,11 @@ export function createOpenAIClient({
   const diagnostics = getOpenAIKeyDiagnosticsFromKey(apiKeyRaw)
 
   if (!apiKey || apiKey === 'YOUR_OPENAI_API_KEY' || apiKey.includes('*')) {
+    // The owner subscription does not require a metered API credential.
+    if (getOwnerAiScope({includeAborted:true})) {
+      const unavailable = async () => { throw new Error('OpenAI API is not configured') }
+      return {openai:wrapOwnerSdkClient({chat:{completions:{create:unavailable}},responses:{create:unavailable},embeddings:{create:unavailable}}),diagnostics}
+    }
     if (allowMissing) {
       return { openai: null, diagnostics }
     }
@@ -78,11 +85,11 @@ export function createOpenAIClient({
       : Number(process.env.OPENAI_MAX_RETRIES || process.env.ANYA_OPENAI_MAX_RETRIES || 2)
 
   return {
-    openai: new OpenAI({
+    openai: wrapOwnerSdkClient(new OpenAI({
       apiKey,
       timeout: Number.isFinite(effectiveTimeoutMs) ? effectiveTimeoutMs : 30_000,
       maxRetries: Number.isFinite(effectiveMaxRetries) ? effectiveMaxRetries : 2,
-    }),
+    })),
     diagnostics,
   }
 }

@@ -26,3 +26,12 @@ it('rotation of a dedicated free credential invalidates its old cooldown', async
   expect(await invokeFreeJsonRoutes(options)).toMatchObject({ok:true})
   expect(create).toHaveBeenCalledTimes(2)
 })
+
+
+it.each([400, undefined])('applies cooldown to classified exhausted credit with status %s', async status => {
+  const create=vi.fn(async()=>{throw Object.assign(new Error('credit balance is too low'),{status})})
+  const options={circuitState:new Map(),routes:[route('exhausted-'+String(status))],prompt:'JSON',maxTokens:64,timeoutMs:5000,clientFactory:()=>({chat:{completions:{create}}})}
+  expect(await invokeFreeJsonRoutes(options)).toMatchObject({ok:false})
+  expect(await invokeFreeJsonRoutes(options)).toMatchObject({ok:false})
+  expect(create).toHaveBeenCalledTimes(1)
+})

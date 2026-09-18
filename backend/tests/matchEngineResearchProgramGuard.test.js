@@ -338,4 +338,5 @@ it('rejects the September 18 Federal Register comment-request notice at both cho
   const title = 'Proposed Collection; 60-Day Comment Request; Post-Award Reporting Requirements Including Research Performance Progress Report (OD)'
   expect(RE_PROCEDURAL_NOTICE_TITLE.test(title)).toBe(true)
   expect(FR_ADAPTER_PROCEDURAL_RE.test(title)).toBe(true)
+  expect(computeMatchDecision({profile:{id:"fixture"},sections:{}}, {...PRA_NOTICE_OPP,title}).decision).toBe("REJECT")
 })

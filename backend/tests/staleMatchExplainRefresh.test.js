@@ -467,3 +467,19 @@ it.each(['crawler-os', 'catalog-rescore-link'])('real school-origin rescore inva
     expect(qualifiesForDisplay({ ...row, opportunity_kind: 'SCHOLARSHIP' })).toBe(false)
   } finally { raw.close() }
 })
+
+
+describe('procedural funding notices cannot keep historical linker acceptance', () => {
+  it.each(['catalog-rescore-link','institution-link'])('demotes a proven procedural notice in %s without deleting or relabeling the row', async matcherVersion => {
+    const raw=makeDb();seedPair(raw,{matcherVersion})
+    try {
+      raw.prepare('UPDATE funding_opportunities SET title=? WHERE id=?').run('Proposed Collection; 60-Day Comment Request; Post-Award Reporting Requirements','o1')
+      const result=await runStaleMatchExplainRefresh(wrap(raw),{deps:{computeMatchDecision:()=>({...stubEngine()(),decision:'reject',score:0,explanation:'procedural notice is not funding'}),loadProfileContext:async()=>({profile:{id:'p1'},sections:{}})}})
+      expect(result.refreshed).toBe(1)
+      const row=raw.prepare('SELECT * FROM profile_opportunity_matches WHERE id=?').get('m1')
+      expect(row.match_decision).toBe('reject');expect(row.matcher_version).toBe(matcherVersion)
+      expect(JSON.parse(row.match_explain_json).signal_version).toBe(PROFILE_SIGNAL_VERSION)
+      expect(raw.prepare('SELECT count(*) n FROM funding_opportunities').get().n).toBe(1)
+    } finally {raw.close()}
+  })
+})

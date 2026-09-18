@@ -1,3 +1,4 @@
+import { wrapOwnerSdkClient } from '../utils/ownerSdkRouting.js'
 import express from 'express'
 import crypto from 'crypto'
 import {
@@ -176,11 +177,11 @@ router.get('/status', adminAuth, async (_req, res) => {
     } else {
       try {
         const Anthropic = (await import('@anthropic-ai/sdk')).default
-        const client = new Anthropic({
+        const client = wrapOwnerSdkClient(new Anthropic({
           apiKey: process.env.ANTHROPIC_API_KEY,
           timeout: Number(process.env.ANYA_ANTHROPIC_TIMEOUT_MS || 15_000),
           maxRetries: Number(process.env.ANYA_ANTHROPIC_MAX_RETRIES || 1),
-        })
+        }), 'anthropic')
 
         const testResponse = await client.messages.create({
           model: 'claude-haiku-4-5',
