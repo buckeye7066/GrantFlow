@@ -3,6 +3,7 @@ const sdk = vi.hoisted(() => ({ responses: vi.fn(), openai: vi.fn(), anthropic: 
 vi.mock('openai', () => ({ default: class { constructor(options) { sdk.construct(options); this.responses = { create: sdk.responses }; this.chat = { completions: { create: sdk.openai } } } } }))
 vi.mock('@anthropic-ai/sdk', () => ({ default: class { messages = { create: sdk.anthropic } } }))
 import { invokeJsonWithFallback, invokeTextWithFallback } from '../utils/aiProviders.js'
+import { isTransientLlmFailure } from '../services/hamilton/portalSync/llmPageExtract.js'
 import { clearRecentLogs, getRecentLogs } from '../utils/logger.js'
 import { circuitBlocked, recordPaidFailure } from '../utils/paidAiRoutes.js'
 const completion = (content = '{"ok":true}', finish_reason = 'stop') => ({ choices: [{ message: { content }, finish_reason }] })
@@ -18,6 +19,33 @@ beforeEach(() => {
 })
 afterEach(() => { vi.unstubAllEnvs(); vi.useRealTimers() })
 describe('ranked paid gateway', () => {
+  it('keeps Anthropic overload retryable with sanitized status', async () => {
+    sdk.openai.mockRejectedValue(new Error('unavailable'))
+    sdk.anthropic.mockRejectedValue(Object.assign(new Error('overloaded private-document-text'), { status: 529 }))
+    const result = await run()
+    expect(result.anthropicError).toMatchObject({ status: 529 })
+    expect(isTransientLlmFailure(result)).toBe(true)
+    expect(JSON.stringify(result)).not.toContain('private-document-text')
+  })
+  it('does not cool an entire account when only one model returns 403', async () => {
+    sdk.openai.mockRejectedValueOnce(Object.assign(new Error('model access denied'), { status: 403 }))
+    sdk.anthropic.mockRejectedValue(new Error('unavailable'))
+    expect(await run()).toMatchObject({ ok: true, model: 'gpt-4.1-mini' })
+  })
+  it('preserves retryability through account cooldown without repeating exhausted calls', async () => {
+    sdk.openai.mockRejectedValue(Object.assign(new Error('insufficient_quota private-account'), { status: 429 }))
+    sdk.anthropic.mockRejectedValue(Object.assign(new Error('credit balance too low private-account'), { status: 400 }))
+    const first = await run()
+    const second = await run()
+    expect(isTransientLlmFailure(first)).toBe(true)
+    expect(isTransientLlmFailure(second)).toBe(true)
+    expect(second.openaiError).toMatchObject({ status: 429 })
+    expect(second.anthropicError).toMatchObject({ status: 400 })
+    expect(sdk.openai).toHaveBeenCalledTimes(1)
+    expect(sdk.anthropic).toHaveBeenCalledTimes(1)
+    expect(JSON.stringify([...state.values()])).not.toContain('private-account')
+  })
+
   it('promotes the other primary ahead of consecutive models from the first provider', async () => {
     config([routes[0], routes[2], routes[1]])
     sdk.openai.mockRejectedValueOnce(new Error('unavailable'))

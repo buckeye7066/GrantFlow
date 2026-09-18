@@ -300,6 +300,8 @@ function describeLlmFailure(result) {
  */
 export function isTransientLlmFailure(errOrResult) {
   if (!errOrResult) return false
+  // The shared gateway preserves sanitized outage causes across circuit cooldowns.
+  if (errOrResult.timedOut === true || [errOrResult, errOrResult.anthropicError, errOrResult.openaiError].some(error => error?.transient === true)) return true
   const texts = []
   const push = (v) => { const t = errToText(v); if (t) texts.push(String(t)) }
   // A thrown error, or the wrapper's collected provider errors.

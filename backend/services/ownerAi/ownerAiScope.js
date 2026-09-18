@@ -9,12 +9,13 @@ export function isCanonicalOwner(req) {
     email && c.email === email && (!process.env.OWNER_AI_USER_ID || c.userId === process.env.OWNER_AI_USER_ID) &&
     ![req, req?.user, c].some(x => x?.serviceToken || x?.profileTokenAuth))
 }
-export function getOwnerAiScope() {
+export function getOwnerAiScope({ includeAborted = false } = {}) {
   const scope = scopes.getStore()
-  return scope && !scope.signal.aborted ? scope : null
+  return scope && (includeAborted || !scope.signal.aborted) ? scope : null
 }
 export function runWithOwnerAiScope(req, work) {
-  if (!isCanonicalOwner(req) || !req.res?.once || req.res.destroyed || req.res.writableEnded) return scopes.run(null, work)
+  if (!isCanonicalOwner(req) || !req.res?.once) return scopes.run(null, work)
+  if (req.res.destroyed || req.res.writableEnded) return
   const controller = new AbortController()
   const close = () => { controller.abort(); req.res.removeListener('close', close); req.res.removeListener('finish', close) }
   req.res.once('close', close)

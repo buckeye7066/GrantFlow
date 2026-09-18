@@ -1,7 +1,7 @@
 import { tryOwnerSubscription } from '../services/ownerAi/ownerAiBroker.js'
 import { getOwnerAiScope } from '../services/ownerAi/ownerAiScope.js'
 import OpenAI from 'openai'
-import { resolvePaidAiRoutes, paidCircuitState, circuitBlocked, recordPaidFailure, isHardPaidFailure } from './paidAiRoutes.js'
+import { resolvePaidAiRoutes, paidCircuitState, circuitFailure, circuitBlocked, recordPaidFailure, isHardPaidFailure } from './paidAiRoutes.js'
 import { createOpenAIClient, summarizeOpenAIError } from './openaiClient.js'
 import { safeParseJSON } from './safeJson.js'
 import { createLogger } from './logger.js'
@@ -99,6 +99,7 @@ function providerFailureDiagnostics(error) {
   const summary = summarizeOpenAIError(error)
   return {
     status: summary.status,
+    transient: isLLMTimeout(error) || summary.isRateLimit || [408, 425].includes(Number(summary.status)) || Number(summary.status) >= 500 || (isHardPaidFailure(error) && !summary.isAuth),
     ...(error?.jsonFinishReason ? { finish_reason: error.jsonFinishReason } : {}),
     reason: isLLMTimeout(error)
       ? 'timed_out'
@@ -165,7 +166,7 @@ async function invokePaidLadder({
   freeRoutes = null, freeClientFactory = null, timeoutMs = null, signal: callerSignal = null,
   paidCircuitState: injectedState,
 } = {}, jsonOnly) {
-  const ownerScope = getOwnerAiScope()
+  const ownerScope = getOwnerAiScope({ includeAborted: true })
   const signal = ownerScope
     ? AbortSignal.any([ownerScope.signal, ...(callerSignal ? [callerSignal] : [])])
     : callerSignal
@@ -177,9 +178,9 @@ async function invokePaidLadder({
   const safePrompt = typeof prompt === 'string' ? prompt : JSON.stringify(prompt ?? '')
   // Owner subscription work uses the same caller deadline, with time left for APIs.
   // The canonical request scope excludes customers, other admins and service tokens.
-  const configuredSubscriptionWindow = Number(process.env.OWNER_AI_SUBSCRIPTION_TIMEOUT_MS ?? 10000)
+  const configuredSubscriptionWindow = Number(process.env.OWNER_AI_SUBSCRIPTION_TIMEOUT_MS ?? 20000)
   const subscriptionWindow = Math.min(budget / 2,
-    Number.isFinite(configuredSubscriptionWindow) ? Math.max(0, Math.min(60000, configuredSubscriptionWindow)) : 10000)
+    Number.isFinite(configuredSubscriptionWindow) ? Math.max(0, Math.min(60000, configuredSubscriptionWindow)) : 20000)
   if (ownerScope && subscriptionWindow > 0) {
     try {
       const subscription = await withLLMTimeout(attemptSignal => tryOwnerSubscription({
@@ -208,7 +209,15 @@ async function invokePaidLadder({
   for (let index = 0; index < routes.length; index += 1) {
     if (signal?.aborted) return abortedResult(signal)
     const route = routes[index]
-    if (circuitBlocked(state, route)) continue
+    const blocked = circuitFailure(state, route)
+    if (blocked) {
+      failed = true
+      timedOut ||= blocked.reason === 'timed_out'
+      exhausted ||= blocked.reason === 'credit_or_quota_exhausted'
+      if (route.provider === 'openai') openaiError = blocked
+      if (route.provider === 'anthropic') anthropicError = blocked
+      continue
+    }
     const window = paidDeadline - Date.now()
     if (window <= 25) break
     const later = routes.slice(index + 1).filter(r => !circuitBlocked(state, r)).length
@@ -282,11 +291,12 @@ async function invokePaidLadder({
       if (signal?.aborted) return abortedResult(signal)
       failed = true
       timedOut ||= isLLMTimeout(error)
-      exhausted = recordPaidFailure(state, route, error) || exhausted
       const diagnostics = providerFailureDiagnostics(error)
-      // Preserve error field types, but never return upstream messages as diagnostics.
-      if (route.provider === 'openai') openaiError = { ...summarizeOpenAIError(error), message: diagnostics.reason }
-      if (route.provider === 'anthropic') anthropicError = diagnostics.reason
+      const cause = { ...diagnostics, message: diagnostics.reason }
+      exhausted = recordPaidFailure(state, route, error, cause) || exhausted
+      // Preserve classified status/retryability, never upstream messages.
+      if (route.provider === 'openai') openaiError = cause
+      if (route.provider === 'anthropic') anthropicError = cause
       const label = route.provider === 'openai' ? 'OpenAI' : route.provider === 'anthropic' ? 'Anthropic' : 'Compatible paid'
       qualityLog.warn(`${label} ${jsonOnly ? 'JSON' : 'text'} call failed`, {
         ...diagnostics, openai_available: Boolean(openai), openai_attempted: Boolean(openaiError),

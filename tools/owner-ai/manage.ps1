@@ -32,6 +32,9 @@ function Invoke-SubscriptionLogin([string]$Provider) {
 
 switch ($Action) {
   'Install' {
+    $bridgeScript = Join-Path $PSScriptRoot 'bridge.mjs'
+    if (-not (Test-Path -LiteralPath $bridgeScript -PathType Leaf)) { throw 'bridge.mjs is missing.' }
+    if (-not (Get-Command node.exe -CommandType Application -ErrorAction SilentlyContinue)) { throw 'node.exe is required.' }
     $target = [Uri]$Url
     if ($target.Scheme -ne 'https' -or $target.UserInfo -or $target.Query -or $target.Fragment -or $target.AbsolutePath -ne '/') { throw 'An explicit HTTPS origin is required.' }
     New-Item -ItemType Directory -Force $bridgeHome | Out-Null

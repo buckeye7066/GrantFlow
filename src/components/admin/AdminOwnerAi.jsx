@@ -4,9 +4,10 @@ import { apiFetch } from '@/api/client'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 
 export default function AdminOwnerAi() {
-  const { data } = useQuery({ queryKey: ['owner-ai-status'], queryFn: () => apiFetch('/api/admin/owner-ai/status'), retry: false, refetchInterval: 15000 })
+  const { data, isPending, isError } = useQuery({ queryKey: ['owner-ai-status'], queryFn: () => apiFetch('/api/admin/owner-ai/status'), retry: false, refetchInterval: 15000 })
   // The exact canonical-owner predicate is evaluated by the server, not browser claims.
-  if (!data) return null
+  if (isPending) return <p role="status">Checking owner subscription bridge status...</p>
+  if (isError || !data) return <p role="status">Owner subscription bridge status is unavailable or not authorized.</p>
   return <Card>
     <CardHeader><CardTitle>Owner subscription bridge</CardTitle></CardHeader>
     <CardContent>

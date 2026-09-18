@@ -169,3 +169,17 @@ test('failed subscriptions return null; server provider order and whole-deadline
   const run = fakeRun([], async () => { controller.abort(); return ndjson(events) })
   assert.equal(await executeJob(job, { env, signal: controller.signal, run }), null)
 })
+
+ test('a second ready subscription does not halve the viable primary slice', async () => {
+  const calls = []
+  const base = fakeRun(calls)
+  const run = async (exe, args, options) => {
+    if (exe === 'codex.exe' && args[0] === 'exec' && !args.includes('--help')) {
+      await new Promise(resolve => { const timer = setTimeout(resolve, 260); options.signal.addEventListener('abort', () => { clearTimeout(timer); resolve() }, { once: true }) })
+      return options.signal.aborted ? null : ndjson(events)
+    }
+    return base(exe, args, options)
+  }
+  const result = await executeJob({ ...job, timeoutMs: 400 }, { env, run })
+  assert.equal(result?.provider, 'subscription:codex')
+})

@@ -75,6 +75,7 @@ export function runChild(executable, args, { cwd, env, input = '', signal, captu
       if (platform === 'win32' && Number.isInteger(child?.pid)) {
         const killer = spawnImpl(path.join(env.SystemRoot || 'C:\\Windows', 'System32', 'taskkill.exe'), ['/PID', String(child.pid), '/T', '/F'], { shell: false, windowsHide: true, stdio: 'ignore' })
         killer.on('error', () => child.kill())
+        killer.on('close', code => { if (code !== 0 && (child.exitCode === null || child.exitCode === undefined)) child.kill() })
       } else child?.kill('SIGKILL')
     }
     try {
@@ -124,7 +125,7 @@ export async function executeJob(job, { signal, env = process.env, run = runChil
   let deadlineTimer
   try {
     if (signal?.aborted || !Number.isFinite(job.timeoutMs) || job.timeoutMs <= 0 || job.timeoutMs > 120000 ||
-        !Number.isInteger(job.maxTokens) || job.maxTokens <= 0 || !Array.isArray(job.providers)) return null
+        !Number.isInteger(job.maxTokens) || job.maxTokens < 2 || !Array.isArray(job.providers)) return null
     const deadline = Date.now() + job.timeoutMs
     const controller = new AbortController()
     deadlineTimer = setTimeout(() => controller.abort(), job.timeoutMs)
@@ -135,7 +136,9 @@ export async function executeJob(job, { signal, env = process.env, run = runChil
       const remaining = deadline - Date.now()
       if (wholeSignal.aborted || remaining <= 0) break
       const slice = new AbortController()
-      const timer = setTimeout(() => slice.abort(), Math.max(1, Math.floor(remaining / (providers.length - index))))
+      // A newly ready fallback must not halve the primary's proven runtime.
+      const fallbackReserve = index + 1 < providers.length ? Math.min(2000, remaining / 5) : 0
+      const timer = setTimeout(() => slice.abort(), Math.max(1, Math.floor(remaining - fallbackReserve)))
       const attemptSignal = AbortSignal.any([wholeSignal, slice.signal])
       try {
         if (await probeProvider(provider, { signal: attemptSignal, env, run }) !== 'ready' || attemptSignal.aborted) continue

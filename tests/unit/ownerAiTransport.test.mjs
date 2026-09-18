@@ -130,3 +130,46 @@ test('real request context hydrates authority from DB before entering owner scop
     req.res.emit('finish')
   }
 })
+
+test('ended owner responses cannot start work after asynchronous identity resolution', async () => {
+  process.env.AGENT_CONTROL_ADMIN_EMAIL = 'owner@example.test'
+  for (const flag of ['destroyed', 'writableEnded']) {
+    const res = new EventEmitter(); res[flag] = true
+    const req = { ctx: { identityResolved: true, isAdmin: true, userId: 'real', email: 'owner@example.test' }, res }
+    let called = false
+    await runWithOwnerAiScope(req, () => { called = true })
+    assert.equal(called, false)
+  }
+})
+test('impossible one-token subscription requests never queue', async () => {
+  process.env.AGENT_CONTROL_ADMIN_EMAIL = 'owner@example.test'
+  const b = createOwnerAiBroker({ env: { OWNER_AI_BRIDGE_ENABLED: 'true', OWNER_AI_BRIDGE_TOKEN: 'x'.repeat(48) } })
+  b.poll({ providers: { codex: 'ready' } })
+  const req = { ctx: { identityResolved: true, isAdmin: true, userId: 'real', email: 'owner@example.test' }, res: new EventEmitter() }
+  await runWithOwnerAiScope(req, () => assert.equal(b.trySubscription({ prompt: 'fixed', format: 'text', maxTokens: 1, timeoutMs: 5 }), null))
+})
+test('unsuccessful Windows tree kill falls back to terminating its owned child', async () => {
+  const controller = new AbortController(); let killed = false; let child
+  const spawnImpl = (exe) => {
+    if (exe.endsWith('taskkill.exe')) { const killer = new EventEmitter(); queueMicrotask(() => killer.emit('close', 1)); return killer }
+    child = new EventEmitter(); child.pid = 43210
+    child.stdin = new PassThrough(); child.stdout = new PassThrough(); child.stderr = new PassThrough()
+    child.kill = () => { killed = true; child.emit('close', 1) }
+    queueMicrotask(() => controller.abort())
+    return child
+  }
+  const result = runChild('codex.exe', [], { env: {}, signal: controller.signal, spawnImpl, platform: 'win32' })
+  await new Promise(resolve => setTimeout(resolve, 5))
+  if (!killed) child.emit('close', 1)
+  await result
+  assert.equal(killed, true)
+})
+
+test('installer validates runtime before requesting or storing a secret', async () => {
+  const { readFile } = await import('node:fs/promises')
+  const source = await readFile(new URL('../../tools/owner-ai/manage.ps1', import.meta.url), 'utf8')
+  const install = source.slice(source.indexOf("'Install' {"), source.indexOf("'Start' {"))
+  assert.ok(install.indexOf('Get-Command node.exe') >= 0)
+  assert.ok(install.indexOf('Get-Command node.exe') < install.indexOf('Read-Host'))
+  assert.ok(install.indexOf('Test-Path -LiteralPath $bridgeScript') < install.indexOf('Read-Host'))
+})

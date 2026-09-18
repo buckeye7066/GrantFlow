@@ -62,12 +62,12 @@ export function createOwnerAiBroker({ env = process.env, now = Date.now } = {}) 
   function trySubscription(input = {}) {
     sweep()
     const scope = getOwnerAiScope()
-    if (!scope || !enabled() || !fresh() || !names.some(n => worker.providers[n] === 'ready') || pending ||
+    if (!scope || scope.signal.aborted || !enabled() || !fresh() || !names.some(n => worker.providers[n] === 'ready') || pending ||
         input.signal?.aborted || !Number.isFinite(input.timeoutMs) || input.timeoutMs <= 0 ||
         !['json', 'text'].includes(input.format) || typeof input.prompt !== 'string' ||
         (input.system !== undefined && input.system !== null && typeof input.system !== 'string') ||
         Buffer.byteLength(input.prompt + (input.system || '')) > 131072 ||
-        !Number.isInteger(input.maxTokens) || input.maxTokens < 1) return null
+        !Number.isInteger(input.maxTokens) || input.maxTokens < 2) return null
     return new Promise(resolve => {
       const signals = [scope.signal, input.signal].filter(Boolean)
       const cancel = () => pending?.finish(null)

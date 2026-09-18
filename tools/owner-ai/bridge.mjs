@@ -52,7 +52,7 @@ export async function runBridge({ env = process.env, signal } = {}) {
       if (job) {
         if (!Number.isFinite(job.timeoutMs) || job.timeoutMs <= 0 || job.timeoutMs > 120000 ||
             typeof job.prompt !== 'string' || typeof job.system !== 'string' ||
-            !Number.isInteger(job.maxTokens) || job.maxTokens <= 0) throw new Error('invalid_job')
+            !Number.isInteger(job.maxTokens) || job.maxTokens < 2) throw new Error('invalid_job')
         const controller = new AbortController()
         const jobSignal = AbortSignal.any([controller.signal, AbortSignal.timeout(job.timeoutMs), ...(signal ? [signal] : [])])
         const monitor = (async () => {

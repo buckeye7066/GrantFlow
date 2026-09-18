@@ -1,9 +1,11 @@
-import { createHash } from 'node:crypto'
+import { createHmac, randomBytes } from 'node:crypto'
 import { createLogger } from './logger.js'
 const configLog = createLogger('utils:paidAiRoutes')
 const reasoningEfforts = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']
 const adaptiveModels = new Set(['claude-fable-5-1', 'claude-opus-5', 'claude-sonnet-5'])
 
+// Ephemeral keyed fingerprints identify rotated credentials without publishing a reusable key hash.
+const fingerprintKey = randomBytes(32)
 const sharedState = new Map()
 export function resetPaidAiCircuitState() { sharedState.clear() }
 export function paidCircuitState() { return sharedState }
@@ -42,7 +44,7 @@ export function resolvePaidAiRoutes({ openai, openaiModel, anthropicModel }) {
       key = process.env[entry.api_key_env]
     } else if (entry.base_url || entry.api_key_env) return []
     if (provider !== 'openai' && !String(key || '').trim()) return []
-    const account = createHash('sha256').update(`${provider}|${baseURL || ''}|${key || ''}`).digest('hex')
+    const account = createHmac('sha256', fingerprintKey).update(`${provider}|${baseURL || ''}|${key || ''}`).digest('hex')
     return [{ provider, model, api, reasoningEffort: entry.reasoning_effort, thinking: entry.thinking, effort: entry.effort, baseURL, apiKeyEnv: entry.api_key_env, account,
       reasoning: entry.reasoning === true || (provider === 'openai' && /^(gpt-[5-9]|o[1-9])/.test(model)) }]
   })
@@ -58,18 +60,19 @@ export function resolvePaidAiRoutes({ openai, openaiModel, anthropicModel }) {
   return ordered.filter((r, i) => ordered.findIndex(x => x.account === r.account && x.model === r.model) === i)
 }
 
-export function circuitBlocked(state, route) {
-  for (const [key, until] of state) if (until <= Date.now()) state.delete(key)
-  return state.has(route.account) || state.has(`${route.account}:${route.model}`)
+export function circuitFailure(state, route) {
+  for (const [key, entry] of state) if (entry.until <= Date.now()) state.delete(key)
+  return (state.get(route.account) || state.get(`${route.account}:${route.model}`))?.cause || null
 }
+export function circuitBlocked(state, route) { return Boolean(circuitFailure(state, route)) }
 
 export function isHardPaidFailure(error) {
   const status = Number(error?.status || 0)
   const text = `${error?.code || ''} ${error?.error?.code || ''} ${error?.message || ''}`
-  return [401, 402, 403].includes(status) || /insufficient[_ -]?quota|credit.*(?:low|exhaust|deplet|expir)|billing|payment required|invalid.*api.*key/i.test(text)
+  return [401, 402].includes(status) || /insufficient[_ -]?quota|credit.*(?:low|exhaust|deplet|expir)|billing|payment required|invalid.*api.*key/i.test(text)
 }
 
-export function recordPaidFailure(state, route, error) {
+export function recordPaidFailure(state, route, error, cause = null) {
   const status = Number(error?.status || 0)
   const hard = isHardPaidFailure(error)
   const retryAfter = error?.headers?.get?.('retry-after') ?? error?.headers?.['retry-after']
@@ -77,7 +80,8 @@ export function recordPaidFailure(state, route, error) {
   const retryMs = retryAfter === null || retryAfter === undefined ? 30000 : Number.isFinite(parsed) ? parsed * 1000 : Date.parse(retryAfter) - Date.now()
   const duration = hard ? 300000 : status === 429 ? Math.min(300000, Math.max(1000, Number.isFinite(retryMs) ? retryMs : 30000)) : 5000
   circuitBlocked(state, route)
-  state.set(hard ? route.account : `${route.account}:${route.model}`, Date.now() + duration)
+  const safeCause = cause || { status: status || null, reason: hard ? 'credit_or_quota_exhausted' : 'provider_request_failed', transient: status === 429 || status >= 500 }
+  state.set(hard ? route.account : `${route.account}:${route.model}`, { until: Date.now() + duration, cause: safeCause })
   while (state.size > 256) state.delete(state.keys().next().value)
   return hard
 }

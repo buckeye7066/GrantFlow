@@ -74,11 +74,14 @@ Receipts add `model` and `billing_mode: "paid_api"`; free receipts carry
 `billing_mode: "free_or_local"`. These label the API route, not a price guarantee
 or subscription entitlement. No billing, admission, or receipt gates change.
 
-Auth/credit exhaustion cools the account for five minutes. Retryable 429 cools
+Auth/credit exhaustion cools the account for five minutes. Model-only 403 denials
+remain model-scoped so other paid models can still run. Sanitized status and
+transient classifications survive cooldowns; Hamilton continues retrying outages
+instead of interpreting them as zero-result page facts. Retryable 429 cools
 only that model, honoring Retry-After (seconds or HTTP date), bounded to 1–300
 seconds (30 seconds if absent/invalid). Other failures cool the model for five
-seconds. State holds at most 256 hashed account/model entries with expiring
-timestamps; credential rotation changes the account identity. Configured ladders
+seconds. State holds at most 256 process-keyed account/model fingerprints with expiring
+timestamps and sanitized failure causes; credential rotation changes the account identity. Configured ladders
 share process-local state across chat and Responses API shapes for the same
 account/model; legacy calls use request-local state for compatibility.
 Tests can inject `paidCircuitState: new Map()` or reset the shared state via
@@ -108,3 +111,12 @@ in the input, with a red/green regression test. All 61 gateway/provider tests
 passed. The same live request then completed with gpt-6-astra in 2381 ms,
 returned the expected object, and reported paid_api billing and real usage.
 This is a single-request dependency proof, not the full acceptance benchmark.
+
+Review follow-up: sanitized provider status and retryability now survive account
+cooldowns, model-only 403s no longer block an entire paid account, and account
+identities use ephemeral keyed fingerprints rather than reusable API-key hashes.
+The owner bridge rejects impossible token caps, preserves cancellation through
+closed response contexts, checks installation prerequisites, and handles native
+Windows termination failure. Owner UI loading/error states remain visible.
+Verification: 39 Node tests and 97 related Vitest cases passed with no skips;
+changed-file lint passed. Final-head CI and deployment remain separate gates.

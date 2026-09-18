@@ -6,6 +6,15 @@ application, submission, or confirmation outcome has been established by this wo
 
 ## Availability and provider order
 
+Server setup requires OWNER_AI_BRIDGE_ENABLED=true plus a dedicated random
+OWNER_AI_BRIDGE_TOKEN of at least 32 characters. The worker receives the same
+token through DPAPI installation; never use a provider API/OAuth token for it.
+Set OWNER_AI_USER_ID to the canonical owner id when an additional id binding is
+needed. The default 20000 ms subscription cap is further limited by half the
+caller's remaining whole budget. The primary retains 80% of a short worker
+window (all but two seconds of a longer window); the next subscription receives
+the actual remaining time. A short caller deadline can still force API fallback.
+
 Order is subscription:codex, subscription:claude, then the separately integrated
 cloud API fallback. **Codex is implemented:** readiness requires native `exec
 --help`, every required supported feature toggle from `features list`, and exact
@@ -57,7 +66,7 @@ this is not unlimited service and must never route other users through the owner
 Both text and JSON entry points use the same owner-aware gateway. Only a live,
 canonical owner request may reach the broker. The subscription slice is bounded
 by half the original request deadline and OWNER_AI_SUBSCRIPTION_TIMEOUT_MS
-(default 10000 ms, maximum 60000 ms). An unavailable worker returns immediately.
+(default 20000 ms, maximum 60000 ms). An unavailable worker returns immediately.
 A subscription failure leaves only the original remaining budget for paid and
 free routes; closing the owner's response cancels all later attempts too.
 Successful receipts preserve provider, model, billing_mode, model_source and usage.

@@ -75,3 +75,11 @@ it('zero budget and already-aborted requests never create subscription jobs', as
   expect(bridge.run).not.toHaveBeenCalled()
   expect(create).not.toHaveBeenCalled()
 })
+it('later work inherited from a closed owner response cannot start a paid fallback', async () => {
+  const req = ownerRequest()
+  await runWithOwnerAiScope(req, async () => {
+    req.res.emit('finish')
+    expect(await invokeJsonWithFallback(opts())).toMatchObject({ ok: false, aborted: true })
+    expect(create).not.toHaveBeenCalled()
+  })
+})
