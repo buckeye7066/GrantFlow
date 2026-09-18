@@ -82,17 +82,18 @@ function gateMetaFromStub(stub) {
  * @param {object} [opts]
  * @param {number} [opts.pairBudget]
  * @param {number} [opts.timeBudgetMs]
+ * @param {number} [opts.verificationRowBudget] Read-only exact-audit cap; default 10000, maximum 10000.
  * @param {boolean} [opts.writeEnabled]
- * @param {AbortSignal} [opts.signal]
  * @param {object} [opts.deps]
  */
 export async function runStaleMatchExplainRefresh(db, opts = {}) {
-  opts.signal?.throwIfAborted()
   const startedAt = Date.now()
   const pairBudget = Number.isFinite(opts.pairBudget) ? opts.pairBudget
     : envInt(process.env.STALE_MATCH_EXPLAIN_PAIR_BUDGET, 800)
   const timeBudgetMs = Number.isFinite(opts.timeBudgetMs) ? opts.timeBudgetMs
     : envInt(process.env.STALE_MATCH_EXPLAIN_TIME_BUDGET_MS, 45000)
+  const verificationRowBudget = Number.isFinite(opts.verificationRowBudget)
+    ? Math.max(0, Math.min(10000, Math.floor(opts.verificationRowBudget))) : 10000
   const writeEnabled = opts.writeEnabled !== false &&
     !/^(0|false|no|off)$/i.test(String(process.env.ENFORCE_STALE_MATCH_EXPLAIN ?? '1').trim())
 
@@ -123,6 +124,73 @@ export async function runStaleMatchExplainRefresh(db, opts = {}) {
     held_at_review: 0,
     structural_target_holds: 0,
     truncated: false,
+    remaining_candidates: null,
+    remaining_stale: null,
+    verification_scanned: 0,
+    verification_truncated: false,
+    verification_failed: false,
+    verified_at: null,
+    complete: false,
+    status: 'pending',
+  }
+
+  // A page finishing is not evidence that the backlog is empty. Count the
+  // same active-catalog SQL candidate scope after writes, not rows attempted.
+  // SQL uses marker text, so it can both over-select current rows and miss
+  // malformed JSON carrying those markers. A zero needs an exact JS audit.
+  const finish = async () => {
+    // Calendar-sensitive evidence may expire while this batch is running.
+    const remainingPred = staleMatchExplainSql('m')
+    try {
+      const row = await db.prepare(
+        `SELECT COUNT(*) AS remaining_candidates
+           FROM profile_opportunity_matches m
+           JOIN funding_opportunities fo ON fo.id = m.opportunity_id
+          WHERE ${remainingPred}
+            AND (fo.is_active IS NULL OR fo.is_active = ${isPg ? 'TRUE' : '1'})`,
+      ).get()
+      const count = row?.remaining_candidates
+      const numeric = typeof count === 'number' || (typeof count === 'string' && /^[0-9]+$/.test(count))
+      const remaining = Number(count)
+      if (!numeric || !Number.isSafeInteger(remaining) || remaining < 0) throw new Error('Invalid remaining-candidate count')
+      summary.remaining_candidates = remaining
+      if (remaining === 0 && summary.ok && writeEnabled) {
+        if (Date.now() - startedAt >= timeBudgetMs) summary.verification_truncated = true
+        else {
+          const audit = await db.prepare(
+            `SELECT m.match_explain_json AS verification_explain
+               FROM profile_opportunity_matches m
+               JOIN funding_opportunities fo ON fo.id = m.opportunity_id
+              WHERE (fo.is_active IS NULL OR fo.is_active = ${isPg ? 'TRUE' : '1'})
+              ORDER BY m.id LIMIT ?`,
+          ).all(verificationRowBudget + 1)
+          let stale = 0
+          summary.verification_truncated = audit.length > verificationRowBudget
+          for (const candidate of audit.slice(0, verificationRowBudget)) {
+            if (Date.now() - startedAt >= timeBudgetMs) {
+              summary.verification_truncated = true
+              break
+            }
+            summary.verification_scanned += 1
+            if (isStaleMatchExplain(candidate.verification_explain)) stale += 1
+          }
+          // Do not combine observations made under different calendar rules.
+          if (remainingPred !== staleMatchExplainSql('m')) summary.verification_truncated = true
+          if (!summary.verification_truncated) summary.remaining_stale = stale
+        }
+      }
+      summary.verified_at = new Date().toISOString()
+    } catch {
+      summary.ok = false
+      summary.verification_failed = true
+    }
+    summary.complete = summary.ok && writeEnabled && summary.remaining_candidates === 0 &&
+      summary.remaining_stale === 0 && !summary.verification_truncated && summary.unscorable === 0 && summary.skipped_no_profile === 0
+    summary.status = !summary.ok ? 'failed' : !writeEnabled ? 'disabled' : summary.complete ? 'complete' : 'pending'
+    summary.elapsed_ms = Date.now() - startedAt
+    // Aggregate-only receipt: no applicant identifiers, URLs, titles or evidence.
+    log.info('batch receipt', summary)
+    return summary
   }
 
   let rows
@@ -143,18 +211,17 @@ export async function runStaleMatchExplainRefresh(db, opts = {}) {
           AND (fo.is_active IS NULL OR fo.is_active = ${isPg ? 'TRUE' : '1'})
         ORDER BY m.profile_id, m.opportunity_id
         LIMIT ?`,
-    // One read-only sentinel makes an unfinished bounded batch observable.
-    // The processing loop still permits at most pairBudget rows and writes.
     ).all(Math.max(pairBudget, 1) + 1)
   } catch (err) {
     log.warn('stale-match-explain candidate query failed (non-fatal)', { error: String(err?.message || err) })
-    return { ...summary, ok: false, skipped: 'query' }
+    summary.ok = false
+    summary.skipped = 'query'
+    return finish()
   }
 
   const ctxCache = new Map()
   const needsDefaultedCache = new Map()
   for (const row of rows || []) {
-    opts.signal?.throwIfAborted()
     if (summary.scanned >= pairBudget || (Date.now() - startedAt) >= timeBudgetMs) {
       summary.truncated = true
       break
@@ -168,7 +235,6 @@ export async function runStaleMatchExplainRefresh(db, opts = {}) {
       try { ctx = await loadProfileContext(db, profileId) } catch { ctx = null }
       ctxCache.set(profileId, ctx)
     }
-    opts.signal?.throwIfAborted()
     if (!ctx?.profile) { summary.skipped_no_profile += 1; continue }
 
     let decision
@@ -298,8 +364,6 @@ export async function runStaleMatchExplainRefresh(db, opts = {}) {
       explainToPersist.previous_four_truth_proof = previousProof
     }
 
-    // Do not start another write after the scheduler loses its lease.
-    opts.signal?.throwIfAborted()
     try {
       const res = await db.prepare(
         `UPDATE profile_opportunity_matches
@@ -341,9 +405,8 @@ export async function runStaleMatchExplainRefresh(db, opts = {}) {
     }
   }
 
-  summary.elapsed_ms = Date.now() - startedAt
   if (summary.convergence_errors > 0) summary.ok = false
-  return summary
+  return finish()
 }
 
 export default { runStaleMatchExplainRefresh }

@@ -254,7 +254,6 @@ async function runInvariant(name, fn) {
 const PERSISTED_STEP_DIAGNOSTICS = Object.freeze([
   'upserted', 'adjudicated', 'notFundable', 'rejectedByEngine', 'review',
   'convergenceErrors', 'foreignLaneSkipped', 'truncated', 'enforced',
-  'unscorable', 'skippedNoProfile', 'concurrentChangesSkipped', 'skipped', 'wouldRepair',
 ])
 
 export function projectPersistedStep(s) {
@@ -271,6 +270,19 @@ export function projectPersistedStep(s) {
   }
   for (const key of PERSISTED_STEP_DIAGNOSTICS) {
     if (s[key] !== undefined) out[key] = s[key]
+  }
+  // The stale-refresh receipt distinguishes successful work from verified
+  // completion. Preserve explicit zero, false and null without affecting
+  // unrelated invariant records.
+  if (s.name === 'stale_match_explain_refresh') {
+    for (const key of [
+      'remaining_candidates', 'remaining_stale', 'verification_scanned',
+      'verification_truncated', 'verification_failed', 'verified_at',
+      'complete', 'status', 'unscorable', 'skipped_no_profile',
+      'convergence_errors', 'concurrent_changes_skipped', 'skipped',
+    ]) {
+      if (s[key] !== undefined) out[key] = s[key]
+    }
   }
   // Work the sweep deliberately did NOT do, and why — so "repaired 0" can be
   // read as "the decision contract forbade N candidates" instead of as an
@@ -11232,26 +11244,24 @@ export async function summarizeCatalogRescore(runSweep) {
  * measured one. Linker nets used to persist gate-only stubs; this drain
  * refreshes residue IN PLACE without rebranding matcher_version.
  */
-export async function enforceStaleMatchExplainRefresh(db, opts = {}) {
+export async function enforceStaleMatchExplainRefresh(db) {
   return runInvariant('stale_match_explain_refresh', async () => {
     let runStaleMatchExplainRefresh
     try {
       ;({ runStaleMatchExplainRefresh } = await import('../services/matching/staleMatchExplainRefresh.js'))
     } catch (err) {
       log.warn('stale_match_explain_refresh: unavailable (non-fatal)', { error: String(err?.message || err) })
-      return { ok: false, scanned: 0, repaired: 0, enforced: false, skipped: 'deps' }
+      return { ok: false, scanned: 0, repaired: 0, enforced: false, skipped: 'deps',
+        remaining_candidates: null, remaining_stale: null, verification_failed: true,
+        complete: false, status: 'failed' }
     }
-    const res = await runStaleMatchExplainRefresh(db, opts)
+    const res = await runStaleMatchExplainRefresh(db)
     return {
-      ok: res.ok === true,
-      skipped: res.skipped,
+      ...res,
       scanned: res.scanned ?? 0,
       repaired: res.refreshed ?? 0,
       wouldRepair: res.would_refresh ?? 0,
       unscorable: res.unscorable ?? 0,
-      convergenceErrors: res.convergence_errors ?? 0,
-      skippedNoProfile: res.skipped_no_profile ?? 0,
-      concurrentChangesSkipped: res.concurrent_changes_skipped ?? 0,
       truncated: Boolean(res.truncated),
       enforced: Boolean(res.write_enabled),
     }

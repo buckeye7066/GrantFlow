@@ -1191,6 +1191,17 @@ describe('enforceInvariants — runner', () => {
 
   it('runs every invariant, never throws, and returns a structured summary', async () => {
     const db = makeDb()
+    // A healthy receipt requires a readable empty match/catalog scope. The
+    // old fixture omitted it and relied on the wrapper hiding query failure.
+    db.exec(`
+      CREATE TABLE profile_sections (profile_id TEXT, section_key TEXT, data TEXT, updated_at TEXT);
+      CREATE TABLE funding_opportunities (id TEXT PRIMARY KEY, title TEXT, is_active INTEGER);
+      CREATE TABLE profile_opportunity_matches (
+        id TEXT PRIMARY KEY, profile_id TEXT, opportunity_id TEXT,
+        matcher_version TEXT, match_decision TEXT, match_score INTEGER,
+        match_explain_json TEXT, match_explanation TEXT, updated_at TEXT, evaluated_at TEXT
+      );
+    `)
     insertProfile(db, { id: 'p1', orgId: 'org1' })
     insertGrant(db, { profile_id: 'p1', organization_id: 'org1', title: 'Clean', match_score: 90 })
 
@@ -1232,12 +1243,8 @@ describe('enforceInvariants — runner', () => {
     //   is re-derived from its canonical answer, and a legacy-only answer seeds
     //   the canonical field once.
     expect(summary.ran).toBe(70)
-    // This minimal fixture lacks the match store. Its failed candidate query
-    // must remain visible instead of being reported as successful maintenance.
-    expect(summary.failed).toBe(1)
-    expect(summary.steps.filter((step) => !step.ok)).toEqual([
-      expect.objectContaining({ name: 'stale_match_explain_refresh', ok: false, skipped: 'query', repaired: 0, scanned: 0 }),
-    ])
+    expect(summary.steps.filter(step => !step.ok)).toEqual([])
+    expect(summary.failed).toBe(0)
     expect(summary.steps.map((s) => s.name)).toEqual([
       'sticky_deletes',
       'profile_id_integrity',
