@@ -1,0 +1,42 @@
+import { test, expect } from 'playwright/test'
+import { basePath } from './playwright.config.mjs'
+const appBase = String(basePath || '').replace(/\/+$/, '')
+for (const viewport of [{ width: 1280, height: 800 }, { width: 390, height: 844 }]) {
+ test(`Foundation location follows ZIP and preserves manual county (${viewport.width}px)`, async ({ page }) => {
+ await page.setViewportSize(viewport)
+ const pageErrors = []
+ page.on('pageerror', (error) => pageErrors.push(error.message))
+ await page.goto(`${appBase}/start`, { waitUntil: 'domcontentloaded' })
+ const intro = page.getByRole('dialog').filter({ hasText: 'Welcome to GrantFlow!' })
+ await expect(intro).toBeVisible()
+ await intro.getByRole('button', { name: 'Skip for now', exact: true }).click()
+ await expect(intro).toBeHidden()
+ await page.getByRole('button', { name: /english/i }).click()
+ await page.getByRole('button', { name: /let.s do it/i }).click()
+ await page.getByRole('button', { name: /myself or my family/i }).click()
+ await page.locator('#zip').fill('37205')
+ await expect(page.locator('#city')).toHaveValue('Nashville')
+ await expect(page.locator('#county')).toHaveValue('Davidson')
+ await page.locator('#zip').fill('37312')
+ await expect(page.locator('#city')).toHaveValue('Cleveland')
+ await expect(page.locator('#county')).toHaveValue('Bradley')
+ await page.locator('#county').fill('Applicant County')
+ await page.locator('#zip').fill('37205')
+ await expect(page.locator('#city')).toHaveValue('Nashville')
+ await expect(page.locator('#county')).toHaveValue('Applicant County')
+ await page.locator('#county').fill('')
+ await page.locator('#zip').fill('37312')
+ await expect(page.locator('#city')).toHaveValue('Cleveland')
+ await expect(page.locator('#county')).toHaveValue('Bradley')
+ const submitted = page.waitForRequest((request) =>
+ new URL(request.url()).pathname === '/api/onboarding/answer' && request.method() === 'POST')
+ await page.getByRole('button', { name: 'Continue', exact: true }).click()
+ expect((await submitted).postDataJSON().answer).toEqual({
+ zip: '37312', state: 'TN', city: 'Cleveland', county: 'Bradley',
+ })
+ await expect(page.getByRole('button', { name: /just me \(single adult\)/i })).toBeVisible()
+ await page.reload({ waitUntil: 'domcontentloaded' })
+ await expect(page.getByRole('button', { name: /just me \(single adult\)/i })).toBeVisible()
+ expect(pageErrors).toEqual([])
+ })
+}
