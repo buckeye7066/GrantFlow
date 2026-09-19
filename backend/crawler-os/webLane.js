@@ -521,6 +521,7 @@ export async function runWebDiscoveryLane(deps, opts = {}) {
     seeded: 0,
     fetched: 0,
     extracted: 0,
+    extraction_cache_hits: 0,
     stored: 0,
     deduped: 0,
     rejected: 0,
@@ -871,6 +872,10 @@ export async function runWebDiscoveryLane(deps, opts = {}) {
     } catch (err) {
       extracted = [];
       failureClass = classifyThrownExtractionError(err);
+    }
+    if (!failureClass && extracted?.extraction_cached === true) {
+      result.extraction_cache_hits += 1;
+      if (entry) entry.extraction_cached = true;
     }
     if (failureClass) {
       result.stage_ledger.extraction_failed += 1;

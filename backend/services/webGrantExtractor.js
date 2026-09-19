@@ -25,10 +25,12 @@
 // `searchMeta`. Read it with `extractionFailureOf(result)`.
 
 import * as cheerio from 'cheerio';
+import { createHash } from 'node:crypto';
+import { pageFactMemo } from './pageFactMemo.js';
 import { getOpenAIOptional, invokeJsonWithFallback } from '../utils/aiProviders.js';
 import { buildLinkInventory } from '../crawler-os/blindLinkInventory.js';
 import { canonicalizeUrl } from '../crawler-os/urlCanonical.js';
-import { extractPageFactsBlind } from '../crawler-os/blindPageFactExtractor.js';
+import { extractPageFactsBlind, PROMPT_VERSION, EXTRACTOR_VERSION } from '../crawler-os/blindPageFactExtractor.js';
 import { mapBlindFactsToCandidate } from '../crawler-os/blindFactsMapper.js';
 import { classifyBlindOpportunityKind } from '../crawler-os/blindOpportunityKind.js';
 import { OPPORTUNITY_KIND } from '../crawler-os/contract.js';
@@ -303,6 +305,17 @@ export async function extractOpportunitiesFromPage(
     return tagResult([], { status: 'failed', failure: { class: 'page_too_short', detail: `text_chars=${pageText.length}<${MIN_TRUSTWORTHY_PAGE_TEXT_CHARS}` } });
   }
 
+  // A current fetch is still required. Only identical source bytes and parser
+  // versions reuse public page facts; each profile is matched independently.
+  if (deps.signal?.aborted) return tagResult([], { status: 'failed', failure: { class: 'llm_timeout', detail: 'aborted' } });
+  const memo = deps.pageMemo || (process.env.GRANTFLOW_PAGE_FACT_MEMO_ENABLED === '1' && !deps.invoke && deps.openai === undefined ? pageFactMemo : null);
+  const memoKey = memo ? createHash('sha256').update(JSON.stringify([pageUrl, cappedHtml, PROMPT_VERSION, EXTRACTOR_VERSION])).digest('hex') : null;
+  const cached = memoKey ? memo.get(memoKey) : null;
+  if (cached) {
+    const result = tagResult(cached.data, { status: cached.status });
+    Object.defineProperty(result, 'extraction_cached', { value: true, enumerable: false });
+    return result;
+  }
   const linkInventory = buildLinkInventory(htmlForLinkInventory(cappedHtml), { baseUrl: pageUrl });
   const timeoutMs = Number.isFinite(Number(deps.timeoutMs)) && Number(deps.timeoutMs) > 0
     ? Number(deps.timeoutMs)
@@ -408,7 +421,9 @@ export async function extractOpportunitiesFromPage(
       },
     };
   });
-  return tagResult(targetChecked, { status: targetChecked.length > 0 ? 'ok' : 'empty', provider: outcome.provider });
+  const status = targetChecked.length > 0 ? 'ok' : 'empty';
+  if (memoKey && !deps.signal?.aborted) memo.set(memoKey, targetChecked, status);
+  return tagResult(targetChecked, { status, provider: outcome.provider });
 }
 
 export default {

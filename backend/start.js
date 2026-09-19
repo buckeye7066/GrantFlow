@@ -6,6 +6,7 @@ import { spawn } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import { captureException, flushObservability, initObservability } from './utils/observability.js'
 import { getActiveJobsSnapshot } from './utils/activeJobTracker.js'
+import { startLocalModel } from './services/localModelRuntime.js'
 
 // Prevent unhandled promise rejections from crashing the server process.
 // Background tasks (crawlers, cron jobs, health checks) may fire DB queries that reject
@@ -182,6 +183,17 @@ function maybeRunSqliteToPostgresMigrationInBackground() {
     console.error('[migrate] Failed to start migration process:', error?.message || error)
   }
 }
+
+// Optional private CPU fallback: no Home tunnel and no external inference key.
+const localModel = startLocalModel({enabled: process.env.GRANTFLOW_LOCAL_MODEL_ENABLED, onUnexpectedExit: () => {
+  console.error('[local-model] engine exited unexpectedly; requesting supervised restart')
+  process.kill(process.pid, 'SIGTERM')
+}})
+process.once('SIGTERM', () => localModel.stop())
+process.once('SIGINT', () => localModel.stop())
+process.once('exit', () => localModel.stop())
+await localModel.ready
+if (localModel.status().state === 'ready') console.log('[local-model] bundled model ready')
 
 // Start server AFTER env is loaded (ESM imports are hoisted).
 await import('./server.js')
