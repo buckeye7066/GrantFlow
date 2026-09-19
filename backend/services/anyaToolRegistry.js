@@ -1,3 +1,4 @@
+import {ownerAiJobParameters} from './ownerAi/ownerAiScope.js'
 import path from 'path'
 import { promises as fs } from 'fs'
 import { randomUUID } from 'crypto'
@@ -3645,7 +3646,7 @@ registerTool({
         `INSERT INTO crawler_jobs (id, type, status, profile_id, organization_id, parameters, requested_by)
          VALUES (?, 'comprehensive', 'queued', NULL, NULL, ?, 'anya_admin')`,
       )
-      .run(jobId, parameters)
+      .run(jobId, JSON.stringify(ownerAiJobParameters(JSON.parse(parameters),{id:jobId,type:'comprehensive',profile_id:null})))
 
     try {
       const { dispatchCrawlerJob } = await import('./crawlerDispatcher.js')

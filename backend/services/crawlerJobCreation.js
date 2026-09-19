@@ -6,6 +6,7 @@
  */
 
 import crypto from 'crypto'
+import {ownerAiJobParameters} from './ownerAi/ownerAiScope.js'
 import { buildProfileContext, computeProfileDigest } from './profileHelpers.js'
 import { prepareContextForSnapshot } from './snapshotSerialization.js'
 import { validateJobStatus, validateZipCode, validateStateCode, validateUuid } from '../utils/dbValidation.js'
@@ -245,7 +246,7 @@ export async function createCrawlerJob(db, options) {
   const jobId = crypto.randomUUID()
 
   // Insert job (transactional)
-  const parametersJson = JSON.stringify(parameters)
+  const parametersJson = JSON.stringify(ownerAiJobParameters(parameters,{id:jobId,type,profile_id:profileId}))
 
   if (db?.dialect === 'postgres') {
     const hasSnapshotCol = await postgresHasProfileContextSnapshotColumn(db)

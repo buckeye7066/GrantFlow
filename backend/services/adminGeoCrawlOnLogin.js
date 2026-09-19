@@ -1,3 +1,4 @@
+import {ownerAiJobParameters} from './ownerAi/ownerAiScope.js'
 /**
  * Queue a nationwide geo crawl (state-by-state inside one comprehensive job) when an admin logs in.
  * Throttled to avoid stacking duplicate long runs; optional cooldown via ANYA_ADMIN_GEO_COOLDOWN_HOURS.
@@ -125,7 +126,7 @@ export async function scheduleAdminGeoCrawlOnLogin(db, user, ctx = {}) {
         VALUES (?, 'comprehensive', 'queued', NULL, NULL, ?, 'anya_admin_login')
       `,
       )
-      .run(jobId, JSON.stringify(parameters))
+      .run(jobId, JSON.stringify(ownerAiJobParameters(parameters,{id:jobId,type:'comprehensive',profile_id:null})))
 
     const job = await db
       .prepare('SELECT id, type, status, created_at, parameters FROM crawler_jobs WHERE id = ?')

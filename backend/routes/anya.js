@@ -1,4 +1,4 @@
-import { captureOwnerAiJobScope, isCanonicalOwner } from '../services/ownerAi/ownerAiScope.js'
+import { captureOwnerAiJobScope, isCanonicalOwner, ownerAiJobBudget } from '../services/ownerAi/ownerAiScope.js'
 import express from 'express'
 import crypto from 'crypto'
 import {
@@ -430,7 +430,7 @@ router.post('/sessions/:sessionId/messages', async (req, res) => {
     })
 
     if (background) {
-      const bgTimeout = Number(process.env.ANYA_BG_REPLY_TIMEOUT_MS || 240_000)
+      const bgTimeout = ownerAiJobBudget(process.env.ANYA_BG_REPLY_TIMEOUT_MS || 240_000)
       const jobScope = captureOwnerAiJobScope(req, { timeoutMs: bgTimeout })
       // Acknowledge now; finish the reply in its separately bounded owner scope.
       res.status(202).json({

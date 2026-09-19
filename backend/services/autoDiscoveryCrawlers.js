@@ -1,3 +1,4 @@
+import {ownerAiJobParameters} from './ownerAi/ownerAiScope.js'
 import { dispatchCrawlerJob } from './crawlerDispatcher.js'
 import { randomUUID } from 'crypto'
 import { buildProfileSignals, computeProfileDigest, resolveEffectiveProfileType } from './profileHelpers.js'
@@ -594,7 +595,7 @@ export async function triggerAutoDiscoveryCrawlers(db, profileId, options = {}) 
     `)
 
     for (const job of activeJobs) {
-      await insertStmt.run(job.id, job.type, job.profile_id, JSON.stringify(job.parameters), requestedBy)
+      await insertStmt.run(job.id, job.type, job.profile_id, JSON.stringify(ownerAiJobParameters(job.parameters,job)), requestedBy)
     }
 
     // Dispatch real jobs asynchronously (fire and forget)

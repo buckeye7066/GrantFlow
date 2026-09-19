@@ -1,3 +1,4 @@
+import {ownerAiJobParameters} from './ownerAi/ownerAiScope.js'
 /**
  * Anya Login Trigger
  * Automatically initializes Anya AI Assistant for ANY user on login.
@@ -72,7 +73,7 @@ async function createCrawlerJob(db, profileId, crawlerType, parameters = {}) {
     profileId,
     crawlerType,
     'queued',
-    JSON.stringify(parameters)
+    JSON.stringify(ownerAiJobParameters(parameters,{id:jobId,type:crawlerType,profile_id:profileId}))
   )
   
   return jobId

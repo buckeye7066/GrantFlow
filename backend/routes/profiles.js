@@ -1,3 +1,4 @@
+import {ownerAiJobParameters} from '../services/ownerAi/ownerAiScope.js'
 import express from 'express'
 import crypto from 'crypto'
 import { createOpenAIClient } from '../utils/openaiClient.js'
@@ -2926,7 +2927,7 @@ router.post('/:id/avatar/ai', async (req, res) => {
     jobId,
     profileRow.id,
     profileRow.organization_id ?? null,
-    JSON.stringify(parameters),
+    JSON.stringify(ownerAiJobParameters(parameters,{id:jobId,type:'avatar_lookup',profile_id:profileRow.id})),
     req.ctx?.isAdmin ? 'admin' : profileRow.id,
   )
 

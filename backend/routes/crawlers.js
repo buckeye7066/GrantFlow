@@ -1,3 +1,4 @@
+import {ownerAiJobParameters} from '../services/ownerAi/ownerAiScope.js'
 import express from 'express'
 import crypto from 'crypto'
 import fs from 'fs'
@@ -1393,7 +1394,7 @@ router.post('/jobs/:id/retry', async (req, res) => {
         job.type,
         retryProfileId,
         job.organization_id ?? null,
-        JSON.stringify(parameters),
+        JSON.stringify(ownerAiJobParameters(parameters,{id:newJobId,type:job.type,profile_id:retryProfileId})),
         profileContextSnapshot,
         idempotencyKey,
         requestedBy,

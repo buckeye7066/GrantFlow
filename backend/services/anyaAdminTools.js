@@ -1,3 +1,4 @@
+import {ownerAiJobParameters} from './ownerAi/ownerAiScope.js'
 import { promises as fs } from 'fs'
 import path from 'path'
 import { fileURLToPath } from 'url'
@@ -1205,7 +1206,7 @@ export async function adminCrawlerRun({ crawlerType, type, profileId, parameters
   }
 
   const jobId = randomUUID()
-  const parametersJson = JSON.stringify(parameters)
+  const parametersJson = JSON.stringify(ownerAiJobParameters(parameters,{id:jobId,type:selectedType,profile_id:profileId ?? null}))
 
   db.prepare(
     `
@@ -1380,7 +1381,7 @@ export async function adminCrawlerRetry({ jobId }, context) {
     newJobId,
     originalJob.type,
     originalJob.profile_id,
-    JSON.stringify(parameters),
+    JSON.stringify(ownerAiJobParameters(parameters,{id:newJobId,type:originalJob.type,profile_id:originalJob.profile_id})),
   )
 
   // Update retry count on original job

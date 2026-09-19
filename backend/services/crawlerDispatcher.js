@@ -1,5 +1,5 @@
 import fs from 'fs'
-import {captureDetachedOwnerAiRunner, runWithoutOwnerAiScope} from './ownerAi/ownerAiScope.js'
+import {captureDetachedOwnerAiRunner, runWithoutOwnerAiScope, durableOwnerAiRunner} from './ownerAi/ownerAiScope.js'
 import crypto from 'crypto'
 import { fileURLToPath } from 'url'
 import { dirname, join, resolve } from 'path'
@@ -334,7 +334,8 @@ async function ensureJobSnapshot(db, job) {
 }
 
 export function dispatchCrawlerJob(options) {
-  const runAiJob = captureDetachedOwnerAiRunner()
+  // Queue authority belongs to the signed original requester, not the drainer.
+  const runAiJob = runWithoutOwnerAiScope(captureDetachedOwnerAiRunner)
   return dispatchScopedCrawlerJob(options, runAiJob)
 }
 
@@ -345,6 +346,8 @@ function dispatchScopedCrawlerJob({ db, jobId, uploadDir, getOpenAI }, runAiJob)
       console.warn('[crawlerDispatcher] Job not found', jobId)
       return
     }
+
+    const originalOwnerJob = {...job}
 
     if (job.status && job.status !== 'queued') {
       // Grep-friendly so we can see why the dispatcher bailed out.
@@ -655,7 +658,7 @@ function dispatchScopedCrawlerJob({ db, jobId, uploadDir, getOpenAI }, runAiJob)
       context.heartbeat = () => updateJobHeartbeat(db, jobId)
 
       result = await withTimeout(
-        runAiJob(signal => handler({...context, signal}), {timeoutMs, signal:abortController.signal}),
+        (durableOwnerAiRunner(originalOwnerJob) || runAiJob)(signal => handler({...context, signal}), {timeoutMs, signal:abortController.signal}),
         timeoutMs,
         `Job ${jobId} (${job.type})`,
         abortController,
