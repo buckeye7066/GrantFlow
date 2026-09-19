@@ -23,6 +23,7 @@
 
 import { normalizeHost } from '../../hamiltonCredentialSessionService.js'
 import { extractPortalDataWithLLM } from '../llmPageExtract.js'
+import { observeGenericAccess, observeAccountEntry, genericCredentialLoginUrl } from '../genericAccess.js'
 
 export const id = 'mtsu'
 export const label = 'Middle Tennessee State University (PipelineMT / AcademicWorks)'
@@ -164,12 +165,22 @@ export async function read(page, ctx = {}) {
   // Navigate to the authenticated landing / known MTSU hosts so the extractor
   // starts from a useful page. We do NOT depend on these succeeding — the
   // extractor also reads same-origin aid links from wherever we land.
-  const navCandidates = [...new Set([...NAV.awards, ...NAV.scores, ...NAV.status])]
+  const navCandidates = [...new Set([genericCredentialLoginUrl(ctx), ctx.portalHost ? `https://${ctx.portalHost}/` : null, ...NAV.awards, ...NAV.scores, ...NAV.status].filter(Boolean))]
   const landed = await gotoFirst(page, navCandidates, log)
   raw.navigated = landed
+  const refuse = observation => ({
+    reached: Boolean(landed), access: observation.access, fields: [], awards: [], rejected: [],
+    notFound: [{ kind: 'access', name: 'authentication', reason: 'Authenticated account controls were not observed; no personal data was extracted.' }],
+    raw: { ...raw, pages: [observation.page] },
+  })
+  const observed = await observeAccountEntry(page, ctx, safeUrl(page))
+  if (observed.access !== 'authenticated') return refuse(observed)
 
   // ── PRIMARY: model-driven, selector-independent extraction ─────────────────
-  const llm = await extractPortalDataWithLLM(page, { log, navCandidates })
+  // Guessed landing pages cannot inherit the observed account's access proof.
+  const llm = await extractPortalDataWithLLM(page, { log, maxPages: 1 })
+  const afterExtraction = await observeGenericAccess(page, ctx, observed.page.landed)
+  if (afterExtraction.access !== 'authenticated') return refuse(afterExtraction)
   raw.llm = llm.raw
   // Fabrication-guard audit trail (items the extractor refused to treat as user
   // awards) — surfaced in the run summary for human review.
@@ -258,7 +269,10 @@ export async function read(page, ctx = {}) {
   // captured per-award above instead.
 
   log(`MTSU read complete: ${fields.length} fields, ${awards.length} awards (${rejected.length} rejected by fabrication guard), ${notFound.length} notFound`)
-  return { fields, awards, notFound, rejected, raw }
+  const finalAccess = await observeGenericAccess(page, ctx, observed.page.landed)
+  if (finalAccess.access !== 'authenticated') return refuse(finalAccess)
+  raw.pages = [finalAccess.page]
+  return { reached: true, access: finalAccess.access, fields, awards, notFound, rejected, raw }
 }
 
 /**
