@@ -1,3 +1,4 @@
+import {ownerAiJobParameters} from '../services/ownerAi/ownerAiScope.js'
 import express from 'express';
 import { withProfileScope } from '../middleware/profileContext.js'
 import crypto from 'crypto';
@@ -32,7 +33,7 @@ const routeLogger = createLogger('route:documents')
 
 // OpenAI client helper
 function getOpenAI() {
-  return createOpenAIClient().openai;
+  return createOpenAIClient({ ownerInference: true }).openai;
 }
 
 const router = express.Router();
@@ -1261,13 +1262,13 @@ router.post('/ingest', uploadLimiter, requireUploadsWritable, runUploadSingle('d
           jobId,
           profileId,
           resolvedOrganizationId,
-          JSON.stringify({
+          JSON.stringify(ownerAiJobParameters({
             document_id: docId,
             source,
             handwriting: req.body?.handwriting === 'true' || req.body?.handwriting === true,
             enable_ai: enableAiForJob,
             add_to_opportunities: addToOpportunities,
-          }),
+          },{id:jobId,type:'document_ingest',profile_id:profileId})),
           requestedBy,
         );
       
@@ -1445,12 +1446,12 @@ router.post('/:id/parse', async (req, res) => {
               jobId,
               profileId,
               document.organization_id ?? null,
-              JSON.stringify({
+              JSON.stringify(ownerAiJobParameters({
                 document_id: document.id,
                 source: 'manual_parse_followup',
                 handwriting: req.body?.handwriting === 'true' || req.body?.handwriting === true,
                 enable_ai: true,
-              }),
+              },{id:jobId,type:'document_ingest',profile_id:profileId})),
               requestedBy,
             );
           const parseJob = await req.db.prepare('SELECT * FROM crawler_jobs WHERE id = ?').get(jobId);
@@ -1467,7 +1468,7 @@ router.post('/:id/parse', async (req, res) => {
           params.handwriting = req.body?.handwriting === 'true' || req.body?.handwriting === true
           await req.db
             .prepare('UPDATE crawler_jobs SET parameters = ? WHERE id = ?')
-            .run(JSON.stringify(params), existing.id)
+            .run(JSON.stringify(ownerAiJobParameters(params,{id:existing.id,type:'document_ingest',profile_id:profileId})), existing.id)
         }
       }
     } else {
@@ -1483,12 +1484,12 @@ router.post('/:id/parse', async (req, res) => {
           jobId,
           profileId,
           document.organization_id ?? null,
-          JSON.stringify({
+          JSON.stringify(ownerAiJobParameters({
             document_id: document.id,
             source: 'manual_parse',
             handwriting: req.body?.handwriting === 'true' || req.body?.handwriting === true,
             enable_ai: true,
-          }),
+          },{id:jobId,type:'document_ingest',profile_id:profileId})),
           requestedBy,
         );
 
@@ -1586,12 +1587,12 @@ router.post('/parse-all', async (req, res) => {
               jobId,
               profileId,
               doc.organization_id ?? null,
-              JSON.stringify({
+              JSON.stringify(ownerAiJobParameters({
                 document_id: doc.id,
                 source: 'parse_all_followup',
                 handwriting: req.body?.handwriting === 'true' || req.body?.handwriting === true,
                 enable_ai: true,
-              }),
+              },{id:jobId,type:'document_ingest',profile_id:profileId})),
               requestedBy,
             );
             jobsToDispatch.push(jobId);
@@ -1601,7 +1602,7 @@ router.post('/parse-all', async (req, res) => {
             params.handwriting = req.body?.handwriting === 'true' || req.body?.handwriting === true
             await req.db
               .prepare('UPDATE crawler_jobs SET parameters = ? WHERE id = ?')
-              .run(JSON.stringify(params), already.id)
+              .run(JSON.stringify(ownerAiJobParameters(params,{id:already.id,type:'document_ingest',profile_id:profileId})), already.id)
             // Dispatch the updated job so the worker picks up enable_ai=true.
             jobsToDispatch.push(already.id)
             queued += 1
@@ -1615,12 +1616,12 @@ router.post('/parse-all', async (req, res) => {
         jobId,
         profileId,
         doc.organization_id ?? null,
-        JSON.stringify({
+        JSON.stringify(ownerAiJobParameters({
           document_id: doc.id,
           source: 'parse_all',
           handwriting: req.body?.handwriting === 'true' || req.body?.handwriting === true,
           enable_ai: true,
-        }),
+        },{id:jobId,type:'document_ingest',profile_id:profileId})),
         requestedBy,
       );
       
@@ -1685,12 +1686,12 @@ router.post('/:id/ingest', async (req, res) => {
           jobId,
           profileId,
           document.organization_id ?? null,
-          JSON.stringify({
+          JSON.stringify(ownerAiJobParameters({
             document_id: document.id,
             source: 'manual_ingest',
             handwriting: req.body?.handwriting === 'true' || req.body?.handwriting === true,
             enable_ai: false,
-          }),
+          },{id:jobId,type:'document_ingest',profile_id:profileId})),
           requestedBy,
         );
 

@@ -332,3 +332,11 @@ describe('federalRegisterAdapter procedural exclusion (ingest side)', () => {
     expect(String(FR_ADAPTER_PROCEDURAL_RE)).toBe(String(RE_PROCEDURAL_NOTICE_TITLE))
   })
 })
+
+
+it('rejects the September 18 Federal Register comment-request notice at both choke points', () => {
+  const title = 'Proposed Collection; 60-Day Comment Request; Post-Award Reporting Requirements Including Research Performance Progress Report (OD)'
+  expect(RE_PROCEDURAL_NOTICE_TITLE.test(title)).toBe(true)
+  expect(FR_ADAPTER_PROCEDURAL_RE.test(title)).toBe(true)
+  expect(computeMatchDecision({profile:{id:"fixture"},sections:{}}, {...PRA_NOTICE_OPP,title}).decision).toBe("REJECT")
+})

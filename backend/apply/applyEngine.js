@@ -1436,7 +1436,7 @@ export async function generateApplicationSections(db, grant, opportunity, profil
       // retries × 30s timeout per attempt (= up to 90s per call), which alone
       // already breaches the proxy budget. A retry on the next button click is
       // strictly safer than a 504.
-      openai = createOpenAIClient({
+      openai = createOpenAIClient({ ownerInference: true,
         allowMissing: true,
         timeoutMs: AUTO_POPULATE_PER_SECTION_TIMEOUT_MS,
         maxRetries: 0,

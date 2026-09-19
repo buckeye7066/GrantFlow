@@ -1,3 +1,4 @@
+import { wrapOwnerSdkClient } from '../utils/ownerSdkRouting.js'
 /**
  * Error reporter — when a logged-in NON-ADMIN user hits an error, capture it,
  * analyze the likely cause + suggested fix (LLM with heuristic fallback), and
@@ -171,11 +172,11 @@ async function getAnthropic() {
   if (!key) return null
   if (cachedAnthropic && cachedAnthropicKey === key) return cachedAnthropic
   const Anthropic = (await import('@anthropic-ai/sdk')).default
-  cachedAnthropic = new Anthropic({
+  cachedAnthropic = wrapOwnerSdkClient(new Anthropic({
     apiKey: key,
     timeout: ANALYZE_TIMEOUT_MS,
     maxRetries: 1,
-  })
+  }), 'anthropic')
   cachedAnthropicKey = key
   return cachedAnthropic
 }

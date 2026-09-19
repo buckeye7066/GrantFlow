@@ -3,6 +3,8 @@ import { listToolMetadata, invokeTool as invokeRegisteredTool } from './anyaTool
 import { createCircuitBreaker } from '../utils/circuitBreaker.js'
 import { createOpenAIClient, summarizeOpenAIError } from '../utils/openaiClient.js'
 import { invokeTextWithFallback as invokeProviderTextWithFallback } from '../utils/aiProviders.js'
+import { getOwnerAiScope } from './ownerAi/ownerAiScope.js'
+import { invokeAnyaToolTurn } from './anyaToolTransport.js'
 import { getProfileContext, runProfileContext } from '../db/scopedQuery.js'
 import { buildAnyaContext } from './anyaContextBuilder.js'
 import path from 'path'
@@ -31,7 +33,7 @@ const openAIBreaker = createCircuitBreaker({
 function getOpenAIClient() {
   // Resolve current runtime configuration for every request. A cached SDK client
   // would keep a revoked/cleared credential alive after an admin key change.
-  return createOpenAIClient().openai
+  return createOpenAIClient({ ownerInference: true }).openai
 }
 
 const DEFAULT_ASSISTANT_MODEL = process.env.ANYA_OPENAI_MODEL || 'gpt-4o-mini'
@@ -1530,8 +1532,11 @@ export async function generateAssistantResponse(db, user, sessionId, { content, 
     return null
   }
 
-  // 1) Try OpenAI first (if configured)
-  if (openai) {
+  // Owner requests enter subscription routing before any direct metered call.
+  // Other callers retain native tools first, with a provider-neutral fallback.
+  const wasCancelled = async () => Boolean(runId) && (await isAnyaRunCancelRequested(db, runId))
+  let useGateway = Boolean(getOwnerAiScope({ includeAborted: true })) || !openai
+  if (openai || useGateway) {
     try {
       log.info('[Anya] Calling OpenAI API with model:', DEFAULT_ASSISTANT_MODEL, openaiTools ? `(tools=${openaiTools.length})` : '(tools=disabled)')
 
@@ -1587,14 +1592,18 @@ export async function generateAssistantResponse(db, user, sessionId, { content, 
         }
         return MAP[name] || `Running ${name}`
       }
-      const wasCancelled = async () => Boolean(runId) && (await isAnyaRunCancelRequested(db, runId))
 
       for (let iter = 0; iter < MAX_TOOL_ITERATIONS; iter += 1) {
         if (await wasCancelled()) {
           await pushStep('Stopped by you', 'cancelled')
           return CANCELLED_REPLY
         }
-        const response = await openAIBreaker.exec(
+        let response
+        if (useGateway) {
+          response = await invokeAnyaToolTurn({ messages: workingMessages, tools: openaiTools || [] })
+        } else {
+          try {
+        response = await openAIBreaker.exec(
           async () =>
             await openai.chat.completions.create({
               model: DEFAULT_ASSISTANT_MODEL,
@@ -1612,6 +1621,12 @@ export async function generateAssistantResponse(db, user, sessionId, { content, 
             },
           },
         )
+          } catch (error) {
+            log.warn('[Anya] Native tool provider unavailable; trying configured fallback', { status: error?.status ?? null })
+            useGateway = true
+            response = await invokeAnyaToolTurn({ messages: workingMessages, tools: openaiTools || [] })
+          }
+        }
 
         const choice = response.choices?.[0]?.message
         if (!choice) break
@@ -1720,12 +1735,16 @@ export async function generateAssistantResponse(db, user, sessionId, { content, 
         // confirmation, retry with adjusted args).
       }
 
+      if (await wasCancelled()) return CANCELLED_REPLY
       if (finalReply) {
-        log.info('[Anya] OpenAI API response received successfully')
+        log.info('[Anya] Tool-capable response received', { transport: useGateway ? 'shared_provider_gateway' : 'native_openai' })
         return finalReply
       }
       log.warn('[Anya] OpenAI tool-calling loop exhausted without a textual reply')
     } catch (error) {
+      if (await wasCancelled()) return CANCELLED_REPLY
+      const ownerScope = getOwnerAiScope({ includeAborted: true })
+      if (ownerScope?.signal.aborted) throw ownerScope.signal.reason || error
       const summary = summarizeOpenAIError(error)
       console.error('[Anya] OpenAI API Error:', {
         status: summary.status,
@@ -1809,7 +1828,7 @@ export async function invokeTool(db, user, toolName, params, { sessionId, intern
 
   const getOpenAI = () => {
     try {
-      const { openai } = createOpenAIClient({ allowMissing: true })
+      const { openai } = createOpenAIClient({ allowMissing: true, ownerInference: true })
       return openai
     } catch {
       return null

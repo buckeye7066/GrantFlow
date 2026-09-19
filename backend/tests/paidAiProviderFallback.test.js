@@ -289,3 +289,9 @@ describe('native API options and recovery', () => {
 it('retains retryability when the final free route is rate-limited', () => {
   expect(isTransientLlmFailure({ ok: false, freeRouteErrors: [{ status: 429, message: 'rate_limited' }] })).toBe(true)
 })
+
+
+it('a failed upstream SDK provider is excluded from this fallback invocation',async()=>{
+ const result=await run({excludedProviders:['openai']})
+ expect(result.provider).toBe('anthropic');expect(sdk.openai).not.toHaveBeenCalled();expect(sdk.responses).not.toHaveBeenCalled()
+})

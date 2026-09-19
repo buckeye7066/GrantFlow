@@ -152,7 +152,7 @@ export function validateOpportunityAgainstSchema(value, jsonSchema, { partial = 
 }
 
 function getOpenAIOptional() {
-  return createOpenAIClient({ allowMissing: true }).openai
+  return createOpenAIClient({ ownerInference: true, allowMissing: true }).openai
 }
 
 function tryExtractFirstJson(text) {

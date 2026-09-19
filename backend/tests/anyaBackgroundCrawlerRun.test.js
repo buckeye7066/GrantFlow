@@ -1,3 +1,5 @@
+import {EventEmitter} from 'node:events'
+import {runWithOwnerAiScope,getOwnerAiScope} from '../services/ownerAi/ownerAiScope.js'
 // Guards the 2026-07-20 fix: POST /api/anya/autonomous/crawlers used to
 // `await` runAutonomousCrawlers() synchronously inside the HTTP handler.
 // runAutonomousCrawlers now drives the Crawler OS one real profile at a time
@@ -70,4 +72,15 @@ describe('startBackgroundCrawlerRun (fire-and-forget)', () => {
     expect(state.running).toBe(false)
     expect(state.lastError).toBe('boom')
   })
+})
+
+
+it('a launched owner crawler does not inherit the acknowledged request cancellation',async()=>{
+ vi.stubEnv('OWNER_AI_EMAIL','owner@example.test');vi.stubEnv('OWNER_AI_USER_ID','');let seen
+ try {
+  const req={ctx:{identityResolved:true,isAdmin:true,userId:'owner',email:'owner@example.test'},res:new EventEmitter()}
+  runAutonomousCrawlers.mockImplementation(async()=>{await flush();const scope=getOwnerAiScope({includeAborted:true});seen={present:!!scope,aborted:scope?.signal.aborted};return {profiles_processed:1}})
+  runWithOwnerAiScope(req,()=>startBackgroundCrawlerRun({}, {db:{},user:req.ctx}));req.res.emit('finish');await flush();await flush()
+  expect(seen).toEqual({present:true,aborted:false})
+ }finally{vi.unstubAllEnvs()}
 })

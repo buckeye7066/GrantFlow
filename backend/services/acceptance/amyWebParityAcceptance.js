@@ -388,7 +388,7 @@ export async function runDependencyPreflight({
   searchWeb,
   extractOpportunitiesFromPage,
   searchTimeoutMs = 60_000,
-  extractorTimeoutMs = 20_000,
+  extractorTimeoutMs = 65_000,
 } = {}) {
   const searchConfig = configuredSearchProviders(env || {}, allowedProviders || [])
   const extractorConfigured = configuredExtractorProviders(env || {})
@@ -464,7 +464,7 @@ export async function runDependencyPreflight({
           pageUrl: 'https://acceptance-probe.invalid/community-health-grant',
           html: EXTRACTOR_PROBE_HTML,
         },
-        { timeoutMs: Math.min(15_000, extractorTimeoutMs) },
+        { timeoutMs: Math.min(60_000, extractorTimeoutMs) },
       ),
       extractorTimeoutMs,
       'extractor_probe_timeout',

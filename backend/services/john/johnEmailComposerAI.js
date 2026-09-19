@@ -1,3 +1,4 @@
+import { wrapOwnerSdkClient } from '../../utils/ownerSdkRouting.js'
 /**
  * John — AI email composer.
  *
@@ -60,11 +61,11 @@ async function getClient() {
   const key = String(process.env.ANTHROPIC_API_KEY || '').trim()
   if (!key) return null
   const Anthropic = (await import('@anthropic-ai/sdk')).default
-  cachedClient = new Anthropic({
+  cachedClient = wrapOwnerSdkClient(new Anthropic({
     apiKey: key,
     timeout: Number(process.env.JOHN_AI_TIMEOUT_MS || 25_000),
     maxRetries: Number(process.env.JOHN_AI_MAX_RETRIES || 1),
-  })
+  }), 'anthropic')
   return cachedClient
 }
 

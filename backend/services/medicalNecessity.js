@@ -314,7 +314,7 @@ export async function generateMedicalNecessityDocument(db, profileId, options = 
   })
 
   try {
-    const client = createOpenAIClient({ allowMissing: true })
+    const client = createOpenAIClient({ allowMissing: true, ownerInference: true })
     const providerResult = await invokeProviderTextWithFallback({
       openai: client?.openai || null,
       openaiModel: process.env.OPENAI_MODEL || 'gpt-4o-mini',

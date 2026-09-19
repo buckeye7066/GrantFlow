@@ -833,6 +833,29 @@ export function isPendingGapStatus(value) {
   return status === 'candidate' || (isNotEvaluatedGapStatus(status) && !isTerminalGapStatus(status))
 }
 
+// Older queue rows called extraction failure a terminal gate decision. Only
+// the positively documented legacy case may retry; actual gates, dismissals,
+// other producers and exhausted offer budgets remain untouched.
+function gapOfferCount(candidate) {
+  const recorded = Number(candidate?.offer_count)
+  const minimum = normalizeGapStatus(candidate?.status) === 'gated_out' ? 1 : 0
+  return Number.isFinite(recorded) ? Math.max(minimum, Math.floor(recorded)) : minimum
+}
+
+function isRecoverableLegacyExtractionGap(candidate) {
+  return candidate?.source === 'web_parity_benchmark' &&
+    normalizeGapStatus(candidate.status) === 'gated_out' &&
+    !String(candidate.gate || '').trim() && !String(candidate.gate_reason || '').trim() &&
+    (candidate.outcome_evidence === undefined || candidate.outcome_evidence === null) &&
+    candidate.disposition === 'extraction_failed' &&
+    candidate.disposition_evidence?.source === 'lane_page_ledger' &&
+    gapOfferCount(candidate) < GAP_SEED_MAX_OFFERS
+}
+
+export function isPendingGapCandidate(candidate) {
+  return isPendingGapStatus(candidate?.status) || isRecoverableLegacyExtractionGap(candidate)
+}
+
 function gapCandidateKey(candidate) {
   const profileId = String(candidate?.profile_id || '').trim()
   const urlKey = normalizeUrlKey(candidate?.url)
@@ -876,7 +899,7 @@ function trimGapQueue(rows, cap = GAP_QUEUE_CAP) {
   const dispositionedPending = []
   const plainPending = []
   for (const item of indexed) {
-    if (isTerminalGapStatus(item.row?.status)) terminal.push(item)
+    if (isTerminalGapStatus(item.row?.status) && !isPendingGapCandidate(item.row)) terminal.push(item)
     else if (item.row?.disposition) dispositionedPending.push(item)
     else plainPending.push(item)
   }
@@ -946,7 +969,7 @@ export async function appendGapCandidates(
     const key = gapCandidateKey(candidate)
     if (!key) continue
     const sourceName = String(candidate?.source || 'web_parity_benchmark')
-    const terminal = isTerminalGapStatus(candidate?.status)
+    const terminal = isTerminalGapStatus(candidate?.status) && !isPendingGapCandidate(candidate)
     const inScope = scope.has(String(candidate?.profile_id || ''))
 
     if (sourceName === 'web_parity_benchmark' && !terminal && inScope) {
@@ -1087,7 +1110,7 @@ export async function loadGapSeedPagesForProfile(db, profileId, {
   // which is terminal for seeding).
   const fresh = forProfile.filter((c) => normalizeGapStatus(c?.status) === 'candidate')
   const cooled = forProfile.filter((c) => {
-    if (!isNotEvaluatedGapStatus(c?.status) || !isPendingGapStatus(c?.status)) return false
+    if (!(isNotEvaluatedGapStatus(c?.status) && isPendingGapStatus(c?.status)) && !isRecoverableLegacyExtractionGap(c)) return false
     if ((Number(c?.offer_count) || 0) >= GAP_SEED_MAX_OFFERS) return false
     const offeredMs = Date.parse(c?.offered_at || '')
     return !Number.isFinite(offeredMs) || nowMs - offeredMs >= reseedCooldownMs
@@ -1222,8 +1245,10 @@ export async function markGapCandidateOutcomes(db, {
     if (profileId !== null && String(c?.profile_id) !== String(profileId)) return c
     const key = normalizeUrlKey(c?.url)
     if (!key || !offered.has(key)) return c
-    const offerCount = (Number(c?.offer_count) || 0) + 1
-    const base = { ...c, offered_at: at, offer_count: offerCount }
+    const offerCount = gapOfferCount(c) + 1
+    const base = { ...c, offered_at: at, offer_count: offerCount,
+      ...(isRecoverableLegacyExtractionGap(c) ? { legacy_gate_claim: { status: c.status, resolved_at: c.resolved_at ?? null, disposition: c.disposition } } : {}),
+    }
     const ledgerEntry = outcomes.get(key) || null
     const ledgerOutcome = String(ledgerEntry?.outcome || ledgerEntry?.stage || '').trim().toLowerCase()
     if (adopted.has(key) || SEED_OUTCOME_ADOPTED.has(ledgerOutcome)) {
@@ -2395,5 +2420,6 @@ export default {
   markGapCandidateOutcomes,
   loadGapSeedPagesForProfile,
   isPendingGapStatus,
+  isPendingGapCandidate,
   runWebParityBenchmark,
 }

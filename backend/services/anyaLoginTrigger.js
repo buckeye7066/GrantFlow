@@ -1,3 +1,5 @@
+import { runWithVerifiedOwnerAiScope } from './ownerAi/ownerAiScope.js'
+import {ownerAiJobParameters} from './ownerAi/ownerAiScope.js'
 /**
  * Anya Login Trigger
  * Automatically initializes Anya AI Assistant for ANY user on login.
@@ -72,7 +74,7 @@ async function createCrawlerJob(db, profileId, crawlerType, parameters = {}) {
     profileId,
     crawlerType,
     'queued',
-    JSON.stringify(parameters)
+    JSON.stringify(ownerAiJobParameters(parameters,{id:jobId,type:crawlerType,profile_id:profileId}))
   )
   
   return jobId
@@ -110,7 +112,7 @@ async function addAnyaMessage(db, sessionId, role, content) {
  *
  * The legacy name is kept as an alias so existing call-sites don't break.
  */
-export async function initializeAnyaOnLogin(db, user, profileId = null, { uploadDir, getOpenAI } = {}) {
+async function initializeAnyaOnLoginVerified(db, user, profileId = null, { uploadDir, getOpenAI } = {}) {
   try {
     // Resolve profile for this user
     if (!profileId && user?.id) {
@@ -288,4 +290,8 @@ export async function getAnyaSessionInfo(db, sessionId) {
     status: session.status,
     title: session.title,
   }
+}
+
+export async function initializeAnyaOnLogin(db, user, ...args) {
+  return runWithVerifiedOwnerAiScope(db, user, () => initializeAnyaOnLoginVerified(db, user, ...args))
 }

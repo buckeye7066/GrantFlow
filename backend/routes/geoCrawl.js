@@ -1,3 +1,4 @@
+import {ownerAiJobParameters} from '../services/ownerAi/ownerAiScope.js'
 import express from 'express'
 import crypto from 'crypto'
 import { requireAuthenticatedUser, isAdminUserWithDb, getAuthUserId } from '../utils/accessControl.js'
@@ -87,7 +88,7 @@ export default function createGeoCrawlRouter({ uploadDir, getOpenAI } = {}) {
             VALUES (?, 'comprehensive', 'queued', ?, NULL, ?, 'admin')
           `,
         )
-        .run(jobId, callerProfileId, JSON.stringify(parameters))
+        .run(jobId, callerProfileId, JSON.stringify(ownerAiJobParameters(parameters,{id:jobId,type:'comprehensive',profile_id:callerProfileId})))
 
       // Durable run row for monitor (DB-backed, survives refresh)
       const createdByUserId = getAuthUserId(req.ctx ?? req.user ?? isAuthorized) ?? null

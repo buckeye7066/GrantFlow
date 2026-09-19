@@ -141,7 +141,7 @@ function fallbackGrantAnalysisMarkdown({ title }) {
 }
 
 async function invokeOpenAiOptional(prompt) {
-  const openai = createOpenAIClient({ allowMissing: true }).openai
+  const openai = createOpenAIClient({ ownerInference: true, allowMissing: true }).openai
   const result = await invokeProviderTextWithFallback({
     openai,
     openaiModel: process.env.OPENAI_MODEL || 'gpt-4o-mini',

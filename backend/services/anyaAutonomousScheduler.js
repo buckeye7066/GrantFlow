@@ -1,3 +1,4 @@
+import {captureDetachedOwnerAiRunner} from './ownerAi/ownerAiScope.js'
 import { runAutonomousCodeCrawl } from './anyaAutonomousCrawler.js'
 import { runAutonomousCrawlers } from './anyaAutonomousFunctionRunner.js'
 import { runAutonomousFunctionTests } from './anyaAutonomousFunctionTesting.js'
@@ -527,36 +528,49 @@ export async function runCodeCrawlAndRepairOnly(context) {
   try {
     if (AUTONOMOUS_CONFIG.operations.codeCrawl) {
       try {
+        context.signal?.throwIfAborted()
         const result = await runAutonomousCodeCrawl(AUTONOMOUS_CONFIG.params.codeCrawl, context)
+        context.signal?.throwIfAborted()
         report.operations.codeCrawl = { status: 'completed', files_scanned: result.files_scanned, files_modified: result.files_modified, issues_fixed: result.issues_fixed }
       } catch (error) {
+        context.signal?.throwIfAborted()
         report.errors.push({ phase: 'codeCrawl', error: error.message })
+        context.signal?.throwIfAborted()
         report.operations.codeCrawl = { status: 'failed', error: error.message }
       }
     }
 
     if (AUTONOMOUS_CONFIG.operations.functionTests) {
       try {
+        context.signal?.throwIfAborted()
         const result = await runAutonomousFunctionTests(AUTONOMOUS_CONFIG.params.functionTests, context)
+        context.signal?.throwIfAborted()
         report.operations.functionTests = { status: 'completed', total_tests: result.total_tests, tests_passed: result.tests_passed, tests_failed: result.tests_failed }
         if (result.failed_tests && result.failed_tests.length > 0) {
           try {
+        context.signal?.throwIfAborted()
             const repairResult = await repairFailingTests(result.failed_tests, context.db)
-            report.operations.testRepair = { status: 'completed', repaired: repairResult.repaired.length, unable_to_repair: repairResult.unable_to_repair.length }
+            context.signal?.throwIfAborted()
+        report.operations.testRepair = { status: 'completed', repaired: repairResult.repaired.length, unable_to_repair: repairResult.unable_to_repair.length }
             if (repairResult.repaired.length > 0) {
               const retestResult = await runAutonomousFunctionTests(AUTONOMOUS_CONFIG.params.functionTests, context)
-              report.operations.functionTestsAfterRepair = { tests_passed: retestResult.tests_passed, tests_failed: retestResult.tests_failed }
+              context.signal?.throwIfAborted()
+        report.operations.functionTestsAfterRepair = { tests_passed: retestResult.tests_passed, tests_failed: retestResult.tests_failed }
             }
           } catch (repairError) {
-            report.operations.testRepair = { status: 'failed', error: repairError.message }
+            context.signal?.throwIfAborted()
+        report.operations.testRepair = { status: 'failed', error: repairError.message }
           }
         }
       } catch (error) {
+        context.signal?.throwIfAborted()
         report.errors.push({ phase: 'functionTests', error: error.message })
+        context.signal?.throwIfAborted()
         report.operations.functionTests = { status: 'failed', error: error.message }
       }
     }
 
+    context.signal?.throwIfAborted()
     report.completed_at = new Date().toISOString()
     report.status = report.errors.length > 0 ? 'completed_with_errors' : 'success'
     await logOperation('background_code_repair_complete', report.status, report, context)
@@ -582,7 +596,7 @@ export function startBackgroundCodeCrawlAndRepair(context) {
   backgroundCodeCrawlState.lastResult = null
   backgroundCodeCrawlState.lastError = null
 
-  runCodeCrawlAndRepairOnly(context)
+  captureDetachedOwnerAiRunner()(signal => runCodeCrawlAndRepairOnly({...context, signal}), {timeoutMs:21600000,waitForSettlement:true})
     .then((result) => {
       backgroundCodeCrawlState.lastResult = result
     })
@@ -647,7 +661,7 @@ export function startBackgroundCrawlerRun(options, context) {
   backgroundCrawlerRunState.lastResult = null
   backgroundCrawlerRunState.lastError = null
 
-  runAutonomousCrawlers(options, context)
+  captureDetachedOwnerAiRunner()(signal => runAutonomousCrawlers(options, {...context, signal}), {timeoutMs:21600000})
     .then((result) => {
       backgroundCrawlerRunState.lastResult = result
     })

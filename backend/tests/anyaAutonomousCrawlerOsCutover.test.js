@@ -63,3 +63,9 @@ describe('autonomous crawler OS cutover', () => {
     expect(report.jobs.some((j) => j.status === 'skipped')).toBe(true)
   })
 })
+
+
+it('cancellation of the final fleet profile does not become a completed report',async()=>{
+ const controller=new AbortController();runProfileDiscoveryLive.mockImplementationOnce(async()=>{controller.abort();throw new DOMException('Cancelled','AbortError')})
+ await expect(runAutonomousCrawlers({profileIds:['p1'],force:true},{db:fakeDb([PROFILES[0]]),signal:controller.signal})).rejects.toThrow()
+})

@@ -20,6 +20,7 @@ import {
   hasPositiveFourTruthProof,
 } from '../../config/fundingTruthPolicy.js'
 import { isFundingResource } from './fundingSourcePresentation.js'
+import { RE_PROCEDURAL_NOTICE_TITLE } from '../opportunityNormalizer.js'
 
 const log = createLogger('stale-match-explain')
 
@@ -340,13 +341,16 @@ export async function runStaleMatchExplainRefresh(db, opts = {}) {
     const structuralTargetRefusal = storedDecision === 'accept' && verdictToWrite === 'review' &&
       decision?.match_explain?.application_target?.status === 'non_application'
 
+    const structuralProceduralRefusal = verdictToWrite === 'reject' && RE_PROCEDURAL_NOTICE_TITLE.test(String(row.title || ''))
+    const structuralRefusal = structuralTargetRefusal || structuralProceduralRefusal
+
     // Other linker scoring/provenance rules retain their existing behavior.
-    if (!structuralTargetRefusal && ACCEPT_ONLY_VERSIONS.has(matcherVersion) && verdictToWrite !== 'accept') {
+    if (!structuralRefusal && ACCEPT_ONLY_VERSIONS.has(matcherVersion) && verdictToWrite !== 'accept') {
       verdictToWrite = null
       scoreToWrite = null
     }
     // For linker lanes in general: never allow a downgrade (e.g., accept -> review/reject)
-    if (!structuralTargetRefusal && LINKER_VERSIONS.has(matcherVersion)) {
+    if (!structuralRefusal && LINKER_VERSIONS.has(matcherVersion)) {
       if (rank(verdictToWrite) < rank(storedDecision)) {
         verdictToWrite = null
         // Do not lower the score alongside a downgrade; keep existing score
@@ -364,7 +368,7 @@ export async function runStaleMatchExplainRefresh(db, opts = {}) {
     // the display gate evaluates this fresh proof. Preserve an earlier positive
     // proof only as history so a later recovery can explain the disagreement.
     const explainToPersist = { ...explain }
-    if (verdictToWrite === null && storedDecision === 'accept' &&
+    if ((verdictToWrite === null || structuralRefusal) && storedDecision === 'accept' &&
         previousProof && hasPositiveFourTruthProof({ four_truth_proof: previousProof }) &&
         refreshedProof?.all_passed !== true) {
       explainToPersist.previous_four_truth_proof = previousProof

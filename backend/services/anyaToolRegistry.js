@@ -1,3 +1,4 @@
+import {ownerAiJobParameters} from './ownerAi/ownerAiScope.js'
 import path from 'path'
 import { promises as fs } from 'fs'
 import { randomUUID } from 'crypto'
@@ -2975,7 +2976,7 @@ registerTool({
         continue
       }
       if (creation.created) {
-        setImmediate(() => { dispatchCrawlerJob({ db, jobId: creation.jobId }).catch(() => {}) })
+         dispatchCrawlerJob({ db, jobId: creation.jobId }).catch(() => {})
       }
       jobs.push({ type: crawlerType, profileId, jobId: creation.jobId, existing: !creation.created })
     }
@@ -3645,7 +3646,7 @@ registerTool({
         `INSERT INTO crawler_jobs (id, type, status, profile_id, organization_id, parameters, requested_by)
          VALUES (?, 'comprehensive', 'queued', NULL, NULL, ?, 'anya_admin')`,
       )
-      .run(jobId, parameters)
+      .run(jobId, JSON.stringify(ownerAiJobParameters(JSON.parse(parameters),{id:jobId,type:'comprehensive',profile_id:null})))
 
     try {
       const { dispatchCrawlerJob } = await import('./crawlerDispatcher.js')
@@ -4598,7 +4599,7 @@ registerTool({
       requestedBy: context?.ctx?.userId ?? 'anya_owner',
       buildSnapshot: false,
     })
-    setImmediate(() => { dispatchCrawlerJob({ db, jobId: creation.jobId }).catch(() => {}) })
+     dispatchCrawlerJob({ db, jobId: creation.jobId }).catch(() => {})
     return { ok: true, job_id: creation.jobId, type: params.type, profile_id: params.profileId }
   },
 })
@@ -5714,7 +5715,7 @@ registerTool({
         requestedBy: context?.ctx?.userId ?? 'anya_owner',
         buildSnapshot: false,
       })
-      setImmediate(() => { dispatchCrawlerJob({ db, jobId: creation.jobId }).catch(() => {}) })
+       dispatchCrawlerJob({ db, jobId: creation.jobId }).catch(() => {})
       crawl = { job_id: creation.jobId, type: String(params?.crawlType || 'comprehensive') }
     }
 

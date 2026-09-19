@@ -32,6 +32,7 @@
  */
 
 import { getAnthropicOptional, getOpenAIOptional } from '../utils/aiProviders.js'
+import { wrapOwnerSdkClient } from '../utils/ownerSdkRouting.js'
 import { withLLMTimeout } from '../utils/llmTimeout.js'
 import { safeParseJSON } from '../utils/safeJson.js'
 import { validatePatchForDispatch } from './anyaCodeFixDispatch.js'
@@ -283,7 +284,7 @@ export async function defaultAuthorFn(
   deps = {},
 ) {
   const getAnthropic = deps.getAnthropicOptional || getAnthropicOptional
-  const anthropic = await getAnthropic()
+  const anthropic = wrapOwnerSdkClient(await getAnthropic(), 'anthropic', { providerSpecific: true })
   if (!anthropic) {
     const err = new Error('ANTHROPIC_API_KEY not configured — code author (fable/Claude) unavailable')
     err.code = 'AUTHOR_UNAVAILABLE'
@@ -311,7 +312,7 @@ export async function defaultAuthorFn(
 
 export async function defaultVerifierFn({ finding, diff, filePath } = {}, deps = {}) {
   const getOpenAI = deps.getOpenAIOptional || getOpenAIOptional
-  const openai = getOpenAI()
+  const openai = wrapOwnerSdkClient(getOpenAI(), 'openai', { providerSpecific: true })
   if (!openai) {
     const err = new Error('OPENAI_API_KEY not configured — adversarial verifier (sol/OpenAI) unavailable')
     err.code = 'VERIFIER_UNAVAILABLE'

@@ -1,3 +1,4 @@
+import { wrapOwnerSdkClient } from '../utils/ownerSdkRouting.js'
 import { buildProfileSectionPrompt } from '../prompts/profileSections.js'
 import { summarizeOpenAIError } from '../utils/openaiClient.js'
 import { invokeJsonWithFallback } from '../utils/aiProviders.js'
@@ -74,11 +75,11 @@ async function createAnthropicClient() {
   if (!key) return null
   try {
     const Anthropic = (await import('@anthropic-ai/sdk')).default
-    return new Anthropic({
+    return wrapOwnerSdkClient(new Anthropic({
     apiKey: key,
     timeout: Number(process.env.ANYA_ANTHROPIC_TIMEOUT_MS || 20_000),
     maxRetries: Number(process.env.ANYA_ANTHROPIC_MAX_RETRIES || 1),
-  })
+  }), 'anthropic')
   } catch (error) { console.error('Failed to load Anthropic SDK:', error); return null; }
 }
 

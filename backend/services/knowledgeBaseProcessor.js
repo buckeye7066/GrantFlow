@@ -65,7 +65,7 @@ export async function analyzeKnowledgeBaseDocument({ documentId, extractedText, 
     // broken DB handle.
     db.prepare('SELECT 1')
 
-    const { openai } = createOpenAIClient({ allowMissing: true })
+    const { openai } = createOpenAIClient({ ownerInference: true, allowMissing: true })
     
     // Truncate very long documents to manage token usage
     // Note: Character-to-token ratio varies by content (typically 3-5 chars per token).

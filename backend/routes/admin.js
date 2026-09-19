@@ -1,3 +1,4 @@
+import {ownerAiJobParameters} from '../services/ownerAi/ownerAiScope.js'
 import express from 'express';
 import { createAdminLinkVerificationRouter } from './adminLinkVerification.js'
 import { rejectDryRunBody } from '../utils/noDryRun.js'
@@ -687,11 +688,11 @@ async function extractTextFromPDF(filePath) {
 
 // Helper function to get OpenAI instance
 function getOpenAI() {
-  return createOpenAIClient().openai;
+  return createOpenAIClient({ ownerInference: true }).openai;
 }
 
 function getOpenAIOptional() {
-  return createOpenAIClient({ allowMissing: true }).openai
+  return createOpenAIClient({ allowMissing: true, ownerInference: true }).openai
 }
 
 
@@ -1842,7 +1843,7 @@ router.post('/upload-profile-document', secureUploadSingle(upload, 'document', [
             VALUES (?, 'document_ingest', 'queued', ?, ?, ?, ?)
           `,
         )
-        .run(parseJobId, profileId, null, JSON.stringify({ document_id: documentId, source: 'admin_upload' }), 'admin');
+        .run(parseJobId, profileId, null, JSON.stringify(ownerAiJobParameters({ document_id: documentId, source: 'admin_upload' },{id:parseJobId,type:'document_ingest',profile_id:profileId})), 'admin');
       
       // Get the job and dispatch it immediately
       const parseJob = await req.db.prepare('SELECT * FROM crawler_jobs WHERE id = ?').get(parseJobId);

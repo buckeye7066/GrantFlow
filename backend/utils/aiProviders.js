@@ -1,6 +1,8 @@
 import { tryOwnerSubscription } from '../services/ownerAi/ownerAiBroker.js'
 import { getOwnerAiScope } from '../services/ownerAi/ownerAiScope.js'
 import OpenAI from 'openai'
+import { wrapOwnerSdkClient, unwrapOwnerSdkClient } from './ownerSdkRouting.js'
+import { isTransientProviderError } from './providerFailure.js'
 import { resolvePaidAiRoutes, paidCircuitState, circuitFailure, circuitBlocked, recordPaidFailure, isHardPaidFailure } from './paidAiRoutes.js'
 import { createOpenAIClient, summarizeOpenAIError } from './openaiClient.js'
 import { safeParseJSON } from './safeJson.js'
@@ -67,7 +69,7 @@ function tryParseJsonLoose(text) {
 
 export function getOpenAIOptional({ timeoutMs = null, maxRetries = null } = {}) {
   try {
-    return createOpenAIClient({ allowMissing: true, timeoutMs, maxRetries }).openai
+    return createOpenAIClient({ allowMissing: true, ownerInference: true, timeoutMs, maxRetries }).openai
   } catch {
     return null
   }
@@ -86,7 +88,7 @@ export function getOpenAIOptional({ timeoutMs = null, maxRetries = null } = {}) 
  */
 export async function getAnthropicOptional() {
   try {
-    return await getAnthropicClient()
+    return wrapOwnerSdkClient(await getAnthropicClient(), 'anthropic', { providerSpecific: true })
   } catch {
     return null
   }
@@ -99,7 +101,7 @@ function providerFailureDiagnostics(error) {
   const summary = summarizeOpenAIError(error)
   return {
     status: summary.status,
-    transient: isLLMTimeout(error) || summary.isRateLimit || [408, 425].includes(Number(summary.status)) || Number(summary.status) >= 500 || (isHardPaidFailure(error) && !summary.isAuth),
+    transient: isTransientProviderError(error) || summary.isRateLimit || (isHardPaidFailure(error) && !summary.isAuth),
     ...(error?.jsonFinishReason ? { finish_reason: error.jsonFinishReason } : {}),
     reason: isLLMTimeout(error)
       ? 'timed_out'
@@ -164,7 +166,7 @@ async function invokePaidLadder({
   openai = getOpenAIOptional({ maxRetries: 0 }), system = null, prompt,
   temperature, maxTokens = 1200, openaiModel = null, anthropicModel = null,
   freeRoutes = null, freeClientFactory = null, timeoutMs = null, signal: callerSignal = null,
-  paidCircuitState: injectedState,
+  paidCircuitState: injectedState, excludedProviders = [],
 } = {}, jsonOnly) {
   const ownerScope = getOwnerAiScope({ includeAborted: true })
   const signal = ownerScope
@@ -194,7 +196,11 @@ async function invokePaidLadder({
       qualityLog.warn('owner_subscription_unavailable', { reason: 'bounded_subscription_attempt_failed' })
     }
   }
-  const routes = resolvePaidAiRoutes({ openai, openaiModel, anthropicModel })
+  // The owner's monthly allowance must not silently become metered usage.
+  // This policy affects only a canonically authenticated owner request.
+  const ownerMeteredDisabled = Boolean(ownerScope && process.env.OWNER_AI_ALLOW_PAID_FALLBACK !== 'true')
+  const excluded = new Set(Array.isArray(excludedProviders) ? excludedProviders : [])
+  const routes = ownerMeteredDisabled ? [] : resolvePaidAiRoutes({ openai, openaiModel, anthropicModel }).filter(route => !excluded.has(route.provider))
   // Legacy calls retain request-local state; configured ladders share bounded cooldowns.
   const state = injectedState ?? (process.env.AI_PAID_ROUTES ? paidCircuitState() : new Map())
   const configuredFreeRoutes = resolveFreeAiRoutes(freeRoutes)
@@ -244,7 +250,7 @@ async function invokePaidLadder({
               messages: [{ role: 'user', content: safePrompt }],
             }, requestOptions)
           }
-          const client = route.provider === 'openai' ? openai : new OpenAI({
+          const client = route.provider === 'openai' ? unwrapOwnerSdkClient(openai) : new OpenAI({
             apiKey: process.env[route.apiKeyEnv], baseURL: route.baseURL, maxRetries: 0,
           })
           attemptSignal.throwIfAborted()
@@ -313,7 +319,7 @@ async function invokePaidLadder({
   })
   if (signal?.aborted) return abortedResult(signal)
   if (freeResult.ok) return { ...freeResult, billing_mode: 'free_or_local', openaiError, anthropicError,
-    fallback_reason: exhausted ? 'paid_provider_credit_or_quota_exhausted' : failed || routes.length ? 'paid_provider_failure' : 'paid_provider_not_configured' }
+    fallback_reason: ownerMeteredDisabled ? 'owner_metered_fallback_disabled' : exhausted ? 'paid_provider_credit_or_quota_exhausted' : failed || routes.length ? 'paid_provider_failure' : 'paid_provider_not_configured' }
   return { ok: false, provider: 'fallback', ...(jsonOnly ? { json: null } : { text: null }), raw: null, timedOut, transient,
     error: new Error(timedOut ? 'AI service timed out — please try again.' : 'No AI provider configured or provider failure'),
     openaiError, anthropicError, freeRouteErrors: freeResult.freeRouteErrors }

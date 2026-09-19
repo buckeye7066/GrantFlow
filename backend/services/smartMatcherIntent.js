@@ -838,7 +838,7 @@ export async function interpretFundingIntent(text, opts = {}) {
   let openai = opts.openai
   if (openai === undefined) {
     try {
-      const r = createOpenAIClient({ allowMissing: true })
+      const r = createOpenAIClient({ allowMissing: true, ownerInference: true })
       openai = r?.openai ?? null
     } catch {
       openai = null

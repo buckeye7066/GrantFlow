@@ -1,3 +1,4 @@
+import { wrapOwnerSdkClient } from '../utils/ownerSdkRouting.js'
 import express from 'express';
 import { fetchReminderSnapshot } from './reminders.js';
 import { buildReminderPlanPrompt } from '../prompts/reminderPlan.js';
@@ -122,22 +123,22 @@ router.use((req, res, next) => {
 })
 
 function getOpenAI() {
-  return createOpenAIClient().openai;
+  return createOpenAIClient({ ownerInference: true }).openai;
 }
 
 function getOpenAIOptional() {
-  return createOpenAIClient({ allowMissing: true }).openai;
+  return createOpenAIClient({ allowMissing: true, ownerInference: true }).openai;
 }
 
 async function createAnthropicClient() {
   if (!process.env.ANTHROPIC_API_KEY) return null
   try {
     const Anthropic = (await import('@anthropic-ai/sdk')).default
-    return new Anthropic({
+    return wrapOwnerSdkClient(new Anthropic({
       apiKey: process.env.ANTHROPIC_API_KEY,
       timeout: Number(process.env.ANYA_ANTHROPIC_TIMEOUT_MS || 15_000),
       maxRetries: Number(process.env.ANYA_ANTHROPIC_MAX_RETRIES || 1),
-    })
+    }), 'anthropic')
   } catch (err) {
     console.warn('[ai] Anthropic client unavailable:', err?.message || String(err))
     return null

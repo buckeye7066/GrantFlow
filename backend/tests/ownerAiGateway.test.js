@@ -14,6 +14,7 @@ beforeEach(() => {
   vi.stubEnv('ADMIN_EMAIL', 'owner@example.test')
   vi.stubEnv('AGENT_CONTROL_ADMIN_EMAIL', '')
   vi.stubEnv('OWNER_AI_USER_ID', '')
+  vi.stubEnv('OWNER_AI_ALLOW_PAID_FALLBACK', 'true')
   vi.stubEnv('ANTHROPIC_API_KEY', '')
   vi.stubEnv('AI_PAID_ROUTES', '')
   vi.stubEnv('FREE_AI_ROUTES', '')
@@ -82,4 +83,23 @@ it('later work inherited from a closed owner response cannot start a paid fallba
     expect(await invokeJsonWithFallback(opts())).toMatchObject({ ok: false, aborted: true })
     expect(create).not.toHaveBeenCalled()
   })
+})
+
+
+it('the owner can prohibit metered fallback and still use a free model', async () => {
+  vi.stubEnv('OWNER_AI_ALLOW_PAID_FALLBACK', 'false')
+  const freeCreate = vi.fn(async () => ({ choices:[{finish_reason:'stop',message:{content:'{"answer":42}'}}] }))
+  const result = await runWithOwnerAiScope(ownerRequest(), () => invokeJsonWithFallback({ ...opts(), freeRoutes:[{id:'owner-free',model:'fixture',base_url:'https://fixture.invalid/v1'}],freeClientFactory:()=>({chat:{completions:{create:freeCreate}}}) }))
+  expect(result).toMatchObject({ provider:'free:owner-free',billing_mode:'free_or_local' })
+  expect(create).not.toHaveBeenCalled()
+})
+it('owner no-metered policy does not alter ordinary customer routing', async () => {
+  vi.stubEnv('OWNER_AI_ALLOW_PAID_FALLBACK', 'false')
+  expect(await invokeJsonWithFallback(opts())).toMatchObject({provider:'openai',billing_mode:'paid_api'})
+})
+
+it('owner metered fallback is opt-in, not the default', async () => {
+  vi.stubEnv('OWNER_AI_ALLOW_PAID_FALLBACK', '')
+  expect(await runWithOwnerAiScope(ownerRequest(), () => invokeJsonWithFallback(opts()))).toMatchObject({ok:false})
+  expect(create).not.toHaveBeenCalled()
 })

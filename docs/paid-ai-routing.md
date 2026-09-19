@@ -1,3 +1,11 @@
+Owner direct-SDK callers now pass through the same invocation-time policy, including clients constructed before login. Supported text, JSON and authorized function-tool planning use subscriptions or configured free models. Native-only hosted search tools, streaming, embeddings and image/audio operations are not simulated by the text bridge: unsupported owner calls fail explicitly before any metered request. Such an error is not completion evidence.
+
+## September 18 runtime routing correction
+
+Canonical owner calls use the dedicated monthly-subscription bridge first. Metered API fallback is now off by default for those calls: only an explicit `OWNER_AI_ALLOW_PAID_FALLBACK=true` allows it. When a subscription cannot answer, the default owner route goes to configured free models or reports failure; it never silently charges an API. The owner status endpoint and admin card show this policy. Ordinary customer and scheduler requests retain the configured paid-to-free order; customer traffic never uses the owner's subscription.
+
+The extraction timeout is addressed separately in PR #1763 by a bounded page deadline that preserves the owner's ranked strong models. Free model quota cooldowns are model-scoped, respect Retry-After, are invalidated on key rotation, and never hide surviving candidates or record a failed response as a success.
+
 # Paid API fallback configuration
 
 `AI_PAID_ROUTES` is a server-only JSON array; array order is the owner-selected

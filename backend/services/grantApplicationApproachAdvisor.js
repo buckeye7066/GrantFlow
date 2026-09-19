@@ -212,7 +212,7 @@ export async function analyzeAndPersistGrantApplicationApproach({ db, grantId, p
   // Optional AI refinement (keeps heuristics as baseline).
   let final = { ...heuristic }
   try {
-    const { openai } = createOpenAIClient({ allowMissing: true })
+    const { openai } = createOpenAIClient({ allowMissing: true, ownerInference: true })
       const prompt = buildGrantApplicationApproachPrompt({
         grant: {
           id: grant.id,

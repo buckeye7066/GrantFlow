@@ -1,3 +1,4 @@
+import { captureOwnerAiJobScope, isCanonicalOwner, ownerAiJobBudget } from '../services/ownerAi/ownerAiScope.js'
 import express from 'express'
 import crypto from 'crypto'
 import {
@@ -15,13 +16,14 @@ import {
   updateTask,
   listProfileTasks,
 } from '../services/anyaOrchestrator.js'
-import { createAnyaRun, appendAnyaRunLog, completeAnyaRun, getAnyaRun, requestAnyaRunCancel } from '../services/anyaRuns.js'
+import { createAnyaRun, appendAnyaRunLog, completeAnyaRun, getAnyaRun, requestAnyaRunCancel, isAnyaRunCancelRequested } from '../services/anyaRuns.js'
 import { resolveInternalSelfBaseUrl } from '../utils/internalSelfBaseUrl.js'
 
 import { createLogger } from '../utils/logger.js'
 const routeLogger = createLogger('route:anya')
 
 const router = express.Router()
+const backgroundReplyScopes = new Map()
 
 const resolveAdminToken = () => process.env.ADMIN_TOKEN || process.env.ANYA_ADMIN_TOKEN || null
 
@@ -160,7 +162,11 @@ router.get('/status', adminAuth, async (_req, res) => {
   let anthropicError = null
   let modelInfo = null
 
-  if (shouldTest) {
+  const ownerPolicyBlocks = isCanonicalOwner(_req) && process.env.OWNER_AI_ALLOW_PAID_FALLBACK !== 'true'
+  if (shouldTest && !isProd && ownerPolicyBlocks) {
+    anthropicStatus = 'not_tested'
+    anthropicError = { message: 'Owner billing policy disables metered provider diagnostics. Subscription readiness is reported separately.' }
+  } else if (shouldTest) {
     // Return cached result if still valid (avoids redundant API calls)
     if (_statusTestCache && Date.now() < _statusTestCacheExpiry) {
       return res.json(_statusTestCache)
@@ -176,6 +182,7 @@ router.get('/status', adminAuth, async (_req, res) => {
     } else {
       try {
         const Anthropic = (await import('@anthropic-ai/sdk')).default
+        // This explicitly enabled diagnostic tests only the named provider.
         const client = new Anthropic({
           apiKey: process.env.ANTHROPIC_API_KEY,
           timeout: Number(process.env.ANYA_ANTHROPIC_TIMEOUT_MS || 15_000),
@@ -220,7 +227,7 @@ router.get('/status', adminAuth, async (_req, res) => {
     status: 'ready',
     anthropic: {
       status: anthropicStatus,
-      tested: shouldTest && !isProd,
+      tested: shouldTest && !isProd && !ownerPolicyBlocks,
       api_key_configured: Boolean(process.env.ANTHROPIC_API_KEY),
       error: anthropicError,
       model: modelInfo,
@@ -234,7 +241,7 @@ router.get('/status', adminAuth, async (_req, res) => {
   }
 
   // Cache the test result to avoid redundant external API calls
-  if (shouldTest && !isProd) {
+  if (shouldTest && !isProd && !ownerPolicyBlocks) {
     _statusTestCache = responseBody
     _statusTestCacheExpiry = Date.now() + STATUS_TEST_CACHE_TTL_MS
   }
@@ -350,11 +357,12 @@ async function generateAndStoreReply(db, ctx, sessionId, runId, { content, curre
       : {}),
   })
 
+  const cancelled = await isAnyaRunCancelRequested(db, runId)
   const completion = {
     status: 'completed',
     // assistant_message_id lets the client's background poller pull the exact
     // reply when the run finishes (panel may be closed by then).
-    response: { assistantText, degraded, assistant_message_id: assistantMessage.id },
+    response: { assistantText, degraded, cancelled, assistant_message_id: assistantMessage.id },
   }
   const runFinalized = await completeAnyaRun(db, runId, completion)
   if (!runFinalized) {
@@ -422,7 +430,9 @@ router.post('/sessions/:sessionId/messages', async (req, res) => {
     })
 
     if (background) {
-      // Acknowledge now; finish the reply afterwards.
+      const bgTimeout = ownerAiJobBudget(process.env.ANYA_BG_REPLY_TIMEOUT_MS || 240_000)
+      const jobScope = captureOwnerAiJobScope(req, { timeoutMs: bgTimeout })
+      // Acknowledge now; finish the reply in its separately bounded owner scope.
       res.status(202).json({
         session_id: req.params.sessionId,
         messages: [userMessage],
@@ -433,18 +443,18 @@ router.post('/sessions/:sessionId/messages', async (req, res) => {
 
       // Generous ceiling — no client is blocking, so allow slow tool chains to
       // finish, but still bound it so a wedged provider call can't run forever.
-      const bgTimeout = Number(process.env.ANYA_BG_REPLY_TIMEOUT_MS || 240_000)
+      backgroundReplyScopes.set(runId, jobScope)
       // Fire-and-forget. req.db is the app's long-lived shared handle (see
       // server.js), so it stays valid after the response is sent. Never let a
       // rejection escape as an unhandledRejection — mark the run failed instead.
-      void generateAndStoreReply(
+      void jobScope.run(() => generateAndStoreReply(
         req.db,
         req.ctx,
         req.params.sessionId,
         runId,
         { content, currentPage, pageContext },
         bgTimeout,
-      ).catch(async (bgError) => {
+      )).finally(() => backgroundReplyScopes.delete(runId)).catch(async (bgError) => {
         console.error('[anya] Background reply failed:', bgError)
         try {
           await completeAnyaRun(req.db, runId, { status: 'failed', error: bgError?.message || String(bgError) })
@@ -511,6 +521,7 @@ router.post('/sessions/:sessionId/runs/:runId/cancel', async (req, res) => {
     if (!result.ok && result.reason === 'not_found') {
       return res.status(404).json({ error: 'Run not found' })
     }
+    if (result.ok) backgroundReplyScopes.get(req.params.runId)?.cancel()
     res.json(result)
   } catch (error) {
     handleError(res, error)
