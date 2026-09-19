@@ -18,3 +18,10 @@ test('runs the canonical fifty-profile command without replacing any acceptance 
  for(const override of ['preflightDependencies:', 'loadRuntime:', 'runAmyTraining:', 'inspectSource:'])assert.equal(source.includes(override),false);
  assert.match(source,/--depth=1/);assert.match(source,/rev-parse/);assert.match(source,/status.*--porcelain/);
 });
+
+test('the runtime dependency symlink alone is excluded from clone status',()=>{
+ const source=readFileSync(new URL('../../backend/scripts/run-deployed-acceptance.mjs',import.meta.url),'utf8');
+ assert.ok(source.includes("path.join(folder,'.git','info','exclude')"));
+ assert.ok(source.includes("'/node_modules\\n'"));
+ assert.ok(source.indexOf("path.join(folder,'.git','info','exclude')") < source.indexOf("['status','--porcelain']"));
+});

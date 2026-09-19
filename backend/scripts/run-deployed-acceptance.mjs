@@ -1,6 +1,6 @@
 import {execFile as execFileCallback, spawn} from 'node:child_process'
 import {promisify} from 'node:util'
-import {mkdtemp, mkdir, symlink, readFile, writeFile, rm, open} from 'node:fs/promises'
+import {mkdtemp, mkdir, symlink, readFile, writeFile, appendFile, rm, open} from 'node:fs/promises'
 import {tmpdir} from 'node:os'
 import path from 'node:path'
 import {pathToFileURL} from 'node:url'
@@ -69,6 +69,9 @@ export async function runDeployedAcceptance(sha) {
     env.TMP=env.TMPDIR
     await mkdir(env.TMPDIR,{recursive:true,mode:0o700})
     await symlink('/app/node_modules',path.join(folder,'node_modules'),'dir')
+    // A Git directory-only ignore does not match a Linux symlink. Ignore only
+    // this verified runtime dependency binding, not any application source.
+    await appendFile(path.join(folder,'.git','info','exclude'),'/node_modules\n','utf8')
     if (await git(['status','--porcelain'])) throw new Error('acceptance_source_not_clean')
     if (interrupted) throw new Error('acceptance_interrupted')
     const relativeReceipt='audit-reports/deployed-exact50.json'
