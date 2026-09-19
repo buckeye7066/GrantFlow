@@ -1,3 +1,4 @@
+import { runWithVerifiedOwnerAiScope } from './ownerAi/ownerAiScope.js'
 import {ownerAiJobParameters} from './ownerAi/ownerAiScope.js'
 /**
  * Anya Login Trigger
@@ -111,7 +112,7 @@ async function addAnyaMessage(db, sessionId, role, content) {
  *
  * The legacy name is kept as an alias so existing call-sites don't break.
  */
-export async function initializeAnyaOnLogin(db, user, profileId = null, { uploadDir, getOpenAI } = {}) {
+async function initializeAnyaOnLoginVerified(db, user, profileId = null, { uploadDir, getOpenAI } = {}) {
   try {
     // Resolve profile for this user
     if (!profileId && user?.id) {
@@ -289,4 +290,8 @@ export async function getAnyaSessionInfo(db, sessionId) {
     status: session.status,
     title: session.title,
   }
+}
+
+export async function initializeAnyaOnLogin(db, user, ...args) {
+  return runWithVerifiedOwnerAiScope(db, user, () => initializeAnyaOnLoginVerified(db, user, ...args))
 }

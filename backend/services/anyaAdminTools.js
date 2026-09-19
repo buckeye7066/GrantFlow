@@ -1,4 +1,4 @@
-import {ownerAiJobParameters} from './ownerAi/ownerAiScope.js'
+import {ownerAiJobParameters, ownerAiRetryParameters, publicOwnerAiParameters} from './ownerAi/ownerAiScope.js'
 import { promises as fs } from 'fs'
 import path from 'path'
 import { fileURLToPath } from 'url'
@@ -1169,7 +1169,7 @@ export async function adminCrawlerList({ status, limit = 50, type }, context) {
     filters: { status: status ?? null, type: type ?? null },
     jobs: jobs.map((job) => ({
       ...job,
-      parameters: safeJson(job.parameters, {}),
+      parameters: publicOwnerAiParameters(safeJson(job.parameters, {})),
       result_meta: safeJson(job.result_meta, null),
     })),
   }
@@ -1224,7 +1224,7 @@ export async function adminCrawlerRun({ crawlerType, type, profileId, parameters
       id: job?.id ?? jobId,
       job_id: job?.id ?? jobId,
       crawlerType: job?.type ?? selectedType,
-      parameters: safeJson(job?.parameters, {}),
+      parameters: publicOwnerAiParameters(safeJson(job?.parameters, {})),
     },
     message: `Crawler job ${jobId} queued successfully`,
   }
@@ -1362,7 +1362,7 @@ export async function adminCrawlerRetry({ jobId }, context) {
       new_job: {
         ...pendingRetry,
         job_id: pendingRetry.id,
-        parameters: safeJson(pendingRetry.parameters, {}),
+        parameters: publicOwnerAiParameters(safeJson(pendingRetry.parameters, {})),
       },
       message: 'A retry of this job is already queued/running; returning it instead of creating a duplicate.',
     }
@@ -1381,7 +1381,7 @@ export async function adminCrawlerRetry({ jobId }, context) {
     newJobId,
     originalJob.type,
     originalJob.profile_id,
-    JSON.stringify(ownerAiJobParameters(parameters,{id:newJobId,type:originalJob.type,profile_id:originalJob.profile_id})),
+    JSON.stringify(await ownerAiRetryParameters(parameters,{id:newJobId,type:originalJob.type,profile_id:originalJob.profile_id},originalJob,db)),
   )
 
   // Update retry count on original job
@@ -1403,7 +1403,7 @@ export async function adminCrawlerRetry({ jobId }, context) {
       ...newJob,
       id: newJob?.id ?? newJobId,
       job_id: newJob?.id ?? newJobId,
-      parameters: safeJson(newJob?.parameters, {}),
+      parameters: publicOwnerAiParameters(safeJson(newJob?.parameters, {})),
     },
     message: 'Job retried successfully',
   }

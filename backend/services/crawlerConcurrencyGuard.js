@@ -146,7 +146,7 @@ export async function autoRetryOrphanedJob(db, job) {
       job.type,
       job.profile_id ?? null,
       job.organization_id ?? null,
-      JSON.stringify(await ownerAiRetryParameters(retryParameters,{id:newJobId,type:job.type,profile_id:job.profile_id ?? null},job)),
+      JSON.stringify(await ownerAiRetryParameters(retryParameters,{id:newJobId,type:job.type,profile_id:job.profile_id ?? null},job,db)),
       idempotencyKey,
       'system:orphan-retry',
     )

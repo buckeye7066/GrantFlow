@@ -1,5 +1,5 @@
 import fs from 'fs'
-import {captureDetachedOwnerAiRunner, runWithoutOwnerAiScope, durableOwnerAiRunner} from './ownerAi/ownerAiScope.js'
+import {captureDetachedOwnerAiRunner, runWithoutOwnerAiScope, durableOwnerAiRunner, ownerAiRetryParameters} from './ownerAi/ownerAiScope.js'
 import crypto from 'crypto'
 import { fileURLToPath } from 'url'
 import { dirname, join, resolve } from 'path'
@@ -274,9 +274,12 @@ async function ensureJobSnapshot(db, job) {
       // Persist the corrected id so future passes (retries, telemetry,
       // entitlement checks) all see the live profile.
       try {
+        const rebound = await ownerAiRetryParameters(parseJSON(job.parameters) || {}, {...job,profile_id:snapshotProfileId}, job, db)
+        const serialized = JSON.stringify(rebound)
         await db
-          .prepare('UPDATE crawler_jobs SET profile_id = ? WHERE id = ?')
-          .run(snapshotProfileId, job.id)
+          .prepare('UPDATE crawler_jobs SET profile_id = ?, parameters = ? WHERE id = ?')
+          .run(snapshotProfileId, serialized, job.id)
+        job.parameters = serialized
         log.info(
           '[crawlerDispatcher] Repaired stale crawler_jobs.profile_id alias',
           {
@@ -658,7 +661,7 @@ function dispatchScopedCrawlerJob({ db, jobId, uploadDir, getOpenAI }, runAiJob)
       context.heartbeat = () => updateJobHeartbeat(db, jobId)
 
       result = await withTimeout(
-        (durableOwnerAiRunner(originalOwnerJob) || runAiJob)(signal => handler({...context, signal}), {timeoutMs, signal:abortController.signal}),
+        (await durableOwnerAiRunner(originalOwnerJob, db) || runAiJob)(signal => handler({...context, signal}), {timeoutMs, signal:abortController.signal}),
         timeoutMs,
         `Job ${jobId} (${job.type})`,
         abortController,

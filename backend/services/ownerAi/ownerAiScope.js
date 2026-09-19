@@ -1,5 +1,6 @@
 import { AsyncLocalStorage } from 'node:async_hooks'
-import {createHmac,timingSafeEqual} from 'node:crypto'
+import { createHmac, timingSafeEqual } from 'node:crypto'
+import { getJwtSecretOrThrow } from '../../config/env.js'
 import { isReservedSyntheticUserId } from '../../middleware/syntheticServiceTokens.js'
 const scopes = new AsyncLocalStorage()
 export function isCanonicalOwner(req) {
@@ -98,7 +99,7 @@ function ownerProofPayload(job,identity) {
   return JSON.stringify({v:1,id:String(job.id),type:String(job.type),profileId:job.profile_id ?? null,userId:identity.userId,email:identity.email})
 }
 function ownerProofSignature(payload) {
-  const key = process.env.AUTH_JWT_SECRET
+  const key = getJwtSecretOrThrow(process.env)
   if (typeof key !== 'string' || key.length < 32) throw new Error('Durable owner AI policy signing is not configured')
   return createHmac('sha256',key).update('grantflow-owner-job-v1\n'+payload).digest('hex')
 }
@@ -113,7 +114,7 @@ export function ownerAiJobParameters(parameters,job) {
   clean[DURABLE_OWNER_KEY] = {identity:{...scope.identity},signature:ownerProofSignature(payload)}
   return clean
 }
-export function durableOwnerAiRunner(job) {
+export async function durableOwnerAiRunner(job, db) {
   const parameters = typeof job.parameters === 'string' ? JSON.parse(job.parameters) : job.parameters
   const proof = parameters?.[DURABLE_OWNER_KEY]
   if (proof === undefined) return null
@@ -122,13 +123,36 @@ export function durableOwnerAiRunner(job) {
   const expected = ownerProofSignature(ownerProofPayload(job,identity))
   const req = {ctx:{identityResolved:true,isAdmin:true,userId:identity.userId,email:identity.email}}
   if (!timingSafeEqual(Buffer.from(expected,'hex'),Buffer.from(proof.signature,'hex')) || !isCanonicalOwner(req)) throw new Error('Invalid or revoked durable owner AI policy')
-  // Only a server-signed, job-bound proof can restore the owner after restart.
-  return scopes.run({identity:{...identity},signal:new AbortController().signal},captureDetachedOwnerAiRunner)
+  // A signature proves who queued it, not that an account remains authorized.
+  const ctx = await verifiedOwnerContext(db, { userId: identity.userId })
+  if (!isCanonicalOwner({ ctx }) || ctx.email !== identity.email) throw new Error('Revoked durable owner AI policy')
+  return scopes.run({identity:{userId:ctx.userId,email:ctx.email},signal:new AbortController().signal},captureDetachedOwnerAiRunner)
 }
 
 
-export async function ownerAiRetryParameters(parameters,nextJob,originalJob) {
-  const restore = durableOwnerAiRunner(originalJob)
+export async function ownerAiRetryParameters(parameters,nextJob,originalJob,db) {
+  const restore = await durableOwnerAiRunner(originalJob,db)
   if (!restore) return runWithoutOwnerAiScope(() => ownerAiJobParameters(parameters,nextJob))
   return restore(() => ownerAiJobParameters(parameters,nextJob),{timeoutMs:1000})
+}
+
+// Use the canonical database-backed authority resolver at cold-login boundaries.
+async function verifiedOwnerContext(db, user) {
+  if (!db?.prepare) throw new Error('Owner policy requires database identity verification')
+  const { buildRequestContext } = await import('../../middleware/requestContext.js')
+  return buildRequestContext(db, user)
+}
+export async function runWithVerifiedOwnerAiScope(db, user, work) {
+  const ctx = await verifiedOwnerContext(db, user)
+  if (!isCanonicalOwner({ ctx, user })) return runWithoutOwnerAiScope(work)
+  const runner = scopes.run({ identity: {userId:ctx.userId,email:ctx.email}, signal: new AbortController().signal }, captureDetachedOwnerAiRunner)
+  return runner(work, { timeoutMs: 240000 })
+}
+// Internal billing provenance never belongs in API responses, even for admins.
+export function publicOwnerAiParameters(parameters) {
+  const parsed = typeof parameters === 'string' ? JSON.parse(parameters) : parameters
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return parsed ?? null
+  const copy = {...parsed}
+  delete copy[DURABLE_OWNER_KEY]
+  return copy
 }

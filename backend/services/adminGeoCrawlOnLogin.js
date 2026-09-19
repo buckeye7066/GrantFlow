@@ -1,3 +1,4 @@
+import { runWithVerifiedOwnerAiScope } from './ownerAi/ownerAiScope.js'
 import {ownerAiJobParameters} from './ownerAi/ownerAiScope.js'
 /**
  * Queue a nationwide geo crawl (state-by-state inside one comprehensive job) when an admin logs in.
@@ -44,7 +45,7 @@ function defaultUploadDir() {
  * @param {object} user
  * @param {{ uploadDir?: string, getOpenAI?: () => any, userId?: string }} ctx
  */
-export async function scheduleAdminGeoCrawlOnLogin(db, user, ctx = {}) {
+async function scheduleAdminGeoCrawlOnLoginVerified(db, user, ctx = {}) {
   if (!db || !isAdmin(user)) return { scheduled: false, reason: 'not_admin' }
 
   // CUTOVER: the admin nationwide geo sweep ran as a `comprehensive` crawler_jobs
@@ -168,4 +169,8 @@ export async function scheduleAdminGeoCrawlOnLogin(db, user, ctx = {}) {
     log.error('[adminGeoCrawlOnLogin] Failed:', error)
     return { scheduled: false, reason: 'error', error: String(error?.message || error) }
   }
+}
+
+export async function scheduleAdminGeoCrawlOnLogin(db, user, ...args) {
+  return runWithVerifiedOwnerAiScope(db, user, () => scheduleAdminGeoCrawlOnLoginVerified(db, user, ...args))
 }

@@ -10,7 +10,7 @@ import {createCrawlerJob} from '../services/crawlerJobCreation.js'
 const owner=()=>({ctx:{identityResolved:true,isAdmin:true,userId:'owner-proof',email:'owner@example.test'},res:new EventEmitter()})
 beforeEach(()=>{mock.ingest.mockReset();vi.stubEnv('OWNER_AI_EMAIL','owner@example.test');vi.stubEnv('OWNER_AI_USER_ID','');vi.stubEnv('AUTH_JWT_SECRET','queue-proof-fixture-secret-with-more-than-thirty-two-characters')})
 afterEach(()=>vi.unstubAllEnvs())
-function database(){const db=new Database(':memory:');db.dialect='sqlite';db.exec(readFileSync(new URL('../db/schema.sql',import.meta.url),'utf8'));return db}
+function database(){const db=new Database(':memory:');db.dialect='sqlite';db.exec(readFileSync(new URL('../db/schema.sql',import.meta.url),'utf8'));db.prepare('INSERT INTO users (id,primary_email,is_admin) VALUES (?,?,?)').run('owner-proof','owner@example.test',1);return db}
 it('a queued owner document job retains subscription scope after the HTTP reply finishes',async()=>{
  const db=database();let observed
  try {
@@ -89,11 +89,11 @@ it('tampered or re-bound durable owner proofs fail without executing a provider'
  try {
   const req=owner();const created=await runWithOwnerAiScope(req,()=>createCrawlerJob(db,{type:'document_ingest',buildSnapshot:false}));req.res.emit('finish')
   const row=db.prepare('SELECT * FROM crawler_jobs WHERE id=?').get(created.jobId)
-  expect(()=>durableOwnerAiRunner({...row,id:'another-job'})).toThrow(/policy/)
+  await expect(durableOwnerAiRunner({...row,id:'another-job'},db)).rejects.toThrow(/policy/)
   const params=JSON.parse(row.parameters);params._owner_ai.identity.userId='other-user'
-  expect(()=>durableOwnerAiRunner({...row,parameters:JSON.stringify(params)})).toThrow(/policy/)
+  await expect(durableOwnerAiRunner({...row,parameters:JSON.stringify(params)},db)).rejects.toThrow(/policy/)
   vi.stubEnv('OWNER_AI_EMAIL','changed-owner@example.test')
-  expect(()=>durableOwnerAiRunner(row)).toThrow(/policy/)
+  await expect(durableOwnerAiRunner(row,db)).rejects.toThrow(/policy/)
   expect(mock.ingest).not.toHaveBeenCalled()
  } finally {db.close()}
 })

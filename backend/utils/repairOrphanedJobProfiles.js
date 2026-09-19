@@ -1,3 +1,4 @@
+import { ownerAiRetryParameters } from '../services/ownerAi/ownerAiScope.js'
 // backend/utils/repairOrphanedJobProfiles.js
 //
 // Find `crawler_jobs` rows that died with `Profile X not found` (i.e. the
@@ -77,7 +78,7 @@ export async function repairOrphanedJobProfiles(db, opts = {}) {
   try {
     rows = await db
       .prepare(
-        `SELECT id, profile_id, error, result_meta, idempotency_key
+        `SELECT id, type, parameters, profile_id, error, result_meta, idempotency_key
          FROM crawler_jobs
          WHERE status = 'failed'
            AND error IS NOT NULL
@@ -149,10 +150,12 @@ export async function repairOrphanedJobProfiles(db, opts = {}) {
       `repaired_${row.id.replace(/-/g, '').slice(0, 16)}_${Date.now().toString(36)}`
 
     try {
+      const rebound = await ownerAiRetryParameters(safeParseJson(row.parameters) || {}, {...row,profile_id:newProfileId}, row, db)
       await db
         .prepare(
           `UPDATE crawler_jobs
            SET profile_id = ?,
+               parameters = ?,
                status = 'queued',
                error = NULL,
                started_at = NULL,
@@ -164,7 +167,7 @@ export async function repairOrphanedJobProfiles(db, opts = {}) {
            WHERE id = ?
              AND status = 'failed'`,
         )
-        .run(newProfileId, JSON.stringify(newMeta), newIdempotencyKey, row.id)
+        .run(newProfileId, JSON.stringify(rebound), JSON.stringify(newMeta), newIdempotencyKey, row.id)
 
       summary.repaired += 1
       summary.details.push({

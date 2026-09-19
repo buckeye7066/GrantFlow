@@ -1,4 +1,4 @@
-import {ownerAiJobParameters} from '../services/ownerAi/ownerAiScope.js'
+import {ownerAiJobParameters, ownerAiRetryParameters, publicOwnerAiParameters} from '../services/ownerAi/ownerAiScope.js'
 import express from 'express'
 import crypto from 'crypto'
 import fs from 'fs'
@@ -122,7 +122,7 @@ function mapJob(row) {
   if (!row) return null
   const job = { ...row }
   try {
-    job.parameters = row.parameters ? JSON.parse(row.parameters) : {}
+    job.parameters = publicOwnerAiParameters(row.parameters ? JSON.parse(row.parameters) : {})
   } catch {
     job.parameters = {}
   }
@@ -1394,7 +1394,7 @@ router.post('/jobs/:id/retry', async (req, res) => {
         job.type,
         retryProfileId,
         job.organization_id ?? null,
-        JSON.stringify(ownerAiJobParameters(parameters,{id:newJobId,type:job.type,profile_id:retryProfileId})),
+        JSON.stringify(await ownerAiRetryParameters(parameters,{id:newJobId,type:job.type,profile_id:retryProfileId},job,req.db)),
         profileContextSnapshot,
         idempotencyKey,
         requestedBy,
