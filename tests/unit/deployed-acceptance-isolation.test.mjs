@@ -9,6 +9,7 @@ test('only an exact immutable Git revision is accepted',()=>{
 test('production data, mail and paid-model credentials never enter acceptance',()=>{
  const result=buildAcceptanceEnvironment({PATH:'/usr/bin',SEARXNG_URL:'http://search.railway.internal',DATABASE_URL:'postgres://production',AUTH_JWT_SECRET:'secret',OPENAI_API_KEY:'secret',RESEND_API_KEY:'secret',OWNER_AI_BRIDGE_TOKEN:'secret',NODE_OPTIONS:'--require evil',GITHUB_TOKEN:'secret'});
  for(const key of ['DATABASE_URL','AUTH_JWT_SECRET','OPENAI_API_KEY','RESEND_API_KEY','OWNER_AI_BRIDGE_TOKEN','NODE_OPTIONS','GITHUB_TOKEN'])assert.equal(result[key],undefined);
+ assert.equal(result.FREE_AI_TIMEOUT_MS,'60000');
  assert.equal(result.NODE_ENV,'acceptance');assert.equal(result.SEARXNG_URL,'http://search.railway.internal');
  const [route]=JSON.parse(result.FREE_AI_ROUTES);assert.equal(route.base_url,'http://127.0.0.1:11434/v1');assert.equal(route.json_schema_mode,true);
 });

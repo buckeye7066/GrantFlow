@@ -46,3 +46,9 @@ provider failures and cancelled requests never become cached success. Hits are
 explicitly tagged extraction_cached; no model usage or subscription receipt is
 fabricated. Empty outputs expire after one minute; other snapshots after one
 hour. This limits wasted inference, not the number of profiles or required searches.
+
+The OpenAI-compatible client's default request timeout is 12 seconds, which is
+shorter than the existing 60-second page-extraction deadline. The local CPU
+configuration sets FREE_AI_TIMEOUT_MS=60000 in both production and the isolated
+acceptance environment. Existing caller deadlines and cancellation still apply;
+this does not extend a shorter caller budget or change any acceptance criterion.

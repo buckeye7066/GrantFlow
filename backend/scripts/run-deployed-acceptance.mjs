@@ -20,6 +20,7 @@ export function buildAcceptanceEnvironment(env = process.env) {
     GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: '/dev/null', GIT_TERMINAL_PROMPT: '0',
     FREE_AI_ROUTES: JSON.stringify([{id:'cloud-local',base_url:'http://127.0.0.1:11434/v1',
       model:'llama3.2:1b',json_mode:true,json_schema_mode:true}]),
+    FREE_AI_TIMEOUT_MS:'60000',
     OWNER_AI_BRIDGE_ENABLED:'false', AI_PAID_ROUTES:'[]', WEB_SEARCH_CACHE_TTL_HOURS:'0', GRANTFLOW_PAGE_FACT_MEMO_ENABLED:'1',
   }
 }
