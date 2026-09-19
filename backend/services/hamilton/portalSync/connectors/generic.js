@@ -21,7 +21,7 @@
 
 import { registrableDomain } from '../../hamiltonPortalCredentialService.js'
 import { extractPortalDataWithLLM } from '../llmPageExtract.js'
-import { observeGenericAccess } from '../genericAccess.js'
+import { observeGenericAccess, findGenericAccountEntry } from '../genericAccess.js'
 
 const GENERIC_NOTE =
   'Authenticated access was observed, but no supported personal fields or awards were extracted. ' +
@@ -72,6 +72,21 @@ async function visit(page, ctx) {
   }
 }
 
+// The read and write phases share the same bounded session-reuse path.
+async function observeAccountEntry(page, ctx, requestedUrl) {
+  let observed = await observeGenericAccess(page, ctx, requestedUrl)
+  if (['unknown', 'signin_wall'].includes(observed.access) && observed.can_follow_account_entry) {
+    const entry = await findGenericAccountEntry(page, requestedUrl)
+    if (entry) {
+      try {
+        await page.goto(entry, { waitUntil: 'domcontentloaded', timeout: 30000 })
+        observed = await observeGenericAccess(page, ctx, entry)
+      } catch { /* Failed navigation never grants access. */ }
+    }
+  }
+  return observed
+}
+
 const generic = {
   id: 'generic',
   label: 'Generic portal (captured session required)',
@@ -110,7 +125,7 @@ const generic = {
       }
     }
 
-    const observed = await observeGenericAccess(page, ctx, nav.url)
+    const observed = await observeAccountEntry(page, ctx, nav.url)
     const refuse = observation => ({
       reached: true, access: observation.access, fields: [], awards: [], rejected: [],
       notFound: [observation.access === 'signin_wall' ? 'The portal requires a fresh sign-in session.'
@@ -151,7 +166,11 @@ const generic = {
    * It fills and deliberately does NOT submit — see outsideAwardReporter.
    */
   async write(page, ctx, data = {}) {
-    const nav = await visit(page, ctx)
+    // A read/both operation may already have proved the private account page.
+    // Do not navigate it back to the public root before preparing the form.
+    let observed = await observeGenericAccess(page, ctx)
+    const nav = observed.access === 'authenticated'
+      ? { reached: true, url: observed.page.landed, attempts: [] } : await visit(page, ctx)
     if (!nav.reached) {
       return {
         reached: false,
@@ -159,6 +178,11 @@ const generic = {
         written: [],
         skipped: [`Could not reach the portal: ${nav.error}`],
       }
+    }
+    if (observed.access !== 'authenticated') observed = await observeAccountEntry(page, ctx, nav.url)
+    if (observed.access !== 'authenticated') return {
+      reached: true, access: observed.access, written: [], submitted: false,
+      skipped: ['Authenticated account controls were not observed; no portal form was modified.'],
     }
     const { reportOutsideAwards } = await import('../outsideAwardReporter.js')
     const res = await reportOutsideAwards(page, {
