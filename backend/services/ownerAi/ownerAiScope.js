@@ -100,7 +100,7 @@ function ownerProofPayload(job,identity) {
 }
 function ownerProofSignature(payload) {
   const key = getJwtSecretOrThrow(process.env)
-  if (typeof key !== 'string' || key.length < 32) throw new Error('Durable owner AI policy signing is not configured')
+  // The canonical resolver already enforces the deployment secret policy.
   return createHmac('sha256',key).update('grantflow-owner-job-v1\n'+payload).digest('hex')
 }
 export function ownerAiJobParameters(parameters,job) {

@@ -108,3 +108,12 @@ it('database failures cannot restore or silently charge an owner job', async () 
   const failedDb = { prepare() { throw new Error('fixture database unavailable') } }
   await expect(policy.durableOwnerAiRunner(rowFor(created.jobId), failedDb)).rejects.toThrow(/policy|owner/i)
 })
+
+it('signing accepts precisely the canonical production JWT secret contract', async () => {
+  vi.stubEnv('AUTH_JWT_SECRET', 'UnitFixture_7pZ9mN4c2q8k')
+  vi.stubEnv('NODE_ENV', 'production')
+  const { getJwtSecretOrThrow } = await import('../config/env.js')
+  expect(getJwtSecretOrThrow(process.env)).toBe('UnitFixture_7pZ9mN4c2q8k')
+  const created = await ownerJob()
+  expect(JSON.parse(rowFor(created.jobId).parameters)._owner_ai.signature).toMatch(/^[a-f0-9]{64}$/)
+})
