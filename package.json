@@ -137,7 +137,7 @@
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.125.0",
-    "@aws-sdk/client-textract": "^3.1131.0",
+    "@aws-sdk/client-textract": "^3.1132.0",
     "@babel/parser": "8.0.5",
     "@capacitor/android": "8.5.2",
     "@capacitor/app": "^8.1.1",
@@ -160,7 +160,7 @@
     "fast-xml-parser": ">=5.11.1",
     "fflate": "^0.8.3",
     "helmet": "^8.3.0",
-    "imapflow": "2.0.3",
+    "imapflow": "2.0.5",
     "jsonwebtoken": "9.0.3",
     "mammoth": "^1.12.3",
     "multer": "^2.4.0",
