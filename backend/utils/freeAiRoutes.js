@@ -65,6 +65,7 @@ function normalizeRoute(entry, index) {
     model,
     apiKeyEnv: apiKeyEnv || null,
     ...(entry.json_mode === true || entry.jsonMode === true ? { jsonMode: true } : {}),
+    ...(entry.json_schema_mode === true || entry.jsonSchemaMode === true ? { jsonSchemaMode: true } : {}),
   }
 }
 
@@ -207,6 +208,8 @@ async function invokeRoutes({
   temperature,
   maxTokens,
   jsonOnly,
+  responseSchema,
+  structuredInput,
   circuitState,
   timeoutMs,
   signal,
@@ -222,13 +225,17 @@ async function invokeRoutes({
     const cooldown = activeFreeCooldown(state, route)
     if (cooldown) { errors.push(cooldown); continue }
     try {
+      const useStructuredInput = jsonOnly && route.jsonSchemaMode === true && responseSchema?.type === 'object' &&
+        typeof structuredInput?.system === 'string' && typeof structuredInput?.prompt === 'string'
+      const selectedSystem = useStructuredInput ? structuredInput.system : system
+      const selectedPrompt = useStructuredInput ? structuredInput.prompt : prompt
       const systemText = [
-        system ? String(system) : null,
+        selectedSystem ? String(selectedSystem) : null,
         jsonOnly ? 'Return ONLY valid JSON (no markdown, no prose).' : null,
       ].filter(Boolean).join('\n\n')
       const messages = [
         ...(systemText ? [{ role: 'system', content: systemText }] : []),
-        { role: 'user', content: String(prompt ?? '') },
+        { role: 'user', content: String(selectedPrompt ?? '') },
       ]
       const routesLeft = Math.max(1, routes.slice(index).filter(candidate => !activeFreeCooldown(state, candidate)).length)
       const completion = await withLLMTimeout(
@@ -242,7 +249,9 @@ async function invokeRoutes({
             messages,
             temperature,
             max_tokens: maxTokens,
-            ...(jsonOnly && route.jsonMode === true ? { response_format: { type: 'json_object' } } : {}),
+            ...(jsonOnly && route.jsonSchemaMode === true && responseSchema?.type === 'object'
+              ? { response_format: { type: 'json_schema', json_schema: { name: 'grounded_page_facts', strict: true, schema: responseSchema } } }
+              : jsonOnly && route.jsonMode === true ? { response_format: { type: 'json_object' } } : {}),
           }, { signal: attemptSignal, maxRetries: 0 })
         },
         {

@@ -157,7 +157,7 @@ function makeProfileBlindLlm(deps = {}, deadlineAt, outcome) {
     }
     return res;
   };
-  return async ({ system, prompt, signal }) => {
+  return async ({ system, prompt, signal, responseSchema, structuredInput }) => {
     const timeoutMs = deadlineAt - Date.now();
     if (signal?.aborted || timeoutMs <= 0) {
       outcome.calls += 1;
@@ -172,6 +172,8 @@ function makeProfileBlindLlm(deps = {}, deadlineAt, outcome) {
         prompt,
         temperature: 0.1,
         maxTokens: 1800,
+        responseSchema,
+        structuredInput,
         timeoutMs,
         signal,
         anthropicModel: process.env.WEB_DISCOVERY_MODEL_ANTHROPIC || 'claude-haiku-4-5',

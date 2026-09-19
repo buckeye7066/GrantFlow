@@ -23,3 +23,19 @@ unchanged. A successful gateway probe is not a passed 50-profile benchmark.
 For JSON extraction, set json_mode: true on this explicitly compatible route.
 This enables server-enforced JSON syntax without changing evidence validation.
 Other routes and text requests retain their existing request format.
+
+## Schema-capable extraction
+
+An Ollama route may opt into `json_schema_mode: true` alongside `json_mode: true`.
+The page reader then sends its typed schema through the existing provider
+router, with a compact page-only prompt. Other providers and ordinary text
+requests keep their existing request format and prompt. The schema bounds
+amounts, dates, state codes, lifecycle fields and link IDs. It does not establish
+eligibility or truth: the existing page-evidence validator and matcher still do
+that. Unquoted facts remain unknown rather than being accepted as valid.
+
+The schema and compact prompt are application-owned, not read from page
+instructions. Inventory IDs are taken only after URL sanitation. The normal
+prompt-cache version changes with this prompt revision. No public endpoint,
+credential, subscription identity, matching threshold or production data is
+changed by enabling this request-format capability.
