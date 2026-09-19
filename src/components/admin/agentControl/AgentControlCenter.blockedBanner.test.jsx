@@ -12,7 +12,7 @@
  */
 import React from 'react'
 import { describe, expect, it, vi, beforeEach } from 'vitest'
-import { render, screen, waitFor } from '@testing-library/react'
+import { act, render, screen, waitFor } from '@testing-library/react'
 
 vi.mock('./AgentControlAgentCard.jsx', () => ({ default: () => null }))
 vi.mock('./AnyaAutonomyToggle.jsx', () => ({ default: () => null }))
@@ -77,7 +77,7 @@ describe('AgentControlCenter — standing preflight-block banner', () => {
       },
     })
 
-    render(<AgentControlCenter />)
+    await act(async () => { render(<AgentControlCenter />) })
 
     await waitFor(() => expect(screen.getByText(/Last cycle blocked by Sam preflight/i)).toBeTruthy())
     expect(screen.queryByText(/latest run since then/i)).toBeNull()
@@ -111,7 +111,7 @@ describe('AgentControlCenter — standing preflight-block banner', () => {
       },
     })
 
-    render(<AgentControlCenter />)
+    await act(async () => { render(<AgentControlCenter />) })
 
     // The stale, standing-blocked banner (with its now-resolved prerequisites)
     // must NOT be shown — this is the defect: it stayed up because the check

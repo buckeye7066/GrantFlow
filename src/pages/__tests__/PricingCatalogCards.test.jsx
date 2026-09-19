@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import React from 'react'
-import { render, screen, waitFor } from '@testing-library/react'
+import { act, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { describe, expect, it, vi } from 'vitest'
@@ -45,7 +45,7 @@ function renderPricing() {
 
 describe('Pricing cards read the canonical catalog', () => {
   it('shows catalog monthly prices and never the old hardcoded ranges', async () => {
-    renderPricing()
+    await act(async () => { renderPricing() })
     await waitFor(() => expect(screen.getByText('$149/mo')).toBeTruthy())
     expect(screen.getByText('$349/mo')).toBeTruthy()
     expect(screen.getByText('$599/mo')).toBeTruthy()
@@ -56,7 +56,7 @@ describe('Pricing cards read the canonical catalog', () => {
   })
 
   it('shows catalog discount percentages on persona cards and in the discount list', async () => {
-    renderPricing()
+    await act(async () => { renderPricing() })
     await waitFor(() => expect(screen.getByText('Student: 15% off')).toBeTruthy())
     expect(screen.getByText('Minister / clergy: 10% off')).toBeTruthy()
     // Student and Financial hardship are BOTH 15% in the catalog, so assert each
@@ -68,7 +68,7 @@ describe('Pricing cards read the canonical catalog', () => {
   })
 
   it('sends every Get Started click to a real route', async () => {
-    renderPricing()
+    await act(async () => { renderPricing() })
     await waitFor(() => expect(screen.getByText('$149/mo')).toBeTruthy())
     const hrefs = screen.getAllByRole('link', { name: /Get Started/i }).map((a) => a.getAttribute('href'))
     expect(hrefs.length).toBeGreaterThan(0)
