@@ -21,7 +21,7 @@
 
 import { registrableDomain } from '../../hamiltonPortalCredentialService.js'
 import { extractPortalDataWithLLM } from '../llmPageExtract.js'
-import { observeGenericAccess, findGenericAccountEntry, genericCredentialLoginUrl } from '../genericAccess.js'
+import { observeGenericAccess, observeAccountEntry, genericCredentialLoginUrl } from '../genericAccess.js'
 
 const GENERIC_NOTE =
   'Authenticated access was observed, but no supported personal fields or awards were extracted. ' +
@@ -72,25 +72,6 @@ async function visit(page, ctx) {
   }
 }
 
-// The read and write phases share the same bounded session-reuse path.
-async function observeAccountEntry(page, ctx, requestedUrl) {
-  let observed = await observeGenericAccess(page, ctx, requestedUrl)
-  const visited = new Set()
-  try { visited.add(page.url()) } catch { /* Observation remains fail-closed. */ }
-  // The live MTSU flow is public home -> Login -> Log in with Campus ID.
-  // Two safe GET entries are enough; no arbitrary crawl or login form is allowed.
-  for (let hop = 0; hop < 2 && ['unknown', 'signin_wall'].includes(observed.access) && observed.can_follow_account_entry; hop++) {
-    const entry = await findGenericAccountEntry(page, requestedUrl)
-    if (!entry || visited.has(entry)) break
-    visited.add(entry)
-    try {
-      await page.goto(entry, { waitUntil: 'domcontentloaded', timeout: 30000 })
-      requestedUrl = entry
-      observed = await observeGenericAccess(page, ctx, entry)
-    } catch { break }
-  }
-  return observed
-}
 
 const generic = {
   id: 'generic',

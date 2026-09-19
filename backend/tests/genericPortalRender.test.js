@@ -63,3 +63,45 @@ it('preserves an explicitly bound federated login destination for the same porta
   expect((await generic.read(page, context)).access).toBe('authenticated')
   expect(page.goto.mock.calls[0][0]).toBe('https://identity.example.edu/login')
 })
+
+it('rejects unrelated unbound login destinations before navigating', async () => {
+  let url = ''; const context = { ...ctx, credential: { login_url: 'https://unrelated.example.net/login' } }
+  const page = { goto: vi.fn(async u => { url = u }), url: () => url, evaluate: vi.fn(async fn => String(fn).includes("querySelectorAll('a[href]')") ? [] : publicPage) }
+  await generic.read(page, context)
+  expect(page.goto.mock.calls[0][0]).toBe(base + '/')
+})
+it('preserves a bound same-domain login host without trusting arbitrary siblings', async () => {
+  const context = { ...ctx, credential: { portal_host: 'example.edu', login_url: 'https://account.example.edu/login' } }
+  const page = { goto: vi.fn(async () => {}), url: () => 'https://account.example.edu/dashboard', evaluate: async () => signed }
+  expect((await generic.read(page, context)).access).toBe('authenticated')
+  expect(page.goto.mock.calls[0][0]).toBe('https://account.example.edu/login')
+  expect((await observeGenericAccess({ ...page, url: () => 'https://other.example.edu/dashboard' }, context)).access).toBe('unknown')
+})
+it('registry-resolved MTSU reads use rendered account evidence before extracting', async () => {
+  const { resolveConnector } = await import('../services/hamilton/portalSync/registry.js')
+  const connector = resolveConnector({ host: 'mtsu.edu' }); expect(connector.id).toBe('mtsu')
+  let url = ''; let rendered = false
+  const page = { url: () => url, goto: vi.fn(async u => { url = u }), waitForFunction: vi.fn(async () => { rendered = true }), evaluate: vi.fn(async fn => {
+    if (String(fn).includes("querySelectorAll('a[href]')")) return ['https://mtsu.edu/dashboard']
+    return !rendered ? { chars: 0 } : url.endsWith('/dashboard') ? signed : publicPage
+  }) }
+  const result = await connector.read(page, { portalHost: 'mtsu.edu', hasSession: true })
+  expect(result.access).toBe('authenticated'); expect(page.waitForFunction).toHaveBeenCalled()
+  expect(extract).toHaveBeenCalledTimes(1)
+})
+
+it('registry-resolved MTSU refuses a readable public page without account evidence', async () => {
+  const { resolveConnector } = await import('../services/hamilton/portalSync/registry.js')
+  let url = ''
+  const page = { url: () => url, goto: vi.fn(async u => { url = u }), evaluate: vi.fn(async fn => String(fn).includes("querySelectorAll('a[href]')") ? [] : publicPage) }
+  const result = await resolveConnector({ host: 'mtsu.edu' }).read(page, { portalHost: 'mtsu.edu', hasSession: true })
+  expect(result.access).toBe('unknown'); expect(result.fields).toEqual([]); expect(result.awards).toEqual([])
+  expect(extract).not.toHaveBeenCalled()
+})
+it('registry-resolved MTSU discards extracted data when the session expires', async () => {
+  const { resolveConnector } = await import('../services/hamilton/portalSync/registry.js')
+  const page = { url: () => 'https://mtsu.edu/dashboard', goto: vi.fn(async () => {}), evaluate: vi.fn().mockResolvedValueOnce(signed).mockResolvedValue({ ...publicPage, hasPassword: true }) }
+  extract.mockResolvedValueOnce({ fields: [{ field: 'fixture', value: 'untrusted after expiry' }], awards: [], notFound: [], raw: {} })
+  const result = await resolveConnector({ host: 'mtsu.edu' }).read(page, { portalHost: 'mtsu.edu', hasSession: true })
+  expect(result.access).toBe('signin_wall'); expect(result.fields).toEqual([])
+})

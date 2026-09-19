@@ -57,3 +57,10 @@ Six new regressions failed before the change. All 55 related portal tests pass.
 Authentication still requires observed logout and account controls, not a
 saved-session flag, a readable public page, a successful HTTP response, or a
 login-link click. A fresh exact-release live audit remains mandatory.
+
+Review closure: unbound login URLs are restricted to the portal registrable
+domain. A parent public homepage is refused, while an exact saved sibling
+login host is preserved without granting arbitrary sibling-tenant access.
+The registry-selected MTSU connector now shares bounded render/account-entry
+observation with the generic connector, reads only the observed account page,
+and rejects public or expired-session results before persistence.

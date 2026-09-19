@@ -6,8 +6,16 @@ export function genericCredentialLoginUrl(ctx = {}) {
   try {
     const wanted = new URL('https://' + ctx.portalHost).hostname.replace(/^www\./, '')
     const binding = ctx.credential?.portal_host
-    if (binding && new URL('https://' + binding).hostname.replace(/^www\./, '') !== wanted) return null
+    const boundHost = binding ? new URL('https://' + binding).hostname.replace(/^www\./, '') : null
     const url = new URL(raw)
+    const loginHost = url.hostname.replace(/^www\./, '')
+    const domain = registrableDomain(wanted)
+    if (boundHost !== wanted) {
+      if (!domain || registrableDomain(loginHost) !== domain ||
+          (boundHost && registrableDomain(boundHost) !== domain)) return null
+      // A parent institution's public homepage is not a child's portal login.
+      if (wanted.endsWith('.' + loginHost) && url.pathname === '/' && !url.search) return null
+    }
     return url.protocol === 'https:' && !url.username && !url.password ? url.href : null
   } catch { return null }
 }
@@ -81,7 +89,7 @@ export async function observeGenericAccess(page, ctx = {}, requestedUrl) {
   }
 }
 
-/** Follow at most one visible, same-origin account entry using the existing session. */
+/** Find a visible, same-origin account entry using the existing session. */
 export async function findGenericAccountEntry(page, requestedUrl) {
   try {
     const requested = new URL(requestedUrl)
@@ -105,4 +113,24 @@ export async function findGenericAccountEntry(page, requestedUrl) {
     }
   } catch { /* A missing or unreadable account entry is not a successful login. */ }
   return null
+}
+
+// The read and write phases share the same bounded session-reuse path.
+export async function observeAccountEntry(page, ctx, requestedUrl) {
+  let observed = await observeGenericAccess(page, ctx, requestedUrl)
+  const visited = new Set()
+  try { visited.add(page.url()) } catch { /* Observation remains fail-closed. */ }
+  // The live MTSU flow is public home -> Login -> Log in with Campus ID.
+  // Two safe GET entries are enough; no arbitrary crawl or login form is allowed.
+  for (let hop = 0; hop < 2 && ['unknown', 'signin_wall'].includes(observed.access) && observed.can_follow_account_entry; hop++) {
+    const entry = await findGenericAccountEntry(page, requestedUrl)
+    if (!entry || visited.has(entry)) break
+    visited.add(entry)
+    try {
+      await page.goto(entry, { waitUntil: 'domcontentloaded', timeout: 30000 })
+      requestedUrl = entry
+      observed = await observeGenericAccess(page, ctx, entry)
+    } catch { break }
+  }
+  return observed
 }
