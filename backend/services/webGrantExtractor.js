@@ -121,6 +121,9 @@ export function classifyExtractionFailure(input) {
   }
   const errors = [input.openaiError, input.anthropicError, ...(Array.isArray(input.freeRouteErrors) ? input.freeRouteErrors : [])];
   const seen = errors.filter((e) => e !== null && e !== undefined && e !== '');
+  if (seen.some(error => /timeout|timed out|abort/i.test(errText(error)))) {
+    return { class: 'llm_timeout', detail: seen.map(errText).filter(Boolean).join(' | ').slice(0, 200) };
+  }
   if (seen.some(looksLikeQuota)) {
     return { class: 'llm_quota', detail: seen.map(errText).filter(Boolean).join(' | ').slice(0, 200) || 'credit_or_quota_exhausted' };
   }
