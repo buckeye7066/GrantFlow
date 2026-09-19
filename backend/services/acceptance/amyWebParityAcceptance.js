@@ -349,10 +349,15 @@ function configuredSearchProviders(env, allowedProviders) {
   }
 }
 
-function configuredExtractorProviders(env) {
+async function configuredExtractorProviders(env) {
+  // Keep runtime imports behind the disposable database/email isolation step.
+  // Reuse the real route validator rather than inventing a second config policy.
+  const { getConfiguredFreeAiRoutes } = await import('../../utils/freeAiRoutes.js')
+  const freeRoutes = getConfiguredFreeAiRoutes(env)
   return [
     ...(String(env.OPENAI_API_KEY || '').trim() ? ['openai'] : []),
     ...(String(env.ANTHROPIC_API_KEY || '').trim() ? ['anthropic'] : []),
+    ...freeRoutes.map((route) => `free:${route.id}`),
   ]
 }
 
@@ -391,7 +396,7 @@ export async function runDependencyPreflight({
   extractorTimeoutMs = 65_000,
 } = {}) {
   const searchConfig = configuredSearchProviders(env || {}, allowedProviders || [])
-  const extractorConfigured = configuredExtractorProviders(env || {})
+  const extractorConfigured = await configuredExtractorProviders(env || {})
   const evidence = {
     ok: false,
     search: {
@@ -417,7 +422,7 @@ export async function runDependencyPreflight({
     return evidence
   }
   if (extractorConfigured.length === 0) {
-    evidence.extractor.reason = 'no_openai_or_anthropic_provider_configured'
+    evidence.extractor.reason = 'no_extractor_provider_configured'
     return evidence
   }
   if (typeof searchWeb !== 'function' || typeof extractOpportunitiesFromPage !== 'function') {

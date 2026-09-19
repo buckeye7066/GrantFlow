@@ -64,6 +64,7 @@ function normalizeRoute(entry, index) {
     baseURL,
     model,
     apiKeyEnv: apiKeyEnv || null,
+    ...(entry.json_mode === true || entry.jsonMode === true ? { jsonMode: true } : {}),
   }
 }
 
@@ -241,6 +242,7 @@ async function invokeRoutes({
             messages,
             temperature,
             max_tokens: maxTokens,
+            ...(jsonOnly && route.jsonMode === true ? { response_format: { type: 'json_object' } } : {}),
           }, { signal: attemptSignal, maxRetries: 0 })
         },
         {

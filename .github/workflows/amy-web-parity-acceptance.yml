@@ -28,6 +28,8 @@ jobs:
       AI_PAID_ROUTES: ${{ vars.AI_PAID_ROUTES }}
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
       ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      FREE_AI_ROUTES: ${{ vars.FREE_AI_ROUTES }}
+      FREE_AI_API_KEY: ${{ secrets.FREE_AI_API_KEY }}
       GOOGLE_CSE_KEY: ${{ secrets.GOOGLE_CSE_KEY }}
       GOOGLE_CSE_CX: ${{ secrets.GOOGLE_CSE_CX }}
       BRAVE_SEARCH_API_KEY: ${{ secrets.BRAVE_SEARCH_API_KEY }}

@@ -175,6 +175,36 @@ function makeRuntime({
 }
 
 describe('bounded live dependency preflight', () => {
+  it.each([
+    ['custom free route', { FREE_AI_ROUTES: JSON.stringify([{ id: 'local-proof', base_url: 'http://127.0.0.1:11434/v1', model: 'llama3.2' }]) }, 'free:local-proof'],
+    ['Ollama', { OLLAMA_BASE_URL: 'http://127.0.0.1:11434/v1', OLLAMA_MODEL: 'llama3.2' }, 'free:ollama'],
+    ['free tier', { FREE_AI_BASE_URL: 'https://free.example.test/v1', FREE_AI_MODEL: 'free-model', FREE_AI_API_KEY: 'secret-not-in-receipt' }, 'free:free-compatible'],
+  ])('probes a %s extractor without paid API credentials', async (_label, freeEnv, expectedProvider) => {
+    const results = [{ url: 'https://grants.gov/example', title: 'Example' }]
+    Object.defineProperty(results, 'searchMeta', { value: { provider: 'searxng', provenance: 'live', status: 'ok' } })
+    const extractOpportunitiesFromPage = vi.fn(async () => [{ title: 'Grant', sponsor: 'Funder', raw: { blind_extraction: true } }])
+    const proof = await runDependencyPreflight({
+      env: { SEARXNG_URL: 'https://search.example.test', ...freeEnv }, allowedProviders: ['searxng'],
+      searchWeb: async () => results, extractOpportunitiesFromPage,
+    })
+    expect(proof.ok).toBe(true)
+    expect(proof.extractor.configured_providers).toContain(expectedProvider)
+    expect(extractOpportunitiesFromPage).toHaveBeenCalledTimes(1)
+    expect(JSON.stringify(proof)).not.toContain('secret-not-in-receipt')
+  })
+
+  it('does not approve free extraction without a grounded live probe result', async () => {
+    const results = [{ url: 'https://grants.gov/example' }]
+    Object.defineProperty(results, 'searchMeta', { value: { provider: 'searxng', provenance: 'live', status: 'ok' } })
+    const proof = await runDependencyPreflight({
+      env: { SEARXNG_URL: 'https://search.example.test', OLLAMA_BASE_URL: 'http://127.0.0.1:11434/v1' },
+      allowedProviders: ['searxng'], searchWeb: async () => results, extractOpportunitiesFromPage: async () => [],
+    })
+    expect(proof.extractor.configured_providers).toEqual(['free:ollama'])
+    expect(proof.ok).toBe(false)
+    expect(proof.extractor.reason).toBe('extractor_returned_no_evidence_grounded_candidate')
+  })
+
   it('gives tool-backed search enough time to return before the outer preflight deadline', async () => {
     const results = [{ url: 'https://grants.gov/example', title: 'Example', snippet: 'funding' }]
     Object.defineProperty(results, 'searchMeta', {
