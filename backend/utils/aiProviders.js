@@ -1,3 +1,4 @@
+import {getAcceptanceSubscription} from './acceptanceSubscriptionContext.js'
 import { tryOwnerSubscription } from '../services/ownerAi/ownerAiBroker.js'
 import { getOwnerAiScope } from '../services/ownerAi/ownerAiScope.js'
 import OpenAI from 'openai'
@@ -168,6 +169,8 @@ async function invokePaidLadder({
   freeRoutes = null, freeClientFactory = null, responseSchema = null, structuredInput = null, timeoutMs = null, signal: callerSignal = null,
   paidCircuitState: injectedState, excludedProviders = [],
 } = {}, jsonOnly) {
+  const acceptance = getAcceptanceSubscription()
+  if (acceptance) return acceptance.invoke({system,prompt,maxTokens,timeoutMs,signal:callerSignal,format:jsonOnly?'json':'text'})
   const ownerScope = getOwnerAiScope({ includeAborted: true })
   const signal = ownerScope
     ? AbortSignal.any([ownerScope.signal, ...(callerSignal ? [callerSignal] : [])])

@@ -1,3 +1,4 @@
+import {getAcceptanceSubscription} from '../../utils/acceptanceSubscriptionContext.js'
 /**
  * Hermetic release acceptance for GrantFlow's exact-50 Amy cohort and the
  * same cohort's live plain-web parity benchmark.
@@ -350,6 +351,8 @@ function configuredSearchProviders(env, allowedProviders) {
 }
 
 async function configuredExtractorProviders(env) {
+  const acceptance = getAcceptanceSubscription()
+  if (acceptance) return [acceptance.provider]
   // Keep runtime imports behind the disposable database/email isolation step.
   // Reuse the real route validator rather than inventing a second config policy.
   const { getConfiguredFreeAiRoutes } = await import('../../utils/freeAiRoutes.js')
@@ -1249,6 +1252,7 @@ export async function runAmyWebParityAcceptance(options = {}) {
     }
   }
 
+  if (getAcceptanceSubscription()) receipt.inference = getAcceptanceSubscription().summary()
   receipt.completed_at = now().toISOString()
   receipt.exit_code = exitCode
   receipt.status = exitCode === ACCEPTANCE_EXIT.PASS
