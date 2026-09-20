@@ -155,3 +155,26 @@ it('an allowed free route retains fallback time without enabling metered calls',
   expect(freeCreate).toHaveBeenCalledTimes(1)
   expect(create).not.toHaveBeenCalled()
 })
+
+it('owner subscription setup time is deducted from the original deadline', async () => {
+  vi.stubEnv('OWNER_AI_ALLOW_PAID_FALLBACK', 'false')
+  bridge.run.mockReturnValue(new Promise(() => {}))
+  const started = Date.now()
+  const prompt = { toJSON() { vi.setSystemTime(Date.now() + 250); return 'answer' } }
+  const promise = runWithOwnerAiScope(ownerRequest(), () => invokeJsonWithFallback({ ...opts(), prompt, freeRoutes: [] }))
+  await vi.advanceTimersByTimeAsync(0)
+  expect(bridge.run.mock.calls[0][0].timeoutMs).toBe(750)
+  await vi.advanceTimersByTimeAsync(751)
+  expect(await promise).toMatchObject({ ok: false })
+  expect(Date.now() - started).toBe(1001)
+  expect(create).not.toHaveBeenCalled()
+})
+
+it('no subscription job starts when setup has exhausted the caller deadline', async () => {
+  vi.stubEnv('OWNER_AI_ALLOW_PAID_FALLBACK', 'false')
+  const prompt = { toJSON() { vi.setSystemTime(Date.now() + 1001); return 'answer' } }
+  const result = await runWithOwnerAiScope(ownerRequest(), () => invokeJsonWithFallback({ ...opts(), prompt, freeRoutes: [] }))
+  expect(result).toMatchObject({ ok: false })
+  expect(bridge.run).not.toHaveBeenCalled()
+  expect(create).not.toHaveBeenCalled()
+})

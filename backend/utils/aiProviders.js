@@ -189,7 +189,7 @@ async function invokePaidLadder({
   const subscriptionBudget = ownerMeteredDisabled && configuredFreeRoutes.length === 0 ? budget : budget / 2
   // The canonical request scope excludes customers, other admins and service tokens.
   const configuredSubscriptionWindow = Number(process.env.OWNER_AI_SUBSCRIPTION_TIMEOUT_MS ?? 20000)
-  const subscriptionWindow = Math.min(subscriptionBudget,
+  const subscriptionWindow = Math.min(subscriptionBudget, remaining(),
     Number.isFinite(configuredSubscriptionWindow) ? Math.max(0, Math.min(60000, configuredSubscriptionWindow)) : 20000)
   if (ownerScope && subscriptionWindow > 0) {
     try {
