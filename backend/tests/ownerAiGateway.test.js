@@ -103,3 +103,55 @@ it('owner metered fallback is opt-in, not the default', async () => {
   expect(await runWithOwnerAiScope(ownerRequest(), () => invokeJsonWithFallback(opts()))).toMatchObject({ok:false})
   expect(create).not.toHaveBeenCalled()
 })
+
+it.each(['json', 'text'])('an owner-only %s request can finish after half the deadline', async format => {
+  vi.stubEnv('OWNER_AI_ALLOW_PAID_FALLBACK', 'false')
+  const receipt = { ok: true, provider: 'subscription:codex', billing_mode: 'subscription',
+    ...(format === 'json' ? { json: { answer: 42 } } : { text: 'answer' }) }
+  bridge.run.mockImplementation(() => new Promise(resolve => setTimeout(() => resolve(receipt), 750)))
+  const invoke = format === 'json' ? invokeJsonWithFallback : invokeTextWithFallback
+  const promise = runWithOwnerAiScope(ownerRequest(), () => invoke({ ...opts(), freeRoutes: [] }))
+  await vi.advanceTimersByTimeAsync(750)
+  expect(await promise).toEqual(receipt)
+  expect(bridge.run.mock.calls[0][0].timeoutMs).toBe(1000)
+  expect(create).not.toHaveBeenCalled()
+})
+
+it('the full owner-only slice still ends at the original caller deadline', async () => {
+  vi.stubEnv('OWNER_AI_ALLOW_PAID_FALLBACK', 'false')
+  bridge.run.mockReturnValue(new Promise(() => {}))
+  let settled = false
+  const promise = runWithOwnerAiScope(ownerRequest(), () => invokeJsonWithFallback({ ...opts(), freeRoutes: [] }))
+    .then(result => { settled = true; return result })
+  await vi.advanceTimersByTimeAsync(999)
+  expect(settled).toBe(false)
+  await vi.advanceTimersByTimeAsync(2)
+  expect(await promise).toMatchObject({ ok: false })
+  expect(create).not.toHaveBeenCalled()
+})
+
+it('an owner-only request still respects the configured subscription cap', async () => {
+  vi.stubEnv('OWNER_AI_ALLOW_PAID_FALLBACK', 'false')
+  vi.stubEnv('OWNER_AI_SUBSCRIPTION_TIMEOUT_MS', '300')
+  bridge.run.mockReturnValue(new Promise(() => {}))
+  const promise = runWithOwnerAiScope(ownerRequest(), () => invokeJsonWithFallback({ ...opts(), freeRoutes: [] }))
+  await vi.advanceTimersByTimeAsync(301)
+  expect(await promise).toMatchObject({ ok: false })
+  expect(bridge.run.mock.calls[0][0].timeoutMs).toBe(300)
+  expect(create).not.toHaveBeenCalled()
+})
+
+it('an allowed free route retains fallback time without enabling metered calls', async () => {
+  vi.stubEnv('OWNER_AI_ALLOW_PAID_FALLBACK', 'false')
+  bridge.run.mockReturnValue(new Promise(() => {}))
+  const freeCreate = vi.fn(async () => ({ choices: [{ finish_reason: 'stop', message: { content: '{"answer":42}' } }] }))
+  const promise = runWithOwnerAiScope(ownerRequest(), () => invokeJsonWithFallback({ ...opts(), timeoutMs: 3000,
+    freeRoutes: [{ id: 'owner-free', model: 'fixture', base_url: 'https://fixture.invalid/v1' }],
+    freeClientFactory: () => ({ chat: { completions: { create: freeCreate } } }),
+  }))
+  await vi.advanceTimersByTimeAsync(1501)
+  expect(await promise).toMatchObject({ provider: 'free:owner-free', billing_mode: 'free_or_local' })
+  expect(bridge.run.mock.calls[0][0].timeoutMs).toBe(1500)
+  expect(freeCreate).toHaveBeenCalledTimes(1)
+  expect(create).not.toHaveBeenCalled()
+})
