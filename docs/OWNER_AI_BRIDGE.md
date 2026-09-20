@@ -39,11 +39,15 @@ tool_suggest, skill_search, skill_mcp_dependency_install, in_app_browser, memori
 and sleep_tool. Removed/unsupported toggles never trigger a weaker retry.
 
 Codex accepts bounded NDJSON containing thread/turn start, completed agent-message
-items and a final turn.completed with actual input/cached-input/output counters.
-Tool, command, file-change, MCP, browser, error, failed or unknown events fail closed.
-Empty, nonterminal or malformed output fails. Model attribution is the requested
-model with `model_source: 'explicit_cli_argument'`, not an independently reported
-server model. Output tokens must remain below the caller's cap.
+items, optional completed reasoning records, and a final turn.completed with actual
+input/cached-input/output counters. Reasoning records are validated as non-output
+metadata and never included in returned text. At least one completed, nonempty
+agent message is required. Tool, command, file-change, MCP, browser, error, failed
+or unknown events fail closed, as do malformed records and incomplete turns.
+Model attribution is the requested model with `model_source: 'explicit_cli_argument'`,
+not an independently reported server model. Positive terminal token usage and the
+shared 262144-byte accepted-text limit remain mandatory. Codex's unenforced token
+hint is not a truncation verdict; the Claude output-token limit remains enforced.
 
 The worker tries the server's provider order under one deadline, including auth
 probes. Each provider gets an independent abort slice reserving time for remaining
