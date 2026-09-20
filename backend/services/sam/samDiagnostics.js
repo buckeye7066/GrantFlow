@@ -561,6 +561,12 @@ async function runInternalCheck({ check, db, ctx }) {
       category: check.category,
       title: `${check.label} reported a problem`,
       description: result?.summary || `${check.id} returned ok:false.`,
+      affected_files: Array.isArray(result?.affected_files)
+        ? result.affected_files
+        : (Array.isArray(check.affected_files) ? check.affected_files : []),
+      affected_routes: Array.isArray(result?.affected_routes)
+        ? result.affected_routes
+        : (Array.isArray(check.affected_routes) ? check.affected_routes : []),
       evidence: result?.evidence && typeof result.evidence === 'object'
         ? result.evidence
         : { summary: result?.summary ?? null },

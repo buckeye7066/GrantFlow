@@ -162,10 +162,12 @@ export function planForFinding(finding) {
 }
 
 function buildPatchSummary(finding, strategy) {
+  // The category strategy controls repair execution; the finding explains this failure.
+  const advice = typeof finding.recommended_fix === 'string' ? finding.recommended_fix.trim() : ''
   const files = (finding.affected_files || []).slice(0, 3).join(', ') || '(no files identified)'
   const route = (finding.affected_routes || []).slice(0, 3).join(', ')
   const tail = route ? ` · routes: ${route}` : ''
-  return `${strategy} · files: ${files}${tail} · finding: ${finding.title}`
+  return `${advice || strategy} · inspect files: ${files}${tail} · finding: ${finding.title}`
 }
 
 function buildRollbackPlan(finding) {

@@ -253,7 +253,7 @@ describe('pipeline.amountCoverage ratchet', () => {
     expect(res.summary).toMatch(/85 read → funder publishes none/)
   })
 
-  it('FAILS ONLY on genuinely-unreadable rows (read → JS shell), naming adapter work', async () => {
+  it('keeps attempted-but-unanswered rows visible without asserting an unverified source cause', async () => {
     // The one class the system cannot answer by reading: a row whose source WAS
     // read and came back a JS shell / dead page. 10 such rows need an API
     // adapter — that is real, named work, not backlog and not a false alarm.
@@ -265,8 +265,8 @@ describe('pipeline.amountCoverage ratchet', () => {
     // (directory/referral/school_portal/past_award_intel) can never carry a
     // per-award figure, so naming them as adapter work asked for work that
     // cannot exist. See backend/tests/opportunityKindClasses.test.js.
-    expect(res.summary).toMatch(/10 AWARD-BEARING active pipeline grant\(s\) were READ but their source could not be parsed/)
-    expect(res.summary).toMatch(/need an API adapter/)
+    expect(res.summary).toMatch(/10 AWARD-BEARING active pipeline grant\(s\) remain without an amount answer after source enrichment was attempted/)
+    expect(res.summary).not.toMatch(/need an API adapter|were READ|JS shell \/ dead page/)
     expect(res.evidence).toMatchObject({ unanswered_unreadable: 10, answered_none_published: 75 })
   })
 
