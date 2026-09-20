@@ -181,10 +181,15 @@ async function invokePaidLadder({
   const deadline = Date.now() + budget
   const remaining = () => Math.max(0, deadline - Date.now())
   const safePrompt = typeof prompt === 'string' ? prompt : JSON.stringify(prompt ?? '')
-  // Owner subscription work uses the same caller deadline, with time left for APIs.
+  const ownerMeteredDisabled = Boolean(ownerScope && process.env.OWNER_AI_ALLOW_PAID_FALLBACK !== 'true')
+  const configuredFreeRoutes = resolveFreeAiRoutes(freeRoutes)
+  // Reserve fallback time only when the owner has an allowed fallback.
+  // With metered access disabled and no free route, halving this deadline
+  // cancels viable subscription work and leaves the other half unusable.
+  const subscriptionBudget = ownerMeteredDisabled && configuredFreeRoutes.length === 0 ? budget : budget / 2
   // The canonical request scope excludes customers, other admins and service tokens.
   const configuredSubscriptionWindow = Number(process.env.OWNER_AI_SUBSCRIPTION_TIMEOUT_MS ?? 20000)
-  const subscriptionWindow = Math.min(budget / 2,
+  const subscriptionWindow = Math.min(subscriptionBudget, remaining(),
     Number.isFinite(configuredSubscriptionWindow) ? Math.max(0, Math.min(60000, configuredSubscriptionWindow)) : 20000)
   if (ownerScope && subscriptionWindow > 0) {
     try {
@@ -201,12 +206,10 @@ async function invokePaidLadder({
   }
   // The owner's monthly allowance must not silently become metered usage.
   // This policy affects only a canonically authenticated owner request.
-  const ownerMeteredDisabled = Boolean(ownerScope && process.env.OWNER_AI_ALLOW_PAID_FALLBACK !== 'true')
   const excluded = new Set(Array.isArray(excludedProviders) ? excludedProviders : [])
   const routes = ownerMeteredDisabled ? [] : resolvePaidAiRoutes({ openai, openaiModel, anthropicModel }).filter(route => !excluded.has(route.provider))
   // Legacy calls retain request-local state; configured ladders share bounded cooldowns.
   const state = injectedState ?? (process.env.AI_PAID_ROUTES ? paidCircuitState() : new Map())
-  const configuredFreeRoutes = resolveFreeAiRoutes(freeRoutes)
   const configuredReserve = Number(process.env.FREE_AI_RESERVE_MS || 6000)
   const reserve = configuredFreeRoutes.length ? Math.min(budget / 2, Math.max(1000, Number.isFinite(configuredReserve) ? configuredReserve : 6000)) : 0
   const paidDeadline = deadline - reserve
