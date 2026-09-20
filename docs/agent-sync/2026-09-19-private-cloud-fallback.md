@@ -52,3 +52,12 @@ shorter than the existing 60-second page-extraction deadline. The local CPU
 configuration sets FREE_AI_TIMEOUT_MS=60000 in both production and the isolated
 acceptance environment. Existing caller deadlines and cancellation still apply;
 this does not extend a shorter caller budget or change any acceptance criterion.
+
+CPU contention investigation: production exposes 48 host CPUs but cpu.max permits
+24 cores, with substantial cgroup throttling during failed extraction. Ollama's
+bundled llama-server supports LLAMA_ARG_THREADS; an upstream issue documents
+severe throttling when default thread counts exceed container budgets. The
+private child environment now uses min(8, affinity, whole-core cgroup quota),
+with a floor of one. This changes execution scheduling only, not model weights,
+output schemas, caller deadlines or acceptance criteria. The actual pinned
+llama-server --help output verified this environment-variable contract.

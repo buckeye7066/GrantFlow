@@ -1,9 +1,28 @@
 import {spawn} from 'node:child_process'
 import {mkdir} from 'node:fs/promises'
+import {readFileSync} from 'node:fs'
+import {availableParallelism} from 'node:os'
 import {setTimeout as sleep} from 'node:timers/promises'
 
 export const LOCAL_MODEL = 'llama3.2:1b'
 export const LOCAL_MODEL_DIGEST = 'baf6a787fdffd633537aa2eb51cfd54cb93ff08e28040095462bb63daf552878'
+
+/** Native llama.cpp auto-detection can see host CPUs beyond the container quota.
+ * Keep both prompt processing and generation within a bounded worker budget.
+ */
+export function localModelThreadLimit({
+  quotaReader = () => readFileSync('/sys/fs/cgroup/cpu.max', 'utf8'),
+  available = availableParallelism,
+} = {}) {
+  let threads = Math.max(1, Math.min(8, Math.floor(Number(available()) || 1)))
+  try {
+    const [quota, period] = quotaReader().trim().split(/\s+/)
+    if (quota !== 'max' && Number(quota) > 0 && Number(period) > 0) {
+      threads = Math.max(1, Math.min(threads, Math.floor(Number(quota) / Number(period))))
+    }
+  } catch { /* Non-cgroup hosts still use the bounded affinity-aware budget. */ }
+  return String(threads)
+}
 
 /** The bundled inference process receives no application or provider secrets. */
 export function localModelEnvironment(env = process.env) {
@@ -21,6 +40,7 @@ export function localModelEnvironment(env = process.env) {
     OLLAMA_VULKAN: '0',
     CUDA_VISIBLE_DEVICES: '-1',
     GOMAXPROCS: '8',
+    LLAMA_ARG_THREADS: localModelThreadLimit(),
   }
 }
 

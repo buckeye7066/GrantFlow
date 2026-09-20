@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {EventEmitter} from 'node:events';
 import {readFileSync} from 'node:fs';
-import {localModelEnvironment, startLocalModel} from '../../backend/services/localModelRuntime.js';
+import {localModelEnvironment, localModelThreadLimit, startLocalModel} from '../../backend/services/localModelRuntime.js';
 
 test('local inference inherits no provider credentials and never exposes a public port',()=>{
  const env=localModelEnvironment({PATH:'/usr/bin',OPENAI_API_KEY:'secret',OWNER_AI_BRIDGE_TOKEN:'secret',OLLAMA_HOST:'0.0.0.0:11434',OLLAMA_API_KEY:'secret'});
@@ -50,4 +50,12 @@ test('a changed model digest cannot silently replace the verified weights',async
  const runtime=startLocalModel({env:{GRANTFLOW_LOCAL_MODEL_ENABLED:'1'},platform:'linux',spawnImpl:()=>child,
  fetchImpl:async()=>Response.json({models:[{name:'llama3.2:1b',digest:'unexpected'}]}),makeDir:async()=>{},delay:async()=>{now+=1000},now:()=>now,startupMs:1000});
  await assert.rejects(runtime.ready,/local_model_not_ready/);runtime.stop();
+});
+
+test('CPU workers stay inside the container quota and never use all host cores',()=>{
+ for(const [quota,cpus,expected] of [['2400000 100000',48,8],['200000 100000',48,2],['50000 100000',48,1],['max 100000',4,4],['invalid',48,8]]){
+  assert.equal(localModelThreadLimit({quotaReader:()=>quota,available:()=>cpus}),String(expected));
+ }
+ assert.equal(localModelThreadLimit({quotaReader:()=>{throw new Error('absent')},available:()=>4}),'4');
+ const env=localModelEnvironment({LLAMA_ARG_THREADS:'128'});assert.ok(Number(env.LLAMA_ARG_THREADS)>=1&&Number(env.LLAMA_ARG_THREADS)<=8);
 });
