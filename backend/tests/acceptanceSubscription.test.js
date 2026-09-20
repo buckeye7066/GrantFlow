@@ -92,6 +92,9 @@ it.each(['already-aborted','aborted-during','timed-out'])('retains the actual %s
   const r=await m.getAcceptanceSubscription().invoke({prompt:'Extract',format:'json',maxTokens:128,timeoutMs:20,signal:c.signal})
   expect(r.ok).toBe(false);expect(classifyExtractionFailure(r).class).toBe('llm_timeout')
   if(kind!=='timed-out')expect(r.aborted).toBe(true);else expect(r.timedOut).toBe(true)
+  const counts=m.getAcceptanceSubscription().summary()
+  expect(counts.failed_calls).toBe(kind==='timed-out'?1:0)
+  expect(counts.aborted_calls).toBe(kind==='timed-out'?0:1)
  })
 })
 it('native authentication failure exposes only a stable receipt-safe error code',async()=>{

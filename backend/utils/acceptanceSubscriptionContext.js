@@ -34,10 +34,14 @@ export async function runAcceptanceSubscription(executeJob,env,work){
  if(typeof executeJob!=='function'||typeof work!=='function')throw new Error('An authenticated local acceptance executor is required')
  const restore=isolateModelEnvironment()
  let active=true
- const counts={completed_calls:0,failed_calls:0,input_tokens:0,output_tokens:0}
+ const counts={completed_calls:0,failed_calls:0,aborted_calls:0,input_tokens:0,output_tokens:0}
  const context={provider,summary:()=>({mode:'explicit_local_operator',provider,billing_mode:'subscription',...counts}),
   async invoke({system=null,prompt,format='text',maxTokens=1200,timeoutMs=20000,signal}={}){
-   const failed=(error=null)=>{counts.failed_calls++;return {ok:false,provider,billing_mode:'subscription',raw:null,json:null,text:null,freeRouteErrors:[],subscription_unavailable:true,aborted:!active||signal?.aborted===true,timedOut:Boolean(error?.isTimeout||error?.code==='LLM_TIMEOUT'),error:signal?.aborted?signal.reason:error}}
+   const failed=(error=null)=>{
+    const aborted=!active||signal?.aborted===true
+    if(aborted)counts.aborted_calls++;else counts.failed_calls++
+    return {ok:false,provider,billing_mode:'subscription',raw:null,json:null,text:null,freeRouteErrors:[],subscription_unavailable:!aborted,aborted,timedOut:Boolean(error?.isTimeout||error?.code==='LLM_TIMEOUT'),error:aborted?(signal?.reason||new DOMException('Operation cancelled','AbortError')):error}
+   }
    if(!active||signal?.aborted||!Number.isSafeInteger(maxTokens)||maxTokens<2||maxTokens>32000||!['text','json'].includes(format))return failed()
    const budget=Number(timeoutMs??20000)
    if(!Number.isFinite(budget)||budget<=0)return failed()
