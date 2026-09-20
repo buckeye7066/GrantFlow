@@ -490,6 +490,12 @@ export const DIAGNOSTIC_CHECKS = Object.freeze([
     // is caught from PRODUCTION traffic, not just Amy's synthetic cohort or the
     // nightly sweep. Anya learns the same signal per-profile via anya_brain_memory.
     id: 'crawler.gapLearning',
+    // Investigation references, not proof that these files contain a defect.
+    investigation_files: [
+      'backend/services/sam/samRegistry.js',
+      'backend/services/coverageAudit/liveCrawlGapLearning.js',
+      'backend/services/crawlerOsService.js',
+    ],
     label: 'Crawler gap learning (live discovery coverage)',
     category: SAM_CATEGORIES.CRAWLER_RELIABILITY,
     kind: CHECK_KIND.INTERNAL,
@@ -672,6 +678,12 @@ export const DIAGNOSTIC_CHECKS = Object.freeze([
     // back with every profile clean at the goals/rules bar. This check makes
     // the scoreboard visible every morning (it flows into Anya's 09:00 digest).
     id: 'amy.flywheelCohort',
+    // Investigation references, not proof that these files contain a defect.
+    investigation_files: [
+      'backend/services/sam/samRegistry.js',
+      'backend/services/amy/flywheelCohort.js',
+      'backend/services/amy/cohortSummary.js',
+    ],
     label: 'Amy flywheel daily cohort (synthetic-profile crawl quality)',
     category: SAM_CATEGORIES.CRAWLER_RELIABILITY,
     kind: CHECK_KIND.INTERNAL,
@@ -760,6 +772,12 @@ export const DIAGNOSTIC_CHECKS = Object.freeze([
     // amount anywhere (an ingest/extraction gap Amy's amount_recall_miss
     // findings and the awardAmountExtractor patterns are meant to close).
     id: 'pipeline.amountCoverage',
+    // Investigation references, not proof that these files contain a defect.
+    investigation_files: [
+      'backend/services/sam/samRegistry.js',
+      'backend/services/amountEnrichment.js',
+      'backend/services/sources/amountAdapters.js',
+    ],
     label: 'Pipeline dollar-value answers (every active grant has an honest amount answer)',
     category: SAM_CATEGORIES.CRAWLER_RELIABILITY,
     kind: CHECK_KIND.INTERNAL,
@@ -1139,12 +1157,10 @@ export const DIAGNOSTIC_CHECKS = Object.freeze([
       // STALLS — the sweeps' own remaining/exhausted telemetry owns that. Failing
       // on it here would re-create the nightly-noise problem one rung down.
       //
-      // The ONLY genuinely-unanswered class is `unreadable`: a row whose source
-      // WAS read and came back a JS shell / dead page, so no amount of fetching
-      // can ever help — it names real ADAPTER work (the report itself says
-      // "persistent classes need a code change"). Orphan grants used to fail here
-      // as `no_catalog_row`; now they are read directly, so they either get an
-      // answer, sit in `never_read` backlog, or land here as honestly unreadable.
+      // The legacy `unreadable` bucket means an attempt was recorded without
+      // an answer. It does not identify why: a parser failure, stale URL,
+      // exhausted retry budget, or JS shell needs its own source evidence.
+      // Preserve the failure and counts without prescribing an unproven adapter.
       if (unreadable > 0) {
         // Name the concentration inline so the finding stops being a bare count:
         // a dominant host is a single-adapter opportunity, a flat spread is a
@@ -1154,9 +1170,9 @@ export const DIAGNOSTIC_CHECKS = Object.freeze([
           : ''
         return {
           ok: false,
-          summary: `${unreadable} AWARD-BEARING active pipeline grant(s) were READ but their source could not be parsed (JS shell / dead page) — they need an API adapter. (Pointer kinds — directory/referral/school_portal/past_award_intel — and benefit programs are NOT counted here: they publish no per-award figure by design and appear as "no-per-award-figure by design".)${hostNote} ${summary}`,
+          summary: `${unreadable} AWARD-BEARING active pipeline grant(s) remain without an amount answer after source enrichment was attempted. The attempt marker does not establish the failure cause. Pointer and benefit kinds with no per-award figure by design are excluded.${hostNote} ${summary}`,
           evidence: fullCensus,
-          recommended_fix: `These are NOT "low coverage" and NOT backlog — the sweep already read them and the page cannot state a per-award figure by fetching (client-rendered shell, or a benefit-eligibility tool with no fixed award). Each needs an entry in the amount ADAPTER registry (services/sources/amountAdapters.js) — grants.gov (API + Simpler Grants fallback), sam.gov /fal/ assistance listings, and federalregister.gov documents already have one — or, for a benefit program with no fixed per-applicant award (FAFSA/Pell/SSI), to be classified as a BENEFIT/DIRECTORY kind so it counts as no-amount-by-design. evidence.unreadable_hosts already groups these rows by source_url host (top 10) — a host carrying a large share of the count is a single-adapter opportunity; a flat spread across many hosts is a long tail and not worth a bespoke adapter. sam.gov CONTRACT opportunities remain deliberately unadapted (their award node is what a specific vendor WAS granted, not what an applicant could receive). Do NOT widen the answer buckets to make this green: an answer is a value, a READ denial (none_published), an honest label, or DIRECTORY-by-design. Silence is not an answer.`,
+          recommended_fix: `Inspect the recorded fetch/extraction failure evidence (system_kv amount_enrich_failure_log), source URL, and current source response for these rows; evidence.unreadable_hosts groups the affected hosts. Then choose an evidence-supported retry, URL correction, parser repair, or source adapter in services/sources/amountAdapters.js. An attempted timestamp alone does not prove a JS shell, a dead page, or that an API exists. Keep the finding open until the row has a grounded value, a read-backed none_published answer, an honest label, or a positively established no-per-award-figure kind. Do not widen answer buckets or weaken eligibility gates to make this green.`,
           confidence: 0.85,
         }
       }
@@ -1247,6 +1263,12 @@ export const DIAGNOSTIC_CHECKS = Object.freeze([
     // ZERO search pages, the search layer (SearXNG upstreams / Brave billing /
     // DDG throttling) is down — the root cause behind a hyperlocal-gap flood.
     id: 'crawler.webLaneHealth',
+    // Investigation references, not proof that these files contain a defect.
+    investigation_files: [
+      'backend/services/sam/samRegistry.js',
+      'backend/services/webGrantExtractor.js',
+      'backend/services/coverageAudit/webLaneHealth.js',
+    ],
     label: 'Open-web discovery lane liveness',
     category: SAM_CATEGORIES.CRAWLER_RELIABILITY,
     kind: CHECK_KIND.INTERNAL,

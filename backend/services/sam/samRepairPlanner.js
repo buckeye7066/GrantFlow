@@ -162,10 +162,14 @@ export function planForFinding(finding) {
 }
 
 function buildPatchSummary(finding, strategy) {
-  const files = (finding.affected_files || []).slice(0, 3).join(', ') || '(no files identified)'
+  // The category strategy controls repair execution; the finding explains this failure.
+  const advice = typeof finding.recommended_fix === 'string' ? finding.recommended_fix.trim() : ''
+  const affected = Array.isArray(finding.affected_files) ? finding.affected_files : []
+  const investigation = Array.isArray(finding.evidence?.investigation_files) ? finding.evidence.investigation_files : []
+  const files = [...new Set([...affected, ...investigation])].slice(0, 3).join(', ') || '(no files identified)'
   const route = (finding.affected_routes || []).slice(0, 3).join(', ')
   const tail = route ? ` · routes: ${route}` : ''
-  return `${strategy} · files: ${files}${tail} · finding: ${finding.title}`
+  return `${advice || strategy} · inspect files: ${files}${tail} · finding: ${finding.title}`
 }
 
 function buildRollbackPlan(finding) {

@@ -509,6 +509,11 @@ async function runHttpCheck({ check, httpProbe }) {
 // ok:true means "healthy or not-applicable-yet", ok:false means a real defect.
 // Sam never throws here — a check that throws is itself recorded as a finding so
 // the rest of the sweep continues.
+function investigationEvidence(check) {
+  const files = Array.isArray(check?.investigation_files) ? check.investigation_files : []
+  return files.length ? { investigation_files: files } : {}
+}
+
 async function runInternalCheck({ check, db, ctx }) {
   if (typeof check.run !== 'function') {
     // A registry INTERNAL check with no run() is a wiring mistake, not a no-op:
@@ -537,7 +542,9 @@ async function runInternalCheck({ check, db, ctx }) {
         category: check.category,
         title: `Internal check threw: ${check.label}`,
         description: err?.message || String(err),
-        evidence: { check_id: check.id, error: String(err?.message || err) },
+        affected_files: Array.isArray(check.affected_files) ? check.affected_files : [],
+        affected_routes: Array.isArray(check.affected_routes) ? check.affected_routes : [],
+        evidence: { check_id: check.id, error: String(err?.message || err), ...investigationEvidence(check) },
         recommended_fix: `Inspect the run() function for ${check.id} in samRegistry.js.`,
         confidence: 0.7,
       }), event_type: check.id }],
@@ -561,9 +568,18 @@ async function runInternalCheck({ check, db, ctx }) {
       category: check.category,
       title: `${check.label} reported a problem`,
       description: result?.summary || `${check.id} returned ok:false.`,
-      evidence: result?.evidence && typeof result.evidence === 'object'
-        ? result.evidence
-        : { summary: result?.summary ?? null },
+      affected_files: Array.isArray(result?.affected_files)
+        ? result.affected_files
+        : (Array.isArray(check.affected_files) ? check.affected_files : []),
+      affected_routes: Array.isArray(result?.affected_routes)
+        ? result.affected_routes
+        : (Array.isArray(check.affected_routes) ? check.affected_routes : []),
+      evidence: {
+        ...(result?.evidence && typeof result.evidence === 'object'
+          ? result.evidence
+          : { summary: result?.summary ?? null }),
+        ...investigationEvidence(check),
+      },
       recommended_fix: result?.recommended_fix || `Inspect ${check.id} in samRegistry.js and the engine it observes.`,
       confidence: typeof result?.confidence === 'number' ? result.confidence : 0.8,
     }), event_type: check.id }],
