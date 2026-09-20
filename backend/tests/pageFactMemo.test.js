@@ -39,3 +39,13 @@ it('counts reusable extraction separately while still fetching the source',async
  expect(result.fetched).toBe(1);expect(result.extraction_cache_hits).toBe(1);expect(result.page_ledger[0].extraction_cached).toBe(true);
  const durable=buildWebLaneRunRecord(result,{profileId:'p1',at:'2026-09-19T00:00:00Z'});expect(durable.extraction_cache_hits).toBe(1);expect(durable.pages[0].extraction_cached).toBe(true);
 });
+
+it('exposes live provider identity without attributing cached results to a fresh model call',async()=>{
+ const memo=createPageFactMemo();const invoke=vi.fn(async()=>structuredClone(response));
+ const fresh=await extractOpportunitiesFromPage({pageUrl,html},{invoke,openai:null,pageMemo:memo});
+ const cached=await extractOpportunitiesFromPage({pageUrl,html},{invoke,openai:null,pageMemo:memo});
+ expect(fresh.extraction_provider).toBe('free:test');
+ expect(cached.extraction_provider).toBeNull();
+ expect(cached.extraction_cached).toBe(true);
+ expect(invoke).toHaveBeenCalledTimes(1);
+});

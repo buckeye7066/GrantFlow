@@ -410,6 +410,7 @@ export async function runDependencyPreflight({
     },
     extractor: {
       configured_providers: extractorConfigured,
+      responsive_provider: null,
       responsive: false,
       candidate_count: 0,
       reason: null,
@@ -479,8 +480,14 @@ export async function runDependencyPreflight({
         String(candidate?.title || '').trim() && String(candidate?.sponsor || '').trim(),
     )
     evidence.extractor.candidate_count = valid.length
-    evidence.extractor.responsive = valid.length > 0
-    evidence.extractor.reason = valid.length > 0 ? null : 'extractor_returned_no_evidence_grounded_candidate'
+    const provider = candidates?.extraction_provider
+    const providerVerified = typeof provider === 'string' && extractorConfigured.includes(provider)
+    evidence.extractor.reason = valid.length === 0
+      ? 'extractor_returned_no_evidence_grounded_candidate'
+      : candidates?.extraction_cached === true ? 'extractor_probe_was_cached'
+        : !providerVerified ? 'extractor_provider_not_configured_or_unverified' : null
+    evidence.extractor.responsive = evidence.extractor.reason === null
+    evidence.extractor.responsive_provider = evidence.extractor.responsive ? provider : null
   } catch {
     evidence.extractor.reason = 'extractor_probe_failed_or_timed_out'
   }

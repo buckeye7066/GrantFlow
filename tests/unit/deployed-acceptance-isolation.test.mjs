@@ -26,3 +26,15 @@ test('the runtime dependency symlink alone is excluded from clone status',()=>{
  assert.ok(source.includes("'/node_modules\\n'"));
  assert.ok(source.indexOf("path.join(folder,'.git','info','exclude')") < source.indexOf("['status','--porcelain']"));
 });
+
+
+test('an interruption vetoes a successful child exit before any receipt is accepted',async()=>{
+ const {assertAcceptanceNotInterrupted}=await import('../../backend/scripts/run-deployed-acceptance.mjs');
+ assert.throws(()=>assertAcceptanceNotInterrupted(true),/acceptance_interrupted/);
+ assert.doesNotThrow(()=>assertAcceptanceNotInterrupted(false));
+ const source=readFileSync(new URL('../../backend/scripts/run-deployed-acceptance.mjs',import.meta.url),'utf8');
+ const childResolved=source.indexOf('    clearTimeout(timer)');
+ const guard=source.indexOf('assertAcceptanceNotInterrupted(interrupted)',childResolved);
+ const receipt=source.indexOf('const raw=await readFile',childResolved);
+ assert.ok(childResolved>=0&&guard>childResolved&&receipt>guard,'Check interruption before reading a child receipt');
+});

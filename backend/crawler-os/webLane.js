@@ -352,6 +352,7 @@ function summarizeProviderHealth(result, llmStats) {
     llm: {
       pages_fetched: result.fetched,
       ok_pages: llmStats.ok_pages,
+      cached_pages: result.extraction_cache_hits,
       failed_pages: s.extraction_failed,
       failed_by_class: { ...s.extraction_failed_by_class },
     },
@@ -883,7 +884,8 @@ export async function runWebDiscoveryLane(deps, opts = {}) {
         (result.stage_ledger.extraction_failed_by_class[failureClass] || 0) + 1;
       if (LLM_FAILURE_CLASSES.has(failureClass)) llmStats.llm_failed_pages += 1;
       if (entry) entry.extraction_failure = failureClass;
-    } else {
+    } else if (extracted?.extraction_cached !== true) {
+      // Cached facts remain useful, but do not prove a live provider is healthy.
       llmStats.ok_pages += 1;
     }
 

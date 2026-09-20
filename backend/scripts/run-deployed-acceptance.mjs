@@ -7,6 +7,10 @@ import {pathToFileURL} from 'node:url'
 import {randomUUID} from 'node:crypto'
 
 const execFile = promisify(execFileCallback)
+export function assertAcceptanceNotInterrupted(interrupted) {
+  if(interrupted) throw new Error('acceptance_interrupted')
+}
+
 export function validateRevision(value) {
   if (!/^[a-f0-9]{40}$/.test(value || '')) throw new Error('exact_revision_required')
   return value
@@ -92,6 +96,7 @@ export async function runDeployedAcceptance(sha) {
       timer=setTimeout(stop,2*60*60*1000)
     })
     clearTimeout(timer)
+    assertAcceptanceNotInterrupted(interrupted)
     const raw=await readFile(path.join(folder,relativeReceipt),'utf8')
     const receipt=JSON.parse(raw)
     await writeFile(reportPath,raw,{flag:'wx',mode:0o600})

@@ -174,6 +174,11 @@ function makeRuntime({
   return { runtime, state, cleanupCalls }
 }
 
+function extractionFrom(provider, candidates = [{ title: 'Grant', sponsor: 'Funder', raw: { blind_extraction: true } }]) {
+  Object.defineProperty(candidates, 'extraction_provider', { value: provider })
+  return candidates
+}
+
 describe('bounded live dependency preflight', () => {
   it.each([
     ['custom free route', { FREE_AI_ROUTES: JSON.stringify([{ id: 'local-proof', base_url: 'http://127.0.0.1:11434/v1', model: 'llama3.2' }]) }, 'free:local-proof'],
@@ -182,7 +187,7 @@ describe('bounded live dependency preflight', () => {
   ])('probes a %s extractor without paid API credentials', async (_label, freeEnv, expectedProvider) => {
     const results = [{ url: 'https://grants.gov/example', title: 'Example' }]
     Object.defineProperty(results, 'searchMeta', { value: { provider: 'searxng', provenance: 'live', status: 'ok' } })
-    const extractOpportunitiesFromPage = vi.fn(async () => [{ title: 'Grant', sponsor: 'Funder', raw: { blind_extraction: true } }])
+    const extractOpportunitiesFromPage = vi.fn(async () => extractionFrom(expectedProvider))
     const proof = await runDependencyPreflight({
       env: { SEARXNG_URL: 'https://search.example.test', ...freeEnv }, allowedProviders: ['searxng'],
       searchWeb: async () => results, extractOpportunitiesFromPage,
@@ -215,7 +220,7 @@ describe('bounded live dependency preflight', () => {
       env: { OPENAI_API_KEY: 'configured' },
       allowedProviders: ['openai_web_search'],
       searchWeb: async () => results,
-      extractOpportunitiesFromPage: async () => [{ title: 'Grant', sponsor: 'Funder', raw: { blind_extraction: true } }],
+      extractOpportunitiesFromPage: async () => extractionFrom('openai'),
     })
     expect(proof.ok).toBe(true)
   })
@@ -232,11 +237,11 @@ describe('bounded live dependency preflight', () => {
       enumerable: false,
     })
     const searchWeb = vi.fn(async () => results)
-    const extractOpportunitiesFromPage = vi.fn(async () => [{
+    const extractOpportunitiesFromPage = vi.fn(async () => extractionFrom('openai', [{
       title: '2026 Community Health Access Grant',
       sponsor: 'Axiom Community Foundation',
       raw: { blind_extraction: true },
-    }])
+    }]))
 
     const proof = await runDependencyPreflight({
       env,
@@ -716,11 +721,36 @@ it('preflight allows a healthy strong extractor to finish inside the bounded pag
   const extract=vi.fn(async (_input,options)=>{
     await new Promise(resolve=>setTimeout(resolve,16000))
     expect(options.timeoutMs).toBeGreaterThan(16000)
-    return [{title:'Grounded fixture',sponsor:'Fixture',raw:{blind_extraction:true}}]
+    return extractionFrom('openai', [{title:'Grounded fixture',sponsor:'Fixture',raw:{blind_extraction:true}}])
   })
   try {
     const pending=runDependencyPreflight({env:{SEARXNG_URL:'https://search.fixture.invalid',OPENAI_API_KEY:'fixture'},allowedProviders:['searxng'],searchWeb:async()=>rows,extractOpportunitiesFromPage:extract})
     await vi.advanceTimersByTimeAsync(17000)
     expect((await pending).ok).toBe(true)
   } finally {vi.useRealTimers()}
+})
+
+
+describe('extractor preflight proves the actual live provider', () => {
+  it.each([
+    ['openai', false, false],
+    [null, false, false],
+    ['free:other', false, false],
+    ['free:local-proof', true, false],
+    ['free:local-proof', false, true],
+  ])('provider %s cached=%s is accepted=%s', async (provider, cached, accepted) => {
+    const results = [{ url: 'https://grants.gov/example' }]
+    Object.defineProperty(results, 'searchMeta', { value: { provider: 'searxng', provenance: 'live', status: 'ok' } })
+    const candidates = [{ title: 'Grant', sponsor: 'Funder', raw: { blind_extraction: true } }]
+    Object.defineProperty(candidates, 'extraction_provider', { value: provider })
+    Object.defineProperty(candidates, 'extraction_cached', { value: cached })
+    const proof = await runDependencyPreflight({
+      env: { SEARXNG_URL: 'https://search.example.test', FREE_AI_ROUTES: JSON.stringify([{ id: 'local-proof', base_url: 'http://127.0.0.1:11434/v1', model: 'llama3.2' }]) },
+      allowedProviders: ['searxng'], searchWeb: async () => results,
+      extractOpportunitiesFromPage: async () => candidates,
+    })
+    expect(proof.ok).toBe(accepted)
+    expect(proof.extractor.responsive).toBe(accepted)
+    expect(proof.extractor.responsive_provider).toBe(accepted ? 'free:local-proof' : null)
+  })
 })

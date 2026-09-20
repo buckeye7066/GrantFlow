@@ -139,6 +139,7 @@ export function extractionFailureOf(result) {
 
 function tagResult(list, { status, failure = null, provider = null }) {
   const arr = Array.isArray(list) ? list : [];
+  Object.defineProperty(arr, 'extraction_provider', { value: provider, enumerable: false, configurable: true });
   Object.defineProperty(arr, 'extraction_status', { value: status, enumerable: false, configurable: true });
   Object.defineProperty(arr, 'extraction_failure', {
     value: failure ? Object.freeze({ class: failure.class, detail: failure.detail ?? null, provider: provider ?? failure.provider ?? null }) : null,
