@@ -47,8 +47,8 @@ describe('INTERNAL finding evidence reaches repair plans', () => {
     const check = getCheckById('crawler.webLaneHealth')
     vi.spyOn(check, 'run').mockResolvedValue({ ok: false, summary: 'Timed out' })
     const { findings } = await runDiagnostics({ checkIds: [check.id] })
-    expect(findings[0].affected_files).toContain('backend/services/webGrantExtractor.js')
-    expect(findings[0].affected_files).toContain('backend/services/sam/samRegistry.js')
+    expect(findings[0].evidence.investigation_files).toContain('backend/services/webGrantExtractor.js')
+    expect(findings[0].evidence.investigation_files).toContain('backend/services/sam/samRegistry.js')
   })
 })
 
@@ -84,7 +84,28 @@ describe('Registered investigation references', () => {
     ['amy.flywheelCohort', 'backend/services/amy/flywheelCohort.js'],
     ['pipeline.amountCoverage', 'backend/services/amountEnrichment.js'],
   ])('%s names its diagnostic and observed engine', (id, engine) => {
-    expect(getCheckById(id).affected_files).toContain(engine)
-    expect(getCheckById(id).affected_files).toContain('backend/services/sam/samRegistry.js')
+    expect(getCheckById(id).investigation_files).toContain(engine)
+    expect(getCheckById(id).investigation_files).toContain('backend/services/sam/samRegistry.js')
+  })
+})
+
+describe('Inspection provenance does not authorize editing', () => {
+  it('keeps registered references out of planned edit targets and rollback', async () => {
+    const check = getCheckById('crawler.webLaneHealth')
+    vi.spyOn(check, 'run').mockResolvedValue({ ok: false, summary: 'Provider unavailable' })
+    const { findings } = await runDiagnostics({ checkIds: [check.id] })
+    const plan = planForFinding(findings[0])
+    expect(findings[0].affected_files).toEqual([])
+    expect(plan.files_to_change).toEqual([])
+    expect(plan.rollback_plan).not.toContain('git checkout')
+    expect(plan.patch_summary).toContain('backend/services/webGrantExtractor.js')
+  })
+  it('preserves investigation references when an INTERNAL check throws', async () => {
+    const check = getCheckById('crawler.webLaneHealth')
+    vi.spyOn(check, 'run').mockRejectedValue(new Error('history read failed'))
+    const { findings } = await runDiagnostics({ checkIds: [check.id] })
+    expect(findings[0].evidence.investigation_files).toContain('backend/services/webGrantExtractor.js')
+    expect(findings[0].affected_files).toEqual([])
+    expect(planForFinding(findings[0]).files_to_change).toEqual([])
   })
 })

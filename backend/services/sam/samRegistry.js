@@ -491,7 +491,7 @@ export const DIAGNOSTIC_CHECKS = Object.freeze([
     // nightly sweep. Anya learns the same signal per-profile via anya_brain_memory.
     id: 'crawler.gapLearning',
     // Investigation references, not proof that these files contain a defect.
-    affected_files: [
+    investigation_files: [
       'backend/services/sam/samRegistry.js',
       'backend/services/coverageAudit/liveCrawlGapLearning.js',
       'backend/services/crawlerOsService.js',
@@ -679,7 +679,7 @@ export const DIAGNOSTIC_CHECKS = Object.freeze([
     // the scoreboard visible every morning (it flows into Anya's 09:00 digest).
     id: 'amy.flywheelCohort',
     // Investigation references, not proof that these files contain a defect.
-    affected_files: [
+    investigation_files: [
       'backend/services/sam/samRegistry.js',
       'backend/services/amy/flywheelCohort.js',
       'backend/services/amy/cohortSummary.js',
@@ -773,7 +773,7 @@ export const DIAGNOSTIC_CHECKS = Object.freeze([
     // findings and the awardAmountExtractor patterns are meant to close).
     id: 'pipeline.amountCoverage',
     // Investigation references, not proof that these files contain a defect.
-    affected_files: [
+    investigation_files: [
       'backend/services/sam/samRegistry.js',
       'backend/services/amountEnrichment.js',
       'backend/services/sources/amountAdapters.js',
@@ -1264,7 +1264,7 @@ export const DIAGNOSTIC_CHECKS = Object.freeze([
     // DDG throttling) is down — the root cause behind a hyperlocal-gap flood.
     id: 'crawler.webLaneHealth',
     // Investigation references, not proof that these files contain a defect.
-    affected_files: [
+    investigation_files: [
       'backend/services/sam/samRegistry.js',
       'backend/services/webGrantExtractor.js',
       'backend/services/coverageAudit/webLaneHealth.js',

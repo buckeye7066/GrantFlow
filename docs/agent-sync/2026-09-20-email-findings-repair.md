@@ -1,26 +1,27 @@
-# Email finding evidence repair implementation plan
+# Email finding evidence repair checkpoint
 
-Goal: make Sam/Anya reports preserve finding-specific diagnostic advice and source references without concealing failures.
-Architecture: keep existing finding and repair-plan contracts; carry references through INTERNAL checks and render the finding's recommendation.
-Scope: reporting only. Provider availability, real award amounts, cohort acceptance and application readiness remain separately verified outcomes.
-Base: ac30991cfcde77e1e3cfe2e4be909758951a165a.
-Workspace: independent clone; existing Home GrantFlow checkout and its edit lock remain untouched.
+Goal: preserve specific diagnostic advice and investigation references without concealing failures.
+Base: ac30991cfcde77e1e3cfe2e4be909758951a165a. PR: #1772.
+Scope: reporting only. No provider routing, eligibility, amount census or production-data changes.
+Workspace: independent clone; original shared checkout and its edit lock remain untouched.
 
-## Constraints
-- Do not access personal mailboxes or portal sign-in sessions.
-- No production data edits, email sends, paid inference, or relaxed acceptance thresholds.
-- Do not claim a named source file is defective merely because it is an investigation reference.
-- No branch protection bypass, force push, or merge before required tests pass.
+## Implemented
+- [x] Display the finding's recommended_fix, with the existing category fallback.
+- [x] Preserve explicitly provided affected files and routes on INTERNAL failures.
+- [x] Carry registered investigation_files separately in evidence, including thrown checks.
+- [x] Show investigation references in summaries without converting them to planned edit targets or rollback paths.
+- [x] Keep attempted-but-unanswered amount findings red without asserting a proven JS shell or mandatory API adapter.
 
-## Tasks
-- [ ] Add failing tests for finding-specific repair summaries and INTERNAL finding references.
-- [ ] Preserve recommendation text in samRepairPlanner.js without changing executable strategy/risk.
-- [ ] Carry explicitly provided affected_files/affected_routes in samDiagnostics.js.
-- [ ] Register investigation references for the four reported samRegistry.js checks.
-- [ ] Test that attempted-but-unanswered amount rows do not imply a proven JS shell or mandatory API adapter.
-- [ ] Replace that unsupported diagnosis while preserving the failing result and count.
-- [ ] Run focused regressions and the repository test command; record actual failures.
-- [ ] Review diff, publish PR, verify checks, merge through the guarded path, verify deployment.
+## Executed verification
+- First regression run: 8 failed, 1 passed before the initial source repair.
+- Initial final focused run: 96 tests passed across six files.
+- Review regression run reproduced lost thrown-check references and investigation/edit-target conflation.
+- After reference corrections: 98 tests passed across the same six files.
+- git diff --check passed. Required hosted release checks and deployment still require final verification.
 
-## Verification status
-Not yet repaired or verified. No production readiness claim.
+## Unresolved and not represented as repaired
+- A tool safety check blocked the attempted durable per-row amount-reason enrichment edit before execution; it was not retried via another path.
+- Two newly written failing tests for that unimplemented enrichment are preserved outside the active suite in Home's grantflow-amount-reason-regression-pending-20260920.test.js. They are not claimed as passing or as part of the implemented reference repair.
+- Review discussion #4057749496 remains open. The bounded failure ring is not complete historical per-row evidence.
+- Live extractor timeouts/quota failures, cohort acceptance, and the two actual missing amount answers are not resolved by these reporting changes.
+- No production-readiness or deployment claim. Do not repeat implemented repairs; continue from the explicit unresolved evidence.
