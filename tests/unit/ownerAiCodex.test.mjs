@@ -66,7 +66,7 @@ test('Codex accepts only bounded complete agent message NDJSON with terminal usa
   assert.equal(result.model, 'gpt-6-astra'); assert.equal(result.model_source, 'explicit_cli_argument')
   assert.deepEqual(result.usage, events.at(-1).usage)
   const invalid = ['', '{', ndjson(events.slice(0, -1)), ndjson(events.slice(0, 2).concat(events.at(-1))), 'x'.repeat(524289), ndjson([...events, { type: 'error' }])]
-  for (const type of ['command_execution', 'file_change', 'mcp_tool_call', 'web_search', 'browser', 'reasoning']) invalid.push(ndjson([...events.slice(0, 2), { type: 'item.completed', item: { type, text: 'bad' } }, ...events.slice(2)]))
+  for (const type of ['command_execution', 'file_change', 'mcp_tool_call', 'web_search', 'browser']) invalid.push(ndjson([...events.slice(0, 2), { type: 'item.completed', item: { type, text: 'bad' } }, ...events.slice(2)]))
   for (const type of ['error', 'turn.failed', 'item.started', 'item.updated', 'unknown']) invalid.push(ndjson([...events.slice(0, 2), { type, item: { type: 'agent_message', text: 'partial' } }, ...events.slice(2)]))
   invalid.push(ndjson([...events.slice(0, -1), { type: 'turn.completed', usage: { output_tokens: 0 } }]))
   for (const raw of invalid) assert.equal(parseResult('codex', raw, 'gpt-6-astra'), null)
@@ -182,4 +182,19 @@ test('failed subscriptions return null; server provider order and whole-deadline
   }
   const result = await executeJob({ ...job, timeoutMs: 400 }, { env, run })
   assert.equal(result?.provider, 'subscription:codex')
+})
+
+test('Codex completed reasoning summaries are accepted but excluded from output', async () => {
+  const withReasoning = [...events.slice(0, 2), { type: 'item.completed', item: { type: 'reasoning', text: 'Non-output summary' } }, ...events.slice(2)]
+  const result = parseResult('codex', ndjson(withReasoning), 'gpt-6-astra')
+  assert.equal(result?.raw, '{"answer":42}')
+  assert.equal(parseResult('codex', ndjson(withReasoning.filter(event => event.item?.type !== 'agent_message')), 'gpt-6-astra'), null)
+  for (const item of [{ type: 'reasoning', text: 42 }, { type: 'reasoning', text: 'failed', status: 'failed' }, { type: 'reasoning', text: 'failed', error: 'failure' }]) {
+    assert.equal(parseResult('codex', ndjson([...events.slice(0, 2), { type: 'item.completed', item }, ...events.slice(2)]), 'gpt-6-astra'), null)
+  }
+  const calls = []
+  const answer = await executeJob(job, { env, run: fakeRun(calls, () => ndjson(withReasoning)) })
+  assert.equal(answer?.provider, 'subscription:codex')
+  assert.equal(answer?.raw, '{"answer":42}')
+  assert.ok(calls.every(call => call.exe === 'codex.exe'))
 })

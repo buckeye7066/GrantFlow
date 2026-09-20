@@ -44,10 +44,15 @@ export function parseResult(provider, raw, requestedModel) {
       const events = raw.trim().split(/\r?\n/).map(line => JSON.parse(line))
       if (events.length < 4 || events.length > 4096 || events[0]?.type !== 'thread.started' || events[1]?.type !== 'turn.started') return null
       const terminal = events.at(-1)
-      const messages = events.slice(2, -1)
-      if (terminal?.type !== 'turn.completed' || !messages.length || events.some(event => !event || event.error || event.is_error) ||
-          !messages.every(event => event.type === 'item.completed' && event.item?.type === 'agent_message' &&
-            !event.item.error && (!event.item.status || event.item.status === 'completed') && typeof event.item.text === 'string' && event.item.text.trim())) return null
+      const records = events.slice(2, -1)
+      // Reasoning summaries are valid non-output records, never manuscript text.
+      // Tool activity, errors, incomplete records and unknown types still fail closed.
+      if (terminal?.type !== 'turn.completed' || !records.length || events.some(event => !event || event.error || event.is_error) ||
+          !records.every(event => event.type === 'item.completed' && ['agent_message', 'reasoning'].includes(event.item?.type) &&
+            !event.item.error && (!event.item.status || event.item.status === 'completed') && typeof event.item.text === 'string' &&
+            (event.item.type === 'reasoning' || event.item.text.trim()))) return null
+      const messages = records.filter(event => event.item.type === 'agent_message')
+      if (!messages.length) return null
       const usage = terminal.usage
       if (!['input_tokens', 'cached_input_tokens', 'output_tokens'].every(key => Number.isSafeInteger(usage?.[key]) && usage[key] >= 0) || usage.output_tokens === 0) return null
       return { ok: true, complete: true, provider: 'subscription:codex', billing_mode: 'subscription', model: requestedModel,
