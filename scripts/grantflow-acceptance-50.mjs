@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 import path from 'node:path'
+import {runWithCodexAcceptance} from '../tools/owner-ai/acceptance.mjs'
 import { fileURLToPath } from 'node:url'
 
 import {
@@ -10,7 +11,7 @@ import {
 } from '../backend/services/acceptance/amyWebParityAcceptance.js'
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
-const ALLOWED_OPTIONS = new Set(['expected-sha', 'output', 'allowed-providers'])
+const ALLOWED_OPTIONS = new Set(['expected-sha', 'output', 'allowed-providers', 'subscription'])
 
 function parseArgs(argv) {
   const parsed = {}
@@ -26,6 +27,7 @@ function parseArgs(argv) {
     if (!value || value.startsWith('--')) throw new Error(`--${key} requires a value`)
     parsed[key] = value
   }
+  if (parsed.subscription && parsed.subscription !== 'codex') throw new Error('--subscription supports only codex')
   if (!parsed['expected-sha']) throw new Error('--expected-sha is required')
   if (!parsed.output) throw new Error('--output is required')
   return parsed
@@ -36,6 +38,7 @@ function usage() {
     'Usage:',
     '  npm run acceptance:amy-parity -- --expected-sha=<40hex> --output=audit-reports/<receipt>.json [--allowed-providers=google_cse,searxng,brave]',
     '',
+    'Optional Windows operator mode: --subscription=codex uses the existing ChatGPT sign-in; no paid API fallback.',
     'The command refuses a dirty worktree or SHA mismatch before creating any artifact.',
     'The output receipt path must be new; existing evidence is never overwritten.',
   ].join('\n')
@@ -56,13 +59,21 @@ async function main() {
     ? args['allowed-providers'].split(',').map((value) => value.trim()).filter(Boolean)
     : DEFAULT_ALLOWED_PROVIDERS
 
-  const result = await runAmyWebParityAcceptance({
+  const run = (operatorPreflightFailure = null) => runAmyWebParityAcceptance({
     repoRoot,
     expectedSha: args['expected-sha'],
     output: args.output,
     allowedProviders,
+    operatorPreflightFailure,
   })
 
+  let result
+  try {
+    result = args.subscription === 'codex' ? await runWithCodexAcceptance(run) : await run()
+  } catch (error) {
+    if (args.subscription !== 'codex' || error?.code !== 'ACCEPTANCE_SUBSCRIPTION_AUTH_FAILED') throw error
+    result = await run('subscription_auth_not_verified')
+  }
   const receipt = result.receipt
   console.log(`[grantflow-acceptance-50] status=${receipt.status} exit_code=${result.exitCode}`)
   console.log(`[grantflow-acceptance-50] sha=${receipt.source?.observed_sha || 'unverified'} target=50`)

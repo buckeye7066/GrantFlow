@@ -1,3 +1,4 @@
+import {getAcceptanceSubscription} from '../../utils/acceptanceSubscriptionContext.js'
 /**
  * Hermetic release acceptance for GrantFlow's exact-50 Amy cohort and the
  * same cohort's live plain-web parity benchmark.
@@ -350,6 +351,8 @@ function configuredSearchProviders(env, allowedProviders) {
 }
 
 async function configuredExtractorProviders(env) {
+  const acceptance = getAcceptanceSubscription()
+  if (acceptance) return [acceptance.provider]
   // Keep runtime imports behind the disposable database/email isolation step.
   // Reuse the real route validator rather than inventing a second config policy.
   const { getConfiguredFreeAiRoutes } = await import('../../utils/freeAiRoutes.js')
@@ -886,6 +889,7 @@ export async function runAmyWebParityAcceptance(options = {}) {
     loadRuntime = loadDefaultAcceptanceRuntime,
     verifyMigrations = verifySqliteMigrationCompleteness,
     preflightDependencies = runDependencyPreflight,
+    operatorPreflightFailure = null,
     loadPolicy = loadCompetitivenessPolicy,
     writeReceipt = writeAtomicReceipt,
   } = options
@@ -957,6 +961,12 @@ export async function runAmyWebParityAcceptance(options = {}) {
     }
     if (!receipt.source.worktree_clean) {
       fail('worktree is not clean', 'preflight', ACCEPTANCE_EXIT.PREFLIGHT)
+    }
+
+    if (operatorPreflightFailure) {
+      receipt.inference = { mode: 'explicit_local_operator', provider: 'subscription:codex', billing_mode: 'subscription', authenticated: false, completed_calls: 0, failed_calls: 0 }
+      addCheck(receipt, 'operator.subscription_authentication_verified', false, { reason: 'subscription_auth_not_verified' })
+      fail('The official Codex client did not prove ChatGPT sign-in; no discovery was started', 'operator_preflight', ACCEPTANCE_EXIT.PREFLIGHT)
     }
 
     // No output or temporary artifact is created before the SHA/clean checks.
@@ -1249,6 +1259,7 @@ export async function runAmyWebParityAcceptance(options = {}) {
     }
   }
 
+  if (getAcceptanceSubscription()) receipt.inference = getAcceptanceSubscription().summary()
   receipt.completed_at = now().toISOString()
   receipt.exit_code = exitCode
   receipt.status = exitCode === ACCEPTANCE_EXIT.PASS
