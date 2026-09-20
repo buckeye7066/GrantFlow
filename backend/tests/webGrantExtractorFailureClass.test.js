@@ -52,6 +52,14 @@ describe('webGrantExtractor — failure classes are surfaced, not swallowed', ()
     expect(extractionFailureOf(out)).toMatchObject({ class: 'llm_timeout' })
   })
 
+  it('keeps a free-model timeout visible even after paid quota failures', () => {
+    for (const paid of [null, { status: 429, message: 'insufficient_quota' }]) {
+      expect(classifyExtractionFailure({ ok: false, timedOut: false, openaiError: paid,
+        freeRouteErrors: [{ status: null, message: 'free route timed out', credit_exhausted: false }],
+      }).class).toBe('llm_timeout')
+    }
+  })
+
   it('no provider at all is llm_unavailable', async () => {
     const invoke = async () => ({ ok: false, provider: 'fallback', json: null, timedOut: false, openaiError: null, anthropicError: null, freeRouteErrors: [], error: new Error('No AI provider configured or provider failure') })
     const out = await extractOpportunitiesFromPage({ pageUrl: 'https://example.org/x', html: RICH_PAGE }, { invoke, openai: null })

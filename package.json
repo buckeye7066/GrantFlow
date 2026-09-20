@@ -62,7 +62,7 @@
     "doctor": "node scripts/doctor.mjs",
     "dns:godaddy:vercel": "node ./scripts/godaddy-set-vercel-dns.mjs",
     "smoke:apply-engine": "node backend/scripts/smoke-apply-engine.mjs",
-    "test": "npm run check:profile-metadata && npm run lint:ci && npm run typecheck && npm run build && npm run unit && npm run test:build-target",
+    "test": "npm run check:profile-metadata && npm run lint:ci && npm run typecheck && npm run build && npm run unit && npm run test:build-target && node --test tools/local-free-ai/gateway.test.mjs",
     "test:all": "npm run test && npm run smoke:install && npm run smoke && npm run e2e",
     "preview": "vite preview",
     "backend": "node backend/start.js",
@@ -133,7 +133,8 @@
     "prestart": "npm run memory:startup",
     "test:ux": "node node_modules/playwright/cli.js test -c tests/ux/playwright.config.mjs",
     "build:target": "node scripts/build-target.cjs",
-    "test:build-target": "node --test scripts/build-target.test.cjs"
+    "test:build-target": "node --test scripts/build-target.test.cjs",
+    "test:local-free-ai": "node --test tools/local-free-ai/gateway.test.mjs"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.125.0",

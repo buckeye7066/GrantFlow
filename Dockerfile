@@ -1,5 +1,20 @@
 # syntax=docker/dockerfile:1
 # Multi-stage Dockerfile for GrantFlow (Vite + Express hybrid)
+# Private CPU-only fallback, pinned engine and immutable model manifest.
+# Only CPU libraries and the verified local weights enter the final runtime.
+FROM ollama/ollama:0.34.2 AS local-model-assets
+ENV OLLAMA_HOST=127.0.0.1:11434 OLLAMA_NO_CLOUD=1 OLLAMA_MODELS=/opt/grantflow-models
+RUN set -eu; \
+    ollama serve >/tmp/model-build.log 2>&1 & model_pid=$!; \
+    trap 'kill "$model_pid" 2>/dev/null || true' EXIT; \
+    for attempt in 1 2 3 4 5 6 7 8 9 10; do ollama list >/dev/null 2>&1 && break; sleep 1; done; \
+    ollama pull llama3.2:1b; \
+    echo 'baf6a787fdffd633537aa2eb51cfd54cb93ff08e28040095462bb63daf552878  /opt/grantflow-models/manifests/registry.ollama.ai/library/llama3.2/1b' | sha256sum -c -; \
+    ollama show --license llama3.2:1b > /opt/grantflow-model-license.txt; \
+    timeout 90 ollama run llama3.2:1b 'Reply with the word READY.' >/tmp/model-proof.txt; \
+    test -s /tmp/model-proof.txt
+RUN rm -rf /usr/lib/ollama/cuda_v12 /usr/lib/ollama/cuda_v13 /usr/lib/ollama/vulkan /usr/lib/ollama/rocm_v7_2 /usr/lib/ollama/mlx_cuda_v13
+
 # Stage 1: Build stage
 FROM node:24.19.0-slim AS builder
 
@@ -40,9 +55,9 @@ RUN apt-get update \
   && rm -rf /var/lib/apt/lists/*
 
 # postgresql-client-17: provides `pg_dump` for the verified DB backup
-# (backend/services/ops/databaseBackup.js → backupPostgres, `pg_dump -Fc`).
+# (backend/services/ops/databaseBackup.js â†’ backupPostgres, `pg_dump -Fc`).
 # WHY THE PGDG REPO, NOT STOCK postgresql-client: the prod Postgres server is
-# v17, and pg_dump REFUSES to dump a server newer than itself — Debian bookworm's
+# v17, and pg_dump REFUSES to dump a server newer than itself â€” Debian bookworm's
 # stock postgresql-client is v15, so a plain install would put a v15 pg_dump on
 # PATH that aborts with "server version mismatch" (the ENOENT JSON fallback never
 # fires, because the binary DOES exist). Pulling postgresql-client-17 from apt.postgresql.org
@@ -51,7 +66,7 @@ RUN apt-get update \
 # exactly what databaseBackup.js spawns. Codename read from /etc/os-release so a
 # future base-image bump keeps pulling the right suite.
 RUN apt-get update \
-  && apt-get install -y --no-install-recommends curl ca-certificates gnupg \
+  && apt-get install -y --no-install-recommends curl ca-certificates gnupg git \
   && install -d /usr/share/postgresql-common/pgdg \
   && curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc \
        -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc \
@@ -67,7 +82,7 @@ RUN apt-get update \
 # this downloads the matching browser build into a fixed path. The code in
 # hamiltonAutopilotEngine.js calls chromium.executablePath() and falls back to
 # a `no_browser` blocker when this is absent, so the image MUST carry it for
-# automation to run. Adds ~300MB — the cost of in-image browser automation.
+# automation to run. Adds ~300MB â€” the cost of in-image browser automation.
 #
 # Layer-cache hygiene: we deliberately COPY only the playwright client packages
 # (not the whole node_modules) before running the browser install, so this
@@ -78,6 +93,11 @@ COPY --from=builder /app/node_modules/playwright /tmp/pw/node_modules/playwright
 COPY --from=builder /app/node_modules/playwright-core /tmp/pw/node_modules/playwright-core
 RUN node /tmp/pw/node_modules/playwright/cli.js install --with-deps chromium \
   && rm -rf /tmp/pw /var/lib/apt/lists/*
+
+COPY --from=local-model-assets /bin/ollama /usr/bin/ollama
+COPY --from=local-model-assets /usr/lib/ollama /usr/lib/ollama
+COPY --from=local-model-assets /opt/grantflow-models /opt/grantflow-models
+COPY --from=local-model-assets /opt/grantflow-model-license.txt /app/local-model-license.txt
 
 COPY --from=builder /app/node_modules ./node_modules
 COPY --from=builder /app/backend ./backend

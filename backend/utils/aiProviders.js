@@ -165,7 +165,7 @@ export function invokeJsonWithFallback(options = {}) { return invokePaidLadder(o
 async function invokePaidLadder({
   openai = getOpenAIOptional({ maxRetries: 0 }), system = null, prompt,
   temperature, maxTokens = 1200, openaiModel = null, anthropicModel = null,
-  freeRoutes = null, freeClientFactory = null, timeoutMs = null, signal: callerSignal = null,
+  freeRoutes = null, freeClientFactory = null, responseSchema = null, structuredInput = null, timeoutMs = null, signal: callerSignal = null,
   paidCircuitState: injectedState, excludedProviders = [],
 } = {}, jsonOnly) {
   const ownerScope = getOwnerAiScope({ includeAborted: true })
@@ -314,7 +314,7 @@ async function invokePaidLadder({
   }
   if (signal?.aborted) return abortedResult(signal)
   const freeResult = await (jsonOnly ? invokeFreeJsonRoutes : invokeFreeTextRoutes)({
-    routes: configuredFreeRoutes, clientFactory: freeClientFactory, system, prompt: safePrompt,
+    routes: configuredFreeRoutes, clientFactory: freeClientFactory, system, prompt: safePrompt, responseSchema, structuredInput,
     temperature: temperature ?? (jsonOnly ? 0.1 : 0.3), maxTokens, timeoutMs: remaining(), signal,
   })
   if (signal?.aborted) return abortedResult(signal)

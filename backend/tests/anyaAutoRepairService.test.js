@@ -10,7 +10,8 @@
  * every file in `backend/` and `src/` and would rewrite the live repo as a
  * side-effect of running the test suite.
  */
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
+import fs from 'node:fs/promises'
 
 import {
   AUTO_REPAIR_TYPES,
@@ -57,14 +58,27 @@ describe('AUTO_REPAIR_TYPES surface', () => {
   })
 
   it('reports Anya code-error repair policy on every run', async () => {
-    const report = await runAutoRepair(null, { dryRun: true, repairTypes: ['column_typo'] })
-    expect(report.writePolicy).toBe('code_error_repair')
-    expect(report.permissionRequired).toBe(false)
-    expect(report.auditRequired).toBe(true)
-    // No per-test override: this walks the live source tree (~13s measured
-    // standalone, 2026-08-20), so the old local 20s cap was TIGHTER than the
-    // suite default and it timed out under full-suite contention. Inherit the
-    // 45s global, whose reasoning is documented in vitest.config.js.
+    // Exercise the actual report/scanner path against a fixed source fixture.
+    // A policy assertion must not depend on the size or disk speed of this clone.
+    const entries = [{ name: 'policy-probe.js', isDirectory: () => false, isFile: () => true }]
+    const list = vi.spyOn(fs, 'readdir').mockResolvedValue(entries)
+    const read = vi.spyOn(fs, 'readFile').mockResolvedValue("const sql = 'SELECT requires_matching_funds FROM funding_opportunities'")
+    const write = vi.spyOn(fs, 'writeFile').mockImplementation(async () => { throw new Error('dry-run attempted a write') })
+    try {
+      const report = await runAutoRepair(null, { dryRun: true, repairTypes: ['column_typo'] })
+      expect(report.writePolicy).toBe('code_error_repair')
+      expect(report.permissionRequired).toBe(false)
+      expect(report.auditRequired).toBe(true)
+      expect(report.scannedFiles).toBe(2)
+      expect(report.findings.column_typo).toHaveLength(2)
+      expect(report.findings.column_typo[0].issues[0].canonical).toBe('requires_match')
+      expect(report.errors).toEqual([])
+      expect(write).not.toHaveBeenCalled()
+    } finally {
+      write.mockRestore()
+      read.mockRestore()
+      list.mockRestore()
+    }
   })
 })
 

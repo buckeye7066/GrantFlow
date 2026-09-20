@@ -322,7 +322,7 @@ describe('partial LLM outage is not healthy', () => {
       { url: 'https://one.org/a', title: 'one', snippet: '' },
       { url: 'https://two.org/b', title: 'two', snippet: '' },
     ], { provider: 'searxng', provenance: 'live', status: 'ok' }))
-    const extractOpportunities = vi.fn(async ({ pageUrl }) => pageUrl.includes('one.org')
+    const extractOpportunities = vi.fn(async ({ pageUrl }) => new URL(pageUrl).hostname === 'one.org'
       ? [realOpp()] : withFailure([], { class: 'llm_quota', detail: 'quota exhausted' }))
     const result = await runWebDiscoveryLane(
       { store: createMemoryStore(), fetcher: fakeFetcher({ 'https://one.org/a': '<body>one</body>', 'https://two.org/b': '<body>two</body>' }), searchWeb, extractOpportunities },
@@ -332,5 +332,28 @@ describe('partial LLM outage is not healthy', () => {
     expect(result.stage_ledger.extraction_failed_by_class).toEqual({ llm_quota: 1 })
     expect(result.provider_health.llm).toBe('degraded')
     expect(result.provider_health.detail.llm.ok_pages).toBe(1)
+  })
+})
+
+
+describe('cached page facts do not prove live model health', () => {
+  it.each([false, true])('keeps cache separate when a live failure is %s', async (liveFailure) => {
+    const cached = [realOpp()]
+    Object.defineProperty(cached, 'extraction_cached', { value: true })
+    const pages = [{ url: 'https://one.org/a', title: 'cached', snippet: '' }]
+    if (liveFailure) pages.push({ url: 'https://two.org/b', title: 'live', snippet: '' })
+    const result = await runWebDiscoveryLane({
+      store: createMemoryStore(),
+      fetcher: fakeFetcher({ 'https://one.org/a': '<body>cached</body>', 'https://two.org/b': '<body>live</body>' }),
+      searchWeb: vi.fn().mockResolvedValue(withMeta(pages, { provider: 'searxng', provenance: 'live', status: 'ok' })),
+      extractOpportunities: vi.fn(async ({ pageUrl }) => new URL(pageUrl).hostname === 'one.org'
+        ? cached : withFailure([], { class: 'llm_quota', detail: 'quota exhausted' })),
+    }, { thesis, runId: 'cached-health', maxQueries: 1, seed: 0 })
+    expect(result.extracted).toBe(1)
+    expect(result.extraction_cache_hits).toBe(1)
+    expect(result.page_ledger[0].extraction_cached).toBe(true)
+    expect(result.provider_health.llm).toBe(liveFailure ? 'unavailable' : 'unknown')
+    expect(result.provider_health.detail.llm).toMatchObject({ ok_pages: 0, cached_pages: 1 })
+    expect(result.stage_ledger.extraction_failed_by_class).toEqual(liveFailure ? { llm_quota: 1 } : {})
   })
 })

@@ -25,10 +25,12 @@
 // `searchMeta`. Read it with `extractionFailureOf(result)`.
 
 import * as cheerio from 'cheerio';
+import { createHash } from 'node:crypto';
+import { pageFactMemo } from './pageFactMemo.js';
 import { getOpenAIOptional, invokeJsonWithFallback } from '../utils/aiProviders.js';
 import { buildLinkInventory } from '../crawler-os/blindLinkInventory.js';
 import { canonicalizeUrl } from '../crawler-os/urlCanonical.js';
-import { extractPageFactsBlind } from '../crawler-os/blindPageFactExtractor.js';
+import { extractPageFactsBlind, PROMPT_VERSION, EXTRACTOR_VERSION } from '../crawler-os/blindPageFactExtractor.js';
 import { mapBlindFactsToCandidate } from '../crawler-os/blindFactsMapper.js';
 import { classifyBlindOpportunityKind } from '../crawler-os/blindOpportunityKind.js';
 import { OPPORTUNITY_KIND } from '../crawler-os/contract.js';
@@ -119,6 +121,9 @@ export function classifyExtractionFailure(input) {
   }
   const errors = [input.openaiError, input.anthropicError, ...(Array.isArray(input.freeRouteErrors) ? input.freeRouteErrors : [])];
   const seen = errors.filter((e) => e !== null && e !== undefined && e !== '');
+  if (seen.some(error => /timeout|timed out|abort/i.test(errText(error)))) {
+    return { class: 'llm_timeout', detail: seen.map(errText).filter(Boolean).join(' | ').slice(0, 200) };
+  }
   if (seen.some(looksLikeQuota)) {
     return { class: 'llm_quota', detail: seen.map(errText).filter(Boolean).join(' | ').slice(0, 200) || 'credit_or_quota_exhausted' };
   }
@@ -134,6 +139,7 @@ export function extractionFailureOf(result) {
 
 function tagResult(list, { status, failure = null, provider = null }) {
   const arr = Array.isArray(list) ? list : [];
+  Object.defineProperty(arr, 'extraction_provider', { value: provider, enumerable: false, configurable: true });
   Object.defineProperty(arr, 'extraction_status', { value: status, enumerable: false, configurable: true });
   Object.defineProperty(arr, 'extraction_failure', {
     value: failure ? Object.freeze({ class: failure.class, detail: failure.detail ?? null, provider: provider ?? failure.provider ?? null }) : null,
@@ -157,7 +163,7 @@ function makeProfileBlindLlm(deps = {}, deadlineAt, outcome) {
     }
     return res;
   };
-  return async ({ system, prompt, signal }) => {
+  return async ({ system, prompt, signal, responseSchema, structuredInput }) => {
     const timeoutMs = deadlineAt - Date.now();
     if (signal?.aborted || timeoutMs <= 0) {
       outcome.calls += 1;
@@ -172,6 +178,8 @@ function makeProfileBlindLlm(deps = {}, deadlineAt, outcome) {
         prompt,
         temperature: 0.1,
         maxTokens: 1800,
+        responseSchema,
+        structuredInput,
         timeoutMs,
         signal,
         anthropicModel: process.env.WEB_DISCOVERY_MODEL_ANTHROPIC || 'claude-haiku-4-5',
@@ -301,6 +309,17 @@ export async function extractOpportunitiesFromPage(
     return tagResult([], { status: 'failed', failure: { class: 'page_too_short', detail: `text_chars=${pageText.length}<${MIN_TRUSTWORTHY_PAGE_TEXT_CHARS}` } });
   }
 
+  // A current fetch is still required. Only identical source bytes and parser
+  // versions reuse public page facts; each profile is matched independently.
+  if (deps.signal?.aborted) return tagResult([], { status: 'failed', failure: { class: 'llm_timeout', detail: 'aborted' } });
+  const memo = deps.pageMemo || (process.env.GRANTFLOW_PAGE_FACT_MEMO_ENABLED === '1' && !deps.invoke && deps.openai === undefined ? pageFactMemo : null);
+  const memoKey = memo ? createHash('sha256').update(JSON.stringify([pageUrl, cappedHtml, PROMPT_VERSION, EXTRACTOR_VERSION])).digest('hex') : null;
+  const cached = memoKey ? memo.get(memoKey) : null;
+  if (cached) {
+    const result = tagResult(cached.data, { status: cached.status });
+    Object.defineProperty(result, 'extraction_cached', { value: true, enumerable: false });
+    return result;
+  }
   const linkInventory = buildLinkInventory(htmlForLinkInventory(cappedHtml), { baseUrl: pageUrl });
   const timeoutMs = Number.isFinite(Number(deps.timeoutMs)) && Number(deps.timeoutMs) > 0
     ? Number(deps.timeoutMs)
@@ -406,7 +425,9 @@ export async function extractOpportunitiesFromPage(
       },
     };
   });
-  return tagResult(targetChecked, { status: targetChecked.length > 0 ? 'ok' : 'empty', provider: outcome.provider });
+  const status = targetChecked.length > 0 ? 'ok' : 'empty';
+  if (memoKey && !deps.signal?.aborted) memo.set(memoKey, targetChecked, status);
+  return tagResult(targetChecked, { status, provider: outcome.provider });
 }
 
 export default {
