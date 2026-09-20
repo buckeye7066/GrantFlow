@@ -18,8 +18,10 @@ Server setup requires OWNER_AI_BRIDGE_ENABLED=true plus a dedicated random
 OWNER_AI_BRIDGE_TOKEN of at least 32 characters. The worker receives the same
 token through DPAPI installation; never use a provider API/OAuth token for it.
 Set OWNER_AI_USER_ID to the canonical owner id when an additional id binding is
-needed. The default 20000 ms subscription cap is further limited by half the
-caller's remaining whole budget. The primary retains 80% of a short worker
+needed. The default 20000 ms subscription cap is bounded by the caller's whole
+budget. Half the caller budget is reserved when metered fallback is explicitly
+allowed or a free route is configured. With both absent, the owner subscription
+can use the full caller budget, still subject to the configured cap. The primary retains 80% of a short worker
 window (all but two seconds of a longer window); the next subscription receives
 the actual remaining time. A short caller deadline can force fallback to configured free models; metered fallback requires explicit owner opt-in.
 
@@ -77,8 +79,10 @@ this is not unlimited service and must never route other users through the owner
 
 Both text and JSON entry points use the same owner-aware gateway. Only a live,
 canonical owner request may reach the broker. The subscription slice is bounded
-by half the original request deadline and OWNER_AI_SUBSCRIPTION_TIMEOUT_MS
-(default 20000 ms, maximum 60000 ms). An unavailable worker returns immediately.
+by OWNER_AI_SUBSCRIPTION_TIMEOUT_MS (default 20000 ms, maximum 60000 ms) and the
+original request deadline. Half that deadline is reserved only when metered
+fallback is explicitly allowed or a free route is configured. An unavailable
+worker returns immediately.
 A subscription failure leaves only the original remaining budget for permitted fallback and
 free routes; closing the owner's response cancels all later attempts too.
 Successful receipts preserve provider, model, billing_mode, model_source and usage.
