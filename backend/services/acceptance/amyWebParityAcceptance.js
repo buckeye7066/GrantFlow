@@ -889,6 +889,7 @@ export async function runAmyWebParityAcceptance(options = {}) {
     loadRuntime = loadDefaultAcceptanceRuntime,
     verifyMigrations = verifySqliteMigrationCompleteness,
     preflightDependencies = runDependencyPreflight,
+    operatorPreflightFailure = null,
     loadPolicy = loadCompetitivenessPolicy,
     writeReceipt = writeAtomicReceipt,
   } = options
@@ -960,6 +961,12 @@ export async function runAmyWebParityAcceptance(options = {}) {
     }
     if (!receipt.source.worktree_clean) {
       fail('worktree is not clean', 'preflight', ACCEPTANCE_EXIT.PREFLIGHT)
+    }
+
+    if (operatorPreflightFailure) {
+      receipt.inference = { mode: 'explicit_local_operator', provider: 'subscription:codex', billing_mode: 'subscription', authenticated: false, completed_calls: 0, failed_calls: 0 }
+      addCheck(receipt, 'operator.subscription_authentication_verified', false, { reason: 'subscription_auth_not_verified' })
+      fail('The official Codex client did not prove ChatGPT sign-in; no discovery was started', 'operator_preflight', ACCEPTANCE_EXIT.PREFLIGHT)
     }
 
     // No output or temporary artifact is created before the SHA/clean checks.

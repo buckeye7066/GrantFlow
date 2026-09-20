@@ -1,3 +1,4 @@
+import {withinSubscriptionOutputLimit} from '../../shared/subscriptionOutput.js'
 import {AsyncLocalStorage} from 'node:async_hooks'
 import {realpathSync} from 'node:fs'
 import {fileURLToPath} from 'node:url'
@@ -36,7 +37,7 @@ export async function runAcceptanceSubscription(executeJob,env,work){
  const counts={completed_calls:0,failed_calls:0,input_tokens:0,output_tokens:0}
  const context={provider,summary:()=>({mode:'explicit_local_operator',provider,billing_mode:'subscription',...counts}),
   async invoke({system=null,prompt,format='text',maxTokens=1200,timeoutMs=20000,signal}={}){
-   const failed=()=>{counts.failed_calls++;return {ok:false,provider,billing_mode:'subscription',raw:null,json:null,text:null,freeRouteErrors:[],subscription_unavailable:true}}
+   const failed=(error=null)=>{counts.failed_calls++;return {ok:false,provider,billing_mode:'subscription',raw:null,json:null,text:null,freeRouteErrors:[],subscription_unavailable:true,aborted:!active||signal?.aborted===true,timedOut:Boolean(error?.isTimeout||error?.code==='LLM_TIMEOUT'),error:signal?.aborted?signal.reason:error}}
    if(!active||signal?.aborted||!Number.isSafeInteger(maxTokens)||maxTokens<2||maxTokens>32000||!['text','json'].includes(format))return failed()
    const budget=Number(timeoutMs??20000)
    if(!Number.isFinite(budget)||budget<=0)return failed()
@@ -46,14 +47,14 @@ export async function runAcceptanceSubscription(executeJob,env,work){
      {env,signal:attemptSignal}),{timeoutMs:Math.min(120000,budget),signal,label:'Acceptance subscription request'})
     if(!active||signal?.aborted||result?.ok!==true||result.complete!==true||result.provider!==provider||result.billing_mode!=='subscription'||
      typeof result.raw!=='string'||!result.raw.trim()||typeof result.model!=='string'||!result.model.trim()||
-     !Number.isSafeInteger(result.usage?.output_tokens)||result.usage.output_tokens<=0||result.usage.output_tokens>=maxTokens)return failed()
+     !withinSubscriptionOutputLimit(result,maxTokens))return failed()
     let json=null
     if(format==='json'){try{json=JSON.parse(result.raw)}catch{return failed()};if(!json||typeof json!=='object')return failed()}
     counts.completed_calls++
     counts.input_tokens+=Number.isSafeInteger(result.usage.input_tokens)?result.usage.input_tokens:0
     counts.output_tokens+=result.usage.output_tokens
     return {...result,json,...(format==='text'?{text:result.raw}:{})}
-   }catch{return failed()}
+   }catch(error){return failed(error)}
   },
  }
  try{return await scope.run(context,work)}finally{active=false;restore()}

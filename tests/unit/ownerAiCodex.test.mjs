@@ -107,7 +107,7 @@ test('auth probing shares slice budget, output cap and cancellation refuse resul
     return base(exe, args, options)
   }
   assert.equal((await executeJob({ ...job, timeoutMs: 200 }, { env, run }))?.provider, 'subscription:claude')
-  assert.equal(await executeJob({ ...job, maxTokens: 6 }, { env, run: fakeRun([], () => ndjson(events)) }), null)
+  assert.equal((await executeJob({ ...job, maxTokens: 6 }, { env, run: fakeRun([], () => ndjson(events)) }))?.complete, true)
   assert.equal(await executeJob(job, { env, signal: AbortSignal.abort(), run: () => assert.fail('must not spawn') }), null)
 })
 

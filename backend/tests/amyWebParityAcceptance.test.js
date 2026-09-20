@@ -323,6 +323,23 @@ describe('runAmyWebParityAcceptance', () => {
     }
   }
 
+  it('writes a native-authentication failure receipt before any database or discovery work', async () => {
+    const { runtime } = makeRuntime()
+    const runMigrations = vi.fn()
+    const loadRuntime = vi.fn()
+    const makeTempDir = vi.fn()
+    const result = await runAmyWebParityAcceptance(options(runtime, {
+      operatorPreflightFailure: 'subscription_auth_not_verified', runMigrations, loadRuntime, makeTempDir,
+    }))
+    expect(result.exitCode).toBe(ACCEPTANCE_EXIT.PREFLIGHT)
+    expect(result.receipt.status).toBe('failed')
+    expect(result.receipt.inference).toMatchObject({ provider: 'subscription:codex', authenticated: false, completed_calls: 0, failed_calls: 0 })
+    expect(runMigrations).not.toHaveBeenCalled()
+    expect(loadRuntime).not.toHaveBeenCalled()
+    expect(makeTempDir).not.toHaveBeenCalled()
+    expect(JSON.parse(await fs.readFile(output, 'utf8')).error.message).toContain('ChatGPT')
+  })
+
   it('passes an exact clean 50-member cohort and atomically writes one parseable receipt', async () => {
     const { runtime } = makeRuntime()
 

@@ -1,3 +1,4 @@
+import {withinSubscriptionOutputLimit} from '../../shared/subscriptionOutput.js'
 import { spawn } from 'node:child_process'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -149,7 +150,7 @@ export async function executeJob(job, { signal, env = process.env, run = runChil
           input: JSON.stringify({ system: job.system, prompt: job.prompt, format: job.format }) })
         if (attemptSignal.aborted || Date.now() >= deadline) continue
         const result = raw ? parseResult(provider, raw, provider === 'codex' ? args[args.indexOf('--model') + 1] : undefined) : null
-        if (result && result.usage.output_tokens < job.maxTokens && (job.format !== 'json' || validJsonObject(result.raw))) return result
+        if (result && withinSubscriptionOutputLimit(result, job.maxTokens) && (job.format !== 'json' || validJsonObject(result.raw))) return result
       } catch { /* Native failure permits the next subscription, never an API call. */ }
       finally { clearTimeout(timer); slice.abort() }
     }

@@ -1,3 +1,4 @@
+import {withinSubscriptionOutputLimit} from '../../../shared/subscriptionOutput.js'
 import { randomBytes, timingSafeEqual, createHash } from 'node:crypto'
 import { getOwnerAiScope } from './ownerAiScope.js'
 export const OWNER_AI_BRIDGE_ENV_KEYS = Object.freeze({
@@ -45,7 +46,7 @@ export function createOwnerAiBroker({ env = process.env, now = Date.now } = {}) 
           ['input_tokens', 'cached_input_tokens'].every(key => Number.isSafeInteger(r.usage?.[key]) && r.usage[key] >= 0))) &&
         typeof r.model === 'string' && /^[a-zA-Z0-9._:-]{1,120}$/.test(r.model) &&
         typeof r.raw === 'string' && r.raw.trim() && Buffer.byteLength(r.raw) <= 262144 &&
-        Number.isFinite(r.usage?.output_tokens) && r.usage.output_tokens > 0 && r.usage.output_tokens < pending.input.maxTokens) {
+        withinSubscriptionOutputLimit(r, pending.input.maxTokens)) {
       try {
         value = { ok: true, provider: r.provider, model: r.model, billing_mode: 'subscription', raw: r.raw,
           usage: { output_tokens: r.usage.output_tokens } }

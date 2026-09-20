@@ -78,3 +78,23 @@ it('cannot enable subscription mode inside a production process',async()=>{
  await expect(m.runWithCodexAcceptance(async()=>true)).rejects.toThrow(/canonical/)
  expect(native.probe).not.toHaveBeenCalled()
 })
+
+it('accepts a completed bounded Codex answer even when terminal usage exceeds the advisory token hint',async()=>{
+ canonical();native.execute.mockResolvedValue({...result(),usage:{input_tokens:10,cached_input_tokens:0,output_tokens:250}});const m=await api()
+ await m.runWithCodexAcceptance(async()=>{const r=await m.getAcceptanceSubscription().invoke({prompt:'Extract',format:'json',maxTokens:128,timeoutMs:1000});expect(r.ok).toBe(true);expect(r.usage.output_tokens).toBe(250)})
+})
+it.each(['already-aborted','aborted-during','timed-out'])('retains the actual %s extraction failure classification',async(kind)=>{
+ canonical();const m=await api();const {classifyExtractionFailure}=await import('../services/webGrantExtractor.js');const c=new AbortController()
+ if(kind==='already-aborted')c.abort()
+ if(kind==='aborted-during')native.execute.mockImplementation(async()=>{c.abort();return result()})
+ if(kind==='timed-out')native.execute.mockImplementation(()=>new Promise(()=>{}))
+ await m.runWithCodexAcceptance(async()=>{
+  const r=await m.getAcceptanceSubscription().invoke({prompt:'Extract',format:'json',maxTokens:128,timeoutMs:20,signal:c.signal})
+  expect(r.ok).toBe(false);expect(classifyExtractionFailure(r).class).toBe('llm_timeout')
+  if(kind!=='timed-out')expect(r.aborted).toBe(true);else expect(r.timedOut).toBe(true)
+ })
+})
+it('native authentication failure exposes only a stable receipt-safe error code',async()=>{
+ canonical();native.probe.mockResolvedValue('auth_required');const m=await api()
+ await expect(m.runWithCodexAcceptance(async()=>true)).rejects.toMatchObject({code:'ACCEPTANCE_SUBSCRIPTION_AUTH_FAILED'})
+})

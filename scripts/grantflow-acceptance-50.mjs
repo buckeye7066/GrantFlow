@@ -59,14 +59,21 @@ async function main() {
     ? args['allowed-providers'].split(',').map((value) => value.trim()).filter(Boolean)
     : DEFAULT_ALLOWED_PROVIDERS
 
-  const run = () => runAmyWebParityAcceptance({
+  const run = (operatorPreflightFailure = null) => runAmyWebParityAcceptance({
     repoRoot,
     expectedSha: args['expected-sha'],
     output: args.output,
     allowedProviders,
+    operatorPreflightFailure,
   })
 
-  const result = args.subscription === 'codex' ? await runWithCodexAcceptance(run) : await run()
+  let result
+  try {
+    result = args.subscription === 'codex' ? await runWithCodexAcceptance(run) : await run()
+  } catch (error) {
+    if (args.subscription !== 'codex' || error?.code !== 'ACCEPTANCE_SUBSCRIPTION_AUTH_FAILED') throw error
+    result = await run('subscription_auth_not_verified')
+  }
   const receipt = result.receipt
   console.log(`[grantflow-acceptance-50] status=${receipt.status} exit_code=${result.exitCode}`)
   console.log(`[grantflow-acceptance-50] sha=${receipt.source?.observed_sha || 'unverified'} target=50`)
