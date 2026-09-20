@@ -13,6 +13,9 @@ switch($Action){
   'Install' {
     if(-not [IO.Path]::IsPathRooted($OllamaExe) -or -not(Test-Path -LiteralPath $OllamaExe -PathType Leaf)){throw 'An existing absolute Ollama executable is required'}
     $node=(Get-Command node.exe -ErrorAction Stop).Source
+    $modelCheck=Join-Path $PSScriptRoot 'model-preflight.mjs'
+    & $node $modelCheck $Model
+    if($LASTEXITCODE-ne0){throw 'Selected local model unavailable; installation was not changed.'}
     $identity=[Security.Principal.WindowsIdentity]::GetCurrent().Name
     New-Item -ItemType Directory -Force $runtimeHome | Out-Null
     & icacls.exe $runtimeHome /inheritance:r /grant:r "${identity}:(OI)(CI)F" | Out-Null
@@ -25,7 +28,7 @@ switch($Action){
       $token=$null
     }
     @{ollamaExe=$OllamaExe;nodeExe=$node;model=$Model}|ConvertTo-Json|Set-Content -LiteralPath $configPath
-    foreach($file in @('gateway.mjs','manage.ps1')){
+    foreach($file in @('gateway.mjs','manage.ps1','model-preflight.mjs')){
       $source=Join-Path $PSScriptRoot $file;$destination=Join-Path $runtimeHome $file
       if([IO.Path]::GetFullPath($source)-ne[IO.Path]::GetFullPath($destination)){Copy-Item -LiteralPath $source -Destination $destination -Force}
     }

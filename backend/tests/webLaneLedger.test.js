@@ -322,7 +322,7 @@ describe('partial LLM outage is not healthy', () => {
       { url: 'https://one.org/a', title: 'one', snippet: '' },
       { url: 'https://two.org/b', title: 'two', snippet: '' },
     ], { provider: 'searxng', provenance: 'live', status: 'ok' }))
-    const extractOpportunities = vi.fn(async ({ pageUrl }) => pageUrl.includes('one.org')
+    const extractOpportunities = vi.fn(async ({ pageUrl }) => new URL(pageUrl).hostname === 'one.org'
       ? [realOpp()] : withFailure([], { class: 'llm_quota', detail: 'quota exhausted' }))
     const result = await runWebDiscoveryLane(
       { store: createMemoryStore(), fetcher: fakeFetcher({ 'https://one.org/a': '<body>one</body>', 'https://two.org/b': '<body>two</body>' }), searchWeb, extractOpportunities },
@@ -346,7 +346,7 @@ describe('cached page facts do not prove live model health', () => {
       store: createMemoryStore(),
       fetcher: fakeFetcher({ 'https://one.org/a': '<body>cached</body>', 'https://two.org/b': '<body>live</body>' }),
       searchWeb: vi.fn().mockResolvedValue(withMeta(pages, { provider: 'searxng', provenance: 'live', status: 'ok' })),
-      extractOpportunities: vi.fn(async ({ pageUrl }) => pageUrl.includes('one.org')
+      extractOpportunities: vi.fn(async ({ pageUrl }) => new URL(pageUrl).hostname === 'one.org'
         ? cached : withFailure([], { class: 'llm_quota', detail: 'quota exhausted' })),
     }, { thesis, runId: 'cached-health', maxQueries: 1, seed: 0 })
     expect(result.extracted).toBe(1)

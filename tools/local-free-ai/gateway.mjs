@@ -1,7 +1,7 @@
 import {createServer} from 'node:http';
 import {timingSafeEqual} from 'node:crypto';
 import {pathToFileURL} from 'node:url';
-const LOCAL_MODELS=new Set(['llama3.2:latest','llama3.2:1b','qwen2.5-coder:7b','gemma3:4b']);
+export const LOCAL_MODELS=new Set(['llama3.2:latest','llama3.2:1b','qwen2.5-coder:7b','gemma3:4b']);
 const failure=(status)=>Object.assign(new Error('Request could not be completed'),{status});
 function send(res,status,body) {
   if(res.destroyed||res.writableEnded)return;
