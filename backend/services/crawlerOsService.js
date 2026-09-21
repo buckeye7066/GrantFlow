@@ -792,7 +792,12 @@ export async function runProfileDiscoveryLive({ db = getDb(), profileId, fetcher
   // Exhausted discovery runs reserve their remaining worker time for durable
   // receipts and mandatory integrity checks, not additive searches or learning.
   const optionalWorkAllowed = () => !signal?.aborted && (resolvedDeadline === null || Date.now() < resolvedDeadline);
-  const persisted = await persistRun(db, store, run, crossProfile ? { primaryProfileId: thesis.profile_id } : {});
+  const persisted = await persistRun(db, store, run, {
+    ...(crossProfile ? { primaryProfileId: thesis.profile_id } : {}),
+    // Only named sources ran; absence from this partial inventory cannot retire
+    // another source's accepted result. Explicit evaluated rejections still apply.
+    ...(onlySources ? { reconcileEvaluatedOnly: true } : {}),
+  });
 
   // Read BACK what the live rows already know (amounts learned by the nightly
   // enrichment sweeps, directory/benefit kind classifications) into this run's

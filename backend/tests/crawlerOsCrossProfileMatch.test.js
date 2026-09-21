@@ -95,6 +95,19 @@ function seedTwoNonprofits(db, {
 }
 
 describe('cross-profile matching (Robert charter)', () => {
+  it('a source-scoped live refresh retains a different source\'s existing accepted award', async () => {
+    const db = makeDb()
+    try {
+      seedTwoNonprofits(db)
+      await runProfileDiscoveryLive({ db, profileId: 'p-a', fetcher: makeStubFetcher(), onlySourceIds: ['grants_gov'] })
+      const award = db.prepare(`SELECT m.* FROM profile_opportunity_matches m
+        JOIN funding_opportunities o ON o.id = m.opportunity_id
+        WHERE m.profile_id = 'p-a' AND o.title = 'Rural Community Facilities Grant'`).get()
+      expect(award?.match_decision).toBe('accept')
+      await runProfileDiscoveryLive({ db, profileId: 'p-a', fetcher: makeStubFetcher(), onlySourceIds: ['usa_gov_local_governments'] })
+      expect(db.prepare('SELECT * FROM profile_opportunity_matches WHERE id = ?').get(award.id)).toEqual(award)
+    } finally { db.close() }
+  }, 20000)
   it('matches a discovered opp against ALL passed profiles: primary=crawler-os, others=crawler-os-xmatch', async () => {
     const db = makeDb()
     seedTwoNonprofits(db)

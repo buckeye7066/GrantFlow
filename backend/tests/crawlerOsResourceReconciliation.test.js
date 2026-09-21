@@ -122,6 +122,24 @@ function currentMatches(db) {
 }
 
 describe('Crawler OS resource-preserving reconciliation', () => {
+  it.each([false, true])('targeted source refresh preserves omitted awards and applies explicit rejections (empty=%s)', async empty => {
+    const db = makeDb()
+    try {
+      for (const id of ['omitted-award', 'evaluated-award']) {
+        seedOpportunity(db, id, 'DIRECT_GRANT')
+        seedMatch(db, { opportunityId: id, score: 20, decision: 'accept' })
+        db.prepare('UPDATE profile_opportunity_matches SET match_explain_json = ? WHERE opportunity_id = ?')
+          .run(verifiedFourTruthExplain(), id)
+      }
+      await persistRun(db, memStore(empty ? [] : [{ profile_id: PROFILE_ID,
+        opportunity_id: 'evaluated-award', match_score: 0, decision: 'reject',
+        match_explain_json: JSON.stringify({ canonical_decision: 'REJECT' }),
+      }]), {}, { primaryProfileId: PROFILE_ID, reconcileEvaluatedOnly: true })
+      expect(currentMatches(db).map(row => row.opportunity_id)).toEqual(
+        empty ? ['evaluated-award', 'omitted-award'] : ['omitted-award'],
+      )
+    } finally { db.close() }
+  })
   it('preserves omitted resources while replacing stale direct-funding matches', async () => {
     const db = makeDb()
     try {
