@@ -759,8 +759,8 @@ export async function resolveProfileIds({ db, profileIds, cap, deps = {} }) {
         `SELECT p.id
            FROM profiles p
            LEFT JOIN (
-             SELECT profile_id, MAX(started_at) AS last_crawled_at
-               FROM crawler_runs
+             SELECT profile_id, MAX(created_at) AS last_crawled_at
+               FROM crawler_source_runs
               GROUP BY profile_id
            ) recent ON recent.profile_id = p.id
           WHERE COALESCE(p.status,'active') = 'active'
@@ -770,7 +770,10 @@ export async function resolveProfileIds({ db, profileIds, cap, deps = {} }) {
           LIMIT ?`,
       ).all(limit)
     } catch (rotationErr) {
-      // Degraded/legacy schemas may not have crawler_runs yet. Keep discovery
+      // Use the durable coverage receipts written by runProfileDiscoveryLive on
+      // both databases; crawler_runs belongs to the synchronous OS store and is
+      // absent from production PostgreSQL. Legacy schemas can still lack receipts.
+      // Keep discovery
       // available, but report that fair rotation could not be applied.
       log.warn(`resolveProfileIds rotation unavailable; using profile recency: ${String(rotationErr?.message || rotationErr)}`)
       rows = await db.prepare(
