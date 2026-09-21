@@ -7,7 +7,9 @@ combined output even when the native command exited zero.
 
 The status parser now accepts only those known leading warning lines followed
 by exactly one ChatGPT status. Unknown diagnostics, API-key authentication,
-duplicate statuses and nonzero native exit codes remain rejected. No credential
+duplicate statuses and nonzero native exit codes remain rejected. The same
+normalization preserves the actionable `auth_required` result for signed-out
+and API-key profiles carrying those warnings. No credential
 files are read or moved, and the app-specific profile remains separate from the
 Codex launcher's profile.
 

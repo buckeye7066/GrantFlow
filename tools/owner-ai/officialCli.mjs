@@ -21,17 +21,18 @@ export function childEnvironment(provider, env = process.env) {
   clean.CLAUDE_CODE_SAFE_MODE = '1'
   return clean
 }
+function normalizedCodexAuthStatus(raw) {
+  if (typeof raw !== 'string') return null
+  const lines = raw.trim().split(/\r?\n/)
+  // Native login status uses stderr, as do these nonfatal bootstrap warnings.
+  // Discard only the known leading housekeeping messages, never arbitrary
+  // diagnostics or a second authentication status. runChild still requires 0.
+  const housekeeping = /^WARNING: (?:failed to clean up stale arg0 temp dirs: |proceeding, even though we could not create PATH aliases: ).+$/
+  while (lines.length > 1 && housekeeping.test(lines[0])) lines.shift()
+  return lines.length === 1 ? lines[0] : null
+}
 export function subscriptionAuth(provider, raw) {
-  if (provider === 'codex') {
-    if (typeof raw !== 'string') return false
-    const lines = raw.trim().split(/\r?\n/)
-    // Native login status uses stderr, as do these nonfatal bootstrap warnings.
-    // Discard only the known leading housekeeping messages, never arbitrary
-    // diagnostics or a second authentication status. runChild still requires 0.
-    const housekeeping = /^WARNING: (?:failed to clean up stale arg0 temp dirs: |proceeding, even though we could not create PATH aliases: ).+$/
-    while (lines.length > 1 && housekeeping.test(lines[0])) lines.shift()
-    return lines.length === 1 && /^Logged in using ChatGPT\s*$/i.test(lines[0])
-  }
+  if (provider === 'codex') return /^Logged in using ChatGPT\s*$/i.test(normalizedCodexAuthStatus(raw) || '')
   if (provider !== 'claude') return false
   try {
     const s = JSON.parse(raw)
@@ -125,8 +126,9 @@ export async function probeProvider(provider, { signal, env = process.env, run =
       if (!codexDisabledFeatures.every(feature => supported.has(feature)) || signal?.aborted) return 'unavailable'
       const auth = await run('codex.exe', ['login', 'status'], { env: clean, signal, captureAuthMetadata: true })
       if (signal?.aborted) return 'unavailable'
-      if (auth && subscriptionAuth(provider, auth)) return 'ready'
-      return auth && /^(?:Logged in using (?:an? )?API key.*|Not logged in)\s*$/i.test(auth.trim()) ? 'auth_required' : 'unavailable'
+      const status = normalizedCodexAuthStatus(auth)
+      if (status && subscriptionAuth(provider, status)) return 'ready'
+      return status && /^(?:Logged in using (?:an? )?API key.*|Not logged in)\s*$/i.test(status) ? 'auth_required' : 'unavailable'
     }
     const help = await run('claude.exe', [...cliArguments(provider), '--help'], { env: clean, signal })
     if (!help || !['--safe-mode', '--tools', '--strict-mcp-config', '--setting-sources', '--permission-prompts'].every(flag => help.includes(flag))) return 'unavailable'

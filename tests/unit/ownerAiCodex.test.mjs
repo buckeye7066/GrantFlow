@@ -54,6 +54,9 @@ test('Codex recognizes ChatGPT status after known nonfatal launcher housekeeping
   const auth = warnings + 'Logged in using ChatGPT\n'
   assert.equal(subscriptionAuth('codex', auth), true)
   assert.equal(await probeProvider('codex', { env, run: async (exe, args) => args.includes('--help') ? help : args.includes('features') ? features : auth }), 'ready')
+  for (const status of ['Not logged in', 'Logged in using an API key']) {
+    assert.equal(await probeProvider('codex', { env, run: async (exe, args) => args.includes('--help') ? help : args.includes('features') ? features : warnings + status }), 'auth_required')
+  }
   for (const raw of [warnings, warnings + 'Logged in using an API key', warnings + 'Not logged in',
     'WARNING: unknown authentication failure\nLogged in using ChatGPT',
     'Logged in using an API key\nLogged in using ChatGPT',
