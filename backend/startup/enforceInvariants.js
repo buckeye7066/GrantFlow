@@ -1,4 +1,5 @@
 import { beginStaleRefreshReceipt, finishStaleRefreshReceipt } from '../services/matching/staleMatchRefreshReceipt.js'
+import { reconcileHistoricalAwardKinds } from '../services/historicalAwardClassification.js'
 /**
  * enforceInvariants.js — CANONICAL PRODUCT-INVARIANT ENFORCEMENT (boot sweep).
  *
@@ -11891,6 +11892,7 @@ export async function runEnforceInvariants(db, { logger = log } = {}) {
   // assistance listings, ssa.gov benefit sections) gets its POSITIVE
   // opportunity_kind classification first, so the enrichment sweeps and the
   // amount-answer census stop treating a pointer page as a missing award.
+  steps.push(await runInvariant('historical_award_classification', () => reconcileHistoricalAwardKinds(db)))
   steps.push(await enforceLocatorKindClassification(db))
   // SOURCE-level same-domain self-repair first (the registry is code, so a
   // moved source page is otherwise unrepairable at runtime): a persistently-

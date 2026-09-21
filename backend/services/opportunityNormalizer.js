@@ -11,6 +11,7 @@
  */
 
 import crypto from 'crypto'
+import { isPastAwardRecord } from '../../shared/opportunityFundability.js'
 import { schoolOriginRequirements } from '../config/schoolOriginEligibility.js'
 import { grantsGovApplicantCodesFrom } from '../../shared/grantsGovProtocol.js'
 import { normalizeNeedCategory, NEED_ALIAS_MAP } from './profileNormalizer.js'
@@ -171,27 +172,10 @@ const SENIOR_PROGRAM_PATTERNS = [
 // downstream gate (evaluateEligibility: isInstitutionalOnly || isResearchOnly)
 // then rejects them for ordinary individuals while still letting genuine
 // research orgs/businesses see them.
-const AWARD_RECORD_SOURCES = new Set([
-  'nsf.awards', 'nsf_awards', 'nih.reporter', 'nih_reporter',
-  'usaspending.gov', 'usaspending', 'usa_spending',
-])
 
 // "Awardee: <Institution>" + "PI: <Name>" is the structural fingerprint the
 // award adapters emit (see backend/src/integrations/nsfAwards.js). A row that
 // names an awardee institution is, by definition, already awarded.
-const ALREADY_AWARDED_TEXT_RX = /\bawardee:\s*\S|\bprincipal investigator:\s*\S|\bpi:\s*[a-z]/i
-
-function isAlreadyAwardedRecord(rawOpp, text) {
-  const source = String(rawOpp?.source ?? '').toLowerCase().trim()
-  const oppType = String(rawOpp?.opportunity_type ?? '').toLowerCase().trim()
-  if (AWARD_RECORD_SOURCES.has(source)) return true
-  // Generic award record from any source: an explicit "award" type that also
-  // names an awardee/PI in its text. We require BOTH so a normal grant whose
-  // title merely contains the word "award" (e.g. "Excellence Award Scholarship")
-  // is not misclassified.
-  if (oppType === 'award' && ALREADY_AWARDED_TEXT_RX.test(text)) return true
-  return false
-}
 
 // ---------------------------------------------------------------------------
 // University / off-campus resource indicators (requires student status)
@@ -956,7 +940,7 @@ export function normalizeOpportunity(rawOpp) {
   // These name an awardee institution + PI and are never open to an individual.
   // Classify them as institutional-research-only so the single eligibility gate
   // hard-rejects them for ordinary individuals (but not for research orgs).
-  const isAlreadyAwarded = isAlreadyAwardedRecord(rawOpp, text)
+  const isAlreadyAwarded = isPastAwardRecord(rawOpp, text)
 
   // -- Institutional / research-only flags --
   //

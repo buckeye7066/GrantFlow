@@ -3,6 +3,7 @@ import React from 'react'
 import { describe, expect, it } from 'vitest'
 import { render, screen } from '@testing-library/react'
 import FundingResultCard from './FundingResultCard.jsx'
+import { toCanonicalResult } from './toCanonicalResult.js'
 
 const BASE = {
   id: 'opp-1',
@@ -20,6 +21,12 @@ const BASE = {
 }
 
 describe('FundingResultCard', () => {
+  it('labels legacy federal award records as reference material rather than applications', () => {
+    render(<FundingResultCard result={toCanonicalResult({ ...BASE, source: 'nih.reporter', opportunity_kind: 'PROGRAM' })} />)
+    expect(screen.getByText('Past award · Reference only')).toBeTruthy()
+    expect(screen.getByRole('link', { name: 'View award record' })).toBeTruthy()
+    expect(screen.queryByRole('link', { name: 'Open application' })).toBeNull()
+  })
   it('renders source HTML descriptions as readable text without executable markup', () => {
     const { container } = render(<FundingResultCard result={{ ...BASE,
       description: '<p>Research &amp; development</p><p>Budget &lt; $50,000.</p><script>alert(1)</script><img src=x onerror="alert(1)">',

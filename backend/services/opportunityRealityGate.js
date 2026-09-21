@@ -1,4 +1,5 @@
 import { resolveApplicationUrl } from '../../shared/applicationTarget.js'
+import { opportunityKindOf } from '../../shared/opportunityFundability.js'
 /**
  * opportunityRealityGate.js
  *
@@ -207,6 +208,7 @@ function pickUsableUrl(opp) {
  */
 export function classifyOpportunityKind(opp) {
   if (!opp || typeof opp !== 'object') return OPPORTUNITY_KINDS.DIRECT
+  if (opportunityKindOf(opp) === 'PAST_AWARD_INTEL') return 'past_award_intel'
 
   const explicitKind = lc(opp.opportunity_kind)
   if (Object.values(OPPORTUNITY_KINDS).includes(explicitKind)) {

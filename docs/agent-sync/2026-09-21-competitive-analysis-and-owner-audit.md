@@ -18,6 +18,10 @@ GrantFlow's existing differentiators include individual and business profiles, n
 
 ## CHANGED
 
+- PR #1781 merged to `main` at `14e3173846e9618f3d3022b1e0a08a20108f0f13` after all 22 checks settled and both required suites passed. Follow-up PR: #1782.
+- Owner discovery/catalog walkthrough exposed raw HTML descriptions. Shared result cards, catalog summaries/detail views and exports now render readable text without inserting source markup.
+- Owner catalog showed decades-old NIH RePORTER records as standing programs with application controls. One shared historical-award classifier now feeds normalization, ingestion gates, read contracts, result classification, application eligibility and catalog/result-card presentation. A bounded boot repair updates known award-source catalog kinds only, preserving user-progressed grants. Source records remain available as reference material; pipeline and application creation are disabled for them.
+
 - `.ics` export on owner and end-user calendars, for the displayed month. Date-only deadlines remain all-day, timestamps preserve cutoff times, event IDs remain stable, invalid dates are skipped and text is escaped/folded for calendar interchange.
 - Owner calendar scopes its grant query and displayed pipeline dates to the selected profile. Saved, document-gathering and ready-to-submit grants now contribute deadlines. Due-today dates use local calendar days.
 - Export is disabled if a contributing query fails or is still loading. Existing end-user milestone and Hamilton events are included with original dates.
@@ -29,6 +33,8 @@ GrantFlow's existing differentiators include individual and business profiles, n
 - Targeted ESLint passes.
 - Authenticated owner navigation audit opened 36 visible routes: Calendar, MyProfiles, Organizations, Settings, DiscoverGrants, GreenHomePrograms, SavedGrants, FundingResults, SmartMatcher, ProfileMatcher, FundingOpportunities, FundingLibrary, FoundationSearch, Funder, DataSources, SourceDirectory, NOFOParser, AIGrantScorer, Pipeline, HamiltonProcessing, Applications, Proposals, Documents, PrintableApplication, GrantDeadline, GrantMonitoring, Reports, AdvancedAnalytics, Outreach, Automation, Billing, Budgets, Diagnostics, CrawlCoverage, Admin and Help. All rendered without uncaught browser errors.
 - Selecting the owner's business profile in Discover restored profile-specific results and enabled the search control.
+- Live catalog search narrowed results, a temporary saved search restored its filters, and deletion removed the temporary search. Opportunity detail opened with source/verification evidence. Pipeline loaded existing work and summary stages.
+- 201 focused classification, read-contract and pipeline tests pass, including historical-award rejection for individuals and organizations despite a mocked high-score ACCEPT, plus idempotent bounded catalog reconciliation preserving application progress. Result-card/adapter/classifier follow-up passed 48 tests. Dynamic-SQL check passes.
 
 ## UNKNOWN / continuing verification
 

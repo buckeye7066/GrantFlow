@@ -151,6 +151,23 @@ function admissionReady(opportunity) {
   }
 }
 
+describe('historical awards never become application pipeline entries', () => {
+  it.each(['individual', 'organization'])('refuses a legacy award even with ACCEPT and score 99 for %s', async primary_type => {
+    const db = makeDb()
+    try {
+      const result = await saveToProfilePipeline(db, admissionReady({
+        id: 'already-awarded', source: 'grants_gov', title: 'Community research award',
+        sponsor: 'Research Agency', opportunity_type: 'award', opportunity_kind: 'PROGRAM',
+        description: 'Awardee: Prior Research Institution; PI: Jane Example',
+        application_url: 'https://grants.fixture-health.org/award-record', test_score: 99,
+      }), 'p1', { ...profileContext, profile: { ...profileContext.profile, primary_type } }, 99, 0)
+      expect(result.saved).toBe(false)
+      expect(result.gate).toBe('FUNDING_RESULT')
+      expect(countGrants(db)).toBe(0)
+    } finally { db.close() }
+  })
+})
+
 describe('saveToProfilePipeline — legacy caller error contract', () => {
   it('returns and logs the original six-argument shape for admission-time exceptions', async () => {
     const db = makeDb()

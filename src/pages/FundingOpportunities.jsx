@@ -58,6 +58,9 @@ import OpportunitySourceTrace from "@/components/funding/OpportunitySourceTrace"
 import ZeroResultGuidance from "@/components/funding/ZeroResultGuidance"
 import { useSavedSearches, useViewHistory, useHiddenGrants, exportGrantAsPDF, parseBooleanQuery } from "@/hooks/useGrantTools"
 import { scoreToMatchTier, scoreToMatchLabel, MIN_SCORE_SLIDER_MAX } from "@/lib/matchDisplayThresholds"
+import { opportunityKindOf } from '../../shared/opportunityFundability.js'
+import { sourceDescriptionText } from '@/utils/sourceDescriptionText'
+import { calendarDate } from '@/lib/calendarExport'
 
 const NOT_AVAILABLE = 'N/A'
 
@@ -144,7 +147,7 @@ function formatDeadline(deadline, deadlineType) {
     return deadlineType === "rolling" ? "Rolling deadline" : "Deadline TBD"
   }
   try {
-    return format(new Date(deadline), "PPP")
+    return format(calendarDate(deadline), "PPP")
   } catch {
     return deadline
   }
@@ -221,7 +224,7 @@ function buildOpportunitySummary(opportunity, profile, match) {
   if (opportunity.description) {
     lines.push("")
     lines.push("Description:")
-    lines.push(opportunity.description)
+    lines.push(sourceDescriptionText(opportunity.description))
   }
   if (Array.isArray(opportunity.eligibility_bullets) && opportunity.eligibility_bullets.length) {
     lines.push("")
@@ -274,6 +277,7 @@ function OpportunityCard({
   isGrantHidden = false,
 }) {
   const matchScore = typeof match?.score === "number" ? match.score : null
+  const isReferenceOnly = opportunityKindOf(opportunity) === 'PAST_AWARD_INTEL'
   const complianceStatus = opportunity.compliance_status ?? "unknown"
   const complianceReasons = Array.isArray(opportunity.compliance_reasons)
     ? opportunity.compliance_reasons
@@ -326,7 +330,9 @@ function OpportunityCard({
     }
   }
   
-  const typeBadge = getTypeBadge(opportunity.type)
+  const typeBadge = isReferenceOnly
+    ? { label: 'Past award · Reference only', className: 'bg-slate-100 text-slate-700 border-slate-200' }
+    : getTypeBadge(opportunity.type)
 
   // Get match color based on score. Guard against non-numeric input.
   // Bands come from the canonical scoreToMatchTier — never inline cutoffs.
@@ -455,7 +461,7 @@ function OpportunityCard({
         </div>
 
         {/* Synopsis / Description */}
-        <p className="text-sm text-slate-600 line-clamp-2">{opportunity.description || "No summary available yet."}</p>
+        <p className="text-sm text-slate-600 line-clamp-2">{sourceDescriptionText(opportunity.description) || "No summary available yet."}</p>
 
         {/* Contact Info - Application URL */}
         {opportunity.application_url && (
@@ -468,7 +474,7 @@ function OpportunityCard({
               onClick={(e) => e.stopPropagation()}
               className="hover:underline truncate"
             >
-              Apply / Contact
+              {isReferenceOnly ? 'View award record' : 'Apply / Contact'}
             </a>
           </div>
         )}
@@ -565,7 +571,7 @@ function OpportunityCard({
         <Button
           variant="default"
           className="flex-1"
-          disabled={!canAddToPipeline || isAddingToPipeline}
+          disabled={isReferenceOnly || !canAddToPipeline || isAddingToPipeline}
           onClick={handleQuickAdd}
         >
           {isAddingToPipeline ? (
@@ -603,6 +609,7 @@ function OpportunityDetail({
   onPrintOpportunity,
 }) {
   if (!opportunity) return null
+  const isReferenceOnly = opportunityKindOf(opportunity) === 'PAST_AWARD_INTEL'
   const matchScore = typeof match?.score === "number" ? match.score : null
   const serverReasons = Array.isArray(opportunity.match_reasons) ? opportunity.match_reasons : []
   const reasonList = match?.reasons?.length ? match.reasons : serverReasons
@@ -880,7 +887,7 @@ function OpportunityDetail({
           <section className="space-y-3">
             <h3 className="text-sm font-semibold text-slate-900 uppercase tracking-wide">Opportunity Overview</h3>
             <p className="text-sm leading-relaxed text-slate-700 whitespace-pre-line">
-              {opportunity.description || "No summary available yet."}
+              {sourceDescriptionText(opportunity.description) || "No summary available yet."}
             </p>
           </section>
 
@@ -897,13 +904,13 @@ function OpportunityDetail({
 
           {opportunity.application_url ? (
             <section className="space-y-2">
-              <h3 className="text-sm font-semibold text-slate-900 uppercase tracking-wide">Application Portal</h3>
+              <h3 className="text-sm font-semibold text-slate-900 uppercase tracking-wide">{isReferenceOnly ? 'Past award · Reference only' : 'Application Portal'}</h3>
               <Button
                 variant="default"
                 className="gap-2"
                 onClick={() => window.open(opportunity.application_url, "_blank", "noopener,noreferrer")}
               >
-                Visit Portal
+                {isReferenceOnly ? 'View award record' : 'Visit Portal'}
                 <ExternalLink className="w-4 h-4" />
               </Button>
             </section>
@@ -912,7 +919,7 @@ function OpportunityDetail({
         <div className="pt-2 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
           <div className="flex flex-col gap-2">
             <p className="text-xs text-slate-500">
-              {canAddToPipeline
+              {isReferenceOnly ? 'This award has already been made. Use it for research; it is not an open application.' : canAddToPipeline
                 ? `Grant will be added to ${selectedProfileName ?? "the selected profile"}'s pipeline.`
                 : "Select a profile to enable pipeline creation."}
             </p>
@@ -983,7 +990,7 @@ function OpportunityDetail({
               <Button
                 variant="outline"
                 size="sm"
-                disabled={!canCreateVNext || isCreatingVNext || !onCreateVNext}
+                disabled={isReferenceOnly || !canCreateVNext || isCreatingVNext || !onCreateVNext}
                 onClick={handleCreateVNextClick}
               >
                 {isCreatingVNext ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
@@ -993,7 +1000,7 @@ function OpportunityDetail({
             <Button
               variant="default"
               size="sm"
-              disabled={!canAddToPipeline || isAddingToPipeline}
+              disabled={isReferenceOnly || !canAddToPipeline || isAddingToPipeline}
               onClick={handleAddClick}
             >
               {isAddingToPipeline ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
@@ -1764,8 +1771,7 @@ export default function FundingOpportunities() {
                 )}
               </div>
               <p className="text-[12px] text-slate-500">
-                Showing {Number(totalResults || 0).toLocaleString()} opportunity
-                {Number(totalResults || 0) === 1 ? "" : "ies"}. {complianceMessage}
+                Showing {Number(totalResults || 0).toLocaleString()} {Number(totalResults || 0) === 1 ? "opportunity" : "opportunities"}. {complianceMessage}
               </p>
             </div>
           </CardContent>
@@ -1803,7 +1809,7 @@ export default function FundingOpportunities() {
                       <span className="text-[10px] text-slate-400 shrink-0">
                         {new Date(ss.savedAt).toLocaleDateString()}
                       </span>
-                      <Button variant="ghost" size="sm" className="h-6 w-6 p-0 text-slate-400 hover:text-red-600" onClick={() => deleteSearch(ss.id)}>
+                      <Button aria-label={`Delete saved search ${ss.name}`} variant="ghost" size="sm" className="h-6 w-6 p-0 text-slate-400 hover:text-red-600" onClick={() => deleteSearch(ss.id)}>
                         <Trash2 className="w-3 h-3" />
                       </Button>
                     </div>

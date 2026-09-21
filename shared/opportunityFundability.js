@@ -26,7 +26,23 @@ export const NON_PROPOSAL_KINDS = Object.freeze([
   'DIRECTORY', 'BENEFIT', 'PAST_AWARD_INTEL',
 ])
 
+export const AWARD_RECORD_SOURCE_NAMES = Object.freeze([
+  'nsf.awards', 'nsf_awards', 'nih.reporter', 'nih_reporter',
+  'usaspending.gov', 'usaspending', 'usa_spending',
+])
+const AWARD_RECORD_SOURCES = new Set(AWARD_RECORD_SOURCE_NAMES)
+
+export function isPastAwardRecord(opp, text = '') {
+  const source = String(opp?.source ?? '').toLowerCase().trim()
+  if (AWARD_RECORD_SOURCES.has(source)) return true
+  const type = String(opp?.opportunity_type ?? '').toLowerCase().trim()
+  const evidence = text || [opp?.title, opp?.description, opp?.summary, opp?.eligibility_bullets].filter(Boolean).join(' ')
+  return type === 'award' && /\bawardee:\s*\S|\bprincipal investigator:\s*\S|\bpi:\s*[a-z]/i.test(evidence)
+}
+
 export function opportunityKindOf(opp) {
+  // Source provenance wins over stale legacy PROGRAM/DIRECT_GRANT stamps.
+  if (isPastAwardRecord(opp)) return 'PAST_AWARD_INTEL'
   return String(opp?.opportunity_kind ?? opp?.kind ?? '').toUpperCase()
 }
 

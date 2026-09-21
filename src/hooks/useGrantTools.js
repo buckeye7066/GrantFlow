@@ -10,6 +10,7 @@
 import { useState, useCallback, useMemo } from "react"
 import { formatReasonText } from "@/utils/reasonText"
 import { useAuthStore } from "@/stores/authStore"
+import { sourceDescriptionText } from '@/utils/sourceDescriptionText'
 
 // ── Storage Keys ──────────────────────────────────────────────────────────────
 
@@ -182,7 +183,7 @@ export function exportGrantAsPDF(grant) {
         ${[grant.sponsor || grant.funder, grant.state, grant.deadline ? `Deadline: ${grant.deadline}` : null].filter(Boolean).map((part) => escapeHtml(String(part))).join(" &bull; ")}
       </div>
 
-      ${grant.description ? `<div class="section"><h2>Description</h2><p>${escapeHtml(grant.description)}</p></div>` : ""}
+      ${grant.description ? `<div class="section"><h2>Description</h2><p>${escapeHtml(sourceDescriptionText(grant.description))}</p></div>` : ""}
 
       <div class="section">
         <h2>Details</h2>

@@ -40,6 +40,7 @@ import { hostnameOf, detectForeignOpportunity } from './opportunityJurisdiction.
 import { resolvedUsOpportunityJurisdiction } from './canonicalUsJurisdiction.js'
 import { isPointerKind } from './opportunityKindClasses.js'
 import { normalizeState } from '../utils/stateNormalization.js'
+import { opportunityKindOf } from '../../shared/opportunityFundability.js'
 
 /** Hosts whose documents are regulatory-register records, never funding pages. */
 export const REGULATORY_SOURCE_HOSTS = Object.freeze(['federalregister.gov'])
@@ -485,7 +486,7 @@ export function classifyFundingResult(row, { now = new Date() } = {}) {
   if (knownNonLeaf) {
     return { bucket: knownNonLeaf.bucket, reasons: [knownNonLeaf.reason], stale }
   }
-  const kind = String(row.opportunity_kind ?? '').trim()
+  const kind = opportunityKindOf(row).trim()
   if ((kind && isPointerKind(kind)) || row.is_directory === true || row.is_resource === true) {
     return { bucket: RESULT_BUCKETS.RESOURCE, reasons: ['pointer_kind'], stale }
   }
