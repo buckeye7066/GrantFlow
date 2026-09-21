@@ -137,6 +137,12 @@ test('checkout endpoint rejects without agreement and rejects missing stripe map
     // Catalog should be seeded on-demand
     const catalogRes = await fetchJson(`http://127.0.0.1:${port}/api/services/catalog`)
     assert.equal(catalogRes.status, 200)
+    const mapping = await fetchJson(`http://127.0.0.1:${port}/api/stripe/admin/mapping-status`, {
+      headers: { Authorization: 'Bearer test-admin-token' },
+    })
+    assert.equal(mapping.status, 200)
+    assert.equal(mapping.json.missing_count, 72, 'only payable rows need Stripe mappings')
+    assert.ok(mapping.json.missing.every((row) => row.pricing_model !== 'milestone' || row.milestone_phase))
     const svc = catalogRes.json.catalog.find((s) => s.pricing_model === 'one_time')
     assert.ok(svc, 'expected at least one one_time service')
 
