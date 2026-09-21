@@ -95,6 +95,21 @@ function seedTwoNonprofits(db, {
 }
 
 describe('cross-profile matching (Robert charter)', () => {
+  it('an empty targeted refresh cannot run integrity cleanup on another profile', async () => {
+    const db = makeDb()
+    try {
+      seedTwoNonprofits(db)
+      await runProfileDiscoveryLive({ db, profileId: 'p-a', fetcher: makeStubFetcher(), onlySourceIds: ['grants_gov'] })
+      const award = db.prepare("SELECT * FROM profile_opportunity_matches WHERE profile_id = 'p-a' AND match_decision = 'accept' LIMIT 1").get()
+      expect(award).toBeTruthy()
+      db.prepare(`INSERT INTO profile_opportunity_matches (id, profile_id, opportunity_id, match_score, match_decision, matcher_version)
+        VALUES ('other-profile-reject', 'p-b', ?, 0, 'reject', 'crawler-os')`).run(award.opportunity_id)
+      const emptyFetcher = { fetch: async () => ({ status: 200, body: JSON.stringify({ data: { oppHits: [] } }) }) }
+      await runProfileDiscoveryLive({ db, profileId: 'p-a', fetcher: emptyFetcher, onlySourceIds: ['grants_gov'] })
+      expect(db.prepare("SELECT id FROM profile_opportunity_matches WHERE id = 'other-profile-reject'").get()).toEqual({ id: 'other-profile-reject' })
+      expect(db.prepare('SELECT id FROM profile_opportunity_matches WHERE id = ?').get(award.id)).toBeTruthy()
+    } finally { db.close() }
+  }, 20000)
   it('a source-scoped live refresh retains a different source\'s existing accepted award', async () => {
     const db = makeDb()
     try {

@@ -793,7 +793,9 @@ export async function runProfileDiscoveryLive({ db = getDb(), profileId, fetcher
   // receipts and mandatory integrity checks, not additive searches or learning.
   const optionalWorkAllowed = () => !signal?.aborted && (resolvedDeadline === null || Date.now() < resolvedDeadline);
   const persisted = await persistRun(db, store, run, {
-    ...(crossProfile ? { primaryProfileId: thesis.profile_id } : {}),
+    // Empty targeted runs have no match rows from which to infer the profile.
+    // Keep their reconciliation and integrity sweep explicitly scoped.
+    ...(crossProfile || onlySources ? { primaryProfileId: thesis.profile_id } : {}),
     // Only named sources ran; absence from this partial inventory cannot retire
     // another source's accepted result. Explicit evaluated rejections still apply.
     ...(onlySources ? { reconcileEvaluatedOnly: true } : {}),
