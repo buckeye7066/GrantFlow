@@ -111,6 +111,16 @@ test('PostgreSQL billing delivery is atomic and serializes account transitions',
       await db.prepare('UPDATE billing_accounts SET stripe_event_created_at = NULL').run()
       await overlappingEvents((tx) => applyStripePaymentFailure(tx, { subscriptionId: 'sub_test', eventCreated: 200 }))
     })
+    await t.test('a swallowed billing audit failure cannot acknowledge a rolled-back payment', async () => {
+      await assert.rejects(db.withTransaction(async (tx) => {
+        await recordStripeEventIfNew(tx, { id: 'evt_audit_failure', type: 'customer.subscription.updated' })
+        await tx.exec('ALTER TABLE billing_account_events RENAME TO unavailable_account_events')
+        return applyStripeSubscription(tx, sub('active'), { eventCreated: 400 })
+      }), /transaction.*rolled back/i)
+      assert.equal(await db.prepare('SELECT event_id FROM stripe_webhook_events WHERE event_id = ?').get('evt_audit_failure'), undefined)
+      const account = await db.prepare('SELECT tier_id, subscription_status FROM billing_accounts WHERE id = ?').get('account')
+      assert.deepEqual(account, { tier_id: 'foundation', subscription_status: 'canceled' })
+    })
   } finally {
     if (db) await db.close()
     await control.query(`DROP SCHEMA IF EXISTS ${schema} CASCADE`)

@@ -4,12 +4,12 @@ import request from 'supertest'
 import Stripe from 'stripe'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-const { applySubscription, markPaid } = vi.hoisted(() => ({
-  applySubscription: vi.fn(), markPaid: vi.fn(),
+const { applySubscription, applyPaymentFailure, markPaid } = vi.hoisted(() => ({
+  applySubscription: vi.fn(), applyPaymentFailure: vi.fn(), markPaid: vi.fn(),
 }))
 vi.mock('../services/serviceCatalogStore.js', () => ({ ensureServiceCatalogSchema: vi.fn() }))
 vi.mock('../services/billing/subscriptionSync.js', () => ({
-  applyStripeSubscription: applySubscription, applyStripePaymentFailure: vi.fn(),
+  applyStripeSubscription: applySubscription, applyStripePaymentFailure: applyPaymentFailure,
 }))
 vi.mock('../services/pricing/pricingAccessGate.js', () => ({ markPaid }))
 vi.mock('../services/pricing/profilePricingInitializer.js', () => ({ recordPaymentAccessEvent: vi.fn() }))
@@ -30,6 +30,7 @@ describe('Stripe webhook atomic delivery', () => {
     vi.stubEnv('STRIPE_SECRET_KEY', 'sk_test_local_fixture')
     vi.stubEnv('STRIPE_WEBHOOK_SECRET', secret)
     applySubscription.mockReset()
+    applyPaymentFailure.mockReset()
     markPaid.mockReset()
     db = new Database(':memory:')
     db.dialect = 'sqlite'
@@ -115,6 +116,18 @@ describe('Stripe webhook atomic delivery', () => {
     expect((await deliver(event, 'invalid')).status).toBe(400)
     expect(db.prepare('SELECT * FROM stripe_webhook_events').all()).toEqual([])
     expect(applySubscription).not.toHaveBeenCalled()
+  })
+
+  it('retries payment-failure events that arrive before their subscription account is linked', async () => {
+    const failedPayment = { id: 'evt_failed_invoice', type: 'invoice.payment_failed', created: 1780000000,
+      data: { object: { subscription: 'sub_test' } } }
+    applyPaymentFailure.mockResolvedValueOnce({ ok: false, reason: 'unresolved_subscription' })
+      .mockResolvedValue({ ok: true, changed: true })
+    expect((await deliver(failedPayment)).status).toBe(500)
+    expect(db.prepare('SELECT * FROM stripe_webhook_events').all()).toEqual([])
+    expect((await deliver(failedPayment)).status).toBe(200)
+    expect((await deliver(failedPayment)).body.duplicate).toBe(true)
+    expect(applyPaymentFailure).toHaveBeenCalledTimes(2)
   })
 
   it('retries a paid checkout if granting profile access fails', async () => {

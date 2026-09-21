@@ -164,6 +164,11 @@ jobs:
       - name: Verify canonical Postgres schema
         run: node backend/scripts/verify-pg-schema.mjs
 
+      - name: Verify atomic billing delivery and concurrent subscription events
+        env:
+          GRANTFLOW_STRIPE_TEST_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/grantflow_ci
+        run: npm run test:stripe-postgres
+
   browser-smoke:
     runs-on: ubuntu-latest
     # Playwright installs Ubuntu browser libraries from the runner's package

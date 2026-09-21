@@ -265,6 +265,9 @@ async function fulfillStripeEvent(db, event) {
           subscriptionId,
           eventCreated: event.created,
         })
+        // Delivery can precede the subscription-created event. Preserve the
+        // retry receipt until its account exists and the failure is recorded.
+        if (!failure?.ok) throw new Error(failure?.reason || 'payment_failure_not_recorded')
         routeLogger.warn('invoice payment failed', {
           subscriptionId, eventId: event?.id, result: failure.reason,
         })
