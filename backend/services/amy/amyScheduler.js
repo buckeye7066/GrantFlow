@@ -64,6 +64,7 @@
 
 import { launchAmyRun } from './amyRunner.js'
 import { readLatestAmyReport } from './amyReportStore.js'
+import { readAmyRunCheckpoint } from './amyRunCheckpoint.js'
 
 const DAY_MS = 24 * 60 * 60 * 1000
 const HOUR_MS = 60 * 60 * 1000
@@ -176,9 +177,10 @@ export async function runAmyFreshnessCheck({
   if (_stopped) return { triggered: false, reason: 'scheduler_stopped' }
   try {
     const latest = await readLatestAmyReport(db)
-    if (isAmyReportDue(latest, { intervalMs, nowMs })) {
+    const checkpoint = await readAmyRunCheckpoint(db)
+    if (checkpoint || isAmyReportDue(latest, { intervalMs, nowMs })) {
       const completedMs = Date.parse(latest?.completed_at || '')
-      const reason = !Number.isFinite(completedMs)
+      const reason = checkpoint ? 'unfinished_run' : !Number.isFinite(completedMs)
         ? 'no_prior_run'
         : completedMs - Number(nowMs) > AMY_REPORT_FUTURE_TOLERANCE_MS
           ? 'future_timestamp'

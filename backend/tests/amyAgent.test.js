@@ -28,6 +28,8 @@ import { evaluateDiscovery, buildAnyaHandoff } from '../services/amy/amyReport.j
 import { ORIGIN_CREATED_BY, METADATA_SECTION_KEY } from '../services/amy/amyConstants.js'
 import { startAmyScheduler, stopAmyScheduler, getAmyConfig } from '../services/amy/amyScheduler.js'
 import { ACCEPT_SCORE, DISCOVERY_MIN_SCORE_FLOOR, REVIEW_SCORE } from '../config/matchThresholds.js'
+import { readAmyRunCheckpoint } from '../services/amy/amyRunCheckpoint.js'
+import { readMeshInbox } from '../services/agentMesh/agentMeshStore.js'
 
 function createDb() {
   const db = new Database(':memory:')
@@ -43,7 +45,7 @@ function createDb() {
       updated_at TEXT
     );
     CREATE TABLE profile_sections (
-      profile_id TEXT NOT NULL,
+      profile_id TEXT NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
       section_key TEXT NOT NULL,
       data TEXT NOT NULL,
       updated_by TEXT,
@@ -54,6 +56,88 @@ function createDb() {
   `)
   return db
 }
+
+describe('Amy resumes durable member progress', () => {
+  it('finishes a retry after cleanup succeeded but checkpoint deletion failed', async () => {
+    const db = createDb()
+    db.pragma('foreign_keys = ON')
+    const originalPrepare = db.prepare.bind(db)
+    let failCompletion = true
+    db.prepare = sql => {
+      if (failCompletion && sql.startsWith('DELETE FROM system_kv WHERE key = ? AND value = ?')) {
+        throw new Error('completion write unavailable')
+      }
+      return originalPrepare(sql)
+    }
+    const opts = { db, targetCount: 1, categories: CATEGORY_IDS.slice(0, 1), adversarial: false,
+      dryRunDiscovery: false, gapLearning: false, improve: false, enableCheckpoint: true,
+      runDiscovery: makeFakeDiscovery(db) }
+    try {
+      await expect(runAmyTraining(opts)).rejects.toThrow('completion write unavailable')
+      expect(db.prepare('SELECT COUNT(*) AS n FROM profiles').get().n).toBe(0)
+      failCompletion = false
+      const result = await runAmyTraining(opts)
+      expect(result.resume_pending).toBe(false)
+      expect(await readAmyRunCheckpoint(db)).toBeNull()
+      expect(db.prepare('SELECT COUNT(*) AS n FROM profile_sections').get().n).toBe(0)
+    } finally { db.close() }
+  })
+  it('publishes orphan findings before granting their teaching and deletion receipt', async () => {
+    const db = createDb()
+    try {
+      const orphan = await createAmyProfile(db, { scenario_id: 'unique-orphan', primary_type: 'individual', sections: {} }, { runId: 'interrupted-old-run' })
+      const result = await runAmyTraining({ db, targetCount: 1, categories: CATEGORY_IDS.slice(0, 1), adversarial: false,
+        dryRunDiscovery: false, gapLearning: false, improve: false, runDiscovery: makeFakeDiscovery(db) })
+      expect(result.combined.adopted_orphans.adopted.map(m => m.id)).toContain(orphan.profileId)
+      const messages = await readMeshInbox(db, 'sam', { unreadOnly: false })
+      expect(JSON.stringify(messages.map(m => m.data?.findings))).toContain(orphan.profileId)
+      expect(result.combined.adopted_orphans.cleanup.deleted).toBe(1)
+    } finally { db.close() }
+  })
+  it('retains checkpoint and profiles when teaching fails', async () => {
+    const db = createDb()
+    try {
+      const result = await runAmyTraining({ db, targetCount: 1, categories: CATEGORY_IDS.slice(0, 1), adversarial: false,
+        dryRunDiscovery: false, gapLearning: false, improve: false, enableCheckpoint: true,
+        runDiscovery: makeFakeDiscovery(db), mesh: { consumeInbox: async () => [], readLessons: async () => [],
+          recordLesson: async () => { throw new Error('teaching unavailable') }, postMessage: async () => { throw new Error('teaching unavailable') } } })
+      expect(result.combined.agent_mesh.teaching_complete).not.toBe(true)
+      expect(result.resume_pending).toBe(true)
+      expect(await readAmyRunCheckpoint(db)).not.toBeNull()
+      expect(db.prepare('SELECT COUNT(*) AS n FROM profiles').get().n).toBe(1)
+    } finally { db.close() }
+  })
+  it('reuses completed evaluations and the unfinished profile after a restart', async () => {
+    const db = createDb()
+    const controller = new AbortController()
+    const seen = []
+    const fake = makeFakeDiscovery(db)
+    const opts = { db, targetCount: 2, categories: CATEGORY_IDS.slice(0, 2), adversarial: false,
+      dryRunDiscovery: false, gapLearning: false, improve: false, keepProfiles: true, enableCheckpoint: true }
+    try {
+      await expect(runAmyTraining({ ...opts, signal: controller.signal, runDiscovery: async args => {
+        seen.push(args.profileId)
+        if (seen.length === 2) { controller.abort(new Error('simulated process stop')); throw controller.signal.reason }
+        return fake(args)
+      } })).rejects.toThrow('simulated process stop')
+      const checkpoint = await readAmyRunCheckpoint(db)
+      expect(checkpoint.value.members.filter(m => m.evaluation)).toHaveLength(1)
+      expect(checkpoint.value.options.applyTuning).toBe(false)
+      expect(checkpoint.value.options.anyaEnabled).toBe(true)
+      expect(checkpoint.value.options.validationSampleSize).toBe(40)
+      const resumedCalls = []
+      const result = await runAmyTraining({ ...opts, targetCount: 3, runDiscovery: async args => {
+        resumedCalls.push(args.profileId)
+        return fake(args)
+      } })
+      expect(result.run_id).toBe(checkpoint.value.run_id)
+      expect(result.summary.scenarios).toBe(2)
+      expect(resumedCalls).toEqual([seen[1]])
+      expect(db.prepare('SELECT COUNT(*) AS n FROM profiles').get().n).toBe(2)
+      expect(await readAmyRunCheckpoint(db)).toBeNull()
+    } finally { db.close() }
+  })
+})
 
 // Offline fake of runProfileDiscoveryLive — cycles ok/weak/zero/source-fail
 // outcomes so the evaluator + report are exercised without the network.

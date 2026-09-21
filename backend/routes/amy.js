@@ -65,6 +65,7 @@ router.get('/status', async (req, res) => {
         running_run_id: run.run_id,
         running_source: run.source,
         running_phase: run.phase,
+        running_progress: run.progress ?? null,
         running_started_at: run.started_at,
         process_started_at: run.process_started_at,
         scheduler_lock: schedulerLock
