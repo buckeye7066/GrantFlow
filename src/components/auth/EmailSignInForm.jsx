@@ -172,7 +172,14 @@ export default function EmailSignInForm({ onComplete }) {
       })
     } catch (error) {
       // Provide more specific error messages
-      const message = error?.error || error?.message || 'Unable to sign in. Please try again.'
+      const errorCode = error?.errorType || error?.details?.error_type || error?.error || error?.message
+      const message = errorCode === 'invalid_credentials'
+        ? 'The email or password was not accepted. Check your password or choose Forgot password? to reset it.'
+        : errorCode === 'password_not_set'
+          ? 'Your password has not been set. Choose Forgot password? to receive a setup link.'
+          : error?.status === 429
+            ? 'Too many sign-in attempts. Please wait a few minutes before trying again.'
+            : 'Unable to sign in. Please try again.'
       setStatus({ type: 'error', message, previewCode: null, notice: null })
     } finally {
       setIsLoading(false)
@@ -219,7 +226,7 @@ export default function EmailSignInForm({ onComplete }) {
       {status.type !== 'idle' ? (
         <Alert variant={status.type === 'error' ? 'destructive' : 'default'}>
           {status.type === 'success' ? <MailCheck className="h-4 w-4" /> : null}
-          <AlertTitle>{status.type === 'error' ? 'Something went wrong' : 'Check your email'}</AlertTitle>
+          <AlertTitle>{status.type === 'error' ? 'Unable to sign in' : step === 'setup_sent' ? 'Check your email' : 'Sign in'}</AlertTitle>
           <AlertDescription>
             {status.message}
             {status.notice ? (
