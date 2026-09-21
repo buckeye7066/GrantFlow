@@ -2222,7 +2222,7 @@ app.get('/api/auth/me', authMeLimiter, async (req, res) => {
           profiles = await req.db
             .prepare(
               `
-                SELECT id, display_name, organization_id, status
+                SELECT id, display_name, primary_type, created_by, organization_id, status
                 FROM profiles
                 ORDER BY created_at DESC
                 LIMIT 1000
@@ -2248,7 +2248,7 @@ app.get('/api/auth/me', authMeLimiter, async (req, res) => {
             profiles = await req.db
               .prepare(
                 `
-                  SELECT id, display_name, organization_id, status, created_at
+                  SELECT id, display_name, primary_type, created_by, organization_id, status, created_at
                   FROM profiles
                   WHERE id IN (${placeholders})
                   ORDER BY created_at ASC

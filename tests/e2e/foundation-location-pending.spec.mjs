@@ -31,7 +31,7 @@ test('Foundation cannot submit old geography while the new ZIP lookup is pending
     await route.fulfill({ response })
   })
   const newLocation = page.waitForResponse((response) =>
-    new URL(response.url()).pathname === '/api/onboarding/zip/37312')
+    new URL(response.url()).pathname === `${appBase}/api/onboarding/zip/37312`)
   try {
     await page.locator('#zip').fill('37312')
     expect(await arrived).toBe(200)
@@ -44,7 +44,7 @@ test('Foundation cannot submit old geography while the new ZIP lookup is pending
   await expect(page.locator('#city')).toHaveValue('Cleveland')
   await expect(page.locator('#county')).toHaveValue('Bradley')
   const submitted = page.waitForRequest((request) =>
-    new URL(request.url()).pathname === '/api/onboarding/answer' && request.method() === 'POST')
+    new URL(request.url()).pathname === `${appBase}/api/onboarding/answer` && request.method() === 'POST')
   await page.getByRole('button', { name: 'Continue', exact: true }).click()
   expect((await submitted).postDataJSON().answer).toEqual({
     zip: '37312', state: 'TN', city: 'Cleveland', county: 'Bradley',

@@ -112,6 +112,17 @@ describe('drop-down answering', () => {
     const r = await answerUnknownField(field, { profile: PROFILE, _deps: llm({ answer: 'Probably', grounded_in: ['financial_information.bank_customer_of'] }) })
     expect(r).toBeNull()
   })
+  it('rejects a fabricated field path even when its leaf name exists elsewhere', async () => {
+    const r = await answerUnknownField(field, { profile: PROFILE, _deps: llm({ answer: 'Yes', grounded_in: ['fabricated.bank_customer_of'] }) })
+    expect(r).toBeNull()
+  })
+  it('does not turn an explicit No in the cited profile field into Yes', async () => {
+    const profile = { sections: { portal_survey_answers: { us_bank_client: 'No' } } }
+    const r = await answerUnknownField(field, { profile, _deps: llm({ answer: 'Yes', grounded_in: ['portal_survey_answers.us_bank_client'] }) })
+    expect(r).toBeNull()
+    const valid = await answerUnknownField(field, { profile, _deps: llm({ answer: 'No', grounded_in: ['sections.portal_survey_answers.us_bank_client'] }) })
+    expect(valid?.value).toBe('No')
+  })
   it('refuses a bare "No" with nothing in the profile behind it - that is an ask, not an answer', async () => {
     const r = await answerUnknownField(field, { profile: PROFILE, _deps: llm({ answer: 'No', grounded_in: [] }) })
     expect(r).toBeNull()

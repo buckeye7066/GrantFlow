@@ -216,8 +216,23 @@ RULES:
     // answer.
     const chosen = options.find((o) => o.toLowerCase() === answer.toLowerCase())
     if (!chosen) return null
-    const anchored = groundedIn.some((p) => p && evidence.includes(String(p).split('.').pop()))
-    if (!anchored) return null
+    // Match a complete evidence path, never a leaf-name substring elsewhere
+    // in the profile. Section paths are printed without the bundle prefix.
+    const evidenceLines = evidence.split('\n')
+    const citedValues = groundedIn.map((path) => {
+      const canonicalPath = path.replace(/^sections\./, '')
+      if (!canonicalPath) return null
+      const prefix = `${canonicalPath}: `
+      const line = evidenceLines.find((entry) => entry.startsWith(prefix))
+      return line ? line.slice(prefix.length).trim() : null
+    })
+    if (!citedValues.length || citedValues.some((value) => !value)) return null
+    const booleanValue = (value) => /^(yes|true)$/i.test(value) ? true : /^(no|false)$/i.test(value) ? false : null
+    const chosenBoolean = booleanValue(chosen)
+    if (chosenBoolean !== null && citedValues.some((value) => {
+      const stated = booleanValue(value)
+      return stated !== null && stated !== chosenBoolean
+    })) return null
     return { value: chosen, free_text: false, grounded_in: groundedIn }
   }
   if (!freeText) {

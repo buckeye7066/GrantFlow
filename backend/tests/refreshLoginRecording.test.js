@@ -238,7 +238,13 @@ describe('login recording across auth paths', () => {
       `INSERT INTO user_credentials (id, user_id, type, identifier) VALUES ('cred-1', 'user-1', 'email_otp', ?)`,
     ).run(email)
     await db.prepare(
-      `INSERT INTO profiles (id, display_name, primary_type, user_id, status) VALUES ('profile-1', 'Client', 'individual', 'user-1', 'active')`,
+      `INSERT INTO profiles (id, display_name, primary_type, created_by, user_id, status) VALUES ('profile-1', 'Client', 'individual', 'user-1', 'user-1', 'active')`,
+    ).run()
+    await db.prepare(
+      `INSERT INTO profiles (id, display_name, primary_type, created_by, user_id, status) VALUES ('profile-business', 'Client Business', 'business', 'user-1', 'user-1', 'active')`,
+    ).run()
+    await db.prepare(
+      `INSERT INTO profiles (id, display_name, primary_type, created_by, user_id, status) VALUES ('profile-other', 'Other Business', 'business', 'user-other', 'user-other', 'active')`,
     ).run()
 
     const code = '654321'
@@ -261,6 +267,13 @@ describe('login recording across auth paths', () => {
     expect(res.body.accessToken).toBeTruthy()
     expect(res.body.refreshToken).toBeUndefined()
     expect(responseRefreshCookie(res)).toBeTruthy()
+    // Login must preserve each identity for type-specific completion questions,
+    // and must never include another user's profile in the selector payload.
+    expect(res.body.user.profiles).toHaveLength(2)
+    expect(res.body.user.profiles).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: 'profile-1', primary_type: 'individual', created_by: 'user-1' }),
+      expect.objectContaining({ id: 'profile-business', primary_type: 'business', created_by: 'user-1' }),
+    ]))
 
     // Durable stamp for the admin panel's user login info.
     expect(await waitForLastLogin(db, 'user-1')).toBeTruthy()
