@@ -12,6 +12,25 @@ beforeEach(() => {
 })
 afterEach(() => { vi.clearAllTimers(); vi.useRealTimers() })
 const options = () => ({ thesis, maxQueries: 1, seedPages: urls.map(url => ({ url })), deadlineMs: Date.now() + 100 })
+it('reserves downstream time when a broad query plan would exhaust the interactive deadline', async () => {
+  let calls = 0
+  deps.searchWeb.mockImplementation(async () => {
+    const id = ++calls
+    await new Promise(resolve => setTimeout(resolve, 20))
+    return [{ url: `https://fixture.invalid/award-${id}` }]
+  })
+  deps.fetcher.fetch.mockImplementation(async url => {
+    await new Promise(resolve => setTimeout(resolve, 20))
+    return { ok: true, body: html, finalUrl: url }
+  })
+  const pending = runWebDiscoveryLane(deps, { ...options(), seedPages: [], maxQueries: 28, maxPages: 44 })
+  await vi.advanceTimersByTimeAsync(101)
+  const result = await pending
+  expect(result.fetched).toBeGreaterThan(0)
+  expect(deps.extractOpportunities).toHaveBeenCalled()
+  expect(deps.extractOpportunities.mock.calls[0][1].timeoutMs).toBeGreaterThan(30)
+  expect(result.query_ledger.skipped_budget.length).toBeGreaterThan(0)
+})
 it('does no search, fetch or extraction after a pre-aborted caller', async () => {
   const result = await runWebDiscoveryLane(deps, { ...options(), signal: AbortSignal.abort() })
   expect(result).toMatchObject({ ok: false, reason: 'aborted' })
@@ -19,10 +38,25 @@ it('does no search, fetch or extraction after a pre-aborted caller', async () =>
   expect(deps.fetcher.fetch).not.toHaveBeenCalled()
   expect(deps.extractOpportunities).not.toHaveBeenCalled()
 })
-it.each(['search', 'fetch', 'extract'])('bounds an uncooperative %s dependency and starts no later page', async phase => {
+it('aborts uncooperative search at its phase deadline and still processes known seed pages', async () => {
+  let passedSignal
+  deps.searchWeb.mockImplementation((query, options) => {
+    passedSignal = options.signal
+    return new Promise(() => {})
+  })
+  const pending = runWebDiscoveryLane(deps, options())
+  await vi.advanceTimersByTimeAsync(34)
+  const result = await pending
+  expect(passedSignal.aborted).toBe(true)
+  expect(deps.searchWeb).toHaveBeenCalledTimes(1)
+  expect(result).toMatchObject({ reason: 'search_unavailable', fetched: 2 })
+  expect(deps.extractOpportunities).toHaveBeenCalledTimes(2)
+  expect(deps.extractOpportunities.mock.calls[0][1].timeoutMs).toBe(67)
+  expect(storage.listCatalog(store)).toHaveLength(0)
+})
+it.each(['fetch', 'extract'])('bounds an uncooperative %s dependency and starts no later page', async phase => {
   let passedSignal
   const hang = vi.fn((...args) => { passedSignal = args[1]?.signal; return new Promise(() => {}) })
-  if (phase === 'search') deps.searchWeb = hang
   if (phase === 'fetch') deps.fetcher.fetch = hang
   if (phase === 'extract') deps.extractOpportunities = hang
   let result

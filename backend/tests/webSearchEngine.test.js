@@ -181,6 +181,17 @@ describe('searchWeb (Brave, when keyed)', () => {
 })
 
 describe('searchWeb (SearXNG primary + provider chain)', () => {
+  it('keeps single-topic funding hits healthy and cacheable without unnecessary fallbacks', async () => {
+    process.env.SEARXNG_URL = 'https://searx.example.com'
+    _resetWebSearchEngineForTests()
+    searxngSearchFn.mockResolvedValue([{ url: 'https://example.org/grants', title: 'Homeschool Grant Programs', snippet: 'Scholarships for homeschool students.' }])
+    const results = await searchWeb('homeschool family grants El Paso Texas')
+    expect(results.searchMeta).toMatchObject({ provider: 'searxng', status: 'ok', provenance: 'live' })
+    expect(searxngSearchFn).toHaveBeenCalledTimes(1)
+    expect(braveSearchFn).not.toHaveBeenCalled()
+    expect(getWithRetryMock).not.toHaveBeenCalled()
+    expect(cachePutMock).toHaveBeenCalledTimes(1)
+  })
   it('prefers SearXNG over Brave and DuckDuckGo when SEARXNG_URL is set', async () => {
     process.env.SEARXNG_URL = 'https://searx.example.com'
     process.env.BRAVE_SEARCH_API_KEY = 'test-key'
@@ -259,6 +270,13 @@ describe('the degenerate-SERP gate (SearXNG first-word collapse, 2026-07-27)', (
   it('looksDegenerateSerp: a single on-topic result clears the whole set', async () => {
     const { looksDegenerateSerp } = await import('../services/shared/webSearchEngine.js')
     expect(looksDegenerateSerp(SCHOOL_QUERY, [...JUNK_SERP, REAL_HIT])).toBe(false)
+  })
+
+  it('recognizes the same single-topic funding evidence as the result ranker', async () => {
+    const { looksDegenerateSerp } = await import('../services/shared/webSearchEngine.js')
+    const query = 'homeschool family grants El Paso Texas'
+    expect(looksDegenerateSerp(query, [{ title: 'Homeschool Grant Programs', url: 'https://example.org/grants' }])).toBe(false)
+    expect(looksDegenerateSerp(query, [{ title: 'Benefits of homeschool education', url: 'https://example.org/blog' }])).toBe(true)
   })
 
   it('looksDegenerateSerp: never fires on single-distinctive-term or empty inputs', async () => {

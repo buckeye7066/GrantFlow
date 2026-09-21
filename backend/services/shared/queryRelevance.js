@@ -62,10 +62,16 @@ export function coveredTerms(result, terms) {
   return terms.filter((t) => wordRe(t).test(hay))
 }
 
-const FUNDING_EVIDENCE = /\b(?:grants?|scholarships?|fellowships?|bursar(?:y|ies)|funding|financial[ -]aid|financial[ -]assistance|tuition[ -]assistance|benefits?|endowments?)\b/i
+const FUNDING_EVIDENCE = /\b(?:grants?|scholarships?|fellowships?|bursar(?:y|ies)|funding|financial[ -]aid|financial[ -]assistance|tuition[ -]assistance|(?:government|public|employee|veterans?|disability|unemployment|survivor|retirement|social[ -]security|cash)[ -]benefits?|endowments?)\b/i
 
 function hasFundingEvidence(result) {
   return FUNDING_EVIDENCE.test(`${result?.url ?? ''} ${result?.title ?? ''} ${result?.snippet ?? ''}`)
+}
+
+/** Shared exception for both ranking and whole-SERP health classification. */
+export function hasTopicalFundingEvidence(query, result) {
+  return FUNDING_EVIDENCE.test(String(query || '')) && hasFundingEvidence(result)
+    && coveredTerms(result, distinctiveTerms(query)).length > 0
 }
 
 /**

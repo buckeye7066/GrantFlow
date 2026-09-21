@@ -88,6 +88,14 @@ describe('isWeakResult — the first-word-collapse signature', () => {
 })
 
 describe('partitionByRelevance', () => {
+  it('does not mistake educational benefits prose for financial benefits', () => {
+    const query = 'homeschool family grants El Paso Texas';
+    const blog = { title: 'Benefits of homeschool education', url: 'https://example.org/blog' };
+    const aid = { title: 'Family government benefits', url: 'https://example.org/aid' };
+    const { strong, weak } = partitionByRelevance(query, [blog, aid]);
+    expect(strong).toEqual([aid]);
+    expect(weak).toEqual([blog]);
+  });
   it('prioritizes funding evidence above generic topical pages for funding queries', () => {
     const generic = { title: 'El Paso Texas homeschool association', url: 'https://example.org/group' };
     const funding = { title: 'Homeschool Grant Programs', url: 'https://example.org/grants' };

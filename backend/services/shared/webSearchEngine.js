@@ -40,7 +40,7 @@ import { makeSearxngProvider } from './searxngProvider.js'
 import { makeGoogleCseProvider } from './googleCseProvider.js'
 import { makeOpenAIWebSearchProvider } from './openaiWebSearchProvider.js'
 import { tryConsumeGoogleQuery } from './googleBudget.js'
-import { distinctiveTerms, coveredTerms } from './queryRelevance.js'
+import { distinctiveTerms, coveredTerms, hasTopicalFundingEvidence } from './queryRelevance.js'
 import { getCachedSearch, putCachedSearch } from './webSearchCache.js'
 import { createLogger } from '../../utils/logger.js'
 
@@ -267,7 +267,7 @@ export function looksDegenerateSerp(query, results) {
   // United States' count as covering the term 'west' (the
   // University-of-West-Florida junk SERP slipped through on it, verified live
   // 2026-07-27).
-  return !results.some((r) => coveredTerms(r, terms).length >= needed)
+  return !results.some((r) => coveredTerms(r, terms).length >= needed || hasTopicalFundingEvidence(query, r))
 }
 
 /**

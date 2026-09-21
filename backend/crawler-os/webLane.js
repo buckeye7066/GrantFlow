@@ -784,12 +784,21 @@ export async function runWebDiscoveryLane(deps, opts = {}) {
 
   let executedCount = 0;
   const deferredPages = [];
+  // Interactive callers share a short deadline across search, fetch and
+  // extraction. Bound search to one third of the remaining time so broadening
+  // the query plan cannot consume the entire request before one page is read.
+  // Offline/background runs without a deadline retain their full breadth.
+  const remainingForStages = budget.remaining();
+  const searchBudget = createDeadlineBudget({
+    deadlineMs: remainingForStages === null ? null : Date.now() + Math.floor(remainingForStages / 3),
+    signal: opts.signal,
+  });
   for (const [queryIndex, q] of queries.entries()) {
-    if (budget.stopped() || pages.length - result.seeded >= maxPages) break;
+    if (budget.stopped() || searchBudget.stopped() || pages.length - result.seeded >= maxPages) break;
     executedCount += 1;
     let hits = [];
     let threw = false;
-    try { hits = await budget.run(options => searchWeb(q, { count: resultsPerQuery, ...options, ...(Number.isFinite(options.timeoutMs) ? { timeoutMs: Math.min(8000, options.timeoutMs) } : {}) })); }
+    try { hits = await searchBudget.run(options => searchWeb(q, { count: resultsPerQuery, ...options, ...(Number.isFinite(options.timeoutMs) ? { timeoutMs: Math.min(8000, options.timeoutMs) } : {}) })); }
     catch { threw = true; hits = []; }
     const provenance = searchProvenanceFor(hits, queryIndex, threw, q);
     result.search_provenance.push(provenance);

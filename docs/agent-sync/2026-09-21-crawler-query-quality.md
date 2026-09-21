@@ -57,3 +57,20 @@ reuse of old cached facts. The same captured model response now has null deadlin
 and reporting requirements; replay assertions passed exit 0. All 26 extractor
 Node tests and 56 lifecycle/extraction/cache tests passed exit 0. This validates
 the observed grounding repair, not the local model's overall accuracy or speed.
+
+## Review follow-up
+
+Three review findings were reproduced and repaired before merge. For finite
+interactive deadlines, the search phase now gets at most one third of remaining
+time, including cancellation of an uncooperative search dependency; fetched-page
+processing retains the remaining time. The existing caller deadline remains
+authoritative. Runs with no deadline retain full planned breadth. A live
+search-only diagnostic executed eight planned queries within eight page slots,
+including later education/location queries; it made no extraction claim.
+
+Funding recognition now requires a financial/government/employee context for
+"benefits", excluding generic educational-benefits blogs. Whole-SERP health and
+per-result ranking share the topical-funding exception, preserving healthy
+single-topic funding hits without unnecessary fallback requests or degraded
+learning provenance. Deadline, ranking, provider, cache and lane regressions
+cover these boundaries.
