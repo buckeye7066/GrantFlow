@@ -373,7 +373,7 @@ export function buildNeedWebQueries(needText, expandedNeed = null, profileContex
   let profileTerms = []
   const identityTerms = new Set([...applicantTypes, applicantNoun])
   try {
-    profileTerms = buildGrantsGovQueryTerms(profileContext, { limit: 8 })
+    profileTerms = buildGrantsGovQueryTerms(profileContext, { limit: 8, allowFallback: false })
       .map((value) => String(value || '').trim())
       .filter((value) => value && !identityTerms.has(value.toLowerCase()) && !exactNeed.toLowerCase().includes(value.toLowerCase()))
   } catch { profileTerms = [] }

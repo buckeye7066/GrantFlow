@@ -14,7 +14,7 @@
 // The live lane shares its page budget across the plan; interactive deadlines
 // can still truncate execution, so preserve the highest-signal anchors first.
 
-import zipcodes from 'zipcodes';
+import { STATE_REGISTRY } from '../services/shared/data/stateRegistry.js';
 
 // Readable noun for an applicant bucket (used in the query text). Every person
 // bucket PRIMARY_TYPE_TO_APPLICANT can emit FIRST needs a noun here, or the
@@ -74,11 +74,10 @@ function regionName(stateCode) {
 
 function statewideRegionName(stateCode) {
   const code = String(stateCode || '').trim().toUpperCase();
-  // The existing ZIP geography vocabulary supplies state names. Bare "CA"
+  // The existing dependency-free state registry supplies names. Bare "CA"
   // led the live state-aid query to Canada's international-scholarship site.
   // This changes search language only, never stored geography or eligibility.
-  const full = zipcodes.states.abbr[code];
-  return full ? full.toLowerCase().replace(/\b[a-z]/g, letter => letter.toUpperCase()) : regionName(stateCode);
+  return STATE_REGISTRY[code]?.name || regionName(stateCode);
 }
 
 function geoPhrase(location = {}) {

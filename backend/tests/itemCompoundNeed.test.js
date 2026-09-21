@@ -13,6 +13,6 @@ it.each(['industrial food dehydrator', 'commercial food processor'])('does not s
   expect(statesEndorsingPhrase(`${item} equipment grant`, buildEndorsementPhrases(item, expansion))).toBeTruthy()
 })
 
-it.each(['food assistance for a disabled individual', 'DME for a disabled individual', 'passenger van'])('retains relevant expansion for %s', item => {
+it.each(['food assistance for a disabled individual', 'DME for a disabled individual', 'passenger van', 'food insecurity', 'legal fees', 'internet bill', 'childcare expenses', 'rent payment'])('retains relevant expansion for %s', item => {
   expect(resolveNeedExpansion(item).synonyms.length).toBeGreaterThan(0)
 })

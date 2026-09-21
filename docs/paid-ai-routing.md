@@ -2,7 +2,7 @@ Owner direct-SDK callers now pass through the same invocation-time policy, inclu
 
 ## September 18 runtime routing correction
 
-Canonical owner calls use the dedicated monthly-subscription bridge first. Metered API fallback is now off by default for those calls: only an explicit `OWNER_AI_ALLOW_PAID_FALLBACK=true` allows it. When a subscription cannot answer, the default owner route goes to configured free models or reports failure; it never silently charges an API. The owner status endpoint and admin card show this policy. Ordinary customer and scheduler requests retain the configured paid-to-free order; customer traffic never uses the owner's subscription.
+Canonical owner calls use the dedicated monthly-subscription bridge first. Per the September 21 owner directive, metered OpenAI/Anthropic API fallback is enabled by default, followed by configured free/local models. Explicit `OWNER_AI_ALLOW_PAID_FALLBACK=false` disables metered fallback. The owner status endpoint and admin card show this policy. Customer traffic never uses the owner subscription.
 
 The extraction timeout is addressed separately in PR #1763 by a bounded page deadline that preserves the owner's ranked strong models. Free model quota cooldowns are model-scoped, respect Retry-After, are invalidated on key rotation, and never hide surviving candidates or record a failed response as a success.
 
@@ -73,10 +73,9 @@ unknown effort values invalidate the route. Legacy Haiku defaults retain their
 existing temperature and do not enable thinking. Model-specific generation
 capabilities remain subject to live verification.
 
-The existing `amy-web-parity-acceptance.yml` receives the same server-side JSON
-from GitHub repository variable `AI_PAID_ROUTES` through its job environment.
-Existing provider secrets retain their scopes; the variable is never interpolated
-into shell code. This change does not dispatch the workflow.
+The fixed 50-profile acceptance workflow and command were retired by owner
+directive on September 21. Configure the deployed service through its server-side
+`AI_PAID_ROUTES` setting; there is no longer an acceptance workflow to dispatch.
 
 Receipts add `model` and `billing_mode: "paid_api"`; free receipts carry
 `billing_mode: "free_or_local"`. These label the API route, not a price guarantee

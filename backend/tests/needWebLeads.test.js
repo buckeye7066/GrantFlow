@@ -26,6 +26,10 @@ const nonprofitContext = {
 }
 
 describe('buildNeedWebQueries', () => {
+  it('does not invent a profile need when no context was loaded', () => {
+    const queries = buildNeedWebQueries('help to pay for an Ethics Probe Class', expandNeed('help to pay for an Ethics Probe Class'), {})
+    expect(queries.join(' ')).not.toMatch(/community development|rural development|public safety|workforce development/)
+  })
   it('keeps a real profile need and unambiguous county inside the normal query budget', () => {
     const context = {
       profile: {primary_type:'nonprofit', state:'OH'},
