@@ -1,6 +1,7 @@
 import express from 'express'
 import crypto from 'node:crypto'
 import { ensureAuth } from '../middleware/auth.js'
+import { ensureProfileAccess } from '../utils/accessControl.js'
 import {
   seedServiceCatalogFromExtract,
   listServiceCatalog,
@@ -94,6 +95,7 @@ router.post('/purchases', ensureAuth, async (req, res) => {
   const body = req.body ?? {}
   const serviceSlug = typeof body.service_slug === 'string' ? body.service_slug.trim() : ''
   const profileId = typeof body.profile_id === 'string' ? body.profile_id.trim() : (req.ctx?.activeProfileId ? String(req.ctx.activeProfileId) : '')
+  if (profileId && !(await ensureProfileAccess(req, res, profileId))) return
 
   let clientCategory = typeof body.client_category === 'string' ? body.client_category.trim() : ''
   if (!clientCategory && profileId) {
@@ -319,4 +321,3 @@ router.post('/hourly/time-entry', ensureAuth, async (req, res) => {
 })
 
 export default router
-

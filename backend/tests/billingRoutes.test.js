@@ -9,6 +9,8 @@
  * real non-admin session needs a signed JWT this harness doesn't mint.)
  */
 import request from 'supertest'
+import express from 'express'
+import billingRouter from '../routes/billing.js'
 import { describe, it, expect, beforeAll, beforeEach } from 'vitest'
 import { getAppAndDb, resetDb, TEST_ADMIN_AUTH_HEADER } from './testServer.js'
 
@@ -72,5 +74,47 @@ describe('Billing routes', () => {
       .set(TEST_ADMIN_AUTH_HEADER)
       .send({ tier_id: 'mid_size' })
     expect(res.status).toBe(200)
+  })
+
+  it('records a customer plan request without granting the requested tier, then resolves it on admin approval', async () => {
+    await request(app).get(`/api/billing/me/${profileId}`).set(TEST_ADMIN_AUTH_HEADER)
+    const previous = db.prepare('SELECT tier_id FROM billing_accounts WHERE profile_id = ?').get(profileId).tier_id
+    const response = await request(app).post(`/api/billing/me/${profileId}/plan-request`).set(TEST_ADMIN_AUTH_HEADER).send({ tier_id: 'growth' })
+    expect(response.status).toBe(200)
+    expect(response.body.plan_request).toMatchObject({ tier_id: 'growth', status: 'pending_review' })
+    const pending = db.prepare('SELECT tier_id, metadata FROM billing_accounts WHERE profile_id = ?').get(profileId)
+    expect(pending.tier_id).toBe(previous)
+    expect(JSON.parse(pending.metadata).plan_request.status).toBe('pending_review')
+    const approved = await request(app).put(`/api/billing/accounts/${profileId}`).set(TEST_ADMIN_AUTH_HEADER).send({ tier_id: 'growth' })
+    expect(approved.status).toBe(200)
+    expect(JSON.parse(db.prepare('SELECT metadata FROM billing_accounts WHERE profile_id = ?').get(profileId).metadata).plan_request.status).toBe('approved')
+  })
+
+  it('rejects anonymous and unrelated account plan requests, and invalid tiers', async () => {
+    expect((await request(app).post(`/api/billing/me/${profileId}/plan-request`).send({ tier_id: 'growth' })).status).toBe(401)
+    const isolated = express()
+    isolated.use(express.json(), (req, res, next) => { req.db = db; req.user = { userId: 'unrelated-user' }; req.ctx = { isAdmin: false }; next() })
+    isolated.use('/billing', billingRouter)
+    expect((await request(isolated).post(`/billing/me/${profileId}/plan-request`).send({ tier_id: 'growth' })).status).toBe(403)
+    expect((await request(app).post(`/api/billing/me/${profileId}/plan-request`).set(TEST_ADMIN_AUTH_HEADER).send({ tier_id: 'invented' })).status).toBe(400)
+  })
+
+  it('computes the entire unpaid balance even beyond the invoice page and excludes paid/void invoices', async () => {
+    await request(app).get(`/api/billing/me/${profileId}`).set(TEST_ADMIN_AUTH_HEADER)
+    const insert = db.prepare(`INSERT INTO billing_invoices (id, profile_id, cadence, period_key, amount_cents, currency, status, paid_at) VALUES (?, ?, 'monthly', ?, ?, ?, ?, ?)`)
+    for (let i = 0; i < 105; i++) insert.run(`invoice-${i}`, profileId, `period-${i}`, 100, 'USD', 'sent', null)
+    insert.run('paid', profileId, 'paid', 99000, 'USD', 'paid', '2026-09-01')
+    insert.run('void', profileId, 'void', 99000, 'USD', 'void', null)
+    insert.run('settled', profileId, 'settled', 99000, 'USD', 'sent', '2026-09-01')
+    insert.run('eur', profileId, 'eur', 700, 'EUR', 'second_notice', null)
+    const response = await request(app).get(`/api/billing/me/${profileId}/invoices`).set(TEST_ADMIN_AUTH_HEADER)
+    expect(response.status).toBe(200)
+    expect(response.body.invoices).toHaveLength(100)
+    expect(response.body.open_invoices).toHaveLength(106)
+    expect(response.body.open_invoices.map(invoice => invoice.id)).not.toContain('paid')
+    expect(response.body.balances).toEqual(expect.arrayContaining([
+      { currency: 'USD', amount_cents: 10500, invoice_count: 105 },
+      { currency: 'EUR', amount_cents: 700, invoice_count: 1 },
+    ]))
   })
 })

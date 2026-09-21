@@ -1,4 +1,5 @@
 import { resolveApplicationUrl } from '../../shared/applicationTarget.js'
+import { opportunityKindOf } from '../../shared/opportunityFundability.js'
 /**
  * Canonical opportunity read contract for the existing JavaScript catalog.
  *
@@ -301,6 +302,8 @@ export function buildOpportunityReadModel(row = {}, options = {}) {
   const sourceStatus = firstKnownSourceStatus(row)
 
   const canonical = {
+    opportunity_kind: opportunityKindOf(row) === 'PAST_AWARD_INTEL'
+      ? 'PAST_AWARD_INTEL' : (row.opportunity_kind ?? row.kind ?? null),
     canonical_opportunity_id: nonEmptyString(row.canonical_opportunity_id ?? row.id),
     source_id: nonEmptyString(row.source_id),
     title: nonEmptyString(row.title),

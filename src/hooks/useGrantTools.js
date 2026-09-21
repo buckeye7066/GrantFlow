@@ -1,5 +1,5 @@
 /**
- * GrantWatch-beating grant management hooks:
+ * Grant management hooks:
  * - Saved search filters (persist per user)
  * - View history tracking
  * - Hide/dismiss grants
@@ -9,6 +9,8 @@
 
 import { useState, useCallback, useMemo } from "react"
 import { formatReasonText } from "@/utils/reasonText"
+import { useAuthStore } from "@/stores/authStore"
+import { sourceDescriptionText } from '@/utils/sourceDescriptionText'
 
 // ── Storage Keys ──────────────────────────────────────────────────────────────
 
@@ -21,7 +23,8 @@ const HIDDEN_GRANTS_KEY = "grantflow:hidden-grants"
 function loadFromStorage(key, fallback = []) {
   try {
     const raw = localStorage.getItem(key)
-    return raw ? JSON.parse(raw) : fallback
+    const parsed = raw ? JSON.parse(raw) : fallback
+    return Array.isArray(parsed) ? parsed.filter((entry) => entry !== null && entry !== undefined) : fallback
   } catch {
     return fallback
   }
@@ -33,12 +36,31 @@ function saveToStorage(key, value) {
   } catch { /* quota */ }
 }
 
+// Legacy keys have no owner information. Preserve them, but never expose them
+// to an arbitrary account signing in on this browser.
+function useAccountList(baseKey) {
+  const userId = useAuthStore((state) => state.user?.id)
+  const key = userId ? `${baseKey}:${userId}` : null
+  const [snapshot, setSnapshot] = useState(() => ({ key, value: key ? loadFromStorage(key) : [] }))
+  const value = useMemo(() => key === snapshot.key ? snapshot.value : (key ? loadFromStorage(key) : []), [key, snapshot])
+  const update = useCallback((updater) => {
+    if (!key) return
+    setSnapshot((previous) => {
+      const current = previous.key === key ? previous.value : loadFromStorage(key)
+      const next = typeof updater === 'function' ? updater(current) : updater
+      saveToStorage(key, next)
+      return { key, value: next }
+    })
+  }, [key])
+  return [value, update]
+}
+
 /**
  * Manage saved search filters. Each saved search has:
  * { id, name, filters: { query, state, categories, minScore, ... }, savedAt }
  */
 export function useSavedSearches() {
-  const [searches, setSearches] = useState(() => loadFromStorage(SAVED_SEARCHES_KEY))
+  const [searches, setSearches] = useAccountList(SAVED_SEARCHES_KEY)
 
   const saveSearch = useCallback((name, filters) => {
     setSearches((prev) => {
@@ -46,18 +68,16 @@ export function useSavedSearches() {
         { id: `ss_${Date.now()}`, name, filters, savedAt: new Date().toISOString() },
         ...prev,
       ].slice(0, 20) // keep max 20
-      saveToStorage(SAVED_SEARCHES_KEY, next)
       return next
     })
-  }, [])
+  }, [setSearches])
 
   const deleteSearch = useCallback((id) => {
     setSearches((prev) => {
       const next = prev.filter((s) => s.id !== id)
-      saveToStorage(SAVED_SEARCHES_KEY, next)
       return next
     })
-  }, [])
+  }, [setSearches])
 
   return { savedSearches: searches, saveSearch, deleteSearch }
 }
@@ -69,7 +89,7 @@ export function useSavedSearches() {
  * { grantId, title, viewedAt, source }
  */
 export function useViewHistory() {
-  const [history, setHistory] = useState(() => loadFromStorage(VIEW_HISTORY_KEY))
+  const [history, setHistory] = useAccountList(VIEW_HISTORY_KEY)
 
   const recordView = useCallback((grant) => {
     if (!grant?.id) return
@@ -79,15 +99,13 @@ export function useViewHistory() {
         { grantId: grant.id, title: grant.title, viewedAt: new Date().toISOString(), source: grant.source },
         ...filtered,
       ].slice(0, 100) // keep last 100
-      saveToStorage(VIEW_HISTORY_KEY, next)
       return next
     })
-  }, [])
+  }, [setHistory])
 
   const clearHistory = useCallback(() => {
     setHistory([])
-    saveToStorage(VIEW_HISTORY_KEY, [])
-  }, [])
+  }, [setHistory])
 
   const isViewed = useCallback((grantId) => {
     return history.some((h) => h.grantId === grantId)
@@ -102,30 +120,28 @@ export function useViewHistory() {
  * Let users hide irrelevant grants so they don't clutter results.
  */
 export function useHiddenGrants() {
-  const [hidden, setHidden] = useState(() => new Set(loadFromStorage(HIDDEN_GRANTS_KEY)))
+  const [hiddenIds, setHidden] = useAccountList(HIDDEN_GRANTS_KEY)
+  const hidden = useMemo(() => new Set(hiddenIds), [hiddenIds])
 
   const hideGrant = useCallback((grantId) => {
     setHidden((prev) => {
       const next = new Set(prev)
       next.add(grantId)
-      saveToStorage(HIDDEN_GRANTS_KEY, [...next])
-      return next
+      return [...next]
     })
-  }, [])
+  }, [setHidden])
 
   const unhideGrant = useCallback((grantId) => {
     setHidden((prev) => {
       const next = new Set(prev)
       next.delete(grantId)
-      saveToStorage(HIDDEN_GRANTS_KEY, [...next])
-      return next
+      return [...next]
     })
-  }, [])
+  }, [setHidden])
 
   const unhideAll = useCallback(() => {
-    setHidden(new Set())
-    saveToStorage(HIDDEN_GRANTS_KEY, [])
-  }, [])
+    setHidden([])
+  }, [setHidden])
 
   const isHidden = useCallback((grantId) => hidden.has(grantId), [hidden])
 
@@ -167,7 +183,7 @@ export function exportGrantAsPDF(grant) {
         ${[grant.sponsor || grant.funder, grant.state, grant.deadline ? `Deadline: ${grant.deadline}` : null].filter(Boolean).map((part) => escapeHtml(String(part))).join(" &bull; ")}
       </div>
 
-      ${grant.description ? `<div class="section"><h2>Description</h2><p>${escapeHtml(grant.description)}</p></div>` : ""}
+      ${grant.description ? `<div class="section"><h2>Description</h2><p>${escapeHtml(sourceDescriptionText(grant.description))}</p></div>` : ""}
 
       <div class="section">
         <h2>Details</h2>

@@ -11,6 +11,7 @@
 // Pure, no I/O. Operates on a candidate + the profile thesis + source context.
 
 import { isSafeUrl } from './safeUrl.js';
+import { isPastAwardRecord } from '../../shared/opportunityFundability.js';
 import {
   REALITY_STATUS, REASON, OPPORTUNITY_KIND, APPLICABLE_KINDS,
   TRUST_TIER_WEIGHT, deterministicOpportunityId,
@@ -214,6 +215,7 @@ export function applyProfilePolicy(candidate, ctx = {}) {
 
 // ---- internals ------------------------------------------------------------
 function classifyKind(candidate, source) {
+  if (isPastAwardRecord({ ...candidate, source: candidate.source || source.id })) return OPPORTUNITY_KIND.PAST_AWARD_INTEL;
   if (candidate.is_directory) return OPPORTUNITY_KIND.DIRECTORY;
   if (candidate.is_intel) return OPPORTUNITY_KIND.PAST_AWARD_INTEL;
   if (source.directory) return OPPORTUNITY_KIND.DIRECTORY;

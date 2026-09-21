@@ -17,6 +17,7 @@
  */
 
 import { resolveApplicationUrl, readApplicationTargetRefusal } from '../../../shared/applicationTarget.js'
+import { opportunityKindOf } from '../../../shared/opportunityFundability.js'
 
 const VALID_DECISIONS = new Set(['ACCEPT', 'REVIEW', 'REJECT'])
 
@@ -55,6 +56,7 @@ const KIND_ALIASES = new Map([
 ])
 
 function inferKind(opp) {
+  if (opportunityKindOf(opp) === 'PAST_AWARD_INTEL') return 'past_award_intel'
   const explicit = opp?.kind || opp?.opportunity_kind
   if (explicit && KIND_ALIASES.has(String(explicit).toLowerCase())) {
     return KIND_ALIASES.get(String(explicit).toLowerCase())

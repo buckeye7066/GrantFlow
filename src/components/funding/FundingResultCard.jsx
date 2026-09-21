@@ -27,11 +27,14 @@ import PropTypes from 'prop-types'
 import { humanizeMatchReason } from '@/utils/reasonText'
 import { amountTextFallback } from '@/lib/amountDisplay'
 import { canonicalMatchDisplay } from '@/lib/matchDisplayThresholds'
+import { sourceDescriptionText } from '@/utils/sourceDescriptionText'
+import { opportunityKindOf } from '../../../shared/opportunityFundability.js'
 
 // canonicalResultShape() lives in ./canonicalResultShape.js so this file
 // can stay components-only (Vite Fast Refresh requirement).
 
 const KIND_LABEL = {
+  past_award_intel: 'Past award · Reference only',
   direct: 'Direct grant',
   benefit: 'Benefit / assistance program',
   directory: 'Directory / referral',
@@ -119,7 +122,8 @@ function pickAction(result) {
 export default function FundingResultCard({ result, onPrimaryAction, onSecondaryAction, className }) {
   if (!result) return null
 
-  const kind = result.kind || result.opportunity_kind || 'direct'
+  const isPastAward = opportunityKindOf(result) === 'PAST_AWARD_INTEL'
+  const kind = isPastAward ? 'past_award_intel' : result.kind || result.opportunity_kind || 'direct'
   const tier = result.source_trust_tier || result.trust_tier || 'open_web'
   const linkStatus = result.link_status || 'unverified'
   const score = Number.isFinite(result.match_score) ? Math.round(result.match_score) : null
@@ -153,7 +157,7 @@ export default function FundingResultCard({ result, onPrimaryAction, onSecondary
     geoEvidence: result.geo_evidence,
   })
   const needsConfirmation = display.confirm_eligibility === true
-  const actionLabel = needsConfirmation && action === 'apply'
+  const actionLabel = isPastAward ? 'View award record' : needsConfirmation && action === 'apply'
     ? 'Confirm eligibility, then apply'
     : NEXT_ACTION_LABEL[action]
 
@@ -245,7 +249,7 @@ export default function FundingResultCard({ result, onPrimaryAction, onSecondary
       </header>
 
       {result.description && (
-        <p className="text-sm text-slate-700 line-clamp-3">{result.description}</p>
+        <p className="text-sm text-slate-700 line-clamp-3">{sourceDescriptionText(result.description)}</p>
       )}
 
       {needsConfirmation && (
@@ -347,6 +351,7 @@ export default function FundingResultCard({ result, onPrimaryAction, onSecondary
         </p>
       )}
 
+      {isPastAward && <p className="text-xs text-slate-500">This award has already been made. It is reference material, not an open application.</p>}
       {isDirectory && (
         <p className="text-xs text-slate-500">
           This is a {KIND_LABEL[kind].toLowerCase()}, not a direct grant. Use it to find local help
@@ -411,7 +416,7 @@ export default function FundingResultCard({ result, onPrimaryAction, onSecondary
               href={url}
               target="_blank"
               rel="noreferrer noopener"
-              onClick={onPrimaryAction && !targetRefusal ? (e) => onPrimaryAction(e, result) : undefined}
+              onClick={onPrimaryAction && !targetRefusal && !isPastAward ? (e) => onPrimaryAction(e, result) : undefined}
               data-needs-confirmation={needsConfirmation ? 'true' : undefined}
               className={
                 needsConfirmation

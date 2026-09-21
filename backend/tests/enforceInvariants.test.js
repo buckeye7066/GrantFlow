@@ -1195,7 +1195,7 @@ describe('enforceInvariants — runner', () => {
     // old fixture omitted it and relied on the wrapper hiding query failure.
     db.exec(`
       CREATE TABLE profile_sections (profile_id TEXT, section_key TEXT, data TEXT, updated_at TEXT);
-      CREATE TABLE funding_opportunities (id TEXT PRIMARY KEY, title TEXT, is_active INTEGER);
+      CREATE TABLE funding_opportunities (id TEXT PRIMARY KEY, title TEXT, is_active INTEGER, source TEXT, opportunity_kind TEXT);
       CREATE TABLE profile_opportunity_matches (
         id TEXT PRIMARY KEY, profile_id TEXT, opportunity_id TEXT,
         matcher_version TEXT, match_decision TEXT, match_score INTEGER,
@@ -1242,7 +1242,8 @@ describe('enforceInvariants — runner', () => {
     //   is doubled up"): duplicate questions are hidden; every hidden legacy key
     //   is re-derived from its canonical answer, and a legacy-only answer seeds
     //   the canonical field once.
-    expect(summary.ran).toBe(70)
+    // + historical_award_classification: known award records remain reference-only.
+    expect(summary.ran).toBe(71)
     expect(summary.steps.filter(step => !step.ok)).toEqual([])
     expect(summary.failed).toBe(0)
     expect(summary.steps.map((s) => s.name)).toEqual([
@@ -1254,6 +1255,7 @@ describe('enforceInvariants — runner', () => {
       'imported_status_honesty',
       'relevance_floor',
       'grant_catalog_link',
+      'historical_award_classification',
       // Positive locator/benefit kind classification (sam.gov /fal/ listings,
       // ssa.gov benefit sections) BEFORE amount acquisition.
       'locator_kind_classification',

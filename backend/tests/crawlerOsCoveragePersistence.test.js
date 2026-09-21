@@ -20,7 +20,7 @@
  *      Found=0 despite a real result), not just on the persistence helper in
  *      isolation.
  */
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import Database from 'better-sqlite3'
 import { persistSourceCoverage } from '../services/crawlerOsCoveragePersistence.js'
 import { runProfileDiscoveryLive } from '../services/crawlerOsService.js'
@@ -231,6 +231,42 @@ describe('runProfileDiscoveryLive → crawler_source_runs (end-to-end regression
     // owner saw across every "comprehensive" row for a month.
     expect(grantsGovRow.found).toBeGreaterThan(0)
   }, 20000)
+
+  it('persists earlier discoveries and a partial receipt when an in-flight fetch exceeds the soft deadline', async () => {
+    const db = makeFullDb()
+    db.prepare("INSERT INTO profiles (id, primary_type, applicant_type, state, tags) VALUES ('p-partial', 'nonprofit', 'nonprofit', 'TN', '[\"community\"]')").run()
+    vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout'] })
+    let started
+    const hanging = new Promise(resolve => { started = resolve })
+    const stub = makeStubFetcher()
+    let calls = 0
+    const fetcher = { async fetch(url, init) {
+      calls += 1
+      if (calls === 1) {
+        const response = await stub.fetch(url, init)
+        return { ...response, body: response.body.replaceAll('900002', 'legacy-award') }
+      }
+      started()
+      return new Promise(() => {})
+    } }
+    try {
+      const pending = runProfileDiscoveryLive({ db, profileId: 'p-partial', fetcher, onlySourceIds: ['grants_gov'], deadlineMs: Date.now() + 1000 })
+      await hanging
+      await vi.advanceTimersByTimeAsync(1000)
+      const { run, persisted } = await pending
+      expect(persisted.opportunities).toBeGreaterThan(0)
+      expect(db.prepare('SELECT COUNT(*) AS n FROM funding_opportunities').get().n).toBeGreaterThan(0)
+      const receipt = db.prepare('SELECT * FROM crawler_source_runs WHERE crawler_run_id = ?').get(run.run_id)
+      expect(receipt.error).toBe('time_budget_exhausted')
+      expect(receipt.queried).toBe(1)
+      expect(receipt.found).toBeGreaterThan(0)
+      expect(run.institution_recall).toBeUndefined()
+      expect(run.gap_learning).toBeUndefined()
+    } finally {
+      vi.useRealTimers()
+      db.close()
+    }
+  })
 
   it('a dry run never writes crawler_source_runs (nothing was actually persisted)', async () => {
     const db = makeFullDb()

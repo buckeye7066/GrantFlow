@@ -619,7 +619,7 @@ export async function runProfileDiscoveryLive({ db = getDb(), profileId, fetcher
       : null);
   const run = await runDiscovery(
     { store, fetcher: liveFetcher },
-    { thesis, matchProfiles: effMatchProfiles, floor, onlySourceIds: onlySources, deadlineMs: resolvedDeadline },
+    { thesis, matchProfiles: effMatchProfiles, floor, onlySourceIds: onlySources, deadlineMs: resolvedDeadline, signal },
   );
 
   // Open-web discovery lane — the bridge to state/local/foundation/community
@@ -730,7 +730,9 @@ export async function runProfileDiscoveryLive({ db = getDb(), profileId, fetcher
       // mutates web_lane_blind_shadow.promotion_evidence in place — a shared ref —
       // so recordWebLaneRun below sees the final counter) and is kept OUT of the
       // persisted telemetry object.
-      webTargetVerification = targetVerification ?? null;
+      // Attach rejection handling immediately, including when the exhausted
+      // deadline skips the optional await after persistence.
+      webTargetVerification = targetVerification ? Promise.resolve(targetVerification).catch(() => null) : null;
       run.web_lane = webTelemetry;
       if (Array.isArray(webRecs) && webRecs.length) {
         run.recommendations = [...(run.recommendations ?? []), ...webRecs].sort((a, b) => b.match_score - a.match_score);
@@ -787,6 +789,9 @@ export async function runProfileDiscoveryLive({ db = getDb(), profileId, fetcher
       thesis,
     };
   }
+  // Exhausted discovery runs reserve their remaining worker time for durable
+  // receipts and mandatory integrity checks, not additive searches or learning.
+  const optionalWorkAllowed = () => !signal?.aborted && (resolvedDeadline === null || Date.now() < resolvedDeadline);
   const persisted = await persistRun(db, store, run, crossProfile ? { primaryProfileId: thesis.profile_id } : {});
 
   // Read BACK what the live rows already know (amounts learned by the nightly
@@ -798,7 +803,7 @@ export async function runProfileDiscoveryLive({ db = getDb(), profileId, fetcher
   // read run.recommendations, so the overlay happens exactly once, here.
   // Best-effort: a failure leaves the recs as extracted and never fails a crawl.
   try {
-    run.amount_overlay = await overlayLiveAmountKnowledge(db, run.recommendations, persisted?.idRemap);
+    if (optionalWorkAllowed()) run.amount_overlay = await overlayLiveAmountKnowledge(db, run.recommendations, persisted?.idRemap);
   } catch { /* observability-only; never fails a crawl */ }
 
   // ── In-run institution catalog recall ──────────────────────────────────────
@@ -814,24 +819,26 @@ export async function runProfileDiscoveryLive({ db = getDb(), profileId, fetcher
   // duplicate and the boot net's convergence pass governs both. The engine
   // remains the sole authority. Best-effort: never fails a crawl.
   try {
-    const { recallInstitutionAidForRun } = await import('./matching/institutionRunRecall.js');
-    const instRecall = await recallInstitutionAidForRun(db, {
-      profile: ctx?.profile ?? null,
-      sections: ctx?.sections ?? null,
-      idRemap: persisted?.idRemap ?? null,
-      existingRecommendations: run.recommendations ?? [],
-    });
-    run.institution_recall = {
-      schools: instRecall.schools,
-      scanned: instRecall.scanned,
-      linked: instRecall.linked,
-      rejected_by_engine: instRecall.rejectedByEngine,
-      recommended: instRecall.recommendations.length,
-      ...(instRecall.skipped ? { skipped: instRecall.skipped } : {}),
-    };
-    if (instRecall.recommendations.length > 0) {
-      run.recommendations = [...(run.recommendations ?? []), ...instRecall.recommendations]
-        .sort((a, b) => b.match_score - a.match_score);
+    if (optionalWorkAllowed()) {
+      const { recallInstitutionAidForRun } = await import('./matching/institutionRunRecall.js');
+      const instRecall = await recallInstitutionAidForRun(db, {
+        profile: ctx?.profile ?? null,
+        sections: ctx?.sections ?? null,
+        idRemap: persisted?.idRemap ?? null,
+        existingRecommendations: run.recommendations ?? [],
+      });
+      run.institution_recall = {
+        schools: instRecall.schools,
+        scanned: instRecall.scanned,
+        linked: instRecall.linked,
+        rejected_by_engine: instRecall.rejectedByEngine,
+        recommended: instRecall.recommendations.length,
+        ...(instRecall.skipped ? { skipped: instRecall.skipped } : {}),
+      };
+      if (instRecall.recommendations.length > 0) {
+        run.recommendations = [...(run.recommendations ?? []), ...instRecall.recommendations]
+          .sort((a, b) => b.match_score - a.match_score);
+      }
     }
   } catch { /* institution recall is additive; never fails a crawl */ }
 
@@ -840,7 +847,7 @@ export async function runProfileDiscoveryLive({ db = getDb(), profileId, fetcher
   // persistRun and never delayed it) so its promotion_evidence counter is present
   // on run.web_lane before we record web-lane health telemetry below. Best-effort:
   // it never throws, and a failure here can never affect the persisted result.
-  if (webTargetVerification) {
+  if (webTargetVerification && optionalWorkAllowed()) {
     try { await webTargetVerification; } catch { /* telemetry-only; never fails a crawl */ }
   }
 
@@ -884,7 +891,7 @@ export async function runProfileDiscoveryLive({ db = getDb(), profileId, fetcher
   // `low_results`). Best-effort and fully guarded: learning is observability,
   // never a blocker.
   try {
-    if (String(ctx?.profile?.created_by ?? '') !== 'agent:amy') {
+    if (optionalWorkAllowed() && String(ctx?.profile?.created_by ?? '') !== 'agent:amy') {
       const { learnFromCrawlGaps } = await import('./coverageAudit/liveCrawlGapLearning.js');
       const learned = await learnFromCrawlGaps(db, {
         profileId,
@@ -1007,7 +1014,7 @@ export async function runProfileDiscoveryLive({ db = getDb(), profileId, fetcher
   // venture items, ...) and run the item search for its open needs, persisting
   // the answer beside the plan. Best-effort and bounded; never fails the crawl.
   try {
-    if (!dryRun && String(ctx?.profile?.created_by ?? '') !== 'agent:amy') {
+    if (optionalWorkAllowed() && !dryRun && String(ctx?.profile?.created_by ?? '') !== 'agent:amy') {
       const { runNeedsPlanAutoSearch } = await import('./needs/needsPlanAutoSearch.js');
       await runNeedsPlanAutoSearch(db, { profileId, profileContext: ctx, trigger: 'post_crawl' });
     }

@@ -34,6 +34,7 @@ const EndUserCalendar = lazy(() => import('./EndUserCalendar'), 'EndUserCalendar
 const Reports = lazy(() => import('./Reports'), 'Reports')
 const AdvancedAnalytics = lazy(() => import('./AdvancedAnalytics'), 'AdvancedAnalytics')
 const Billing = lazy(() => import('./Billing'), 'Billing')
+const Account = lazy(() => import('./Account'), 'Account')
 const Automation = lazy(() => import('./Automation'), 'Automation')
 const NewProject = lazy(() => import('./NewProject'), 'NewProject')
 const GrantDetail = lazy(() => import('./GrantDetail'), 'GrantDetail')
@@ -140,7 +141,7 @@ function LayoutRoutes() {
     return <Navigate to="/login" state={{ from: location, sessionExpired }} replace />
   }
 
-  if (!isAdmin && needsProfileCreation && profiles.length === 0) {
+  if (!isAdmin && needsProfileCreation && profiles.length === 0 && location.pathname !== '/Account') {
     return <Navigate to="/start" replace />
   }
 
@@ -155,6 +156,7 @@ function LayoutRoutes() {
           <Route path="/" element={withGate(<Dashboard />, 'Dashboard')} />
           <Route path="/Dashboard" element={withGate(<Dashboard />, 'Dashboard')} />
           <Route path="/Organizations" element={withBoundary(<Organizations />, 'Organizations')} />
+          <Route path="/Account" element={withBoundary(<Account />, 'Account')} />
           <Route path="/MyProfiles" element={withBoundary(<MyProfiles />, 'MyProfiles')} />
           <Route path="/Funder" element={withGate(<Funder />, 'Funder')} />
           <Route path="/DiscoverGrants" element={withGate(<DiscoverGrants />, 'DiscoverGrants')} />

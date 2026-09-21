@@ -19,6 +19,7 @@ import {
 } from '@/api/services'
 import { useToast } from '@/components/ui/use-toast'
 import { isNativeApp } from '@/lib/platform'
+import { useSearchParams } from 'react-router-dom'
 
 function formatUsdFromCents(cents) {
   const n = Number(cents)
@@ -37,7 +38,9 @@ export default function Services() {
   const { toast } = useToast()
   const qc = useQueryClient()
 
-  const [selectedServiceSlug, setSelectedServiceSlug] = React.useState('')
+  const [params] = useSearchParams()
+  const billingProfileId = params.get('profile_id') || undefined
+  const [selectedServiceSlug, setSelectedServiceSlug] = React.useState(params.get('service') || '')
   const [clientCategory, setClientCategory] = React.useState('individual')
   const [agreed, setAgreed] = React.useState(false)
 
@@ -75,6 +78,7 @@ export default function Services() {
       createServicePurchase({
         service_slug: selectedServiceSlug,
         client_category: clientCategory,
+        profile_id: billingProfileId,
       }),
     onSuccess: async (data) => {
       await qc.invalidateQueries({ queryKey: ['services', 'purchases'] })
@@ -405,4 +409,3 @@ export default function Services() {
     </div>
   )
 }
-

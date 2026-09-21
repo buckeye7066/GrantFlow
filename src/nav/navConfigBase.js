@@ -172,6 +172,7 @@ export function getGroupIdForRoute(pathname) {
 
 /** Route name → human label for breadcrumb / page title. */
 export const ROUTE_LABELS = {
+  Account: "Account",
   Dashboard: "Home",
   Organizations: "Organizations",
   MyProfiles: "My Profiles",

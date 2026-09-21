@@ -1,5 +1,5 @@
 import { useEffect, useState, useRef } from 'react'
-import { BrowserRouter as Router } from 'react-router-dom'
+import { BrowserRouter as Router, useLocation } from 'react-router-dom'
 import './App.css'
 import Pages from '@/pages/index.jsx'
 import { Toaster } from '@/components/ui/toaster'
@@ -15,6 +15,11 @@ import { useAuthStore } from '@/stores/authStore'
 import { useSettingsStore } from '@/stores/settingsStore'
 import { env } from '@/config/env.js'
 import { isTransientAuthCheckError, authCheckRetryDelaySeconds } from '@/lib/authBootstrapRetry.js'
+function CompletionGateForRoute() {
+  const { pathname } = useLocation()
+  // Account security, logout and payment must remain reachable before intake.
+  return pathname === '/Account' ? null : <ProfileCompletionGate />
+}
 function App() {
   const [bootstrapped, setBootstrapped] = useState(false)
   // Set while GET /api/auth/me is rate limited / failing server-side: the
@@ -129,7 +134,7 @@ function App() {
           missing data points required for its type, Anya asks the numbered
           questions ("1 of N" … "N of N") before the user can proceed. Renders
           null unless the auth payload's profile_completion reports `blocked`. */}
-      <ProfileCompletionGate />
+      <CompletionGateForRoute />
     </Router>
   )
 }
