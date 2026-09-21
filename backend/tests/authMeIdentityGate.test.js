@@ -34,6 +34,19 @@ beforeEach(() => {
 })
 
 describe('GET /api/auth/me identity gate', () => {
+  it('preserves business identity and asks business completion questions after reload', async () => {
+    db.prepare("INSERT INTO profiles (id, user_id, display_name, primary_type, created_by, status) VALUES ('business-me', 'u-me', 'My Business', 'business', 'u-me', 'active')").run()
+    const token = sign({ sub: 'u-me', roles: ['user'] })
+    const res = await request(app).get('/api/auth/me').set('Authorization', `Bearer ${token}`)
+    expect(res.status).toBe(200)
+    expect(res.body.profiles).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: 'business-me', primary_type: 'business', created_by: 'u-me' }),
+    ]))
+    const questions = res.body.user.profile_completion.next.questions.map((question) => question.id)
+    expect(questions).toEqual(['state', 'organization_type', 'mission', 'focus_areas'])
+    expect(questions).not.toContain('financial_need')
+  })
+
   it('DENIES a synthetic-collision JWT (sub=system_admin_token, no service-token provenance)', async () => {
     const token = sign({ sub: 'system_admin_token', roles: ['user'] })
     const res = await request(app).get('/api/auth/me').set('Authorization', `Bearer ${token}`)

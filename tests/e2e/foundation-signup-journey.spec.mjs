@@ -2,7 +2,7 @@ import { test, expect } from 'playwright/test'
 import { basePath } from './playwright.config.mjs'
 
 const appBase = String(basePath || '').replace(/\/+$/, '')
-const endpoint = (response, path) => new URL(response.url()).pathname === path
+const endpoint = (response, path) => new URL(response.url()).pathname === `${appBase}${path}`
 
 test('Foundation signup saves answers, resumes, signs in and retains the new profile', async ({ page, browser }) => {
   test.setTimeout(120_000)
@@ -37,7 +37,7 @@ test('Foundation signup saves answers, resumes, signs in and retains the new pro
   await clickAnswer('Continue', 'personal_subtype')
 
   const resumedResponse = page.waitForResponse((response) =>
-    new URL(response.url()).pathname.startsWith('/api/onboarding/sessions/'))
+    new URL(response.url()).pathname.startsWith(`${appBase}/api/onboarding/sessions/`))
   await page.reload({ waitUntil: 'domcontentloaded' })
   const resumed = await resumedResponse
   expect(resumed.status()).toBe(200)
@@ -122,6 +122,52 @@ test('Foundation signup saves answers, resumes, signs in and retains the new pro
     await expect(returning.getByRole('heading', { name: profileName, exact: true }).first()).toBeVisible()
     await expect(returning.getByTestId('profile-completion-gate')).toHaveCount(0)
     console.log('Foundation journey: independent login, required answer and saved profile survived reload')
+
+    // One real non-admin login may own both personal and business identities.
+    // Exercise the shared selector and persisted active scope, not a mocked UI.
+    const refreshed = await context.request.post(`${appBase}/api/auth/refresh`, {
+      headers: { 'X-Requested-With': 'XMLHttpRequest' }, data: {},
+    })
+    expect(refreshed.status()).toBe(200)
+    const session = await refreshed.json()
+    const headers = { Authorization: `Bearer ${session.accessToken}` }
+    const created = await context.request.post(`${appBase}/api/profiles`, {
+      headers, data: { display_name: 'Journey Business', primary_type: 'business' },
+    })
+    expect(created.status()).toBe(201)
+    const business = await created.json()
+    expect(business.id).not.toBe(completion.profile_id)
+    const personalRead = await context.request.get(`${appBase}/api/profiles/${completion.profile_id}`, { headers })
+    expect((await personalRead.json()).display_name).toBe(profileName)
+    await returning.reload({ waitUntil: 'domcontentloaded' })
+    // A second profile must answer its own type-specific required questions.
+    // Do not skip the gate or reuse the individual's household answers.
+    const businessGate = returning.getByTestId('profile-completion-gate')
+    const businessAnswers = [
+      [/Which US state/, 'Tennessee'],
+      [/What kind of organization/, 'business'],
+      [/organization.*mission or main focus/, 'Provide local wellness services.'],
+      [/main program focus areas/, 'Wellness services and accessible community classes'],
+    ]
+    for (const [prompt, value] of businessAnswers) {
+      await businessGate.getByRole('textbox', { name: prompt }).fill(value)
+      const saved = returning.waitForResponse(response =>
+        endpoint(response, `/api/profiles/${business.id}/completion-gate/answer`) && response.request().method() === 'POST')
+      await businessGate.getByRole('button', { name: /^(Continue|Finish)$/ }).click()
+      expect((await saved).status()).toBe(200)
+    }
+    await expect(businessGate).toBeHidden()
+    const selector = returning.getByRole('combobox', { name: 'Active funding profile', exact: true })
+    await expect(selector).toBeVisible()
+    await selector.selectOption(business.id)
+    await expect(returning).toHaveURL(new RegExp(`ProfileDetail\\?id=${business.id}`))
+    await expect.poll(() => returning.evaluate(() => localStorage.getItem('grantflow:active-profile-id'))).toBe(business.id)
+    await selector.selectOption(completion.profile_id)
+    await expect(returning).toHaveURL(new RegExp(`ProfileDetail\\?id=${completion.profile_id}`))
+    await returning.reload({ waitUntil: 'domcontentloaded' })
+    await expect(selector).toHaveValue(completion.profile_id)
+    await expect(returning.getByRole('heading', { name: profileName, exact: true }).first()).toBeVisible()
+    console.log('Foundation journey: personal/business switch preserved separate profiles and survived reload')
   } finally {
     await context.close()
   }

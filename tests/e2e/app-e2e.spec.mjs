@@ -137,7 +137,7 @@ test('e2e: login, admin panel, source directory, queue crawler, pipeline, opport
 
   // Organizations page renders and we can create + select a profile.
   await page.goto(`${appBase}/Organizations`, { waitUntil: 'networkidle' })
-  await expect(page.getByRole('heading', { name: 'Profiles' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Organizations', exact: true })).toBeVisible()
 
   await page.getByRole('button', { name: /quick add/i }).click()
   const quickAddDialog = page.getByRole('dialog').filter({ hasText: /quick add profile/i }).first()
@@ -146,16 +146,9 @@ test('e2e: login, admin panel, source directory, queue crawler, pipeline, opport
   const e2eProfileName = 'E2E Profile'
   await quickAddDialog.locator('#display_name').fill(e2eProfileName)
 
-  // Select profile type. The Quick Add Profile listbox no longer includes a
-  // bare "Organization" option — the canonical organisational types are
-  // "Nonprofit Organization" / "Faith-Based Organization" / etc. Select the
-  // nonprofit option so the rest of the flow exercises the same OrganizationProfile
-  // route the test originally targeted.
-  await quickAddDialog.getByText('Select profile type').click()
-  await page
-    .getByRole('option', { name: /^nonprofit organization$/i })
-    .first()
-    .click()
+  // Quick Add now infers type from profile evidence instead of asking users
+  // to choose a category up front. Continue through the actual visible form.
+  await expect(quickAddDialog.getByText(/No need to pick a profile type/)).toBeVisible()
 
   await quickAddDialog.getByRole('button', { name: /create profile/i }).click()
   await page.waitForURL(/\/OrganizationProfile/i, { timeout: 60_000 })
@@ -189,30 +182,13 @@ test('e2e: login, admin panel, source directory, queue crawler, pipeline, opport
     .getByRole('combobox')
     .filter({ hasText: /choose a profile/i })
     .first()
-  const options = page.locator('[role="option"]')
-  const noProfiles = page.getByText(/No profiles available/i).first()
-
-  let selected = false
-  for (let i = 0; i < 40; i += 1) {
-    await discoverProfileTrigger.click({ force: true })
-
-    if (await options.first().isVisible().catch(() => false)) {
-      await options.first().click()
-      selected = true
-      break
-    }
-
-    if (await noProfiles.isVisible().catch(() => false)) {
-      throw new Error('DiscoverGrants profile picker shows "No profiles available"')
-    }
-
-    await page.keyboard.press('Escape').catch(() => {})
-    await page.waitForTimeout(500)
-  }
-
-  if (!selected) {
-    throw new Error('DiscoverGrants profile picker did not render any options')
-  }
+  // The deterministic seed supplies geography for this profile. Selecting the
+  // first option accidentally chooses an incomplete boot-created demo profile.
+  // The option may append its linked organization's name.
+  const searchProfile = page.getByRole('option', { name: /^Seed Profile One(?:\s|$)/ })
+  await discoverProfileTrigger.click()
+  await expect(searchProfile).toBeVisible()
+  await searchProfile.click()
 
   const findFundingButton = page
     .getByRole('button', { name: /^Find Funding Opportunities$/i })
@@ -245,9 +221,16 @@ test('e2e: login, admin panel, source directory, queue crawler, pipeline, opport
   // Automation: queue at least one crawler job via UI.
   await page.goto(`${appBase}/Automation`, { waitUntil: 'networkidle' })
   await expect(page.getByRole('heading', { name: /Automation Control Center/i })).toBeVisible()
-  const localSweepCard = page.locator('div.rounded-xl').filter({ hasText: /Launch local sweep/i }).first()
-  await expect(localSweepCard).toBeVisible()
-  await localSweepCard.getByRole('button', { name: /^run now$/i }).first().click()
+  const automationProfileCard = page.getByText('Run automations as profile', { exact: true }).locator('..').locator('..')
+  await automationProfileCard.getByRole('combobox').click()
+  await page.getByRole('option', { name: 'Seed Profile One', exact: true }).click()
+  // Discovery now uses the canonical Funding discovery metric card.
+  const discoveryCard = page.getByRole('button', { name: 'Inspect latest Funding discovery job', exact: true })
+  await expect(discoveryCard).toBeVisible()
+  const queuedResponse = page.waitForResponse(response =>
+    new URL(response.url()).pathname === `${appBase}/api/crawlers/jobs` && response.request().method() === 'POST')
+  await discoveryCard.getByRole('button', { name: /^run now$/i }).click()
+  expect((await queuedResponse).ok()).toBe(true)
   // The "Automation queued" toast is transient (auto-dismisses ~5s); rather
   // than racing it, assert the durable side-effect: a row appears in the
   // automation queue table. That is the user-visible signal the job was
@@ -263,7 +246,7 @@ test('e2e: login, admin panel, source directory, queue crawler, pipeline, opport
 
   // Funding Opportunities list view renders (even if empty).
   await page.goto(`${appBase}/FundingOpportunities`, { waitUntil: 'networkidle' })
-  await expect(page.getByRole('heading', { name: /Funding Opportunities/i })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Browse grant opportunities', exact: true })).toBeVisible()
 
   expect(errors, 'no console/page/request errors during e2e flow').toEqual([])
 })

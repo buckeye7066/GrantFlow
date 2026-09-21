@@ -1,17 +1,17 @@
 /**
  * End-to-end resilience coverage for the new-user intake:
  *
- *   1. The full anonymous /start interview -> preview-OTP sign-in -> guided
- *      tour handoff (the REAL signup path, no fixtures).
- *   2. A mid-tour page refresh RESUMES at the same step (tab-session
- *      persistence) instead of restarting or vanishing.
- *   3. "Skip guided tour" always works and stays skipped across reloads.
+ *   1. The full anonymous /start interview -> password setup -> required
+ *      profile completion (the real signup path, no pre-created account).
+ *   2. Optional end-user guidance survives a refresh without forcing navigation.
+ *   3. Skipping the introduction persists across reloads.
  *   4. Bare /GrantDetail (no id) renders the friendly not-found state with
  *      working ways out — never a dead end.
  *
  * Uses the same self-started server as app-e2e.spec.mjs (migrate + seed +
- * build + start); the onboarding OTP is read from the on-page dev preview,
- * which the backend exposes outside production.
+ * build + start); the isolated development server previews the password link.
+ * The end-user shell intentionally replaced the route-forcing cycle tour with
+ * EndUserWelcomeGuide. The legacy guided-tour store retains its unit coverage.
  */
 import { test, expect } from 'playwright/test'
 import { basePath } from './playwright.config.mjs'
@@ -34,9 +34,9 @@ async function dismissIntroVideo(page, expect) {
   await expect(dialog).toBeHidden({ timeout: 5_000 })
 }
 
-test('guided tour: signup interview, refresh-resume, skip, bare GrantDetail fallback', async ({ page }) => {
+test('welcome guide: signup, required profile completion, refresh, skip, bare GrantDetail fallback', async ({ page }) => {
   test.setTimeout(300_000)
-  const email = `tour-e2e-${Date.now()}@example.com`
+  const email = `tour-e2e-${Date.now()}@example.invalid`
 
   await page.goto(`${appBase}/start`, { waitUntil: 'networkidle' })
   await dismissIntroVideo(page, expect)
@@ -73,40 +73,35 @@ test('guided tour: signup interview, refresh-resume, skip, bare GrantDetail fall
   await page.getByRole('textbox').fill('Tour Tester')
   await page.getByRole('button', { name: /^continue$/i }).click()
 
-  // Email -> OTP. The dev preview line exposes the code outside production.
+  // Use the current password-link handoff, not the retired preview-OTP screen.
   await page.locator('input[type="email"]').fill(email)
   await page.getByRole('button', { name: /send my sign-in code/i }).click()
-  const preview = page.getByText(/dev preview: *\d{6}/i)
-  await expect(preview).toBeVisible({ timeout: 30_000 })
-  const code = (await preview.textContent()).match(/(\d{6})/)[1]
-  await page.locator('#otp').fill(code)
-  await page.getByRole('button', { name: /sign in & start matching/i }).click()
+  await expect(page).toHaveURL(/\/set-password\?token=/)
+  await page.locator('#new-password').fill('Tour-Readiness-2026!')
+  await page.locator('#confirm-password').fill('Tour-Readiness-2026!')
+  await page.getByRole('button', { name: 'Set password & sign in', exact: true }).click()
+  await expect(page).toHaveURL(/\/Dashboard(?:\?|$)/)
+  const gate = page.getByTestId('profile-completion-gate')
+  await expect(gate).toBeVisible()
+  await gate.getByRole('textbox', { name: /Roughly how urgent is your financial need/ }).fill('high')
+  await gate.getByRole('button', { name: 'Finish', exact: true }).click()
+  await expect(gate).toBeHidden()
 
-  // Handoff panel -> tour.
-  await page.getByRole('button', { name: /let's go/i }).click({ timeout: 30_000 })
-
-  // --- Tour starts: auto-navigates to DiscoverGrants, step 1 coachmark. ---
-  await expect(page).toHaveURL(/DiscoverGrants/i, { timeout: 30_000 })
-  await expect(
-    page.getByRole('dialog', { name: /let's find your first real match/i }),
-  ).toBeVisible({ timeout: 30_000 })
-  await expect(page.getByText(/step 1 of \d+/i)).toBeVisible()
-
-  // --- Refresh mid-tour resumes at the SAME step. ---
-  await page.getByRole('button', { name: /^next$/i }).click()
-  const stepLabel = page.getByText(/step \d+ of \d+/i)
-  await expect(stepLabel).toBeVisible()
-  const stepBeforeReload = (await stepLabel.textContent()).trim()
-  expect(stepBeforeReload).not.toMatch(/^Step 1 /) // we really advanced
-
+  const guide = page.getByRole('heading', { name: 'Start with one clear next step', exact: true })
+  await expect(guide).toBeVisible()
+  await expect(page.getByRole('link', { name: 'Read the getting-started guide', exact: true })).toBeVisible()
+  // Refresh preserves the pending guide and the current route.
   await page.reload({ waitUntil: 'networkidle' })
-  await expect(page.getByText(stepBeforeReload)).toBeVisible({ timeout: 30_000 })
+  await expect(guide).toBeVisible()
+  await expect(page).toHaveURL(/\/Dashboard(?:\?|$)/)
 
-  // --- Skip is always available and sticks across reloads. ---
-  await page.getByRole('button', { name: /skip guided tour/i }).click()
-  await expect(page.getByText(/step \d+ of \d+/i)).toHaveCount(0)
+  const skipped = page.waitForResponse(response =>
+    new URL(response.url()).pathname === `${appBase}/api/auth/onboarding-state` && response.request().method() === 'PATCH')
+  await page.getByRole('button', { name: 'Skip this introduction', exact: true }).click()
+  expect((await skipped).status()).toBe(200)
+  await expect(guide).toBeHidden()
   await page.reload({ waitUntil: 'networkidle' })
-  await expect(page.getByText(/step \d+ of \d+/i)).toHaveCount(0)
+  await expect(guide).toBeHidden()
 
   // --- Bare /GrantDetail is a friendly state with ways out, not a dead end. ---
   await page.goto(`${appBase}/GrantDetail`, { waitUntil: 'networkidle' })

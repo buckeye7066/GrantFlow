@@ -22,6 +22,7 @@ import { qualifiesForDisplay, SURFACED_MATCHER_VERSIONS } from '../config/matchS
 import { isPointerKind } from '../config/opportunityKindClasses.js'
 import { DEFAULT_MIN_SCORE } from '../config/matchThresholds.js'
 import { createLogger } from '../utils/logger.js'
+import { getLastWebLaneRun } from './coverageAudit/webLaneHealth.js'
 
 const log = createLogger('crawlerDoctor')
 
@@ -256,6 +257,9 @@ export async function buildCrawlerDoctorReport(db = getDb(), profileId, opts = {
   return {
     profile_id: profileId,
     generated_at: new Date().toISOString(),
+    // Actual execution is distinct from the plan below. Null means no retained
+    // receipt, never that all planned queries ran or that a crawl succeeded.
+    last_web_run: await getLastWebLaneRun(db, profileId),
     thesis: {
       applicant_types: thesis.applicant_types ?? [],
       needs: thesis.needs ?? [],
@@ -263,6 +267,8 @@ export async function buildCrawlerDoctorReport(db = getDb(), profileId, opts = {
       is_student: Boolean(thesis.is_student),
       schools: thesis.schools ?? [],
       learned_gaps: thesis.learned_gaps ?? null,
+      profile_route: thesis.profile_route ?? null,
+      declared_need_terms: thesis.declared_need_terms ?? [],
     },
     query_budget: queryDiagnostics.query_budget,
     next_queries: queryDiagnostics.next_queries,

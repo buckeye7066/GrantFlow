@@ -27,11 +27,13 @@ import { CHROMIUM_CONTAINER_ARGS } from '../services/hamilton/browserLaunch.js'
 
 let chromium = null
 let browserBinaryPresent = false
+const configuredBrowser = process.env.HAMILTON_TEST_CHROMIUM_EXECUTABLE_PATH
 try {
   ({ chromium } = await import('playwright'))
-  const exe = chromium.executablePath?.()
+  const exe = configuredBrowser || chromium.executablePath?.()
   browserBinaryPresent = Boolean(exe && fs.existsSync(exe))
 } catch { browserBinaryPresent = false }
+if (configuredBrowser && !browserBinaryPresent) throw new Error('Configured Hamilton test browser is unavailable')
 
 const run = browserBinaryPresent ? describe : describe.skip
 
@@ -63,7 +65,7 @@ const SIGNUP_FORM = `
   </script>`
 
 let browser
-beforeAll(async () => { if (browserBinaryPresent) browser = await chromium.launch({ headless: true, args: [...CHROMIUM_CONTAINER_ARGS] }) }, 60_000)
+beforeAll(async () => { if (browserBinaryPresent) browser = await chromium.launch({ headless: true, ...(configuredBrowser ? { executablePath: configuredBrowser } : {}), args: [...CHROMIUM_CONTAINER_ARGS] }) }, 60_000)
 afterAll(async () => { await browser?.close?.() })
 
 async function pageWith(html) {

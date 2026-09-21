@@ -14,7 +14,7 @@ test('Foundation resolves ZIP+4 geography without discarding the postal suffix',
   await expect(page.locator('#city')).toHaveValue('Cleveland')
   await expect(page.locator('#county')).toHaveValue('Bradley')
   const submitted = page.waitForRequest((request) =>
-    new URL(request.url()).pathname === '/api/onboarding/answer' && request.method() === 'POST')
+    new URL(request.url()).pathname === `${appBase}/api/onboarding/answer` && request.method() === 'POST')
   await page.getByRole('button', { name: 'Continue', exact: true }).click()
   expect((await submitted).postDataJSON().answer).toEqual({
     zip: '37312-1234', state: 'TN', city: 'Cleveland', county: 'Bradley',

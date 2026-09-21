@@ -12,6 +12,7 @@ import Database from 'better-sqlite3'
 import { verifiedFourTruthExplain } from './helpers/fourTruthFixture.js'
 import { buildCrawlerDoctorReport } from '../services/crawlerDoctorService.js'
 import { DEFAULT_MIN_SCORE } from '../config/matchThresholds.js'
+import { recordWebLaneRun } from '../services/coverageAudit/webLaneHealth.js'
 
 function makeDb() {
   const db = new Database(':memory:')
@@ -94,6 +95,31 @@ function seed(db) {
 }
 
 describe('buildCrawlerDoctorReport', () => {
+  it('separates the requested profile actual execution receipt from its next-query plan', async () => {
+    const db = makeDb()
+    try {
+      const executed = [{ query: 'actual scholarship search', tier: 'core' }]
+      const skipped = [{ query: 'unexecuted scholarship search', tier: 'breadth' }]
+      await recordWebLaneRun(db, {
+        profileId: 'p1', at: '2026-09-21T05:00:00Z',
+        telemetry: {
+          queries: executed.map(({ query }) => query),
+          queries_planned: [...executed, ...skipped].map(({ query }) => query),
+          query_ledger: { planned: [...executed, ...skipped], executed, skipped_budget: skipped },
+        },
+      })
+      await recordWebLaneRun(db, { profileId: 'other-profile', telemetry: { query_ledger: { executed: [{ query: 'another profile private need', tier: 'core' }] } } })
+      const report = await buildCrawlerDoctorReport(db, 'p1', { thesis: THESIS })
+      expect(report.last_web_run.query_ledger.executed).toEqual(executed)
+      expect(report.last_web_run.query_ledger.skipped_budget).toEqual(skipped)
+      expect(report.last_web_run.queries_executed).toBe(1)
+      expect(report.last_web_run.queries_planned).toBe(2)
+      expect(report.last_web_run.at).toBe('2026-09-21T05:00:00Z')
+      expect(JSON.stringify(report)).not.toContain('another profile private need')
+      const missing = await buildCrawlerDoctorReport(db, 'no-run', { thesis: { ...THESIS, profile_id: 'no-run' } })
+      expect(missing.last_web_run).toBeNull()
+    } finally { db.close() }
+  })
   it('explains each match: query provenance, inclusion/exclusion, geography, amount', async () => {
     const db = makeDb()
     seed(db)
