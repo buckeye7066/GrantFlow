@@ -12,6 +12,8 @@ import { normalizeConditionTerm } from '../config/conditionTerms.js'
 import { resolveApplicantType } from './profileHelpers.js'
 import { crawlerApplicantTypesFor, resolveProfileType } from './profileTypeRegistry.js'
 import { NAMED_CONDITION_FLAGS } from '../config/conditionSpecificity.js'
+import { DECLARED_NEED_FIELDS } from '../config/declaredNeedFields.js'
+import { normalizeDeclaredNeedTerms } from '../crawler-os/declaredNeedTerms.js'
 
 const FALSEY_TEXT_VALUES = new Set([
   '',
@@ -746,10 +748,14 @@ export function normalizeProfile(rawProfile, sections = null, signals = null, do
   // affiliation ... indicating veteran status") into a "Need: veteran" that
   // three official housing locators then displayed as why they matched.
   // Tags still feed keyword scoring and the talent/faith indicators below.
-  const rawNeeds = [
-    ...safeParseArray(profile.needs),
-    ...safeParseArray(profile.need_categories),
-  ]
+  const declaredValues = (value) => {
+    const parsed = safeParseArray(value)
+    const values = parsed.length ? parsed : typeof value === 'string' ? [value] : []
+    // Apply the same invalid-value/privacy guard as discovery, one value at a
+    // time so the search planner's maximum does not truncate matching inputs.
+    return values.flatMap(item => normalizeDeclaredNeedTerms([item]))
+  }
+  const rawNeeds = DECLARED_NEED_FIELDS.flatMap(field => declaredValues(profile[field]))
 
   // Pull needs from profile sections too
   if (profileSections) {
@@ -758,9 +764,8 @@ export function normalizeProfile(rawProfile, sections = null, signals = null, do
       const answers = sectionData.answers ?? sectionData
       if (answers && typeof answers === 'object') {
         // Look for need-related section keys
-        const needKeys = ['needs', 'need_categories', 'primary_needs', 'support_needs']
-        for (const nk of needKeys) {
-          if (answers[nk]) rawNeeds.push(...safeParseArray(answers[nk]))
+        for (const nk of DECLARED_NEED_FIELDS) {
+          if (answers[nk]) rawNeeds.push(...declaredValues(answers[nk]))
         }
       }
       const sectionHasSpecificAnswers = hasSpecificAnswerValue(answers)

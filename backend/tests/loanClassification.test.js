@@ -209,3 +209,14 @@ describe('the loan flag reaches the surface that renders it', () => {
     }
   })
 })
+
+
+describe('loan marketing cannot use relief language to bypass the no-debt gate', () => {
+  it.each([
+    {title:'Direct Loan Program',description:'Loan forgiveness may be available after ten years.'},
+    {title:'Small Business Loan Assistance Program',description:'Borrowers pay monthly payments at a fixed interest rate.'},
+    {title:'Debt Consolidation Loan Program',description:'Debt relief through a new loan with monthly payments.'},
+  ])('excludes $title even when its marketing mentions relief', row => {
+    expect(classifyLoanRisk(row)).toBe(LOAN_CLASS.LOAN)
+  })
+})

@@ -30,7 +30,7 @@ import {
 } from '../config/profileInstitutions.js';
 import { deriveProfileFacts, searchTermsFromFacts } from '../config/profileDerivedFacts.js';
 import { originSearchTerms } from '../config/temporalRelatability.js';
-import { declaredNeedsFrom, typeDerivedNeeds } from './pipelinePrecision.js';
+import { declaredNeedsFrom, typeDerivedNeeds, DECLARED_NEED_FIELDS } from './pipelinePrecision.js';
 import { stampMatchConfidenceProvenance } from './matching/matchConfidenceProvenance.js';
 import { syncOpportunityContractProjection } from './opportunityRepository.js';
 import { grantsGovDetailIdFromUrl } from '../../shared/grantsGovProtocol.js';
@@ -549,6 +549,11 @@ export function profileContextToThesisInput(ctx = {}) {
     name: profile.display_name ?? null,
     tags: [...new Set([...asList(profile.tags), ...keywordTerms].filter(Boolean))],
     need_categories: [...new Set(needCategories.filter(Boolean))],
+    // Keep the request wording before canonical category normalization loses
+    // it. Only declared request fields participate, never narrative/contact
+    // fields; buildThesis sanitizes these seeds before public search.
+    declared_need_terms: [profile, ...Object.values(sections).map(sectionObject)]
+      .flatMap(record => DECLARED_NEED_FIELDS.flatMap(field => asList(record?.[field]))),
     sections: sectionList,
     organizations: org ? [{ name: org.name, type: org.organization_type ?? org.nonprofit_type, mission: org.mission }] : [],
     documents: Array.isArray(ctx.documents)

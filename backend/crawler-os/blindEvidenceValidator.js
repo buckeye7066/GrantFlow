@@ -150,6 +150,25 @@ export function validateEvidenceSpans(pageFacts, pageText) {
       }
     }
   }
+  // A real quotation does not make an unrelated model-written eligibility
+  // claim true. Eligibility is requested verbatim: validate its actual text
+  // and every bullet as well as the attached citation.
+  if (cleanedProv.eligibility) {
+    if (facts.eligibility_text && !isSupportedSnippet(facts.eligibility_text, pageText)) {
+      facts.eligibility_text = null;
+      dropped.push({field:'eligibility_text',reason:'unsupported_value'});
+    }
+    if (Array.isArray(facts.eligibility_bullets)) {
+      facts.eligibility_bullets = facts.eligibility_bullets.filter(bullet => {
+        const supported = isSupportedSnippet(bullet, pageText);
+        if (!supported) dropped.push({field:'eligibility_bullets',reason:'unsupported_value'});
+        return supported;
+      });
+    }
+    const grounded = facts.eligibility_text || (facts.eligibility_bullets || []).join('\n');
+    if (!grounded) { delete cleanedProv.eligibility; kept -= 1; }
+    else cleanedProv.eligibility = {...cleanedProv.eligibility,value:grounded};
+  }
   facts.field_provenance = Object.keys(cleanedProv).length ? cleanedProv : null;
 
   // Neutralize every load-bearing fact whose evidence did not survive (its span

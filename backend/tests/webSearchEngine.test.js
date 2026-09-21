@@ -587,7 +587,7 @@ describe('the empty-default rung (all engines suspended, Brave paused)', () => {
 
 describe('the Google CSE rung (rung 0.5 — official API above SearXNG, 2026-08-04)', () => {
   const GOOGLE_HIT = [
-    { url: 'https://tn.gov/collegepays', title: 'TN HOPE Scholarship', snippet: 'state aid' },
+    { url: 'https://tn.gov/collegepays', title: 'TN HOPE Scholarship', snippet: 'State aid for students in Bradley County and throughout Tennessee.' },
   ]
   const SEARX_HIT = [
     { url: 'https://county.gov/scholarship', title: 'Bradley County Scholarship', snippet: 'apply' },
@@ -750,4 +750,19 @@ describe('the Google CSE rung (rung 0.5 — official API above SearXNG, 2026-08-
     expect(tryConsumeGoogleMock).not.toHaveBeenCalled()
     expect(googleSearchFn).not.toHaveBeenCalled()
   })
+})
+
+
+it('does not let suffix-only funding hits clear the SERP or a stale cache entry', async()=>{
+ process.env.SEARXNG_URL='https://searx.example.com'
+ const query='power wheelchair funding assistance for individual Dayton organization'
+ const unrelated=[{title:'Dayton individual organization funding',url:'https://example.org/tuition'}]
+ const real=[{title:'Power wheelchair financial assistance',url:'https://example.org/wheelchair',snippet:''}]
+ const {looksDegenerateSerp}=await import('../services/shared/webSearchEngine.js')
+ expect(looksDegenerateSerp(query,unrelated)).toBe(true)
+ cacheGetMock.mockResolvedValue(unrelated)
+ searxngSearchFn.mockResolvedValue(real)
+ const result=await searchWeb(query)
+ expect(result).toEqual(real)
+ expect(searxngSearchFn).toHaveBeenCalled()
 })

@@ -49,7 +49,7 @@ import {
 // Version tags — these become content-addressing components for the Phase-0.2
 // page-fact cache (services/pageFactCache.js) when this module is wired in a
 // later sub-PR. Bump when the prompt or output shape changes.
-export const EXTRACTOR_VERSION = 'blind-v4';
+export const EXTRACTOR_VERSION = 'blind-v5';
 export const PROMPT_VERSION = 'blind-prompt-v5';
 export const PAGE_FACT_SCHEMA_VERSION = 2;
 

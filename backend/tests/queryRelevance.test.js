@@ -150,3 +150,17 @@ describe('partitionByRelevance', () => {
     expect(partitionByRelevance(Q, null)).toEqual({ strong: [], weak: [] })
   })
 })
+
+
+describe('specific need searches cannot be cleared by applicant-only grant pages',()=>{
+ it('keeps software grants as backfill when a nonprofit asked for a bus',()=>{
+  const query='15 passenger bus grants donations for nonprofit organization Dayton, OH'
+  const generic={title:'Microsoft nonprofit grants and discounts',url:'https://nonprofit.microsoft.com/'}
+  const bus={title:'Bus grants for nonprofit passenger transportation',url:'https://example.org/bus-grants'}
+  expect(partitionByRelevance(query,[generic,bus])).toEqual({strong:[bus],weak:[generic]})
+ })
+ it('requires the need subject, not merely the city and applicant words',()=>{
+  const query='power wheelchair funding assistance for individual Dayton, OH'
+  expect(isWeakResult(query,{title:'Dayton individual tuition grants',url:'https://example.org/tuition'})).toBe(true)
+ })
+})

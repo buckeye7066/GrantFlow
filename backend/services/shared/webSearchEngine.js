@@ -40,7 +40,7 @@ import { makeSearxngProvider } from './searxngProvider.js'
 import { makeGoogleCseProvider } from './googleCseProvider.js'
 import { makeOpenAIWebSearchProvider } from './openaiWebSearchProvider.js'
 import { tryConsumeGoogleQuery } from './googleBudget.js'
-import { distinctiveTerms, coveredTerms, hasTopicalFundingEvidence } from './queryRelevance.js'
+import { distinctiveTerms, coveredTerms, hasTopicalFundingEvidence, isWeakResult } from './queryRelevance.js'
 import { getCachedSearch, putCachedSearch } from './webSearchCache.js'
 import { createLogger } from '../../utils/logger.js'
 
@@ -267,7 +267,7 @@ export function looksDegenerateSerp(query, results) {
   // United States' count as covering the term 'west' (the
   // University-of-West-Florida junk SERP slipped through on it, verified live
   // 2026-07-27).
-  return !results.some((r) => coveredTerms(r, terms).length >= needed || hasTopicalFundingEvidence(query, r))
+  return !results.some((r) => !isWeakResult(query, r) && (coveredTerms(r, terms).length >= needed || hasTopicalFundingEvidence(query, r)))
 }
 
 /**
@@ -382,7 +382,7 @@ export async function searchWeb(query, { count = 8, timeoutMs = 8000, deadlineMs
   // engine. Only HEALTHY sets are ever cached (below), so junk from a bad
   // night cannot be replayed. Best-effort: no DB → plain miss.
   const cached = await budget.run(() => getCachedSearch(q, { count }))
-  if (cached) {
+  if (cached && !looksDegenerateSerp(q, cached)) {
     // webSearchCache's current contract does not return created_at, so age is
     // explicitly unknown rather than guessed from the configured TTL.
     return withSearchMeta(cached, {

@@ -44,6 +44,8 @@
 
 import { normalizeNeedCategory } from './profileNormalizer.js'
 import { CANONICAL_NEED_CATEGORIES } from '../constants/needCategories.js'
+import { DECLARED_NEED_FIELDS } from '../config/declaredNeedFields.js'
+export { DECLARED_NEED_FIELDS } from '../config/declaredNeedFields.js'
 
 /**
  * The CANONICAL need vocabulary, read from the registry rather than hand-typed.
@@ -52,12 +54,6 @@ import { CANONICAL_NEED_CATEGORIES } from '../constants/needCategories.js'
  * would turn every profile SECTION NAME into a declared need.
  */
 const CANONICAL_NEED_IDS = new Set(CANONICAL_NEED_CATEGORIES.map((n) => n.id))
-
-/** Structured fields a profile may declare a NEED in. Never prose. */
-export const DECLARED_NEED_FIELDS = Object.freeze([
-  'needs', 'need_categories', 'primary_needs', 'support_needs', 'funding_needs',
-  'item_needs', 'assistance_types',
-])
 
 /** Opportunity fields that state the needs a source serves. */
 export const OPPORTUNITY_NEED_FIELDS = Object.freeze([

@@ -30,7 +30,9 @@
  * programs (scholarships, loan repayment...)". Refusing them would delete free
  * money in the name of protecting people from debt.
  *
- * So the taxonomy is three-valued, and DEBT RELIEF IS CHECKED FIRST.
+ * The taxonomy is three-valued. A new-loan title is checked before relief
+ * marketing elsewhere in the description; genuine repayment/forgiveness
+ * titles still identify debt relief.
  * ─────────────────────────────────────────────────────────────────────────────
  *
  * HYBRIDS ARE REFUSED (owner decision 2026-09-08). A row offering both a grant
@@ -53,11 +55,11 @@ export const LOAN_CLASS = Object.freeze({
 })
 
 /**
- * Debt RELIEF — checked before anything else, because every one of these
- * phrases contains the word "loan" and none of them is a loan.
+ * Debt RELIEF phrases. They cannot override a title that explicitly offers
+ * a new loan merely because its description also advertises possible relief.
  */
 export const DEBT_RELIEF_PATTERNS = Object.freeze([
-  /\bloan\s+(repayment|forgiveness|discharge|cancellation|relief|assistance)\b/i,
+  /\bloan\s+(repayment|forgiveness|discharge|cancellation|relief)\b/i,
   /\b(repayment|forgiveness|discharge|cancellation)\s+(of\s+)?(student\s+)?loans?\b/i,
   /\bpublic\s+service\s+loan\s+forgiveness\b/i,
   /\bPSLF\b/,
@@ -118,7 +120,8 @@ function matchesAny(patterns, text) {
 /**
  * Classify a row's relationship to debt.
  *
- * ORDER IS THE CONTRACT: debt relief is tested FIRST, because every debt-relief
+ * A title naming a debt instrument is excluded before reading relief marketing.
+ * For other titles, debt relief is tested first, because every debt-relief
  * phrase contains the word "loan". Reversing these two checks turns loan
  * forgiveness into a refusal, which deletes money people would have received.
  *
@@ -127,6 +130,13 @@ function matchesAny(patterns, text) {
 export function classifyLoanRisk(row) {
   if (!row) return LOAN_CLASS.NOT_LOAN
   const text = textOf(row)
+  const title = String(row.title ?? '')
+  // A new-debt product does not become assistance because its marketing
+  // mentions possible forgiveness. Genuine repayment/forgiveness programs
+  // may still describe the old loans they pay off.
+  if (!matchesAny(DEBT_RELIEF_PATTERNS, title) && matchesAny(LOAN_INSTRUMENT_PATTERNS, title)) {
+    return LOAN_CLASS.LOAN
+  }
 
   // 1. Money TO the applicant. Wins over every other signal, including an
   //    explicit is_loan flag, which the adapters set from title heuristics.

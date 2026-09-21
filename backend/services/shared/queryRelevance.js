@@ -68,10 +68,23 @@ function hasFundingEvidence(result) {
   return FUNDING_EVIDENCE.test(`${result?.url ?? ''} ${result?.title ?? ''} ${result?.snippet ?? ''}`)
 }
 
+// In a subject-first funding query, the applicant/location suffix cannot
+// substitute for the requested subject. Keep short item names (bus, DME)
+// here; the broader distinctive-term contract stays unchanged.
+function coversFundingSubject(query, result) {
+  const clean = String(query || '').toLowerCase().replace(/(^|\s)-?(?:site|filetype):(?:"[^"]*"|'[^']*'|[^\s]+)/g, '$1');
+  const intent = /\b(?:grants?|scholarships?|funding|assistance)\b/.exec(clean);
+  if (!intent || intent.index === 0) return true;
+  const terms = clean.slice(0, intent.index).replace(/[^a-z0-9\s]/g, ' ').split(/\s+/)
+    .filter(term => term.length >= 3 && !DEGENERATE_STOPWORDS.has(term) && !/^\d+$/.test(term)
+      && !['how','can','get','find','are','our','your','any','new'].includes(term));
+  return terms.length === 0 || coveredTerms(result, terms).length > 0;
+}
+
 /** Shared exception for both ranking and whole-SERP health classification. */
 export function hasTopicalFundingEvidence(query, result) {
   return FUNDING_EVIDENCE.test(String(query || '')) && hasFundingEvidence(result)
-    && coveredTerms(result, distinctiveTerms(query)).length > 0
+    && coveredTerms(result, distinctiveTerms(query)).length > 0 && coversFundingSubject(query, result)
 }
 
 /**
@@ -102,6 +115,7 @@ export function hasTopicalFundingEvidence(query, result) {
 export function isWeakResult(query, result) {
   const terms = distinctiveTerms(query)
   if (terms.length < 2) return false
+  if (!coversFundingSubject(query, result)) return true
   const covered = coveredTerms(result, terms)
   if (covered.length === 0) return true
   if (covered.length > 1) return false
