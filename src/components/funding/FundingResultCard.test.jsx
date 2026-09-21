@@ -20,6 +20,15 @@ const BASE = {
 }
 
 describe('FundingResultCard', () => {
+  it('renders source HTML descriptions as readable text without executable markup', () => {
+    const { container } = render(<FundingResultCard result={{ ...BASE,
+      description: '<p>Research &amp; development</p><p>Budget &lt; $50,000.</p><script>alert(1)</script><img src=x onerror="alert(1)">',
+    }} />)
+    expect(screen.getByText('Research & development Budget < $50,000.')).toBeTruthy()
+    expect(container.querySelector('script,img')).toBeNull()
+    expect(container.textContent).not.toContain('alert(1)')
+  })
+
   it('renders title, sponsor, and source for a direct grant', () => {
     render(<FundingResultCard result={{ ...BASE, kind: 'direct', source_trust_tier: 'official_api', link_status: 'verified' }} />)
     expect(screen.getByText('Test Grant')).toBeTruthy()

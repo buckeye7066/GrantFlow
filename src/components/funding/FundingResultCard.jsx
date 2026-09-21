@@ -27,6 +27,7 @@ import PropTypes from 'prop-types'
 import { humanizeMatchReason } from '@/utils/reasonText'
 import { amountTextFallback } from '@/lib/amountDisplay'
 import { canonicalMatchDisplay } from '@/lib/matchDisplayThresholds'
+import { sourceDescriptionText } from '@/utils/sourceDescriptionText'
 
 // canonicalResultShape() lives in ./canonicalResultShape.js so this file
 // can stay components-only (Vite Fast Refresh requirement).
@@ -245,7 +246,7 @@ export default function FundingResultCard({ result, onPrimaryAction, onSecondary
       </header>
 
       {result.description && (
-        <p className="text-sm text-slate-700 line-clamp-3">{result.description}</p>
+        <p className="text-sm text-slate-700 line-clamp-3">{sourceDescriptionText(result.description)}</p>
       )}
 
       {needsConfirmation && (
