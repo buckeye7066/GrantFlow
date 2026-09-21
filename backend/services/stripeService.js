@@ -163,6 +163,8 @@ export async function expireCheckoutSessionForUrl(url) {
 
 export async function createCheckoutSessionForPrice({
   priceId,
+  expectedUnitAmountCents,
+  expectedCurrency,
   quantity = 1,
   customerId,
   successUrl,
@@ -186,6 +188,11 @@ export async function createCheckoutSessionForPrice({
   const qty = Math.max(1, Math.floor(Number(quantity) || 1))
   const idem = idempotencyKey ? String(idempotencyKey) : undefined
 
+  if (checkoutMode === 'payment' && (!Number.isSafeInteger(expectedUnitAmountCents) ||
+      expectedUnitAmountCents <= 0 || !expectedCurrency || !metadata.service_slug || !metadata.client_category)) {
+    throw Object.assign(new Error('Approved service price expectation required'), { code: 'STRIPE_PRICE_EXPECTATION_REQUIRED' })
+  }
+
   if (isTruthy(process.env.STRIPE_MOCK)) {
     const sid = `cs_mock_${safeHash(`${priceId}:${qty}:${customerId || ''}:${successUrl || ''}`).slice(0, 12)}`
     return {
@@ -193,6 +200,24 @@ export async function createCheckoutSessionForPrice({
       url: `https://checkout.stripe.test/session/${sid}`,
       payment_intent: `pi_mock_${safeHash(sid).slice(0, 12)}`,
       customer: customerId || null,
+    }
+  }
+
+  if (checkoutMode === 'payment') {
+    let price
+    try {
+      price = await stripe.prices.retrieve(priceId, { expand: ['product'] })
+    } catch {
+      throw Object.assign(new Error('Unable to verify service price'), { code: 'STRIPE_PRICE_UNVERIFIED' })
+    }
+    if (!price.active || price.unit_amount !== expectedUnitAmountCents || price.currency !== expectedCurrency ||
+        price.type !== 'one_time' || price.recurring || price.billing_scheme !== 'per_unit' || price.transform_quantity ||
+        price.metadata?.app !== 'grantflow' || price.metadata?.service_slug !== metadata.service_slug ||
+        price.metadata?.client_category !== metadata.client_category ||
+        (price.metadata?.milestone_phase || '') !== (metadata.milestone_phase || '') ||
+        price.product?.active !== true || price.product.metadata?.app !== 'grantflow' ||
+        price.product.metadata?.service_slug !== metadata.service_slug) {
+      throw Object.assign(new Error('Stripe price does not match the approved service'), { code: 'STRIPE_PRICE_MISMATCH' })
     }
   }
 
