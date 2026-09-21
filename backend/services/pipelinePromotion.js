@@ -77,7 +77,9 @@ function classifyOutcome(payload) {
   if (reason === 'tombstoned') return 'tombstoned'
   if (reason.startsWith('duplicate:')) return 'duplicate'
   if (reason === 'source_excluded') return 'source_excluded'
-  if (reason === 'live_reject') return 'live_reject'
+  // Funding-result gates reject reference/resource records deliberately; they
+  // are not transient failures and must not occupy the retry backlog.
+  if (reason === 'live_reject' || reason.startsWith('not_a_grant:')) return 'live_reject'
   if (reason === 'below_bar' || reason === 'relevance_floor') return 'below_bar'
   return 'error'
 }
