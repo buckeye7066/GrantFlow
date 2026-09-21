@@ -184,15 +184,24 @@ router.post('/checkout/service', ensureAuth, async (req, res) => {
     return res.status(503).json({ ok: false, error: 'stripe_customer_unavailable', code: 'STRIPE_NOT_CONFIGURED' })
   }
 
-  const session = await createCheckoutSessionForPrice({
-    priceId: String(charge.stripe_price_id),
-    quantity: 1,
-    customerId: String(customer.stripe_customer_id),
-    successUrl: buildSuccessUrl(purchaseId),
-    cancelUrl: buildCancelUrl(purchaseId),
-    metadata,
-    idempotencyKey,
-  })
+  let session
+  try {
+    session = await createCheckoutSessionForPrice({
+      priceId: String(charge.stripe_price_id),
+      expectedUnitAmountCents: charge.final_amount_cents,
+      expectedCurrency: charge.currency,
+      quantity: 1,
+      customerId: String(customer.stripe_customer_id),
+      successUrl: buildSuccessUrl(purchaseId),
+      cancelUrl: buildCancelUrl(purchaseId),
+      metadata,
+      idempotencyKey,
+    })
+  } catch (error) {
+    const code = ['STRIPE_PRICE_MISMATCH', 'STRIPE_PRICE_UNVERIFIED', 'STRIPE_PRICE_EXPECTATION_REQUIRED'].includes(error?.code)
+      ? error.code : 'STRIPE_SESSION_ERROR'
+    return res.status(code === 'STRIPE_PRICE_MISMATCH' ? 409 : 503).json({ ok: false, error: 'checkout_unavailable', code })
+  }
 
   if (!session?.id || !session?.url) {
     return res.status(503).json({ ok: false, error: 'stripe_session_create_failed', code: 'STRIPE_SESSION_ERROR' })
@@ -251,7 +260,8 @@ router.post('/checkout/hourly', ensureAuth, async (req, res) => {
   if (!userId) return res.status(401).json({ ok: false, error: 'Authentication required' })
 
   const purchase = await req.db
-    .prepare('SELECT * FROM service_purchases WHERE id = ? LIMIT 1')
+    .prepare(`SELECT sp.*, sci.slug AS service_slug FROM service_purchases sp
+      JOIN service_catalog_items sci ON sci.id = sp.service_id WHERE sp.id = ? LIMIT 1`)
     .get(purchaseId)
   if (!purchase) return res.status(404).json({ ok: false, error: 'purchase not found' })
   if (String(purchase.user_id) !== String(userId)) return res.status(403).json({ ok: false, error: 'Not authorized' })
@@ -269,23 +279,11 @@ router.post('/checkout/hourly', ensureAuth, async (req, res) => {
   const enforcedRounded = roundBillableMinutes(totalRoundedMinutes, { minimumMinutes: 15, incrementMinutes: 6 })
   const units = Math.ceil(enforcedRounded / 6)
 
-  // Price row for hourly is stored as per-6-min unit
-  const priceRow = await req.db
-    .prepare(
-      `
-        SELECT stripe_price_id, amount_cents
-        FROM service_prices
-        WHERE service_id = ?
-          AND client_category = ?
-          AND COALESCE(milestone_phase, '') = ''
-          AND active = 1
-        LIMIT 1
-      `,
-    )
-    .get(String(purchase.service_id), String(purchase.client_category))
-
-  if (!priceRow?.stripe_price_id) {
-    return res.status(409).json({ ok: false, error: 'stripe_price_not_mapped', code: 'STRIPE_PRICE_MISSING' })
+  // The resolver validates the hourly six-minute unit against approved catalog math.
+  const charge = await resolveChargeForQuote({ db: req.db, serviceKey: purchase.service_slug,
+    clientCategory: purchase.client_category, userId: String(userId), profileId: purchase.profile_id || null })
+  if (!charge.can_checkout) {
+    return res.status(409).json({ ok: false, error: 'checkout_blocked', code: charge.blocking_reason, charge_resolution: charge })
   }
 
   // Deduplication: check for an existing pending invoice for this purchase to prevent duplicates.
@@ -297,7 +295,7 @@ router.post('/checkout/hourly', ensureAuth, async (req, res) => {
   }
 
   const invoiceId = crypto.randomUUID()
-  const amountCents = Number(priceRow.amount_cents) * units
+  const amountCents = charge.final_amount_cents * units
   await req.db.prepare(
     `
       INSERT INTO hourly_invoices (
@@ -314,13 +312,16 @@ router.post('/checkout/hourly', ensureAuth, async (req, res) => {
     name: req.user?.full_name || null,
   })
   if (!customer?.ok) {
+    await req.db.prepare('UPDATE hourly_invoices SET status = ? WHERE id = ?').run('failed', invoiceId)
     return res.status(503).json({ ok: false, error: 'stripe_customer_unavailable', code: 'STRIPE_NOT_CONFIGURED' })
   }
 
   let session
   try {
     session = await createCheckoutSessionForPrice({
-      priceId: String(priceRow.stripe_price_id),
+      priceId: String(charge.stripe_price_id),
+      expectedUnitAmountCents: charge.final_amount_cents,
+      expectedCurrency: charge.currency,
       quantity: units,
       customerId: String(customer.stripe_customer_id),
       successUrl: buildSuccessUrl(purchaseId),
@@ -329,25 +330,28 @@ router.post('/checkout/hourly', ensureAuth, async (req, res) => {
         kind: 'hourly_invoice',
         purchase_id: String(purchaseId),
         hourly_invoice_id: String(invoiceId),
+        service_slug: charge.service_slug,
         units: String(units),
         client_category: String(purchase.client_category),
         pricing_model: 'hourly',
         catalog_version: PRICING_CATALOG_VERSION,
-        unit_amount_cents: String(Number(priceRow.amount_cents)),
+        unit_amount_cents: String(charge.final_amount_cents),
         final_amount_cents: String(amountCents),
       },
       idempotencyKey: `hourly:${purchaseId}:${invoiceId}`,
     })
   } catch (stripeErr) {
     await req.db
-      .prepare('UPDATE hourly_invoices SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?')
+      .prepare('UPDATE hourly_invoices SET status = ? WHERE id = ?')
       .run('failed', invoiceId)
-    return res.status(503).json({ ok: false, error: 'stripe_session_create_failed', code: 'STRIPE_SESSION_ERROR' })
+    const code = ['STRIPE_PRICE_MISMATCH', 'STRIPE_PRICE_UNVERIFIED', 'STRIPE_PRICE_EXPECTATION_REQUIRED'].includes(stripeErr?.code)
+      ? stripeErr.code : 'STRIPE_SESSION_ERROR'
+    return res.status(code === 'STRIPE_PRICE_MISMATCH' ? 409 : 503).json({ ok: false, error: 'checkout_unavailable', code })
   }
 
   if (!session?.id || !session?.url) {
     await req.db
-      .prepare('UPDATE hourly_invoices SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?')
+      .prepare('UPDATE hourly_invoices SET status = ? WHERE id = ?')
       .run('failed', invoiceId)
     return res.status(503).json({ ok: false, error: 'stripe_session_create_failed', code: 'STRIPE_SESSION_ERROR' })
   }
@@ -378,4 +382,3 @@ router.get('/admin/mapping-status', ensureAuth, ensureAdmin, async (req, res) =>
 })
 
 export default router
-
