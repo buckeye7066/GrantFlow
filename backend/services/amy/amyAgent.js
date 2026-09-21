@@ -36,6 +36,9 @@
  */
 
 import { getDb } from '../../db/index.js'
+import { randomUUID } from 'node:crypto'
+import { PROFILE_SIGNAL_VERSION } from '../../config/profileSignalVersion.js'
+import { readAmyRunCheckpoint, writeAmyRunCheckpoint, clearAmyRunCheckpoint, checkpointOptions, hasCompletedCheckpointCleanup } from './amyRunCheckpoint.js'
 import { runProfileDiscoveryLive } from '../crawlerOsService.js'
 import { createLogger } from '../../utils/logger.js'
 import { DEFAULT_MIN_SCORE, TOPICAL_EVIDENCE_STRONG_BAR } from '../../config/matchThresholds.js'
@@ -184,6 +187,9 @@ async function discoveryStampAdvanced(db, profileId, before) {
  * @returns {Promise<object>} { run_id, summary, report (handoff), combined, ... }
  */
 export async function runAmyTraining(options = {}) {
+  const checkpointEnabled = options.enableCheckpoint === true && options.dryRunDiscovery === false && options.saveReport !== false
+  let checkpointHandle = checkpointEnabled ? await readAmyRunCheckpoint(options.db || getDb()) : null
+  if (checkpointHandle) options = { ...options, ...checkpointHandle.value.options, runId: checkpointHandle.value.run_id }
   const {
     db = getDb(),
     categories = CATEGORY_IDS,
@@ -269,10 +275,16 @@ export async function runAmyTraining(options = {}) {
   } = options
 
   throwIfAmyRunAborted(signal)
-  const startedAtDate = clock()
+  const startedAtDate = checkpointHandle ? new Date(checkpointHandle.value.started_at) : clock()
   const runId = options.runId || newRunId(startedAtDate)
   const ttl = clampTtlHours(ttlHours)
   const sliderFloor = Number.isFinite(Number(floor)) ? Number(floor) : DEFAULT_MIN_SCORE
+  const persistCheckpoint = async value => {
+    throwIfAmyRunAborted(signal)
+    checkpointHandle = await writeAmyRunCheckpoint(db, checkpointHandle, value)
+    options.onCheckpointProgress?.({ run_id: runId, completed: value.members.filter(m => m.evaluation).length, planned: value.members.length })
+  }
+  options.onCheckpointProgress?.({ run_id: runId, completed: checkpointHandle?.value.members.filter(m => m.evaluation).length || 0, planned: checkpointHandle?.value.members.length ?? null })
 
   logger.info('Amy training run starting', {
     run_id: runId,
@@ -474,19 +486,20 @@ export async function runAmyTraining(options = {}) {
   // produced 7 profiles. A cohort that quietly gets smaller is the exact
   // "we stopped looking" failure the convergence metric exists to catch, so the
   // catalog absorbs the slack and the nightly total is always the target.
-  const probeScenarios = buildIntersectionScenarios(probePlan.cells, { runId })
+  const probeScenarios = checkpointHandle?.value.plan.probeScenarios ?? buildIntersectionScenarios(probePlan.cells, { runId })
+  probePlan = checkpointHandle?.value.plan.probePlan ?? probePlan
   const catalogTarget = Number(targetCount) > 0
     ? Math.max(0, Number(targetCount) - probeScenarios.length)
     : targetCount
   // amy-cohort-2: the thin catalog floor ROTATES by run/day so its six slots
   // walk every category over consecutive nights instead of replaying the same
   // six. Resolved here (not left implicit) so the report can name the offset.
-  const catalogRotation = catalogRotationForRun({
+  const catalogRotation = checkpointHandle?.value.plan.catalogRotation ?? catalogRotationForRun({
     runId,
     slots: Number(catalogTarget) > 0 ? Math.max(1, Math.min(5000, Math.trunc(Number(catalogTarget)))) : 0,
     ringLength: catalogRing(categories, categoryWeights).length,
   })
-  const catalogScenarios = generateScenarios({
+  const catalogScenarios = checkpointHandle?.value.plan.catalogScenarios ?? generateScenarios({
     runId,
     categories,
     perCategory,
@@ -494,7 +507,7 @@ export async function runAmyTraining(options = {}) {
     categoryWeights,
     catalogRotation,
   })
-  const scenarios = [...catalogScenarios, ...probeScenarios]
+  const scenarios = checkpointHandle?.value.plan.scenarios ?? [...catalogScenarios, ...probeScenarios]
   // Resolve the run's requested target once and persist the exact planned
   // member ids. The daily scoreboard must never combine profiles from several
   // runs to manufacture an "exactly 50" receipt.
@@ -513,11 +526,34 @@ export async function runAmyTraining(options = {}) {
   const crawledProfileIds = []
   const scenarioByProfile = new Map()
 
+  if (checkpointEnabled && !checkpointHandle) {
+    await persistCheckpoint({ version: 1, run_id: runId, started_at: startedAtDate.toISOString(),
+      policy_version: PROFILE_SIGNAL_VERSION, options: checkpointOptions({
+        categories, perCategory, targetCount, dryRunDiscovery, keepProfiles, ttlHours: ttl, floor: sliderFloor,
+        improve, applyTuning, applyWeights, applyCoverage, applyLearning, anyaEnabled, anyaApply, samEnabled, samApply,
+        saveReport, validationSampleSize, tuningOpts, gapLearning, gapScanLimit, adversarial, adversarialShare,
+      }),
+      plan: { scenarios, probeScenarios, probePlan, catalogScenarios, catalogRotation }, members: scenarios.map(scenario => ({ scenario_id: scenario.scenario_id, profile_id: randomUUID(), evaluation: null, crawled: false })) })
+  } else if (checkpointHandle && checkpointHandle.value.policy_version !== PROFILE_SIGNAL_VERSION) {
+    await persistCheckpoint({ ...checkpointHandle.value, policy_version: PROFILE_SIGNAL_VERSION,
+      members: checkpointHandle.value.members.map(member => ({ ...member, evaluation: null, crawled: false })) })
+  }
+
   for (const scenario of scenarios) {
     throwIfAmyRunAborted(signal)
-    let profileId = null
+    const memberIndex = scenarios.indexOf(scenario)
+    const member = checkpointHandle?.value.members[memberIndex] ?? null
+    let profileId = member?.profile_id ?? null
+    if (member?.evaluation) {
+      evaluations.push(member.evaluation)
+      createdProfileIds.push(profileId)
+      scenarioByProfile.set(profileId, scenario)
+      if (member.crawled) crawledProfileIds.push(profileId)
+      continue
+    }
     try {
       const created = await createAmyProfile(db, scenario, {
+        profileId,
         runId,
         ttlHours: ttl,
         now: clock(),
@@ -540,6 +576,8 @@ export async function runAmyTraining(options = {}) {
       evaluations.push(
         evaluateDiscovery(scenario, profileId, null, { error: `profile_create_failed: ${err?.message}`, runId }),
       )
+      // A checkpointed member must remain retryable after incomplete creation.
+      if (checkpointEnabled) throw err
       continue
     }
 
@@ -576,6 +614,11 @@ export async function runAmyTraining(options = {}) {
           crawledProfileIds.push(profileId)
         }
       } catch { /* crawled-signal rescue is best-effort, never fatal */ }
+    }
+    if (checkpointHandle) {
+      const members = checkpointHandle.value.members.slice()
+      members[memberIndex] = { ...member, evaluation: evaluations[evaluations.length - 1], crawled: crawledProfileIds.includes(profileId) }
+      await persistCheckpoint({ ...checkpointHandle.value, members })
     }
   }
 
@@ -679,6 +722,12 @@ export async function runAmyTraining(options = {}) {
       },
     },
   })
+  // Keep the planned cohort's metrics separate, but actually teach findings
+  // from recovered profiles before granting those profiles deletion receipts.
+  const teachingHandoff = orphanEvaluations.length
+    ? buildAnyaHandoff({ runId, evaluations: [...evaluations, ...orphanEvaluations] })
+    : handoff
+  const orphanApprovalQueue = buildApprovalQueue(orphanEvaluations)
 
   // ── MEASURE: cohort quality + floor sweep (always; cheap, no I/O on cohort) ──
   let currentFloor = sliderFloor
@@ -1178,8 +1227,8 @@ export async function runAmyTraining(options = {}) {
     }
     const summaryMessage = await postTeachingSummary(mesh, db, {
       runId,
-      handoff,
-      approvalQueue,
+      handoff: teachingHandoff,
+      approvalQueue: [...approvalQueue, ...orphanApprovalQueue],
       recipients,
       now: clock(),
     })
@@ -1203,18 +1252,18 @@ export async function runAmyTraining(options = {}) {
     throwIfAmyRunAborted(signal)
     try {
       if (combined.agent_mesh.teaching_complete) {
-        const findingTypes = [...new Set((handoff.findings || []).map((f) => f?.type).filter(Boolean))]
-        const actorLevers = [...new Set(approvalQueue.map((item) => item?.lever).filter(Boolean))]
+        const findingTypes = [...new Set((teachingHandoff.findings || []).map((f) => f?.type).filter(Boolean))]
+        const actorLevers = [...new Set([...approvalQueue, ...orphanApprovalQueue].map((item) => item?.lever).filter(Boolean))]
         const taught = await markProfilesTaught(db, crawledProfileIds, {
           now: clock(),
           runId,
           agents: REQUIRED_TEACHING_AGENTS,
           receipt: {
             run_id: runId,
-            findings_total: handoff.findings_total || 0,
+            findings_total: teachingHandoff.findings_total || 0,
             finding_types: findingTypes,
             actor_levers: actorLevers,
-            approval_items: approvalQueue.length,
+            approval_items: approvalQueue.length + orphanApprovalQueue.length,
             lesson_ids: combined.agent_mesh.taught.map((lesson) => lesson.id),
             notified_agents: [...new Set(combined.agent_mesh.notified.map((msg) => msg.to))],
             handoff_generated: true,
@@ -1254,6 +1303,7 @@ export async function runAmyTraining(options = {}) {
         expectedMembers: expectedCohortMembers,
         runId,
         target: requestedCohortTarget,
+        policyVersion: PROFILE_SIGNAL_VERSION,
         at: completedAtDate.toISOString(),
       })
       if (combined.flywheel_cohort?.ok === false && !combined.flywheel_cohort?.skipped) {
@@ -1375,8 +1425,9 @@ export async function runAmyTraining(options = {}) {
   // invariants; they were crawled and taught by THIS run.
   combined.adopted_orphans = {
     ...adoptedOrphans,
+    approval_queue: orphanApprovalQueue,
     // amy-cohort-7: the orphans' own summary + compact per-profile rows. They
-    // are NOT in summary / handoff / approval queue / learning / the receipt.
+    // remain outside planned-cohort metrics, but participate in mesh teaching.
     summary: summarizeEvaluations(orphanEvaluations),
     evaluations: orphanEvaluations.map((ev) => {
       const scn = scenarioByProfile.get(ev.profile_id) || null
@@ -1673,8 +1724,17 @@ export async function runAmyTraining(options = {}) {
     kept: keepProfiles,
   })
 
+  if (checkpointHandle && saveReport && !combined.report_persistence_error &&
+      combined.agent_mesh.teaching_complete && !combined.flywheel_record_error &&
+      hasCompletedCheckpointCleanup(combined, keepProfiles)) {
+    throwIfAmyRunAborted(signal)
+    await clearAmyRunCheckpoint(db, checkpointHandle)
+    checkpointHandle = null
+  }
+
   return {
     run_id: runId,
+    resume_pending: Boolean(checkpointHandle),
     summary,
     report: handoff,
     combined,
@@ -1715,6 +1775,8 @@ async function postTeachingSummary(mesh, db, { runId, handoff, approvalQueue, re
       data: {
         run_id: runId,
         findings_total: Number(handoff?.findings_total || 0),
+        findings: handoff?.findings || [],
+        actor_routes: approvalQueue,
         approval_items: Array.isArray(approvalQueue) ? approvalQueue.length : 0,
       },
       now,

@@ -60,11 +60,21 @@ export function hasRequiredTeachingReceipt(meta) {
  *
  * @returns {Promise<{ profileId: string, metadata: object, tags: string[] }>}
  */
-export async function createAmyProfile(db, scenario, { runId, ttlHours, now = new Date(), metadataExtra = null } = {}) {
+export async function createAmyProfile(db, scenario, { runId, ttlHours, now = new Date(), metadataExtra = null, profileId: assignedId = null } = {}) {
   if (!db) throw new Error('createAmyProfile: db is required')
   if (!scenario?.scenario_id) throw new Error('createAmyProfile: scenario.scenario_id is required')
 
-  const profileId = randomUUID()
+  const profileId = assignedId || randomUUID()
+  const existing = assignedId
+    ? await db.prepare('SELECT created_by, tags FROM profiles WHERE id = ?').get(profileId)
+    : null
+  if (existing) {
+    const existingTags = Array.isArray(existing.tags) ? existing.tags : safeParse(existing.tags, [])
+    if (isDesignatedProfileId(profileId) || existing.created_by !== ORIGIN_CREATED_BY ||
+        !existingTags.includes(`amy_run:${runId}`) || !existingTags.includes(`amy_scenario:${scenario.scenario_id}`)) {
+      throw new Error('Assigned profile does not belong to this Amy run and member')
+    }
+  }
   // `metadataExtra` (amy-cohort-9): additive provenance the caller wants on the
   // authoritative block — a probe's cell + cell key and the cohort target — so
   // an orphan adopted by a later run can recover the exact cell it was built
@@ -76,7 +86,7 @@ export async function createAmyProfile(db, scenario, { runId, ttlHours, now = ne
   const tags = buildAmyTags({ runId, scenarioId: scenario.scenario_id })
   const nowIso = (now instanceof Date ? now : new Date(now)).toISOString()
 
-  await db
+  if (!existing) await db
     .prepare(
       `INSERT INTO profiles (id, display_name, primary_type, status, tags, created_by, created_at, updated_at)
        VALUES (?, ?, ?, 'active', ?, ?, ?, ?)`,
@@ -224,6 +234,9 @@ export async function markProfilesTaught(
   const result = { updated: 0, ids: [] }
 
   for (const profileId of ids) {
+    // A resumed run can teach cached evaluations after its successful cleanup.
+    // Do not recreate metadata for an already-deleted synthetic member.
+    if (!await db.prepare('SELECT id FROM profiles WHERE id = ?').get(profileId)) continue
     const sec = await selectSection.get(profileId, METADATA_SECTION_KEY)
     const meta = sec?.data ? safeParse(sec.data, {}) : {}
     const learningAgents = normalizeAgentIds([

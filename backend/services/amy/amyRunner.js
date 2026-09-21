@@ -52,6 +52,7 @@ const state = {
   ok: null,
   error: null,
   summary: null,
+  progress: null,
 }
 
 /** Snapshot of the current/last run for the admin panel to poll. */
@@ -203,6 +204,7 @@ export function launchAmyRun({ db, logger = console, source = 'admin', opts = {}
   state.ok = null
   state.error = null
   state.summary = null
+  state.progress = null
 
   const promise = (async () => {
     try {
@@ -222,7 +224,9 @@ export function launchAmyRun({ db, logger = console, source = 'admin', opts = {}
         },
         (lease) => {
           state.phase = 'training'
-          return runAmyTraining({ db, runId, writeArtifact, logger, ...opts, signal: lease?.signal })
+          return runAmyTraining({ db, runId, writeArtifact, logger, ...opts, enableCheckpoint: true, signal: lease?.signal,
+            onCheckpointProgress: progress => { state.run_id = progress.run_id; state.progress = progress },
+          })
         },
       )
       if (result?.skipped) {
@@ -241,8 +245,9 @@ export function launchAmyRun({ db, logger = console, source = 'admin', opts = {}
         state.summary = { skipped: true, reason: result.reason || 'lock_held', ...holder }
         return result
       }
-      state.ok = true
-      state.phase = 'completed'
+      state.ok = result?.resume_pending !== true
+      state.phase = result?.resume_pending ? 'incomplete' : 'completed'
+      if (result?.resume_pending) state.error = 'Training progress retained; teaching, report persistence, or cleanup remains incomplete'
       state.summary = result?.summary || null
       logger?.info?.('amy.run.complete', { run_id: result?.run_id || runId, source, ...(result?.summary || {}) })
       return result

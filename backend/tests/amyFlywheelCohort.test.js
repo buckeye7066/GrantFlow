@@ -52,6 +52,16 @@ function freshDb() {
 }
 
 describe('isCleanEvaluation', () => {
+  it('replaces a resumed logical run receipt after scoring policy changes without double counting', () => {
+    const args = { dayKey: '2026-09-21', target: 1, runId: 'resumed-run', evaluations: [clean(1)], policyVersion: 'old' }
+    const first = buildCohortUpdate(null, args)
+    const next = buildCohortUpdate(first.store, { ...args, policyVersion: 'new', evaluations: [{ ...clean(1), findings: [{ type: 'new_gap' }] }] })
+    expect(next.duplicate).toBe(false)
+    expect(next.day.run_receipts).toHaveLength(1)
+    expect(next.receipt.policy_version).toBe('new')
+    expect(next.receipt.issue_profiles).toBe(1)
+    expect(buildCohortUpdate(next.store, { ...args, policyVersion: 'new' }).duplicate).toBe(true)
+  })
   it('clean = status ok AND zero findings', () => {
     expect(isCleanEvaluation(clean(1))).toBe(true)
     expect(isCleanEvaluation(gappy(1))).toBe(false)

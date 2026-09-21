@@ -196,6 +196,7 @@ export function buildRunCohortReceipt({
   evaluations = [],
   at = null,
   codeVersion = null,
+  policyVersion = null,
 } = {}) {
   const requestedTarget = boundedTarget(target)
   const expectedIdsRaw = (Array.isArray(expectedMembers) ? expectedMembers : []).map(memberId)
@@ -331,6 +332,7 @@ export function buildRunCohortReceipt({
 
   return {
     receipt_version: RECEIPT_VERSION,
+    policy_version: policyVersion,
     run_id: runId || null,
     recorded_at: at || null,
     requested_target: requestedTarget,
@@ -405,6 +407,7 @@ export function buildCohortUpdate(prev, {
   evaluations = [],
   expectedMembers = [],
   codeVersion = null,
+  policyVersion = null,
 } = {}) {
   const base = prev && typeof prev === 'object' ? prev : {}
   const days = { ...(base.days && typeof base.days === 'object' ? base.days : {}) }
@@ -412,7 +415,7 @@ export function buildCohortUpdate(prev, {
 
   // Idempotence: a runId already folded into this day is a duplicate fold —
   // return the store unchanged BEFORE any counter increments.
-  if (runId && Array.isArray(prevDay.run_receipts) && prevDay.run_receipts.some((receipt) => receipt?.run_id === runId)) {
+  if (runId && Array.isArray(prevDay.run_receipts) && prevDay.run_receipts.some((receipt) => receipt?.run_id === runId && (receipt?.policy_version ?? null) === policyVersion)) {
     const existingReceipt = prevDay.run_receipts.find((receipt) => receipt?.run_id === runId) || null
     return {
       store: {
@@ -429,11 +432,11 @@ export function buildCohortUpdate(prev, {
     }
   }
 
-  const receipt = buildRunCohortReceipt({ runId, target, expectedMembers, evaluations, at, codeVersion })
+  const receipt = buildRunCohortReceipt({ runId, target, expectedMembers, evaluations, at, codeVersion, policyVersion })
   // Only the LATEST receipt of the day keeps the per-member baselines; older
   // receipts are compacted so ten retained runs cannot multiply the store.
   const receipts = [
-    ...(Array.isArray(prevDay.run_receipts) ? prevDay.run_receipts : []).map(compactReceipt),
+    ...(Array.isArray(prevDay.run_receipts) ? prevDay.run_receipts : []).filter(item => !runId || item.run_id !== runId).map(compactReceipt),
     receipt,
   ].slice(-RUN_RECEIPT_CAP)
   const runs = receipts.map((item) => item.run_id).filter(Boolean)
@@ -569,6 +572,7 @@ export async function recordFlywheelCohort(db, {
   now = null,
   target = null,
   codeVersion = null,
+  policyVersion = null,
   send = defaultSendEmail,
 } = {}) {
   if (!db?.prepare) return { ok: false, skipped: true }
@@ -587,6 +591,7 @@ export async function recordFlywheelCohort(db, {
       evaluations,
       expectedMembers,
       codeVersion,
+      policyVersion,
     })
 
     // The RETURNED day (which the combined Amy report embeds) carries its
