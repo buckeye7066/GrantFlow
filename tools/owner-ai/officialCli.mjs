@@ -22,7 +22,16 @@ export function childEnvironment(provider, env = process.env) {
   return clean
 }
 export function subscriptionAuth(provider, raw) {
-  if (provider === 'codex') return /^Logged in using ChatGPT\s*$/i.test(raw.trim())
+  if (provider === 'codex') {
+    if (typeof raw !== 'string') return false
+    const lines = raw.trim().split(/\r?\n/)
+    // Native login status uses stderr, as do these nonfatal bootstrap warnings.
+    // Discard only the known leading housekeeping messages, never arbitrary
+    // diagnostics or a second authentication status. runChild still requires 0.
+    const housekeeping = /^WARNING: (?:failed to clean up stale arg0 temp dirs: |proceeding, even though we could not create PATH aliases: ).+$/
+    while (lines.length > 1 && housekeeping.test(lines[0])) lines.shift()
+    return lines.length === 1 && /^Logged in using ChatGPT\s*$/i.test(lines[0])
+  }
   if (provider !== 'claude') return false
   try {
     const s = JSON.parse(raw)

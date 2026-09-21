@@ -2,7 +2,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { EventEmitter } from 'node:events'
 import { PassThrough } from 'node:stream'
-import { cliArguments, parseResult, probeProvider, runChild, executeJob } from '../../tools/owner-ai/officialCli.mjs'
+import { cliArguments, parseResult, probeProvider, runChild, executeJob, subscriptionAuth } from '../../tools/owner-ai/officialCli.mjs'
 import { isCanonicalOwner, runWithOwnerAiScope } from '../../backend/services/ownerAi/ownerAiScope.js'
 import { createOwnerAiBroker } from '../../backend/services/ownerAi/ownerAiBroker.js'
 
@@ -46,6 +46,20 @@ test('native ChatGPT auth can arrive on stderr only with explicit metadata captu
   const run = (exe, args, options) => args.includes('status') ? runChild(exe, args, { ...options, spawnImpl }) : Promise.resolve(args.includes('--help') ? help : features)
   assert.equal(await probeProvider('codex', { env, run }), 'ready')
   assert.equal(await runChild('codex.exe', [], { spawnImpl }), '')
+})
+
+test('Codex recognizes ChatGPT status after known nonfatal launcher housekeeping warnings', async () => {
+  const warnings = 'WARNING: failed to clean up stale arg0 temp dirs: Access is denied. (os error 5)\n' +
+    'WARNING: proceeding, even though we could not create PATH aliases: Access is denied. (os error 5) at path "C:/Local/GrantFlow/subscriptions/codex/tmp/arg0/example"\n'
+  const auth = warnings + 'Logged in using ChatGPT\n'
+  assert.equal(subscriptionAuth('codex', auth), true)
+  assert.equal(await probeProvider('codex', { env, run: async (exe, args) => args.includes('--help') ? help : args.includes('features') ? features : auth }), 'ready')
+  for (const raw of [warnings, warnings + 'Logged in using an API key', warnings + 'Not logged in',
+    'WARNING: unknown authentication failure\nLogged in using ChatGPT',
+    'Logged in using an API key\nLogged in using ChatGPT',
+    auth + 'Logged in using ChatGPT', auth + 'unexpected']) {
+    assert.equal(subscriptionAuth('codex', raw), false, raw)
+  }
 })
 
 test('Codex probe fails closed for each missing safety flag/feature and unknown native status', async () => {
