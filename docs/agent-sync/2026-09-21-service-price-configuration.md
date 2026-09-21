@@ -8,8 +8,8 @@ The charge audit, Stripe verifier, and admin mapping-status route share the paya
 
 ## Verified in this session
 
-- Signed-in production Anya conversation for `profile-axiom-biolabs-2` completed without degradation after PR #1794. The answer matched the saved mission, $500,000 need, research areas, and identified unconfirmed eligibility rather than asserting qualification. This proves profile context and a completed answer, not which AI provider served it.
-- PR #1795 application-link grounding fix merged through the guarded script and Railway deployment succeeded. A fresh discovery job `be6768e4-8a25-443c-a113-76d7bfa1f5d6` was queued; no successful end-to-end result yet.
+- Signed-in production Anya conversation completed without degradation after PR #1794. The answer matched the selected profile and identified unconfirmed eligibility rather than asserting qualification. Profile-specific evidence remains in the private operational record. This proves profile context and a completed answer, not which AI provider served it.
+- PR #1795 application-link grounding fix merged through the guarded script and Railway deployment succeeded. A fresh discovery job started after stale-worker cleanup; no successful end-to-end result yet.
 - Live read-only Stripe audit: 14 active prices scanned, five existing GrantFlow recurring tier prices, all live mode. All 72 payable service prices lacked mappings; 12 additional milestone totals are intentionally not payable.
 - Local configuration/verifier/charge/Sam tests: 45 passed. Real PostgreSQL integration: six passed, including configuration and retry. Full service catalog/Stripe route tests: five passed. The mapping route regression first failed with 84 instead of 72, then passed. Targeted ESLint and pre-push build/checks passed.
 
@@ -17,6 +17,6 @@ The charge audit, Stripe verifier, and admin mapping-status route share the paya
 
 The new configuration script has not yet deployed or applied to production. No payment was charged. Required PR CI, live dry run, configuration, and post-configuration audit remain. Actual Stripe price validation immediately before checkout requires a separate dependency-chain review.
 
-The earlier discovery job `fb1a1fcf-67b1-4bf2-b2e2-0c02800cdd6a` failed after deployment interrupted its worker; preserve that evidence. Complete the fresh crawl before another deployment interrupts it.
+The earlier discovery job failed after deployment interrupted its worker; preserve that evidence in the private operational record. Complete the fresh crawl before another deployment interrupts it.
 
 GrantFlow is not declared production ready. Preserve the owner's full scope: profile-derived and specific-need discovery, real company funders, tiers/addons, Anya ownership/context, Amy learning and repair workflows, Sam source review, Yana leads, John drafting, Robert matching, four-point truth, canonical profile selection, and Hamilton mapping through confirmed submission. The exact-50 requirement was retired. No external grant submission was performed in this session.
