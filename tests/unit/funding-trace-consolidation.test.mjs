@@ -102,10 +102,25 @@ describe('consolidateFundingSources', () => {
   it('ranks sources by total dollars descending and builds a sample url', () => {
     const out = consolidateFundingSources([
       row({ 'Awarding Sub Agency': 'Small Office', 'Award ID': 'S1', 'Award Amount': '10000' }),
-      row({ 'Awarding Sub Agency': 'Big Office', 'Award ID': 'B1', 'Award Amount': '9000000' }),
+      row({ 'Awarding Sub Agency': 'Big Office', 'Award ID': 'B1', generated_internal_id:'CONT_AWD_B1_9700_-NONE-_-NONE-', 'Award Amount': '9000000' }),
     ])
     assert.equal(out[0].name, 'Big Office')
-    assert.equal(out[0].sample_url, 'https://www.usaspending.gov/award/B1')
+    assert.equal(out[0].sample_url, 'https://www.usaspending.gov/award/CONT_AWD_B1_9700_-NONE-_-NONE-')
+  })
+
+  it('keeps the unique identifier attached to the selected largest award', () => {
+    const out = consolidateFundingSources([
+      row({'Award Amount':100,generated_internal_id:'ASST_NON_A1_0100'}),
+      row({'Award ID':'A2','Award Amount':200,generated_internal_id:'ASST_NON_A2_0100'}),
+    ])
+    assert.equal(out[0].sample_award_id,'A2')
+    assert.equal(out[0].sample_url,'https://www.usaspending.gov/award/ASST_NON_A2_0100')
+  })
+
+  it('does not fabricate an evidence URL from a display award number', () => {
+    const out=consolidateFundingSources([row()])
+    assert.equal(out[0].sample_url,null)
+    assert.equal(isSourceAddable({...out[0],origin:'usaspending',evidence_status:'verified_award_record',recipient_name:'Acme Corporation'}),false)
   })
 
   it('skips rows with no agency at all', () => {

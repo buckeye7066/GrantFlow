@@ -447,3 +447,15 @@ test('the extractor prompt DEMANDS the eligibility / who-can-apply restrictions 
   // …and it still forbids inventing an eligibility that the page never stated.
   assert.match(captured, /never invent one/i);
 });
+
+
+test('a genuine citation cannot authorize invented eligibility text or bullets', () => {
+  const {facts,dropped}=validateEvidenceSpans({
+    eligibility_text:'Everyone worldwide is eligible.',
+    eligibility_bullets:['reside in Ohio','No income limit applies'],
+    field_provenance:{eligibility:{value:'Everyone worldwide is eligible.',evidence_snippet:'Applicants must reside in Ohio.'}},
+  },PAGE_TEXT);
+  assert.equal(facts.eligibility_text,null);
+  assert.deepEqual(facts.eligibility_bullets,['reside in Ohio']);
+  assert.ok(dropped.some(item=>item.reason==='unsupported_value'));
+});

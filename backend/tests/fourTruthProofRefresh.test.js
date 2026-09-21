@@ -125,6 +125,16 @@ describe('applicant evidence: the funder must say who may apply', () => {
     }
   })
 
+  it('marketing about the applicant class is not an eligibility statement', () => {
+    for (const [bucket,text] of [
+      ['student','Homeschool students using the app learned 1.7 years of mathematics in 13 weeks.'],
+      ['nonprofit','Nonprofits use our dashboard to collaborate and measure their impact.'],
+      ['individual','Individuals love our convenient online experience.'],
+    ]) {
+      expect(qualifies({eligibility_text:text},accepted(bucket)).passed,text).toBe(false)
+    }
+  })
+
   it('prose that names a different applicant class does not qualify an individual', () => {
     for (const text of [
       'Local Educational Agencies (LEAs) State Educational Agencies (SEAs)',

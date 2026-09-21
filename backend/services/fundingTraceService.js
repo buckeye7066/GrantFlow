@@ -207,6 +207,7 @@ async function fetchRecipientAwards(entity, { awardTypeCodes, sinceYears = 5, li
     },
     fields: [
       'Award ID',
+      'generated_internal_id',
       'Recipient Name',
       'Award Amount',
       'Awarding Agency',
@@ -233,7 +234,7 @@ async function fetchRecipientAwards(entity, { awardTypeCodes, sinceYears = 5, li
       })
       const batch = Array.isArray(data?.results) ? data.results : []
       for (const row of batch) {
-        const awardId = String(row?.['Award ID'] ?? '').trim()
+        const awardId = String(row?.generated_internal_id ?? '').trim()
         const key = awardId || JSON.stringify(row)
         if (seenAwards.has(key)) continue
         seenAwards.add(key)
@@ -289,6 +290,7 @@ export function consolidateFundingSources(awards) {
     const amount = parseAmount(row['Award Amount'])
     const year = yearOf(row['Start Date'])
     const awardId = row['Award ID'] || null
+    const uniqueAwardId = String(row.generated_internal_id ?? '').trim() || null
     // Key on parent + funder so identically-named offices under different
     // departments don't collide.
     const groupKey = `${agency}::${funder}`
@@ -302,6 +304,7 @@ export function consolidateFundingSources(awards) {
       if (amount > existing._max_amount) {
         existing._max_amount = amount
         existing.sample_award_id = awardId
+        existing.sample_unique_award_id = uniqueAwardId
       }
     } else {
       bySubAgency.set(groupKey, {
@@ -314,6 +317,7 @@ export function consolidateFundingSources(awards) {
         award_count: 1,
         latest_year: year,
         sample_award_id: awardId,
+        sample_unique_award_id: uniqueAwardId,
         _max_amount: amount,
       })
     }
@@ -322,8 +326,8 @@ export function consolidateFundingSources(awards) {
   return Array.from(bySubAgency.values())
     .map(({ _max_amount, ...src }) => ({
       ...src,
-      sample_url: src.sample_award_id
-        ? `https://www.usaspending.gov/award/${encodeURIComponent(src.sample_award_id)}`
+      sample_url: src.sample_unique_award_id
+        ? `https://www.usaspending.gov/award/${encodeURIComponent(src.sample_unique_award_id)}`
         : null,
     }))
     // Rank by total dollars received — the biggest funders first.

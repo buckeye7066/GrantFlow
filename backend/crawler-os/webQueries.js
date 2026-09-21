@@ -1,3 +1,4 @@
+import { normalizeDeclaredNeedTerms } from './declaredNeedTerms.js';
 // crawler-os/webQueries.js
 //
 // Pure: turn a funding thesis into a small set of profile-keyed web-search
@@ -352,6 +353,19 @@ export function buildWebQueryPlan(thesis = {}, opts = {}) {
     seen.set(k, s);
     list.push(entry(list === core ? 'core' : list === extra ? 'extra' : 'forced', s, meta));
   };
+
+  // A concrete request must survive taxonomy normalization: a bus is not
+  // merely transportation, and a wheelchair is not merely medical equipment.
+  // Preserve the highest-priority request; rotate the remaining requests so
+  // repeated bounded runs give each declared need an early search slot.
+  const specificNeeds = normalizeDeclaredNeedTerms(thesis.declared_need_terms)
+    .filter(term => !needs.includes(term));
+  const requestOrder = specificNeeds.length ? [specificNeeds[0], ...rotate(specificNeeds.slice(1), seed)] : [];
+  setFamily('declared_need');
+  for (const need of requestOrder) {
+    const assistance = isOrgProfile ? 'grants donations' : 'funding assistance';
+    add(core, `${need} ${assistance} for ${word} ${geo || state}`, {need});
+  }
 
   // Amy flywheel precision lane: pin the defining program families for the
   // organization classes that repeatedly came back REVIEW-only. These must be

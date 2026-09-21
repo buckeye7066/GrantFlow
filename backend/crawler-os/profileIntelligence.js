@@ -1,3 +1,4 @@
+import { normalizeDeclaredNeedTerms } from './declaredNeedTerms.js';
 // crawler-os/profileIntelligence.js
 //
 // Profile -> funding thesis. Uses the FULL profile (top-level fields, sections,
@@ -1434,6 +1435,7 @@ export function buildThesis(profile = {}) {
     profile_route: resolvedProfileRoute,
     applicant_types,
     needs,
+    declared_need_terms: normalizeDeclaredNeedTerms(Array.isArray(profile?.declared_need_terms) ? profile.declared_need_terms : declaredNeedValues(profile)),
     // TRUE when `needs` above was invented from the profile's TYPE because the
     // profile declared nothing readable. A consumer that treats a defaulted set
     // as a declaration is reading a guess as a statement of fact — which is how

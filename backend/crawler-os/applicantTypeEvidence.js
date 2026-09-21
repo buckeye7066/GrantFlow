@@ -122,7 +122,11 @@ export function applicantTypeEvidence({ opportunity, canonical, previous = null 
   }
 
   const tokens = (bucket && APPLICANT_BUCKET_TOKENS[bucket]) || []
-  const text = prose.join('\n').toLowerCase()
+  // Marketing that mentions students/nonprofits is not an applicant rule.
+  // Require an actual eligibility or assistance-recipient statement before
+  // using prose as the funder's declaration of who may apply.
+  const criterion = /\b(?:eligib\w*|qualif\w*|open to|may apply|can apply|must|available to|restricted to|limited to|only for|applicants?|recipients?)\b|\b(?:grants?|scholarships?|assistance|funding|awards?)\s+(?:are\s+|is\s+)?(?:provided|awarded|offered|available|for|to)\b/i
+  const text = prose.filter(part => criterion.test(part)).join('\n').toLowerCase()
   const hit = tokens.find((token) => tokenPattern(token).test(text))
   return hit ? { ...result, evidenced: true, via: `eligibility_prose:${hit}` } : result
 }
