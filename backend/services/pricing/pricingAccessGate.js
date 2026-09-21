@@ -476,9 +476,10 @@ export async function markPaid(db, { profileId }) {
     return { ok: false, error: 'pricing_tables_not_installed' }
   }
   return withProfileScope({ bypass: true }, async () => {
-    await db.prepare(
+    const result = await db.prepare(
       `UPDATE ${PROFILE_PRICING_TABLE} SET access_status = ?, updated_at = ? WHERE profile_id = ?`,
     ).run(ACCESS_STATUS.ACTIVE_PAID, new Date().toISOString(), profileId)
+    if (Number(result?.changes ?? result?.rowCount ?? 0) === 0) return { ok: false, error: 'no_pricing' }
     return { ok: true, access_status: ACCESS_STATUS.ACTIVE_PAID }
   })
 }

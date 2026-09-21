@@ -8,6 +8,12 @@ import {
   STATE_DIRECTORIES,
 } from '../../backend/services/crawlers/stateSupplementalDirectories.js'
 
+test('isolated runners never share the application SQLite file, while disk fixtures can opt in', () => {
+  assert.equal(buildIsolatedTestEnv({}).SQLITE_DB_PATH, ':memory:')
+  assert.equal(buildIsolatedTestEnv({ SQLITE_DB_PATH: '/private/live.sqlite' }).SQLITE_DB_PATH, ':memory:')
+  assert.equal(buildIsolatedTestEnv({}, { SQLITE_DB_PATH: '/disposable/fixture.sqlite' }).SQLITE_DB_PATH, '/disposable/fixture.sqlite')
+})
+
 test('hosted test runs cannot inherit production infrastructure, live providers, or agent schedules', () => {
   const isolated = buildIsolatedTestEnv({
     PATH: '/usr/bin',

@@ -113,8 +113,12 @@ async function resolveProfileId(db, subscription) {
 export async function applyStripePaymentFailure(db, { subscriptionId, eventCreated = null } = {}) {
   const sid = String(subscriptionId || '').trim()
   if (!db || !sid) return { ok: false, reason: 'missing_input' }
+  if (db.dialect === 'postgres' && typeof db.withTransaction === 'function') {
+    return db.withTransaction((tx) => applyStripePaymentFailure(tx, { subscriptionId, eventCreated }))
+  }
+  const lockClause = db.dialect === 'postgres' ? ' FOR UPDATE' : ''
   const account = await db.prepare(
-    'SELECT id, stripe_event_created_at FROM billing_accounts WHERE stripe_subscription_id = ? LIMIT 1',
+    `SELECT id, stripe_event_created_at FROM billing_accounts WHERE stripe_subscription_id = ? LIMIT 1${lockClause}`,
   ).get(sid)
   if (!account) return { ok: false, reason: 'unresolved_subscription' }
 
@@ -148,6 +152,9 @@ export async function applyStripeSubscription(
   { source = 'stripe_webhook', eventCreated = null } = {},
 ) {
   if (!db || !subscription) return { ok: false, reason: 'missing_input' }
+  if (db.dialect === 'postgres' && typeof db.withTransaction === 'function') {
+    return db.withTransaction((tx) => applyStripeSubscription(tx, subscription, { source, eventCreated }))
+  }
 
   const status = String(subscription.status || '').trim()
   const subscriptionId = subscription.id ? String(subscription.id) : null
@@ -165,8 +172,12 @@ export async function applyStripeSubscription(
     return { ok: false, reason: 'unresolved_profile', status }
   }
 
+  // Hold the account lock through the watermark check AND the write. Different
+  // Stripe event IDs otherwise read the same prior state and an older event
+  // can overwrite a cancellation after waiting for its UPDATE to commit.
+  const lockClause = db.dialect === 'postgres' ? ' FOR UPDATE' : ''
   const account = await db
-    .prepare('SELECT * FROM billing_accounts WHERE profile_id = ? LIMIT 1')
+    .prepare(`SELECT * FROM billing_accounts WHERE profile_id = ? LIMIT 1${lockClause}`)
     .get(profileId)
   if (!account) {
     log.error('no billing account for profile; tier NOT changed', { profileId, subscriptionId })

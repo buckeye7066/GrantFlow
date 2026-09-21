@@ -130,6 +130,27 @@ describe('POST /api/real-crawlers/specific-need', () => {
     delete process.env.WEB_DISCOVERY_ENABLED
   })
 
+  it.each(['15 passenger bus', 'DME power wheelchair', 'commercial kitchen refrigeration'])(
+    'sends the requested item "%s" to the crawler that extracts and verifies sources', async (need) => {
+      const db = new Database(':memory:')
+      try {
+        seedSchema(db)
+        const app = createApp(db, { userId: 'owner', role: 'user' })
+        const res = await request(app).post('/api/real-crawlers/specific-need')
+          .send({ profile_id: 'profile-owned', need_text: need })
+        expect(res.status).toBe(200)
+        expect(runLiveMock).toHaveBeenCalledTimes(1)
+        const crawl = runLiveMock.mock.calls[0][0]
+        expect(crawl.profileId).toBe('profile-owned')
+        expect(crawl.crawlerType).toBe('comprehensive')
+        expect(crawl.extraQueries.length).toBeGreaterThan(0)
+        expect(crawl.extraQueries[0]).toContain(need)
+        expect(crawl.extraQueries.length).toBeLessThanOrEqual(5)
+        expect(crawl.dryRun).not.toBe(true)
+      } finally { db.close() }
+    },
+  )
+
   it('acceptance 1 — "passenger van": empty catalog still yields REAL, labeled live web leads', async () => {
     searchWebMock.mockResolvedValue(VAN_WEB_HITS)
     const db = new Database(':memory:')

@@ -25,7 +25,7 @@ import {
   SURFACED_MATCHER_VERSIONS_SQL,
   qualifiesForDisplay,
 } from '../config/matchSurfacing.js'
-import { searchNeedWebLeads } from '../services/shared/liveWebSearch.js'
+import { buildNeedWebQueries, searchNeedWebLeads } from '../services/shared/liveWebSearch.js'
 import { searchItemNeeds } from '../services/itemNeedSearch.js'
 import { ingestOpportunities } from '../services/sources/ingestionService.js'
 import {
@@ -60,7 +60,11 @@ function vnextContextForRequest(req) {
 async function runProfileCrawlerOs(db, profileId, options = {}) {
   const floor = Number.isFinite(Number(options?.minScore)) ? Number(options.minScore) : undefined
   const maxResults = Number(options?.maxResults) || 200
-  const { run, persisted } = await runProfileDiscoveryLive({ db, profileId: String(profileId), floor })
+  const { run, persisted } = await runProfileDiscoveryLive({
+    db, profileId: String(profileId), floor,
+    crawlerType: options.crawlerType ?? null,
+    extraQueries: options.extraQueries ?? null,
+  })
   const results = await loadCrawlerOsProfileResults(db, profileId, maxResults)
   return {
     engine: 'crawler-os',
@@ -954,6 +958,12 @@ router.post('/specific-need', ensureAuth, async (req, res) => {
         minScore: 1,
         maxResults: 200,
         crawlerType: 'comprehensive',
+        // The item must reach the source-fetch/extraction lane as well as the
+        // display-only search leads. These add queries, never matching facts:
+        // every candidate still has to qualify against the stored profile.
+        extraQueries: buildNeedWebQueries(need_text, expandedNeed, profileContext ?? {}, {
+          variant: needVariant, maxQueries: 5,
+        }),
       }),
       remainingBudget(startTime, { reserve: CRAWL_FALLBACK_RESERVE_MS }),
     )

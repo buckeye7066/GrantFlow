@@ -820,10 +820,10 @@ async function finishPaidInvoice(db, inv, source) {
   // profile (a late payment must not resurrect it).
   let reactivated = false
   if (inv.status === 'suspended') {
-    try {
-      const res = await db.prepare(`UPDATE profiles SET status = 'active' WHERE id = ? AND COALESCE(status, '') <> 'deleted'`).run(inv.profile_id)
-      reactivated = res && typeof res.changes === 'number' ? res.changes > 0 : true
-    } catch { /* status col */ }
+    // This write is part of payment fulfillment. Let failures reach the
+    // webhook transaction so settlement and its retry receipt roll back too.
+    const res = await db.prepare(`UPDATE profiles SET status = 'active' WHERE id = ? AND COALESCE(status, '') <> 'deleted'`).run(inv.profile_id)
+    reactivated = res && typeof res.changes === 'number' ? res.changes > 0 : true
   }
   log.info('invoice paid', { invoice_id: inv.id, profile_id: inv.profile_id, source, reactivated })
   return { ok: true, invoice_id: inv.id, profile_id: inv.profile_id, reactivated }

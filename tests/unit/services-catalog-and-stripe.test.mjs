@@ -257,6 +257,7 @@ test('webhook signature verification enforced and updates purchase status to pai
         object: {
           id: checkoutRes.json.checkout_session_id,
           payment_intent: 'pi_test_123',
+          payment_status: 'paid',
           metadata: {
             kind: 'service_purchase',
             purchase_id: purchaseId,
@@ -313,4 +314,3 @@ test('webhook signature verification enforced and updates purchase status to pai
     await srv.stop()
   }
 })
-

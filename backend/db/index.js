@@ -674,10 +674,18 @@ class PostgresDb {
     const client = await this._pool.connect();
     try {
       await client.query('BEGIN');
-      const tx = new PostgresTx(client);
-      const result = await fn(tx);
-      await client.query('COMMIT');
-      return result;
+        const tx = new PostgresTx(client);
+        const result = await fn(tx);
+        const committed = await client.query('COMMIT');
+        // A caught statement error still aborts PostgreSQL's transaction.
+        // COMMIT then resolves successfully with command=ROLLBACK. Never tell
+        // callers (especially payment webhooks) that their writes persisted.
+        if (committed?.command === 'ROLLBACK') {
+          const error = new Error('PostgreSQL transaction was rolled back instead of committed');
+          error.code = 'TRANSACTION_ROLLED_BACK';
+          throw error;
+        }
+        return result;
     } catch (error) {
       try {
         await client.query('ROLLBACK');
@@ -809,4 +817,3 @@ export function getDb() {
 }
 
 export const db = getDb();
-

@@ -55,6 +55,7 @@
     "check:prepush": "npm run auth-middleware:check && npm run profile-guards:check && npm run check:profile-metadata && npm run runtime-imports:check && npm run check:env-examples && npm run check:native-platforms && npm run deployment-config:check && npm run profile-scope:check && npm run safe-sql:check && npm run scan:secrets && node scripts/guard-corruption-hotspots.mjs && npm run lint && npm run crawler-os:lint && npm run typecheck && npm run build",
     "unit": "node scripts/run-unit-tests.mjs && node scripts/run-vitest-isolated.mjs run --exclude \"backend/tests/otp*.test.js\" --exclude \"backend/tests/emailOtpTokenNoVerifier.test.js\" && node scripts/run-vitest-isolated.mjs run --no-file-parallelism backend/tests/otp backend/tests/emailOtpTokenNoVerifier",
     "test:endpoints": "node scripts/run-vitest-isolated.mjs run --config vitest.endpoints.config.js",
+    "test:stripe-postgres": "node --test tests/integration/stripe-postgres.test.mjs",
     "smoke": "node ./node_modules/playwright/cli.js test -c tests/smoke/playwright.config.mjs",
     "smoke:install": "node ./node_modules/playwright/cli.js install chromium webkit",
     "e2e": "node ./node_modules/playwright/cli.js test -c tests/e2e/playwright.config.mjs",

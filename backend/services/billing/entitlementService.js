@@ -8,16 +8,10 @@ import { decideBillingEntitlement } from './entitlementDecision.js'
 const CAPABILITIES = Object.freeze(Object.values(CAPABILITY_KEYS))
 
 /**
- * UNIVERSAL ENTITLEMENT POLICY (owner order 2026-09-07, "make these changes
- * global and permanent"; context: "is genemac on the highest tier? he should
- * be." / "(highest non-admin tier)").
- *
- * Every non-admin profile is ENTITLED to every capability of the highest
- * non-admin tier, by default, with no add-on. Until 2026-09-07 the tier used
- * for `tierAllows` was the BILLED tier, which is derived from the profile TYPE
- * (an individual derives 'individual', whose pipeline automation is off), so
- * an end user was locked out of Hamilton unless an admin hand-granted an
- * add-on per profile — the one-off prod write this constant replaces.
+ * PROMOTIONAL ENTITLEMENT TIER. Active free periods, promotions and explicit
+ * pro-bono grants receive the highest non-admin capabilities. Outside those
+ * grants, loadEntitlementAuthority uses the effective billed tier and active
+ * capability add-ons. This constant is not a permanent grant to every user.
  *
  * What this does NOT change:
  *   - what anyone is BILLED: `effectiveBilling` (net_monthly_cents, would_owe,
