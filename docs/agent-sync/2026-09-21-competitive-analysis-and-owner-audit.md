@@ -29,6 +29,8 @@ GrantFlow's existing differentiators include individual and business profiles, n
 
 ## VERIFIED
 
+- PR #1781's exact merged commit was observed on both the frontend deployment artifact and backend health response. Production read-only health, readiness and profile-schema checks passed. Authenticated `/api/auth/me` returned the restored profile type/creator fields.
+- Further owner interaction checks passed: business-profile search, pipeline text/profile filters, settings save with the original preference restored, document profile scoping, report scheduling dialog, and Hamilton's profile selector and reversible process/leave selections. No Hamilton submission was triggered.
 - Nine focused tests cover account switching without unmounting, legacy-data isolation, malformed storage, signed-out actions, calendar profile filtering, month navigation, timed end-user export, date-only deadlines, invalid dates, UTF-8 folding and content escaping.
 - Targeted ESLint passes.
 - Authenticated owner navigation audit opened 36 visible routes: Calendar, MyProfiles, Organizations, Settings, DiscoverGrants, GreenHomePrograms, SavedGrants, FundingResults, SmartMatcher, ProfileMatcher, FundingOpportunities, FundingLibrary, FoundationSearch, Funder, DataSources, SourceDirectory, NOFOParser, AIGrantScorer, Pipeline, HamiltonProcessing, Applications, Proposals, Documents, PrintableApplication, GrantDeadline, GrantMonitoring, Reports, AdvancedAnalytics, Outreach, Automation, Billing, Budgets, Diagnostics, CrawlCoverage, Admin and Help. All rendered without uncaught browser errors.
