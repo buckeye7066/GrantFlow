@@ -16,8 +16,8 @@ function makeDb() {
   db.exec(`
     CREATE TABLE system_kv (key TEXT PRIMARY KEY, value TEXT, updated_at TEXT);
     CREATE TABLE profiles (id TEXT PRIMARY KEY, display_name TEXT, status TEXT, deleted_at TEXT);
-    CREATE TABLE funding_opportunities (id TEXT PRIMARY KEY, title TEXT, source TEXT);
-    CREATE TABLE profile_opportunity_matches (id TEXT PRIMARY KEY, profile_id TEXT, opportunity_id TEXT);
+    CREATE TABLE funding_opportunities (id TEXT PRIMARY KEY, title TEXT, source TEXT, opportunity_kind TEXT, source_url TEXT, reality_status TEXT, is_active INTEGER, is_hidden INTEGER);
+    CREATE TABLE profile_opportunity_matches (id TEXT PRIMARY KEY, profile_id TEXT, opportunity_id TEXT, matcher_version TEXT, match_score REAL, match_decision TEXT, match_explain_json TEXT);
   `)
   return db
 }
@@ -33,6 +33,8 @@ function seedMatch(db, { profileId, source, oppId }) {
     .run(oppId, `opp ${oppId}`, source)
   db.prepare('INSERT INTO profile_opportunity_matches (id, profile_id, opportunity_id) VALUES (?, ?, ?)')
     .run(`m-${oppId}`, profileId, oppId)
+  db.prepare("UPDATE funding_opportunities SET opportunity_kind='DIRECTORY', source_url='https://resources.example.test/housing', reality_status='directory', is_active=1, is_hidden=0 WHERE id=?").run(oppId)
+  db.prepare("UPDATE profile_opportunity_matches SET matcher_version='crawler-os', match_score=3, match_decision='review', match_explain_json=? WHERE opportunity_id=?").run(JSON.stringify({ scoring_policy_version:'need_first_v2', matchedNeeds:['housing'], matchedSignals:['geo:county','needs'], dataPointEvidence:{total:60,matched:[{kind:'need',value:'housing',credit:1}]} }),oppId)
 }
 
 describe('sam check coverage.goldenOutcomes', () => {
@@ -93,4 +95,17 @@ describe('sam check coverage.goldenOutcomes', () => {
     expect(res.summary).toContain('Kim')
     db.close()
   })
+})
+
+it.each(['hidden','inactive','rejected','unproven','unsurfaced'])('does not count a %s stored match as verified coverage', async reason => {
+  const db=makeDb()
+  seedMatch(db,{profileId:'profile-example',source:'resource',oppId:'o1'})
+  putExpectations(db,[{profile_id:'profile-example',require_sources:['resource']}])
+  if(reason==='hidden') db.prepare('UPDATE funding_opportunities SET is_hidden=1').run()
+  if(reason==='inactive') db.prepare('UPDATE funding_opportunities SET is_active=0').run()
+  if(reason==='rejected') db.prepare("UPDATE profile_opportunity_matches SET match_decision='reject'").run()
+  if(reason==='unproven') db.prepare("UPDATE profile_opportunity_matches SET match_explain_json='{}'").run()
+  if(reason==='unsurfaced') db.prepare("UPDATE profile_opportunity_matches SET matcher_version='retired-lane'").run()
+  expect((await check.run({db})).ok).toBe(false)
+  db.close()
 })

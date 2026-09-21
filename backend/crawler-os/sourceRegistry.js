@@ -434,7 +434,7 @@ export const SOURCES = Object.freeze([
     name: 'Medicaid Home & Community-Based Services (HCBS) waivers by state',
     source_type: 'html',
     trust_tier: TRUST_TIER.OFFICIAL_HTML,
-    base_url: 'https://www.medicaid.gov/medicaid/home-community-based-services/index.html',
+    base_url: 'https://www.medicaid.gov/medicaid/home-community-based-services',
     sponsor_name: 'Centers for Medicare & Medicaid Services',
     resource_title: 'Medicaid HCBS waiver programs (state directory)',
     resource_summary: 'Official CMS index of Home and Community-Based Services waiver programs — the entry point for finding your state\'s Medicaid waiver (employment supports, community living, respite, and caregiver services).',

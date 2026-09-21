@@ -377,7 +377,11 @@ export async function auditProfileResultCoverage(db, profileId, { floor = DEFAUL
   let surfacedRows
   try {
     surfacedRows = await db
-      .prepare(buildSurfacedSql(`${baseCols}, o.application_url, o.source_url, o.evidence_url`))
+      // Keep the same catalog evidence the display/applyability predicates read.
+      // A narrow projection dropped is_hidden and structured application metadata,
+      // counting quarantined resources and misclassifying offline application routes.
+      .prepare(buildSurfacedSql(`o.*, m.match_score, m.match_decision, m.match_explain_json,
+              (UPPER(COALESCE(o.opportunity_kind,'')) IN ('DIRECTORY','PAST_AWARD_INTEL')) AS is_directory`))
       .all(profileId)
   } catch {
     try {

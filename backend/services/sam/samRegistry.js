@@ -1,3 +1,4 @@
+import { SURFACED_MATCHER_VERSIONS_SQL as allowedSurfacedMatcherVersionsSql, qualifiesForDisplay } from '../../config/matchSurfacing.js'
 import { withLatestStaleRefreshReceipt } from '../matching/staleMatchRefreshReceipt.js'
 /**
  * samRegistry.js
@@ -1775,7 +1776,7 @@ export const DIAGNOSTIC_CHECKS = Object.freeze([
     category: SAM_CATEGORIES.CRAWLER_RELIABILITY,
     kind: CHECK_KIND.INTERNAL,
     severityOnFailure: SEVERITY.HIGH,
-    description: 'Asserts every owner-verified golden profile (system_kv golden_outcome_expectations) still holds ≥1 stored match from each required source. Catches silent lane/coverage regressions on real profiles. Fails open when no expectations are recorded yet or system_kv is unavailable.',
+    description: 'Asserts every owner-verified golden profile (system_kv golden_outcome_expectations) still holds ≥1 display-qualified match from each required source, including saved pipeline results. Catches silent lane/coverage regressions on real profiles. Fails open when no expectations are recorded yet or system_kv is unavailable.',
     async run({ db } = {}) {
       if (!db?.prepare) return { ok: true, skipped: true, summary: 'golden outcomes: db unavailable' }
       let row
@@ -1813,11 +1814,12 @@ export const DIAGNOSTIC_CHECKS = Object.freeze([
           assertions += 1
           let hit = null
           try {
-            hit = await db.prepare(
-              `SELECT m.id FROM profile_opportunity_matches m
+            hit = (await db.prepare(
+              `SELECT o.*, m.match_score, m.match_decision, m.match_explain_json FROM profile_opportunity_matches m
                  JOIN funding_opportunities o ON o.id = m.opportunity_id
-                WHERE m.profile_id = ? AND o.source = ? LIMIT 1`,
-            ).get(profileId, String(source))
+                WHERE m.profile_id = ? AND o.source = ?
+                  AND m.matcher_version IN ${allowedSurfacedMatcherVersionsSql}`,
+            ).all(profileId, String(source))).find(qualifiesForDisplay)
           } catch { hit = null }
           if (!hit) missing.push(String(source))
         }
@@ -1828,7 +1830,7 @@ export const DIAGNOSTIC_CHECKS = Object.freeze([
           ok: false,
           summary: `GOLDEN OUTCOME REGRESSION: ${failures.length} verified profile(s) lost required coverage — ${failures.map((f) => `${f.profile}: missing ${f.missing.join('/')}`).join('; ')}.`,
           evidence: { failures, expectations: expectations.length },
-          recommended_fix: 'A lane/scoring/purge change removed owner-verified results. Check the named source lanes in the crawler plan for these profiles (Coverage & Evidence dashboard) and recent merges; re-run discovery for the affected profiles after fixing.',
+          recommended_fix: 'Required sources have no display-qualified match. Inspect source lanes, hidden/inactive link-verification state, and persisted matching evidence; repair or reverify the source before rerunning affected profiles. Saved pipeline membership alone is not a coverage loss.',
           confidence: 0.9,
         }
       }
