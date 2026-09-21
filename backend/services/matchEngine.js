@@ -3971,7 +3971,7 @@ function fullSections(sections, prof) {
   return typeof s === 'object' ? s : {}
 }
 
-export function makeDecision(score, profile, opportunity, normalizedProfile = null, signals = null, oppNorm = null, sections = null) {
+export function makeDecision(score, profile, opportunity, normalizedProfile = null, signals = null, oppNorm = null, sections = null, coverageEvidence = null) {
   const reasons = []
   const opp = opportunity || {}
   const prof = profile || {}
@@ -4645,7 +4645,7 @@ export function makeDecision(score, profile, opportunity, normalizedProfile = nu
   // never auto-ACCEPTs for an ORGANIZATION — org eligibility is too often
   // restricted for silence to be treated as consent. Individuals keep the
   // soft-match behavior (consumer programs rarely enumerate entity types).
-  if (score >= ACCEPT_SCORE && on.applicabilityUnknown && !isIndividualOrCaregiver) {
+  if (on.applicabilityUnknown && !isIndividualOrCaregiver) {
     reasons.push('Source does not state who may apply — needs review before ACCEPT for a non-individual profile')
     return {
       decision: 'REVIEW',
@@ -4670,7 +4670,7 @@ export function makeDecision(score, profile, opportunity, normalizedProfile = nu
   // concrete anchor in the text (isGenericOnly's carve-out) rescues rows like
   // "Cancer Resource Directory", and declared DIRECTORY locators are already
   // held at REVIEW upstream by the locator rule.
-  if (score >= ACCEPT_SCORE && isGenericOnly(oppText)) {
+  if (isGenericOnly(oppText)) {
     reasons.push('Generic funding/search listing with no concrete profile-specific anchor — held at REVIEW')
     return {
       decision: 'REVIEW',
@@ -4682,7 +4682,7 @@ export function makeDecision(score, profile, opportunity, normalizedProfile = nu
   // A condition-specific program never ACCEPTs on an UNNAMED disability — the
   // profile may still be served (general-disability case), so it stays visible
   // at REVIEW, but admission-as-a-strong-match requires the named condition.
-  if (conditionUnnamedDisability && score >= ACCEPT_SCORE) {
+  if (conditionUnnamedDisability) {
     return {
       decision: 'REVIEW',
       explanation: 'Condition-specific program: the profile declares a disability but names no matching condition — confirm the condition before pursuing.',
@@ -4692,6 +4692,17 @@ export function makeDecision(score, profile, opportunity, normalizedProfile = nu
 
   if (score >= ACCEPT_SCORE) {
     reasons.push(`Score ${score} ≥ ${ACCEPT_SCORE} — covers at least half of the profile's main needs`)
+    return { decision: 'ACCEPT', explanation: acceptExplanation(score, opp, on), reasons }
+  }
+
+  // Coverage ranks how much of the whole profile this source addresses. A
+  // concrete source can meet one evidenced need without covering unrelated
+  // traits. Admit that positive evidence only after every substantive hold
+  // above; the canonical caller still applies URL, eligibility and purpose
+  // guards below. Mined keywords and partial fragments never qualify here.
+  const substantiveNeeds = coverageEvidence?.matched?.filter(point => point.kind === 'need' && point.credit === 1) ?? []
+  if (substantiveNeeds.length > 0) {
+    reasons.push(`Direct evidence addresses ${substantiveNeeds.length} profile need(s); coverage score remains ${score}`)
     return { decision: 'ACCEPT', explanation: acceptExplanation(score, opp, on), reasons }
   }
 
@@ -5059,7 +5070,7 @@ export function computeMatchDecision(rawProfile, rawOpportunity, opts = {}) {
   }
 
   // Decision via makeDecision — pass normalizedProfile so section-derived flags are used
-  let { decision, explanation, reasons: decisionReasons } = makeDecision(finalScore, rawProfile, rawOpportunity, profileNorm, signalsForScoring ?? signals, oppNorm, sectionsForScoring)
+  let { decision, explanation, reasons: decisionReasons } = makeDecision(finalScore, rawProfile, rawOpportunity, profileNorm, signalsForScoring ?? signals, oppNorm, sectionsForScoring, match_explain?.dataPointEvidence)
 
   // A directory/referral can be useful, but it is not a direct award. Enforce
   // that distinction in the canonical engine so every caller gets the same
