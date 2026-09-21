@@ -32,6 +32,13 @@ describe('distinctiveTerms', () => {
   it('returns an empty list when the query is only generic funding words', () => {
     expect(distinctiveTerms('grants and funding assistance')).toEqual([])
   })
+
+  it('ignores source restrictions wherever they occur without changing the subject', () => {
+    expect(distinctiveTerms('SITE:grants.gov "notice of funding opportunity" filetype:pdf 2026')).toEqual(['notice', 'opportunity'])
+    expect(distinctiveTerms('Ohio robotics -site:example.org grants')).toEqual(['ohio', 'robotics'])
+    expect(distinctiveTerms('site:example.org')).toEqual([])
+    expect(distinctiveTerms('website accessibility funding')).toEqual(['website', 'accessibility'])
+  })
 })
 
 describe('coveredTerms', () => {
@@ -81,6 +88,15 @@ describe('isWeakResult — the first-word-collapse signature', () => {
 })
 
 describe('partitionByRelevance', () => {
+  it('demotes the live dictionary collapse when the query starts with a site operator', () => {
+    const query = 'site:grants.gov "notice of funding opportunity" 2026'
+    const dictionary = { url: 'https://dictionary.cambridge.org/dictionary/english/notice', title: 'NOTICE | English meaning', snippet: 'NOTICE definition: to see or become conscious of something.' }
+    const opportunity = { url: 'https://simpler.grants.gov/opportunity/example', title: 'FY 2026 Notice of Funding Opportunity', snippet: 'Applications for community health grants.' }
+    const { strong, weak } = partitionByRelevance(query, [dictionary, opportunity])
+    expect(strong).toEqual([opportunity])
+    expect(weak).toEqual([dictionary])
+  })
+
   const Q = 'Tennessee disability housing grants'
   const JUNK_A = { url: 'https://en.wikipedia.org/wiki/Tennessee', title: 'Tennessee - Wikipedia', snippet: '' }
   const JUNK_B = { url: 'https://tnvacation.com', title: '20 Best Places to Visit in Tennessee', snippet: '' }
