@@ -62,6 +62,7 @@ describe('search degradation does not prove a query-builder defect', () => {
     expect(update.student.classes).toEqual(['institution_gap', 'hyperlocal_gap'])
     expect(update.student.evidence.profiles).toBe(2)
     expect(learningSearchCoverage([healthy, healthy, degraded]).clearable_counts).toEqual({})
+    expect(learningSearchCoverage([healthy, healthy, unknown]).clearable_counts).toEqual({})
     expect(learningSearchCoverage([healthy, healthy]).clearable_counts).toEqual({ student: 2 })
   })
   it('keeps legacy evidence unknown and retains healthy recall as code work', () => {

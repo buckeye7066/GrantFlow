@@ -278,23 +278,23 @@ describe('runWebDiscoveryLane', () => {
     const first = await run(0)
     const next = await run(14)
 
-    expect(first.executed).toHaveLength(6)
-    expect(next.executed).toHaveLength(6)
+    expect(first.executed).toHaveLength(28)
+    expect(next.executed).toHaveLength(28)
     expect(first.executed.slice(0, 2)).toEqual([
       'scholarship grant funding student',
       'education grant funding student',
     ])
     expect(next.executed.slice(0, 2)).toEqual(first.executed.slice(0, 2))
     expect(next.executed.some((query) => !first.executed.includes(query))).toBe(true)
-    expect(next.res.search_provenance).toHaveLength(6)
+    expect(next.res.search_provenance).toHaveLength(28)
 
     // The real result-floor repair caller adds six archetype directives. Their
     // anchors must run without consuming every page-bound search slot.
     const directiveQueries = Array.from({ length: 6 }, (_, i) => `directive query ${i + 1}`)
     const firstWithDirectives = await run(0, directiveQueries)
     const nextWithDirectives = await run(14, directiveQueries)
-    expect(firstWithDirectives.executed).toHaveLength(6)
-    expect(nextWithDirectives.executed).toHaveLength(6)
+    expect(firstWithDirectives.executed).toHaveLength(34)
+    expect(nextWithDirectives.executed).toHaveLength(34)
     expect(nextWithDirectives.executed.slice(0, 2)).toEqual(directiveQueries.slice(0, 2))
     expect(nextWithDirectives.executed[5]).toBe(directiveQueries[2])
     expect(nextWithDirectives.executed.some((query) => !firstWithDirectives.executed.includes(query))).toBe(true)
@@ -306,7 +306,8 @@ describe('runWebDiscoveryLane', () => {
       .toBe(nextWithDirectives.res.queries_planned.length - nextWithDirectives.executed.length)
 
     const unlearned = await run(14, directiveQueries, { ...retryThesis, learned_gaps: null })
-    expect(unlearned.executed).toEqual(directiveQueries)
+    expect(unlearned.executed.slice(0, directiveQueries.length)).toEqual(directiveQueries)
+    expect(unlearned.executed).toHaveLength(34)
   })
 
   describe('seed pages (owner rule: a source found for a profile gets added)', () => {

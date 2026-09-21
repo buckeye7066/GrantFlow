@@ -33,6 +33,7 @@
 import { classifyThesisArchetype } from '../../crawler-os/archetypes.js'
 import { FINDING_TYPES } from './amyConstants.js'
 import { createLogger } from '../../utils/logger.js'
+import { discoveryGateFor } from './discoveryGate.js'
 
 const log = createLogger('services:amy:archetypeLearning')
 
@@ -55,6 +56,13 @@ export const SAFE_LEARNED_CLASSES = Object.freeze(['institution_gap', 'hyperloca
 function num(v) {
   const n = Number(v)
   return Number.isFinite(n) ? n : 0
+}
+
+function hasLearningEvidence(evaluation) {
+  const gate = discoveryGateFor(evaluation)
+  // Both observations are required: a retained stage verdict cannot replace
+  // missing search provenance, and healthy search cannot prove extraction ran.
+  return evaluation?.search_evidence?.status === 'healthy' && gate.evaluable && gate.recall_measurable
 }
 
 /**
@@ -127,7 +135,7 @@ export function buildArchetypeMetrics(evaluations = []) {
 export function buildArchetypeLearningUpdate(evaluations = [], { runId = null, at = null, minEvidence = 2 } = {}) {
   const byArchetype = {}
   for (const ev of Array.isArray(evaluations) ? evaluations : []) {
-    if (ev.search_evidence?.status !== 'healthy') continue
+    if (!hasLearningEvidence(ev)) continue
     const key = evaluationArchetype(ev)
     if (!key) continue
     const agg = byArchetype[key] || { profiles: 0, zero: 0, weak: 0, institution: 0, hyperlocal: 0 }
@@ -186,7 +194,7 @@ export function learningSearchCoverage(evaluations = []) {
   for (const ev of evaluations) {
     const key = evaluationArchetype(ev)
     if (!key) continue
-    if (ev.search_evidence?.status === 'healthy') counts[key] = (counts[key] || 0) + 1
+    if (hasLearningEvidence(ev)) counts[key] = (counts[key] || 0) + 1
     else uncertain.add(key)
   }
   return { clearable_counts: Object.fromEntries(Object.entries(counts).filter(([key]) => !uncertain.has(key))), uncertain_archetypes: [...uncertain] }

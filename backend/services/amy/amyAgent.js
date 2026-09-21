@@ -1075,6 +1075,7 @@ export async function runAmyTraining(options = {}) {
     archetype_metrics: archetypeMetrics,
     archetype_learning: {
       update: effectiveArchetypeUpdate,
+      search_coverage: searchLearningCoverage,
       applied: Boolean(archetypeLearningApplied),
       store: archetypeLearningApplied,
     },

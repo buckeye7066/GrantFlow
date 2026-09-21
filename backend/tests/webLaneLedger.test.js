@@ -71,7 +71,23 @@ const realOpp = (over = {}) => ({
 })
 
 describe('webq-1 — result.queries is what EXECUTED; the plan and the budget skips are reported apart', () => {
-  it('reports 6 executed of 28 planned under the 44-page cap, with tiers and skipped_budget', async () => {
+  it('backfills unused shares from earlier results without duplicating pages or losing ledger attribution', async () => {
+    let calls = 0;
+    const searchWeb = async () => ++calls === 1
+      ? Array.from({ length: 8 }, (_, hit) => ({ url: `https://fixture.invalid/source/${hit}`, title: `R${hit}` }))
+      : [{ url: 'https://fixture.invalid/source/0?utm_source=duplicate#top' }];
+    const res = await runWebDiscoveryLane(
+      { store: createMemoryStore(), fetcher: fakeFetcher({}), searchWeb, extractOpportunities: vi.fn() },
+      { thesis: richThesis, maxQueries: 4, resultsPerQuery: 8, maxPages: 8 },
+    );
+    expect(calls).toBe(4);
+    expect(res.pages).toBe(8);
+    expect(res.query_ledger.executed.map((entry) => entry.new_pages)).toEqual([8, 0, 0, 0]);
+    expect(res.pages_deduped).toBe(3);
+    expect(res.query_ledger.skipped_budget).toEqual([]);
+  });
+
+  it('shares the 44-page budget across all 28 planned queries instead of spending it on the first six', async () => {
     const executed = []
     const searchWeb = async (query, { count }) => {
       executed.push(query)
@@ -81,21 +97,21 @@ describe('webq-1 — result.queries is what EXECUTED; the plan and the budget sk
       { store: createMemoryStore(), fetcher: fakeFetcher({}), searchWeb, extractOpportunities: vi.fn() },
       { thesis: richThesis, runId: 'ledger-1', maxQueries: 28, resultsPerQuery: 8, maxPages: 44, seed: 0 },
     )
-    expect(executed).toHaveLength(6)
+    expect(executed).toHaveLength(28)
     expect(res.queries).toEqual(executed)
-    expect(res.queries_executed).toBe(6)
+    expect(res.queries_executed).toBe(28)
     expect(res.queries_planned).toHaveLength(28)
     expect(res.query_ledger.planned).toHaveLength(28)
     expect(res.query_ledger.planned[0]).toMatchObject({ query: expect.any(String), tier: expect.any(String), family: expect.any(String) })
-    expect(res.query_ledger.executed).toHaveLength(6)
-    expect(res.query_ledger.executed[0]).toMatchObject({ query: executed[0], tier: expect.any(String), provider: expect.any(String), status: expect.any(String), result_count: 8, new_pages: 8 })
-    expect(res.query_ledger.skipped_budget).toHaveLength(22)
-    expect(res.query_ledger.skipped_budget[0]).toMatchObject({ query: expect.any(String), tier: expect.any(String) })
+    expect(res.query_ledger.executed).toHaveLength(28)
+    expect(res.query_ledger.executed[0]).toMatchObject({ query: executed[0], tier: expect.any(String), provider: expect.any(String), status: expect.any(String), result_count: 8, new_pages: 2 })
+    expect(res.query_ledger.executed.every((entry) => entry.new_pages >= 1)).toBe(true)
+    expect(res.query_ledger.skipped_budget).toHaveLength(0)
     expect(res.stage_ledger.query_generated).toBe(28)
-    expect(res.stage_ledger.query_skipped_budget).toBe(22)
-    expect(res.stage_ledger.provider_attempted).toBe(6)
+    expect(res.stage_ledger.query_skipped_budget).toBe(0)
+    expect(res.stage_ledger.provider_attempted).toBe(28)
     // Budget: pages never exceed the cap, provider calls never exceed the plan.
-    expect(res.pages).toBeLessThanOrEqual(44)
+    expect(res.pages).toBe(44)
     expect(res.stage_ledger.provider_attempted).toBeLessThanOrEqual(28)
   })
 })

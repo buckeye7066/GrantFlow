@@ -370,6 +370,37 @@ describe('runAmyWebParityAcceptance', () => {
     expect(JSON.parse(await fs.readFile(output, 'utf8')).status).toBe('passed')
   })
 
+  it('retains learning evidence after disposable cleanup without claiming it was applied', async () => {
+    const { runtime } = makeRuntime()
+    const run = runtime.runAmyTraining
+    const learning = {
+      update: { student: { classes: ['low_results'], evidence: { profiles: 2, zero: 2 }, run_id: 'acceptance-run' } },
+      search_coverage: { clearable_counts: { student: 2 }, uncertain_archetypes: ['nonprofit'] },
+      applied: false,
+    }
+    runtime.runAmyTraining = vi.fn(async (opts) => {
+      const result = await run(opts)
+      result.combined.archetype_learning = learning
+      result.combined.archetype_metrics = { student: { profiles: 2, zero: 2, qualified: 0 } }
+      return result
+    })
+    const result = await runAmyWebParityAcceptance(options(runtime))
+    expect(result.receipt.cleanup.ok).toBe(true)
+    const receipt = JSON.parse(await fs.readFile(output, 'utf8'))
+    expect(receipt.amy.learning_handoff).toEqual({
+      recorded: true, applied: false, run_id: 'acceptance-run',
+      update: learning.update, search_coverage: learning.search_coverage,
+      metrics: { student: { profiles: 2, zero: 2, qualified: 0 } },
+    })
+    expect(runtime.runAmyTraining.mock.calls[0][0]).toMatchObject({ improve: false, applyLearning: false })
+  })
+
+  it('does not represent absent learning evidence as an observed healthy empty update', async () => {
+    const { runtime } = makeRuntime()
+    const result = await runAmyWebParityAcceptance(options(runtime))
+    expect(result.receipt.amy.learning_handoff).toEqual({ recorded: false, applied: false, run_id: 'acceptance-run', update: null, search_coverage: null, metrics: null })
+  })
+
   it.each([
     ['wrong SHA', { sha: 'b'.repeat(40), status: '' }],
     ['dirty worktree', { sha: SHA, status: ' M backend/file.js\n' }],

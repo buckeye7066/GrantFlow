@@ -442,7 +442,17 @@ function hasStructuredFosterFlag(profile) {
 const RESERVED_PROFILE_TAGS = new Set([
   'designated', 'source-safe', 'source_safe', 'source', 'safe', 'synthetic',
   'test', 'demo', 'organization', 'individual', 'profile', 'active',
+  'amy', 'amy crawler training', 'allow sam cleanup',
 ]);
+
+function isBookkeepingInterest(term) {
+  // The persistence bridge can copy tags into keyword bags and normalize
+  // underscores. Filter at the shared thesis boundary before the topic cap,
+  // without changing the stored tags Sam requires for safe cleanup.
+  const normalized = term.replace(/_/g, ' ').replace(/\s+/g, ' ').trim();
+  return RESERVED_PROFILE_TAGS.has(term) || RESERVED_PROFILE_TAGS.has(normalized)
+    || /^amy (?:run|scenario)\s*:/.test(normalized);
+}
 
 // A declared type string that is recognizably an ORGANIZATION even when no
 // exact map/synonym knows it ("Biotechnology / research organization",
@@ -1416,7 +1426,7 @@ export function buildThesis(profile = {}) {
       // marker) and 'source-safe' leaked in as interests[0] and became the
       // web-query topic ("SBIR STTR designated solicitation") — garbage in,
       // garbage searched. Generic entity words carry no topical signal either.
-      .filter((t) => !RESERVED_PROFILE_TAGS.has(t)),
+      .filter((t) => !isBookkeepingInterest(t)),
   )].slice(0, 12);
 
   return {

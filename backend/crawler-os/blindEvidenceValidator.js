@@ -31,6 +31,21 @@ export const MIN_EVIDENCE_SNIPPET_CHARS = 6;
  */
 const LOAD_BEARING_FACTS = [
   {
+    key: 'expected_decision_date',
+    isSet: (f) => f.expected_decision_date != null,
+    neutralize: (f) => { f.expected_decision_date = null; },
+  },
+  {
+    key: 'decision_review_days',
+    isSet: (f) => f.decision_review_days != null,
+    neutralize: (f) => { f.decision_review_days = null; },
+  },
+  {
+    key: 'reporting_requirements',
+    isSet: (f) => Array.isArray(f.reporting_requirements) && f.reporting_requirements.length > 0,
+    neutralize: (f) => { f.reporting_requirements = null; },
+  },
+  {
     key: 'eligibility',
     isSet: (f) => (typeof f.eligibility_text === 'string' && f.eligibility_text.trim() !== '') ||
       (Array.isArray(f.eligibility_bullets) && f.eligibility_bullets.length > 0),

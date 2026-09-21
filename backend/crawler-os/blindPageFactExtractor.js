@@ -49,7 +49,7 @@ import {
 // Version tags — these become content-addressing components for the Phase-0.2
 // page-fact cache (services/pageFactCache.js) when this module is wired in a
 // later sub-PR. Bump when the prompt or output shape changes.
-export const EXTRACTOR_VERSION = 'blind-v3';
+export const EXTRACTOR_VERSION = 'blind-v4';
 export const PROMPT_VERSION = 'blind-prompt-v5';
 export const PAGE_FACT_SCHEMA_VERSION = 2;
 
@@ -375,6 +375,11 @@ function buildFacts(rawOpp, { pageUrlCanon, linkInventory, hayNorm }) {
     addProvenance(field_provenance, 'deadline', is_rolling ? 'rolling' : deadline, ev.deadline, pageUrlCanon);
   }
   addProvenance(field_provenance, 'national', national, ev.national, pageUrlCanon);
+  // Calendar facts need the same source-span proof as scoring facts. Merely
+  // normalizing an invented date or reporting requirement does not ground it.
+  addProvenance(field_provenance, 'expected_decision_date', expected_decision_date, ev.expected_decision_date, pageUrlCanon);
+  addProvenance(field_provenance, 'decision_review_days', decision_review_days, ev.decision_review_days, pageUrlCanon);
+  addProvenance(field_provenance, 'reporting_requirements', reporting_requirements, ev.reporting_requirements, pageUrlCanon);
   if (states.length) {
     addProvenance(field_provenance, 'geography', states, ev.geography ?? ev.states, pageUrlCanon);
   }
