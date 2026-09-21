@@ -30,7 +30,6 @@ import { FARM_OCCUPATION_FLAG_KEYS, isAgricultureNaics } from '../services/eligi
 // thesis, so the declared need never produced a single query (hyperlocal-3,
 // measured on the faithful Amy intersection path 2026-09-12).
 import { CANONICAL_NEED_CATEGORIES } from '../constants/needCategories.js';
-import { BASE_TAGS as AMY_PROFILE_TAGS } from '../services/amy/amyConstants.js';
 
 const CANONICAL_NEED_IDS = new Set(CANONICAL_NEED_CATEGORIES.map((n) => n.id));
 
@@ -443,7 +442,7 @@ function hasStructuredFosterFlag(profile) {
 const RESERVED_PROFILE_TAGS = new Set([
   'designated', 'source-safe', 'source_safe', 'source', 'safe', 'synthetic',
   'test', 'demo', 'organization', 'individual', 'profile', 'active',
-  ...AMY_PROFILE_TAGS.map((tag) => tag.replace(/_/g, ' ')),
+  'amy', 'amy crawler training', 'allow sam cleanup',
 ]);
 
 function isBookkeepingInterest(term) {

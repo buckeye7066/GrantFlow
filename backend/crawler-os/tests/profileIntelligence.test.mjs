@@ -4,11 +4,12 @@ import assert from 'node:assert/strict';
 import { buildThesis } from '../profileIntelligence.js';
 import { DEFAULT_MIN_SCORE } from '../../services/matchEngine.js';
 import { SAMPLE_VFD_PROFILE, SAMPLE_STUDENT_PROFILE } from './fixtures/fakeFetch.mjs';
-import { buildAmyTags } from '../../services/amy/amyMetadata.js';
 import { buildWebQueries } from '../webQueries.js';
 
 test('Amy trace tags never become interests or web queries, including normalized keyword copies', () => {
-  const tags = buildAmyTags({ runId: 'acceptance-123', scenarioId: 'graduate_student-v1' });
+  // Captured marker shape from the failed live graduate-student run.
+  const tags = ['synthetic', 'amy', 'amy_crawler_training', 'allow_sam_cleanup',
+    'amy_run:acceptance-123', 'amy_scenario:graduate_student-v1'];
   const markers = [...tags, ...tags.map((tag) => tag.replace(/_/g, ' '))];
   for (const field of ['tags', 'keywords', 'interests', 'derived_interest_terms']) {
     const thesis = buildThesis({
