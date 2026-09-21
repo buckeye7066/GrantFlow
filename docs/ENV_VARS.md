@@ -514,7 +514,6 @@ requirements remain in `docs/ENVIRONMENT.md`.
 | `ITEM_WEB_LEAD_MIN_NEED_SCORE` | Yes | Yes | Backend/Node |
 | `JOHN_ADMIN_TOKEN` | Yes | Yes | Backend/Node |
 | `JOHN_AI_DRAFTING` | Yes | Yes | Backend/Node |
-| `JOHN_AI_MAX_RETRIES` | Yes | Yes | Backend/Node |
 | `JOHN_AI_MODEL` | Yes | Yes | Backend/Node |
 | `JOHN_AI_TIMEOUT_MS` | Yes | Yes | Backend/Node |
 | `JOHN_ALLOW_PRIMARY_MAILBOX_FALLBACK_DRAFTS` | Yes | Yes | Backend/Node |
@@ -5422,14 +5421,6 @@ requirements remain in `docs/ENVIRONMENT.md`.
   - `backend/.env.example:503` = ``
 - **Code references**:
   - `backend/services/john/johnEmailComposerAI.js:L53` (process.env)
-
-### `JOHN_AI_MAX_RETRIES`
-
-- **Templates**:
-  - `.env.example:533` = ``
-  - `backend/.env.example:504` = ``
-- **Code references**:
-  - `backend/services/john/johnEmailComposerAI.js:L66` (process.env)
 
 ### `JOHN_AI_MODEL`
 

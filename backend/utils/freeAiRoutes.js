@@ -238,6 +238,12 @@ async function invokeRoutes({
         { role: 'user', content: String(selectedPrompt ?? '') },
       ]
       const routesLeft = Math.max(1, routes.slice(index).filter(candidate => !activeFreeCooldown(state, candidate)).length)
+      const allocatedMs = Math.max(500, Math.floor(remainingMs / routesLeft))
+      const configuredMs = Number(process.env.FREE_AI_TIMEOUT_MS)
+      // The SDK must not silently apply a shorter default than this route's
+      // allotted time. An explicit operator ceiling remains authoritative.
+      const attemptTimeoutMs = Number.isFinite(configuredMs) && configuredMs > 0
+        ? Math.min(allocatedMs, Math.max(1, Math.floor(configuredMs))) : allocatedMs
       const completion = await withLLMTimeout(
         async attemptSignal => {
           const built = await (clientFactory ? clientFactory(route) : clientFor(route))
@@ -252,10 +258,10 @@ async function invokeRoutes({
             ...(jsonOnly && route.jsonSchemaMode === true && responseSchema?.type === 'object'
               ? { response_format: { type: 'json_schema', json_schema: { name: 'grounded_page_facts', strict: true, schema: responseSchema } } }
               : jsonOnly && route.jsonMode === true ? { response_format: { type: 'json_object' } } : {}),
-          }, { signal: attemptSignal, maxRetries: 0 })
+          }, { signal: attemptSignal, maxRetries: 0, timeout: attemptTimeoutMs })
         },
         {
-          timeoutMs: Math.max(500, Math.floor(remainingMs / routesLeft)),
+          timeoutMs: attemptTimeoutMs,
           label: `Free AI route ${route.id}`,
           signal,
         },

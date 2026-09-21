@@ -1,4 +1,4 @@
-import { wrapOwnerSdkClient } from '../../utils/ownerSdkRouting.js'
+import { invokeJsonWithFallback } from '../../utils/aiProviders.js'
 /**
  * John — AI email composer.
  *
@@ -50,23 +50,8 @@ function aiModel(config) {
   )
 }
 
-export function aiComposerEnabled(config = getJohnConfig()) {
-  if (String(process.env.JOHN_AI_DRAFTING || '').toLowerCase() === 'off') return false
-  return !!String(process.env.ANTHROPIC_API_KEY || '').trim()
-}
-
-let cachedClient = null
-async function getClient() {
-  if (cachedClient) return cachedClient
-  const key = String(process.env.ANTHROPIC_API_KEY || '').trim()
-  if (!key) return null
-  const Anthropic = (await import('@anthropic-ai/sdk')).default
-  cachedClient = wrapOwnerSdkClient(new Anthropic({
-    apiKey: key,
-    timeout: Number(process.env.JOHN_AI_TIMEOUT_MS || 25_000),
-    maxRetries: Number(process.env.JOHN_AI_MAX_RETRIES || 1),
-  }), 'anthropic')
-  return cachedClient
+export function aiComposerEnabled() {
+  return String(process.env.JOHN_AI_DRAFTING || '').toLowerCase() !== 'off'
 }
 
 /** Pull the structured, factual hooks Yana attached to the lead. */
@@ -234,14 +219,6 @@ function stripOpeningSalutation(text) {
   return raw
 }
 
-function parseJsonObject(text) {
-  if (!text) return null
-  const start = text.indexOf('{')
-  const end = text.lastIndexOf('}')
-  if (start === -1 || end === -1 || end <= start) return null
-  try { return JSON.parse(text.slice(start, end + 1)) } catch { return null }
-}
-
 /**
  * Compose a personalized email via the LLM. Returns the same shape as the
  * template composer, or { ok: false } when AI is unavailable or the output
@@ -252,8 +229,7 @@ export async function composeEmailWithAI(lead, opts = {}) {
   const interpretation = opts.interpretation || interpretLead(lead)
   const logger = opts.logger
 
-  const client = await getClient()
-  if (!client) return { ok: false, reason: 'no_api_key' }
+  if (!aiComposerEnabled()) return { ok: false, reason: 'disabled' }
 
   const facts = extractOrgFacts(lead)
   const lane = matchFundingLane(lead, extractOrgSignals(lead))
@@ -269,25 +245,19 @@ export async function composeEmailWithAI(lead, opts = {}) {
 
   const { system, user } = buildPrompt(lead, interpretation, facts, config, research.summary, lane, opts.operatorNote)
 
-  let raw
+  let response
   try {
-    const resp = await client.messages.create({
-      model: aiModel(config),
-      max_tokens: 800,
-      temperature: 0.6,
-      system,
-      messages: [{ role: 'user', content: user }],
+    response = await invokeJsonWithFallback({
+      system, prompt:user, anthropicModel:aiModel(config),
+      maxTokens:800, temperature:0.6,
+      timeoutMs:Number(process.env.JOHN_AI_TIMEOUT_MS || 25000),
     })
-    raw = (Array.isArray(resp?.content) ? resp.content : [])
-      .map((p) => (typeof p?.text === 'string' ? p.text : ''))
-      .join('\n')
-      .trim()
   } catch (err) {
-    logger?.warn?.('[John] AI composer API error', { error: err?.message })
+    logger?.warn?.('[John] AI composer gateway error', { error: err?.message })
     return { ok: false, reason: 'api_error', error: err?.message }
   }
-
-  const parsed = parseJsonObject(raw)
+  if (!response?.ok) return {ok:false,reason:'api_error'}
+  const parsed = response.json
   if (!parsed || !parsed.subject || !parsed.body) {
     return { ok: false, reason: 'unparseable_output' }
   }
@@ -330,7 +300,9 @@ export async function composeEmailWithAI(lead, opts = {}) {
     recipient_role: interpretation?.contact?.role || null,
     personalization: {
       template: 'ai_v1',
-      model: aiModel(config),
+      model: response.model,
+      provider: response.provider,
+      billing_mode: response.billing_mode,
       salutation,
       ai_opening_salutation_stripped: personalizedBody !== aiBody,
       contact_name: interpretation.contact?.name || null,
