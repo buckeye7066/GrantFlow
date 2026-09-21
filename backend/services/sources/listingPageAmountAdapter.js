@@ -78,6 +78,22 @@ const WINDOW_CHARS = 900
  */
 export const LISTING_PAGES = Object.freeze([
   Object.freeze({
+    id: 'thedream_national_scholarship',
+    matchHosts: Object.freeze(['www.thedream.us', 'thedream.us']),
+    matchPathPrefixes: Object.freeze(['/scholarships/national-scholarship']),
+    matchTitles: Object.freeze(['TheDream.US Scholarship', 'TheDream.US National Scholarship', 'National Scholarship']),
+    fetchUrl: 'https://www.thedream.us/scholarships/national-scholarship/',
+    // The FAQ compares separate awards and degree limits. Read this program's
+    // own award paragraph; the separate stipend is not the scholarship ceiling.
+    anchorTitles: Object.freeze(['National Scholarship Award']),
+  }),
+  Object.freeze({
+    id: 'cscc_public_scholarship_index',
+    matchHosts: Object.freeze(['www.clevelandstatecc.edu', 'clevelandstatecc.edu']),
+    matchPaths: Object.freeze(['/financial-aid/scholarships']),
+    fetchUrl: 'https://clevelandstatecc.scholarships.ngwebsolutions.com/Scholarships/Search',
+  }),
+  Object.freeze({
     id: 'uwf_aces_academicworks',
     matchHosts: Object.freeze(['uwf.academicworks.com']),
     matchPaths: Object.freeze(['/', '/opportunities', '/opportunities/9039']),
