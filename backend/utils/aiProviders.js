@@ -1,4 +1,4 @@
-import {getAcceptanceSubscription} from './acceptanceSubscriptionContext.js'
+import { ownerPaidFallbackAllowed } from '../services/ownerAi/ownerAiPolicy.js'
 import { tryOwnerSubscription } from '../services/ownerAi/ownerAiBroker.js'
 import { getOwnerAiScope } from '../services/ownerAi/ownerAiScope.js'
 import OpenAI from 'openai'
@@ -169,8 +169,6 @@ async function invokePaidLadder({
   freeRoutes = null, freeClientFactory = null, responseSchema = null, structuredInput = null, timeoutMs = null, signal: callerSignal = null,
   paidCircuitState: injectedState, excludedProviders = [],
 } = {}, jsonOnly) {
-  const acceptance = getAcceptanceSubscription()
-  if (acceptance) return acceptance.invoke({system,prompt,maxTokens,timeoutMs,signal:callerSignal,format:jsonOnly?'json':'text'})
   const ownerScope = getOwnerAiScope({ includeAborted: true })
   const signal = ownerScope
     ? AbortSignal.any([ownerScope.signal, ...(callerSignal ? [callerSignal] : [])])
@@ -181,7 +179,7 @@ async function invokePaidLadder({
   const deadline = Date.now() + budget
   const remaining = () => Math.max(0, deadline - Date.now())
   const safePrompt = typeof prompt === 'string' ? prompt : JSON.stringify(prompt ?? '')
-  const ownerMeteredDisabled = Boolean(ownerScope && process.env.OWNER_AI_ALLOW_PAID_FALLBACK !== 'true')
+  const ownerMeteredDisabled = Boolean(ownerScope && !ownerPaidFallbackAllowed())
   const configuredFreeRoutes = resolveFreeAiRoutes(freeRoutes)
   // Reserve fallback time only when the owner has an allowed fallback.
   // With metered access disabled and no free route, halving this deadline

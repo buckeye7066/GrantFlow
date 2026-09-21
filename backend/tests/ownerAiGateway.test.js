@@ -1,7 +1,8 @@
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { EventEmitter } from 'node:events'
-const bridge = vi.hoisted(() => ({ run: vi.fn() }))
+const bridge = vi.hoisted(() => ({ run: vi.fn(), anthropic: vi.fn() }))
 vi.mock('../services/ownerAi/ownerAiBroker.js', () => ({ tryOwnerSubscription: bridge.run }))
+vi.mock('@anthropic-ai/sdk', () => ({ default: class { messages = { create: bridge.anthropic } } }))
 const { invokeJsonWithFallback, invokeTextWithFallback } = await import('../utils/aiProviders.js')
 const { runWithOwnerAiScope } = await import('../services/ownerAi/ownerAiScope.js')
 let create
@@ -20,6 +21,7 @@ beforeEach(() => {
   vi.stubEnv('FREE_AI_ROUTES', '')
   vi.stubEnv('OWNER_AI_SUBSCRIPTION_TIMEOUT_MS', '10000')
   bridge.run.mockReset().mockReturnValue(null)
+  bridge.anthropic.mockReset()
   create = vi.fn(async () => ({ choices: [{ finish_reason: 'stop', message: { content: '{"answer":42}' } }], usage: {} }))
 })
 afterEach(() => { vi.useRealTimers(); vi.unstubAllEnvs() })
@@ -98,10 +100,27 @@ it('owner no-metered policy does not alter ordinary customer routing', async () 
   expect(await invokeJsonWithFallback(opts())).toMatchObject({provider:'openai',billing_mode:'paid_api'})
 })
 
-it('owner metered fallback is opt-in, not the default', async () => {
+it('owner-authorized metered fallback is enabled by default', async () => {
   vi.stubEnv('OWNER_AI_ALLOW_PAID_FALLBACK', '')
-  expect(await runWithOwnerAiScope(ownerRequest(), () => invokeJsonWithFallback(opts()))).toMatchObject({ok:false})
-  expect(create).not.toHaveBeenCalled()
+  expect(await runWithOwnerAiScope(ownerRequest(), () => invokeJsonWithFallback(opts()))).toMatchObject({provider:'openai',billing_mode:'paid_api'})
+  expect(create).toHaveBeenCalledTimes(1)
+})
+
+it('admin falls through subscription, both exhausted API accounts, then a free model in order', async () => {
+  vi.stubEnv('OWNER_AI_ALLOW_PAID_FALLBACK', '')
+  vi.stubEnv('ANTHROPIC_API_KEY', 'synthetic-exhausted-account')
+  const order = []
+  bridge.run.mockImplementation(async () => { order.push('subscription'); return null })
+  create.mockImplementation(async () => { order.push('openai'); throw Object.assign(new Error('insufficient_quota'), {status:429,code:'insufficient_quota'}) })
+  bridge.anthropic.mockImplementation(async () => { order.push('anthropic'); throw Object.assign(new Error('credit balance is too low'), {status:400}) })
+  const freeCreate = vi.fn(async () => { order.push('free'); return {choices:[{finish_reason:'stop',message:{content:'{"answer":42}'}}]} })
+  const result = await runWithOwnerAiScope(ownerRequest(), () => invokeJsonWithFallback({
+    ...opts(), timeoutMs: 10000, paidCircuitState: new Map(),
+    freeRoutes:[{id:'last-resort',model:'fixture',base_url:'https://fixture.invalid/v1'}],
+    freeClientFactory:()=>({chat:{completions:{create:freeCreate}}}),
+  }))
+  expect(order).toEqual(['subscription','openai','anthropic','free'])
+  expect(result).toMatchObject({ok:true,billing_mode:'free_or_local',fallback_reason:'paid_provider_credit_or_quota_exhausted'})
 })
 
 it.each(['json', 'text'])('an owner-only %s request can finish after half the deadline', async format => {

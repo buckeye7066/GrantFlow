@@ -207,7 +207,7 @@ test('state scholarship programs query is CORE for students (never rotated out)'
   for (const seed of [0, 3, 7, 11]) {
     const qs = buildWebQueries(NAMED_STUDENT, { year: 2026, max: 14, seed });
     assert.ok(
-      qs.includes('TN state scholarship programs'),
+      qs.includes('Tennessee state scholarship programs'),
       `state-aid query present at seed ${seed}`,
     );
   }
@@ -343,13 +343,22 @@ test('a territory student reaches territory scholarship programs without the "st
   assert.ok(!qs.includes('PR state scholarship programs'), 'no code-plus-state phrasing');
 });
 
-test('fifty-state profiles keep their existing query language (no churn)', () => {
+test('statewide searches spell out the state while local geography and territory language stay distinct', () => {
   const qs = buildWebQueries(
     { applicant_types: ['student', 'individual'], is_student: true, needs: ['education'], location: { state: 'TN', city: 'Cleveland' } },
     { year: 2026, max: 20, seed: 0 },
   );
-  assert.ok(qs.includes('TN state scholarship programs'), 'state phrasing unchanged for TN');
+  assert.ok(qs.includes('Tennessee state scholarship programs'), 'statewide query is unambiguous');
+  assert.ok(qs.some(q => q.includes('Cleveland, TN')), 'local city/state phrasing remains intact');
   assert.ok(!qs.some((q) => /programas de ayuda/.test(q)), 'no Spanish lane outside PR');
+});
+
+test('California state aid queries cannot be mistaken for Canadian scholarship searches', () => {
+  const profile = { ...STUDENT_THESIS, location: { state: 'CA', city: 'Fresno' } };
+  const queries = buildWebQueries(profile, { max: 28, seed: 0, year: 2026 });
+  assert.ok(queries.includes('California state scholarship programs'));
+  assert.ok(!queries.includes('CA state scholarship programs'));
+  assert.deepEqual(profile.location, { state: 'CA', city: 'Fresno' });
 });
 
 // September 6 report: the same rotation seed applied twice permanently skipped

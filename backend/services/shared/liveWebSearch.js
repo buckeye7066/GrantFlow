@@ -22,6 +22,7 @@
  */
 
 import { searchWeb } from './webSearchEngine.js'
+import { constrainItemExpansion } from './itemNeedExpansion.js'
 import { buildGrantsGovQueryTerms } from '../sourceRegistry.js'
 import { createLogger } from '../../utils/logger.js'
 
@@ -316,6 +317,7 @@ export async function searchLocalWebByProfile(profileContext = {}, opts = {}) {
  * @returns {string[]}
  */
 export function buildNeedWebQueries(needText, expandedNeed = null, profileContext = {}, opts = {}) {
+  expandedNeed = constrainItemExpansion(needText, expandedNeed)
   const variant = opts.variant === 'gift' ? 'gift' : 'funding'
   const maxQueries = Math.max(1, Math.min(Number(opts.maxQueries) || 5, 8))
   const need = String(needText || '').replace(/\s+/g, ' ').trim()
@@ -329,7 +331,7 @@ export function buildNeedWebQueries(needText, expandedNeed = null, profileContex
   const state = loc.state || profile.state || null
   const cityState = [city, state].filter(Boolean).join(' ')
   const countyLabel = county ? (/county/i.test(county) ? county : `${county} County`) : null
-  const locality = countyLabel || cityState || state || ''
+  const locality = countyLabel ? [countyLabel, state].filter(Boolean).join(' ') : cityState || state || ''
 
   // Applicant identity comes from both the persisted profile row and the
   // canonical derived signals. A coarse/missing primary_type must not erase a
@@ -369,10 +371,11 @@ export function buildNeedWebQueries(needText, expandedNeed = null, profileContex
   // into a search provider. This is the same structured profile vocabulary the
   // federal source planner consumes.
   let profileTerms = []
+  const identityTerms = new Set([...applicantTypes, applicantNoun])
   try {
     profileTerms = buildGrantsGovQueryTerms(profileContext, { limit: 8 })
       .map((value) => String(value || '').trim())
-      .filter((value) => value && !exactNeed.toLowerCase().includes(value.toLowerCase()))
+      .filter((value) => value && !identityTerms.has(value.toLowerCase()) && !exactNeed.toLowerCase().includes(value.toLowerCase()))
   } catch { profileTerms = [] }
 
   const queries = []
@@ -380,10 +383,14 @@ export function buildNeedWebQueries(needText, expandedNeed = null, profileContex
     const v = String(q || '').replace(/\s+/g, ' ').trim()
     if (v) queries.push(v)
   }
+  const pushProfileNeed = () => {
+    if (profileTerms[0]) push(`"${exactNeed}" "${profileTerms[0]}" ${variant === 'gift' ? 'donation' : 'grant'} ${locality}`)
+  }
 
   if (variant === 'gift') {
     push(`"${exactNeed}" donation program ${applicantNoun} ${state || ''}`)
     push(`organizations that donate "${exactNeed}" ${locality}`)
+    pushProfileNeed()
     push(`free "${exactNeed}" ${applicantNoun || 'assistance program'} ${locality}`)
     if (core.toLowerCase() !== exactNeed.toLowerCase()) {
       push(`"${core}" in-kind donation ${applicantNoun} ${state || ''}`)
@@ -391,6 +398,7 @@ export function buildNeedWebQueries(needText, expandedNeed = null, profileContex
   } else {
     push(`"${exactNeed}" grant ${applicantNoun} ${state || ''}`)
     push(`"${exactNeed}" funding assistance ${locality}`)
+    pushProfileNeed()
     push(`grant to pay for "${exactNeed}" ${applicantNoun} ${locality}`)
     if (core.toLowerCase() !== exactNeed.toLowerCase()) {
       push(`"${core}" grant ${applicantNoun} ${state || ''}`)
@@ -401,9 +409,6 @@ export function buildNeedWebQueries(needText, expandedNeed = null, profileContex
       (s) => s && String(s).toLowerCase() !== core.toLowerCase(),
     )
     if (syn) push(`"${syn}" ${applicantNoun ? `${applicantNoun} ` : ''}grant ${state || ''}`)
-  }
-  if (profileTerms[0]) {
-    push(`"${exactNeed}" "${profileTerms[0]}" ${variant === 'gift' ? 'donation' : 'grant'} ${locality}`)
   }
 
   const seen = new Set()

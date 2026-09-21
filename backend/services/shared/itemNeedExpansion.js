@@ -1,0 +1,19 @@
+// A category word modifying a concrete object does not identify that object:
+// "food processor" is equipment, not evidence of a need for food stamps.
+const REQUEST_WORDS = new Set(['grant', 'grants', 'funding', 'assistance', 'help', 'support', 'program', 'programs', 'donation', 'donations', 'cost', 'costs'])
+const CONTEXT_BOUNDARIES = new Set(['for', 'from', 'in', 'near', 'with', 'by'])
+
+export function constrainItemExpansion(itemText, expanded) {
+  if (!expanded || expanded.curatedNeedCode) return expanded
+  const key = String(expanded.matchedKey || '').toLowerCase()
+  if (!/^[a-z]+$/.test(key)) return expanded
+  const words = String(itemText || '').toLowerCase().match(/[a-z0-9]+/g) || []
+  const index = words.indexOf(key)
+  if (index < 0) return expanded
+  const trailing = words.slice(index + 1)
+  const boundary = trailing.findIndex(word => CONTEXT_BOUNDARIES.has(word))
+  const objectWords = (boundary < 0 ? trailing : trailing.slice(0, boundary))
+    .filter(word => word.length > 2 && !REQUEST_WORDS.has(word))
+  if (!objectWords.length) return expanded
+  return {...expanded, canonicalNeed:null, matchedKey:null, synonyms:[], programCategories:[]}
+}

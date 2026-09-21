@@ -1,3 +1,4 @@
+import { ownerPaidFallbackAllowed } from '../services/ownerAi/ownerAiPolicy.js'
 import { randomUUID } from 'node:crypto'
 import { getOwnerAiScope } from '../services/ownerAi/ownerAiScope.js'
 import { isTransientProviderError } from './providerFailure.js'
@@ -77,7 +78,7 @@ export function wrapOwnerSdkClient(client, provider = 'openai', { providerSpecif
           // Model inventory verifies a key; it does not perform model inference.
           if (['models.list','models.retrieve'].includes(operation)) return Reflect.apply(value, object, args)
           if (providerSpecific) {
-            if (scope && process.env.OWNER_AI_ALLOW_PAID_FALLBACK !== 'true') {
+            if (scope && !ownerPaidFallbackAllowed()) {
               return Promise.reject(Object.assign(new Error('Named provider operation unavailable under owner no-metered policy'), {code:'OWNER_NAMED_PROVIDER_UNAVAILABLE'}))
             }
             return Reflect.apply(value, object, args)

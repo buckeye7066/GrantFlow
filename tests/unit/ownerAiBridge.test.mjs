@@ -86,7 +86,8 @@ test('worker mount precedes normal identity; owner status follows canonical cont
 })
 
 
-test('owner status reports metered fallback as disabled unless explicitly opted in', () => {
-  assert.equal(createOwnerAiBroker({env}).status().metered_fallback_allowed, false)
+test('owner status reports the authorized fallback default and explicit disable', () => {
+  assert.equal(createOwnerAiBroker({env}).status().metered_fallback_allowed, true)
   assert.equal(createOwnerAiBroker({env:{...env,OWNER_AI_ALLOW_PAID_FALLBACK:'true'}}).status().metered_fallback_allowed, true)
+  assert.equal(createOwnerAiBroker({env:{...env,OWNER_AI_ALLOW_PAID_FALLBACK:'false'}}).status().metered_fallback_allowed, false)
 })
