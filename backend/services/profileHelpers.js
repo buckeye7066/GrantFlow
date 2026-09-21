@@ -143,6 +143,16 @@ export function resolveEffectiveProfileType(profile, sections = {}) {
     .map(normalizeProfileTypeCandidate)
     .filter(Boolean)
 
+  // A free-form organization description is useful context, but cannot erase
+  // a specific registered identity from onboarding. Otherwise an unrecognized
+  // label falls into free-text identity inference ("County" -> government).
+  for (const candidate of candidates) {
+    if (!isGenericProfileType(candidate)) {
+      const registered = resolveProfileType(candidate)
+      if (registered) return registered
+    }
+  }
+
   for (const candidate of candidates) {
     if (!isGenericProfileType(candidate)) {
       return resolveProfileType(candidate) ?? candidate

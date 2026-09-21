@@ -60,7 +60,8 @@
 // Federal Register comment-request notices are procedural, not new funding.
 // Specific declared needs now survive normalization; applicant evidence must
 // state recipient criteria rather than merely mention an audience in marketing.
-export const PROFILE_SIGNAL_VERSION = '2026.09.21-1'
+// Registered applicant identity outranks an unrecognized organization label.
+export const PROFILE_SIGNAL_VERSION = '2026.09.21-2'
 
 /** Repo-relative files whose content decides what the engine believes about a profile. */
 export const PROFILE_SIGNAL_DERIVATION_FILES = Object.freeze([
@@ -96,6 +97,6 @@ export const PROFILE_SIGNAL_DERIVATION_FILES = Object.freeze([
  * sha256 over the LF-normalized concatenation of the files above, pinned by
  * `scripts/pin-signal-version.mjs`. The test recomputes it.
  */
-export const PROFILE_SIGNAL_DERIVATION_HASH = '1ff3b0594a626bfa1db36a602ed3baa91d888b4af409bce59afb07410846b1e4'
+export const PROFILE_SIGNAL_DERIVATION_HASH = 'c2953d5242826c31198cca7fe2461aa6c2051db5060e52a7bdea405f874cd92b'
 
 export default { PROFILE_SIGNAL_VERSION, PROFILE_SIGNAL_DERIVATION_FILES, PROFILE_SIGNAL_DERIVATION_HASH }
