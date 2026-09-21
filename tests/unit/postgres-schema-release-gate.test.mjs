@@ -585,3 +585,13 @@ test('application-task status preflight is read-only and reports unknown persist
   assert.equal(result.unexpected.length, 1)
   assert.equal(result.wrongDialect, false)
 })
+
+test('PostgreSQL release gate requires notification storage before serving users', async () => {
+  assert.ok(REQUIRED_TABLES.includes('notifications'), 'notifications must be migrated before startup')
+  const result = await verifyPgSchema(makeSchemaDb({ missingTables: ['notifications'] }))
+  assert.ok(result.failures.includes('missing table: notifications'))
+  const invalidRead = await verifyPgSchema(makeSchemaDb({
+    columnOverrides: { 'notifications.read': { data_type: 'boolean' } },
+  }))
+  assert.ok(invalidRead.failures.some(failure => failure.includes('notifications.read is boolean')))
+})
