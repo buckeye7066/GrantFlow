@@ -4,7 +4,6 @@ import {
   ChevronDown,
   ChevronRight,
   FileText,
-  LogOut,
   Moon,
   Sparkles,
   Sun,
@@ -42,6 +41,7 @@ import MaintenanceGate from '@/components/maintenance/MaintenanceGate.jsx'
 import AdvertisementPanel from '@/components/advertisements/AdvertisementPanel.jsx'
 import ShareGrantFlowButton from '@/components/shared/ShareGrantFlowButton.jsx'
 import NotificationBell from '@/components/notifications/NotificationBell'
+import LogoutButton from '@/components/auth/LogoutButton'
 import LoginAnnouncementModal from '@/components/announcements/LoginAnnouncementModal'
 import AppBreadcrumb from '@/components/shared/AppBreadcrumb'
 import EndUserPageGuide from '@/components/guidance/EndUserPageGuide'
@@ -151,8 +151,8 @@ export default function Layout({ children }) {
 
   const user = useAuthStore((state) => state.user)
   const activeProfileId = useAuthStore((state) => state.activeProfileId)
-  const logout = useAuthStore((state) => state.logout)
   const isAuthenticated = useAuthStore((state) => state.isAuthenticated)
+  const isAccountPage = location.pathname === '/Account'
 
   const isAdmin = hasFullAdminWorkspace(user)
   const forcedWelcomeVideo = useAuthStore((state) => state.forcedWelcomeVideo)
@@ -296,14 +296,8 @@ export default function Layout({ children }) {
                   {displayEmail ? <p className="truncate text-xs text-muted-foreground">{displayEmail}</p> : null}
                 </div>
               </div>
-              <button
-                onClick={logout}
-                className="rounded-lg p-2 transition-colors hover:bg-sidebar-accent"
-                title={t('layout.logout')}
-              >
-                <LogOut className="h-4 w-4 text-muted-foreground" />
-              </button>
             </div>
+            <LogoutButton className="w-full justify-start" />
 
             <ShareGrantFlowButton />
             <LanguageSwitcher className="w-full justify-start" />
@@ -328,7 +322,7 @@ export default function Layout({ children }) {
 
         <main className="flex min-w-0 flex-1 flex-col">
           <header className="sticky top-0 z-20 flex flex-col gap-2 border-b border-border bg-background/80 px-4 py-3 backdrop-blur md:px-6">
-            <div className="flex items-center justify-between">
+            <div className="flex flex-wrap items-center justify-between gap-3">
               <div className="flex items-center gap-3 md:gap-4">
                 <SidebarTrigger className="rounded-lg p-2 transition-colors duration-200 hover:bg-muted md:hidden" />
                 <div>
@@ -336,7 +330,7 @@ export default function Layout({ children }) {
                   <p className="text-xs text-muted-foreground">{t('layout.headerSubtitle')}</p>
                 </div>
               </div>
-              <div className="flex items-center gap-2 md:gap-3">
+              <div className="flex flex-wrap items-center gap-2 md:gap-3">
                 <Button asChild variant="outline" size="sm" className="inline-flex">
                   <Link to={createPageUrl('Help')}>
                     <Sparkles className="mr-2 h-3.5 w-3.5" />
@@ -352,7 +346,7 @@ export default function Layout({ children }) {
                 >
                   {isDarkActive ? <Moon className="h-4 w-4" /> : <Sun className="h-4 w-4" />}
                 </Button>
-                <Button variant="ghost" className="flex items-center gap-2 px-2">
+                <Link to="/Account" aria-label="Open account" className="flex items-center gap-2 rounded-md px-2 py-1 hover:bg-muted focus-visible:outline focus-visible:outline-2 focus-visible:outline-ring">
                   <Avatar className="h-8 w-8">
                     <AvatarImage src={user?.avatar_url ?? ''} alt={displayName} />
                     <AvatarFallback>{initials}</AvatarFallback>
@@ -361,7 +355,7 @@ export default function Layout({ children }) {
                     <p className="text-sm font-medium text-foreground">{displayName}</p>
                     {displayEmail ? <p className="text-xs text-muted-foreground">{displayEmail}</p> : null}
                   </div>
-                </Button>
+                </Link>
               </div>
             </div>
             <div className="flex min-w-0 flex-col gap-1.5">
@@ -377,8 +371,8 @@ export default function Layout({ children }) {
               <ProBonoBanner />
               <FreePeriodNotice />
               {!onboardingBusy ? <LoginAnnouncementModal /> : null}
-              {!isAdmin ? <OnboardingSequencer endUser /> : null}
-              {shouldShowPageGuide({ isAdmin, activeProfileId }) ? <EndUserPageGuide /> : null}
+              {!isAdmin && !isAccountPage ? <OnboardingSequencer endUser /> : null}
+              {!isAccountPage && shouldShowPageGuide({ isAdmin, activeProfileId }) ? <EndUserPageGuide /> : null}
               <AdvertisementPanel key={user?.id || "guest"} />
               {children}
             </div>
@@ -388,7 +382,7 @@ export default function Layout({ children }) {
         {!isAdmin && !onboardingBusy && location.pathname !== createPageUrl('Help') ? <AnyaFloatingButton profileId={activeProfileId} /> : null}
         {isAdmin ? (
           <>
-            <OnboardingSequencer />
+            {!isAccountPage ? <OnboardingSequencer /> : null}
             <UserStepCoach />
             <AnyaMatchScoutAlerts />
             <RobertRecommendationListener />

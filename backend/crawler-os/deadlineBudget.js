@@ -1,8 +1,8 @@
 /** One caller deadline across a sequence of asynchronous discovery operations. */
-export function createDeadlineBudget({ deadlineMs = null, signal = null } = {}) {
+export function createDeadlineBudget({ deadlineMs = null, signal = null, clock = Date.now } = {}) {
   const deadline = deadlineMs !== null && deadlineMs !== undefined && Number.isFinite(Number(deadlineMs))
     ? Number(deadlineMs) : null
-  const remaining = () => deadline === null ? null : Math.max(0, deadline - Date.now())
+  const remaining = () => deadline === null ? null : Math.max(0, deadline - clock())
   const stopped = () => signal?.aborted === true || remaining() === 0
   const reason = () => signal?.aborted === true ? 'aborted' : 'time_budget_exhausted'
   const abortError = () => Object.assign(new Error(reason()), { name: 'AbortError' })

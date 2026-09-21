@@ -16,6 +16,7 @@
 // Network and clock are injected, so the whole spine runs deterministically
 // offline in tests and is driven by the host's real `fetch` in production.
 
+import { createDeadlineBudget } from './deadlineBudget.js';
 import { buildThesis } from './profileIntelligence.js';
 import { plan } from './planner.js';
 import { getSource } from './sourceRegistry.js';
@@ -48,7 +49,7 @@ export function outcomeForBenignFetchFailure(reason) {
  * stored opportunity against one or more profile theses.
  *
  * @param {{ store:object, fetcher:{fetch:Function}, env?:object, clock?:Function }} deps
- * @param {{ profile?:object, thesis?:object, matchProfiles?:object[], runId?:string, floor?:number, onlySourceIds?:string[], deadlineMs?:number|null }} [opts]
+ * @param {{ profile?:object, thesis?:object, matchProfiles?:object[], runId?:string, floor?:number, onlySourceIds?:string[], deadlineMs?:number|null, signal?:AbortSignal }} [opts]
  *   `onlySourceIds`, when given a non-empty array, narrows the planner's selection
  *   down to that intersection — used by the admin "re-crawl this one stale
  *   source" action (CrawlCoverage dashboard) so a targeted trigger never fans
@@ -68,6 +69,9 @@ export async function runDiscovery(deps, opts = {}) {
   if (!fetcher?.fetch) throw new Error('runDiscovery: deps.fetcher required');
   const env = deps.env ?? {};
   const clock = typeof deps.clock === 'function' ? deps.clock : () => Date.now();
+
+  const budget = createDeadlineBudget({ deadlineMs: opts.deadlineMs, signal: opts.signal, clock });
+  opts.signal?.throwIfAborted();
 
   const thesis = opts.thesis ?? buildThesis(opts.profile ?? {});
   const matchProfiles = (opts.matchProfiles && opts.matchProfiles.length)
@@ -193,8 +197,8 @@ export async function runDiscovery(deps, opts = {}) {
   for (const sourceId of thePlan.selected_source_ids) {
     // Cooperative time budget: planner order is already topic → stage → default,
     // so skipping the remainder under pressure keeps the highest-signal lanes.
-    // An in-flight source is never aborted mid-fetch — only sources not yet
-    // started are skipped (honest SKIPPED, not a silent drop).
+    // Bound in-flight work too, retaining completed candidates for persistence.
+    opts.signal?.throwIfAborted();
     if (Number.isFinite(opts.deadlineMs) && clock() >= opts.deadlineMs) {
       const srStartedAt = new Date(clock()).toISOString();
       const sr = {
@@ -274,8 +278,12 @@ export async function runDiscovery(deps, opts = {}) {
       }
       if (req.query) sr.queries.push(req.query);
       let resp;
-      try { resp = await fetcher.fetch(req.url, req.init); }
-      catch (e) { resp = { ok: false, status: null, error: String(e?.message ?? e), reason: 'fetch_threw' }; }
+      try { resp = await budget.run(({ signal }) => fetcher.fetch(req.url, { ...req.init, signal }), req.init?.signal); }
+      catch (e) {
+        opts.signal?.throwIfAborted();
+        if (budget.stopped()) { budgetExhausted = true; break; }
+        resp = { ok: false, status: null, error: String(e?.message ?? e), reason: 'fetch_threw' };
+      }
       sr.fetched += 1;
       sr.fetch_attempts += Number.isFinite(resp.attempts) ? resp.attempts : 1;
       sr.fetch_retries += Number.isFinite(resp.retries) ? resp.retries : 0;
@@ -334,18 +342,26 @@ export async function runDiscovery(deps, opts = {}) {
       };
 
       for (const raw of candidates) {
+        opts.signal?.throwIfAborted();
+        if (budget.stopped()) { budgetExhausted = true; break; }
         let cand = adapter.mapCandidate(raw, { thesis, source });
         if (!cand) continue;
         sr.parsed_candidates += 1;
         let candidateEvidence = evidence;
-        if (typeof adapter.enrichCandidate === 'function') {
+        if (typeof adapter.enrichCandidate === 'function' && !budget.stopped()) {
           if (candidateDetailDeadline === null) {
             candidateDetailDeadline = Math.min(clock() + 60_000, Number.isFinite(opts.deadlineMs) ? opts.deadlineMs : Infinity);
           }
+          const detailBudget = createDeadlineBudget({ deadlineMs: candidateDetailDeadline, signal: opts.signal, clock });
           const detailFetcher = { async fetch(url, init) {
             let detail;
-            try { detail = await fetcher.fetch(url, init); }
-            catch (error) { detail = { ok: false, error: String(error?.message ?? error), status: null }; }
+            try { detail = await detailBudget.run(({ signal }) => fetcher.fetch(url, { ...init, signal }), init?.signal); }
+            catch (error) {
+              opts.signal?.throwIfAborted();
+              if (detailBudget.stopped()) throw error;
+              detail = { ok: false, error: String(error?.message ?? error), status: null };
+            }
+            detailBudget.throwIfStopped();
             sr.fetched += 1;
             sr.fetch_attempts += Number.isFinite(detail.attempts) ? detail.attempts : 1;
             sr.fetch_retries += Number.isFinite(detail.retries) ? detail.retries : 0;
@@ -355,13 +371,15 @@ export async function runDiscovery(deps, opts = {}) {
             return detail;
           } };
           try {
-            const enriched = await adapter.enrichCandidate(cand, { fetcher: detailFetcher, cache: candidateDetailCache, deadlineMs: candidateDetailDeadline, clock });
+            const enriched = await detailBudget.run(({ signal }) => adapter.enrichCandidate(cand, { fetcher: detailFetcher, cache: candidateDetailCache, deadlineMs: candidateDetailDeadline, clock, signal }));
             cand = enriched.candidate;
             candidateEvidence = enriched.evidence ?? evidence;
             if (enriched.reason) {
               recordRejection(store, runId, { source_id: sourceId, reason: 'detail_evidence_unavailable', detail: enriched.reason, title: cand.title, url: cand.info_url });
             }
           } catch (error) {
+            opts.signal?.throwIfAborted();
+            if (budget.stopped()) { budgetExhausted = true; break; }
             recordRejection(store, runId, { source_id: sourceId, reason: 'detail_evidence_unavailable', detail: String(error?.message ?? error), title: cand.title, url: cand.info_url });
           }
         }
@@ -416,6 +434,7 @@ export async function runDiscovery(deps, opts = {}) {
         // Per-profile matching. The decision comes ONLY from the canonical engine.
         matchCanonicalOpportunity(opp, opp.id);
       }
+      if (budgetExhausted) break;
     }
 
     const tally = matchTallyBySource.get(sourceId) ?? null;

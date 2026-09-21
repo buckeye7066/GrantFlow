@@ -357,5 +357,94 @@ test('a deadline reached inside a multi-request source stops later requests with
   const source = result.sources.find((row) => row.source_id === 'grants_gov');
   assert.equal(source.reason, 'time_budget_exhausted');
   assert.equal(source.fetched, 1);
-  assert.ok(result.stored > 0, 'completed request evidence and opportunities must survive');
+  assert.equal(result.stored, 0, 'an expired response must not start candidate processing');
+  assert.equal(source.parsed, 0);
+});
+
+test('hanging main fetch returns earlier discoveries and never records a late response', { timeout: 1500 }, async (t) => {
+  t.mock.timers.enable({ apis: ['Date', 'setTimeout'], now: Date.now() });
+  let started;
+  const hanging = new Promise(resolve => { started = resolve; });
+  const d = deps();
+  const offline = d.fetcher;
+  let calls = 0;
+  let release;
+  let pendingSignal;
+  d.fetcher = { fetch(url, init) {
+    calls += 1;
+    if (calls === 1) return offline.fetch(url, init);
+    pendingSignal = init?.signal;
+    started();
+    return new Promise(resolve => { release = resolve; });
+  } };
+  const running = runDiscovery(d, { profile: SAMPLE_VFD_PROFILE, onlySourceIds: ['grants_gov'], deadlineMs: Date.now() + 1000 });
+  await hanging;
+  t.mock.timers.tick(1000);
+  const result = await running;
+  assert.ok(result.stored > 0);
+  assert.equal(result.sources[0].reason, 'time_budget_exhausted');
+  assert.equal(pendingSignal.aborted, true);
+  const before = JSON.stringify([...d.store._tables]);
+  release({ ok: true, body: JSON.stringify(grantsGovBody()), status: 200 });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(JSON.stringify([...d.store._tables]), before);
+  assert.equal(calls, 2);
+});
+
+test('explicit cancellation rejects even when a fetch ignores its signal', { timeout: 1500 }, async () => {
+  const controller = new AbortController();
+  const d = deps();
+  d.fetcher = { fetch() { controller.abort(new Error('owner cancelled')); return new Promise(() => {}); } };
+  await assert.rejects(runDiscovery(d, { profile: SAMPLE_VFD_PROFILE, onlySourceIds: ['grants_gov'], signal: controller.signal }), /owner cancelled/);
+});
+
+
+test('hanging award enrichment retains earlier candidates and cannot mutate the finalized receipt', { timeout: 1500 }, async (t) => {
+  t.mock.timers.enable({ apis: ['Date', 'setTimeout'], now: Date.now() });
+  const d = deps({ grantsGov: [
+    { id: 'legacy-award', title: 'Rural Community Facilities Grant', agency: 'USDA' },
+    { id: '12345', title: 'Volunteer Fire Equipment Grant', agency: 'FEMA' },
+  ] });
+  const offline = d.fetcher;
+  let started;
+  const hanging = new Promise(resolve => { started = resolve; });
+  let release;
+  let detailSignal;
+  let calls = 0;
+  d.fetcher = { fetch(url, init) {
+    calls += 1;
+    if (!url.includes('fetchOpportunity')) return offline.fetch(url, init);
+    detailSignal = init.signal;
+    started();
+    return new Promise(resolve => { release = resolve; });
+  } };
+  const running = runDiscovery(d, { profile: SAMPLE_VFD_PROFILE, onlySourceIds: ['grants_gov'], deadlineMs: Date.now() + 1000 });
+  await hanging;
+  t.mock.timers.tick(1000);
+  const result = await running;
+  assert.equal(result.stored, 1);
+  assert.equal(result.sources[0].reason, 'time_budget_exhausted');
+  assert.equal(detailSignal.aborted, true);
+  const before = JSON.stringify([...d.store._tables]);
+  release({ ok: false, status: 503 });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(JSON.stringify([...d.store._tables]), before);
+  assert.equal(calls, 2);
+});
+
+
+test('expiry between candidates retains completed candidates without starting the next one', async () => {
+  let time = 1000;
+  const d = deps();
+  d.clock = () => time;
+  const upsert = d.store.upsert.bind(d.store);
+  d.store.upsert = (table, keys, row) => {
+    const result = upsert(table, keys, row);
+    if (table === 'funding_opportunities') time = 2000;
+    return result;
+  };
+  const result = await runDiscovery(d, { profile: SAMPLE_VFD_PROFILE, onlySourceIds: ['grants_gov'], deadlineMs: 1500 });
+  assert.equal(result.stored, 1);
+  assert.equal(result.sources[0].parsed, 1);
+  assert.equal(result.sources[0].reason, 'time_budget_exhausted');
 });

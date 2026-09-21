@@ -41,3 +41,13 @@ GrantFlow's existing differentiators include individual and business profiles, n
 ## UNKNOWN / continuing verification
 
 The 36-route check establishes navigation and loading, not every underlying function. Rapid full-page navigation eventually returned three HTTP 429 responses from background `/api/anya/match-suggestions/pending` polling; no other API failures were observed in that pass. External calendar-provider imports, real payments, outgoing email, and actual grant submissions have not been performed. Deployment and the broader functional walkthrough must be verified separately; local fixtures are not production evidence.
+
+## Account access and deadline follow-up
+
+CHANGED: The header account name opens `/Account`, independently of funding-profile completion. It displays the login email, password-reset action, logout, owned billing-workspace selector, current tier, full outstanding invoice balances and available Stripe payment links. Plan comparisons and service add-ons use canonical prices. Upgrade requests persist for administrator review without changing entitlements or charging; Billing can select and apply the requested tier through its existing approval flow. Explicit service purchases enforce profile access. All unpaid invoices are returned separately from the paginated invoice history so older balances remain payable.
+
+CHANGED: Discovery reserves two minutes for persistence and bounds source/detail fetches with a shared soft deadline and cancellation signal. Expiry stops subsequent candidate work, retains earlier candidates and records partial receipts. Optional enrichment cannot consume the persistence reserve; skipped asynchronous verification has an immediate rejection handler.
+
+VERIFIED: 18 focused Account/logout/billing/service tests passed, including account switching, billing error states, upgrade review, cross-profile denial and 106 open invoices spanning the history limit. The final crawler pipeline suite passed 20 tests, including hanging fetch/detail calls, cancellation, late responses and expiry between candidates. Prior job/coverage tests passed 13 cases, including real SQLite partial-result persistence. Targeted lint, syntax and boundary checks passed before the final candidate-loop refinement; its syntax and pipeline tests passed afterward.
+
+UNKNOWN: The owner's live discovery retry `3fea8df7-ad6d-406f-9af1-8842cff5f2ac` failed with `Job time budget exhausted` before this fix. Local deterministic evidence does not establish a successful post-release production crawl. No real payments, password-reset emails or upgrade requests were submitted during verification. Desktop/mobile visual verification and the final production deployment are tracked separately.

@@ -53,8 +53,9 @@ export async function processCrawlerOsDiscoveryJob({ db, job, signal, deadlineMs
     profileId: job.profile_id,
     trigger: 'dispatcher',
     signal,
-    // Leave time to persist the receipt before the dispatcher's hard timeout.
-    deadlineMs: Number.isFinite(deadlineMs) ? deadlineMs - 5000 : null,
+    // Reserve two minutes for persistence, integrity checks and the durable receipt.
+    // Discovery cancels at this soft deadline; the worker's hard signal still wins.
+    deadlineMs: Number.isFinite(deadlineMs) ? deadlineMs - 120_000 : null,
   })
   const sources = Array.isArray(run?.sources) ? run.sources : []
   const unavailableSources = sources.filter((source) =>

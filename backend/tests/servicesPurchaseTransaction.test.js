@@ -104,6 +104,15 @@ afterEach(() => {
 })
 
 describe('POST /api/services/purchases -- async db write completion', () => {
+  it('rejects a purchase linked to an unrelated profile before creating it', async () => {
+    const db = makeAsyncSemanticsDb()
+    openDb = db
+    db._sqlite.exec('CREATE TABLE profiles (id TEXT PRIMARY KEY, organization_id TEXT, user_id TEXT); CREATE TABLE users (id TEXT PRIMARY KEY, is_admin INTEGER)')
+    await ensureServiceCatalogSchema(db)
+    const response = await request(createApp(db)).post('/api/services/purchases').send({ service_slug: 'grant-writing', client_category: 'individual', profile_id: 'unrelated-profile' })
+    expect(response.status).toBe(403)
+    expect(db._sqlite.prepare('SELECT COUNT(*) AS n FROM service_purchases').get().n).toBe(0)
+  })
   it('writes the purchase and every milestone row before responding (Postgres-async semantics)', async () => {
     const db = makeAsyncSemanticsDb()
     openDb = db

@@ -136,7 +136,8 @@ export async function persistSourceCoverage(db, { crawlerRunId, profileId, crawl
     // Every entry in run.sources was SELECTED by the planner (thePlan.selected_source_ids)
     // — that is exactly what "planned" means here.
     const planned = true
-    const queried = outcome !== CRAWLER_OUTCOME.SKIPPED
+    // A budget-limited partial source was queried even though its remainder was skipped.
+    const queried = outcome !== CRAWLER_OUTCOME.SKIPPED || Number(s.fetched) > 0 || Number(s.fetch_attempts) > 0
     const failed = FAILURE_OUTCOMES.has(outcome)
     const found = Number(s.stored ?? 0) + Number(s.existing ?? 0)
     const registrySource = getSource(s.source_id)

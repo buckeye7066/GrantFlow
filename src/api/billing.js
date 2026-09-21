@@ -13,6 +13,16 @@ export async function getBillingOverview(profileId) {
   return apiFetch(`/api/billing/me/${profileId}`)
 }
 
+export async function getBillingInvoices(profileId) {
+  return apiFetch(`/api/billing/me/${encodeURIComponent(profileId)}/invoices`)
+}
+
+export async function requestPlanChange(profileId, tierId) {
+  return apiFetch(`/api/billing/me/${encodeURIComponent(profileId)}/plan-request`, {
+    method: 'POST', body: JSON.stringify({ tier_id: tierId }),
+  })
+}
+
 /**
  * NON-ADMIN: choose when this profile is invoiced.
  *   cadence: 'weekly' (every Friday) | 'biweekly' (every other Friday)

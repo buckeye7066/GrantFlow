@@ -161,6 +161,7 @@ router.get('/me/:profileId', async (req, res) => {
         custom_monthly_cents: account.custom_monthly_cents,
         custom_hourly_cents: account.custom_hourly_cents,
         billing_cadence: normalizeCadence(accountRow.billing_cadence),
+        plan_request: account.metadata?.plan_request ?? null,
       },
       billing,
       entitlements,
@@ -177,6 +178,31 @@ async function canAccessProfile(req, profileId) {
   const accessible = await getAccessibleProfileIds(req.db, req.user)
   return accessible === null || accessible.has(String(profileId))
 }
+
+// A customer can request a reviewed plan change, never assign their own tier.
+router.post('/me/:profileId/plan-request', async (req, res) => {
+  try {
+    const profileId = String(req.params.profileId)
+    if (!(await canAccessProfile(req, profileId))) return res.status(403).json({ error: 'Not authorized' })
+    const tier = fullCatalog().tiers.find(entry => entry.id === req.body?.tier_id)
+    if (!tier) return res.status(400).json({ error: 'Choose a valid plan' })
+    const profile = await req.db.prepare('SELECT id FROM profiles WHERE id = ?').get(profileId)
+    if (!profile) return res.status(404).json({ error: 'Profile not found' })
+    const row = await ensureBillingAccount(req.db, profileId)
+    const account = mapAccountRow(row)
+    if (account.tier_id === tier.id) return res.status(409).json({ error: 'This is already your current plan' })
+    const planRequest = { tier_id: tier.id, tier_name: tier.name, requested_at: new Date().toISOString(), status: 'pending_review' }
+    const metadata = { ...account.metadata, plan_request: planRequest }
+    await req.db.prepare('UPDATE billing_accounts SET metadata = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?')
+      .run(JSON.stringify(metadata), account.id)
+    await logBillingAccountEvent(req.db, account.id, {
+      changed_by: req.ctx?.userId ?? req.user?.userId ?? req.user?.id,
+      previous_tier_id: account.tier_id, new_tier_id: account.tier_id,
+      notes: `Customer requested ${tier.name}. Pending review; no charge or tier change has occurred.`,
+    })
+    return res.json({ ok: true, plan_request: planRequest })
+  } catch (error) { return res.status(500).json(formatError(error)) }
+})
 
 // USER: read only the effective, sanitized add-ons and entitlement decisions
 // for a profile the caller can already access. Internal references, actors and
@@ -245,7 +271,16 @@ router.get('/me/:profileId/invoices', async (req, res) => {
                        gross_amount_cents, pro_bono_credit_cents, is_pro_bono, settled_reason
                   FROM billing_invoices WHERE profile_id = ? ORDER BY issued_at DESC LIMIT 100`)
       .all(profileId)
+    const balances = await req.db.prepare(`SELECT currency, SUM(amount_cents) AS amount_cents, COUNT(*) AS invoice_count
+      FROM billing_invoices WHERE profile_id = ? AND status IN ('sent', 'second_notice', 'suspended')
+        AND amount_cents > 0 AND paid_at IS NULL GROUP BY currency`).all(profileId)
+    // The recent-history page must never hide an older bill that is still due.
+    const openInvoices = await req.db.prepare(`SELECT id, period_key, amount_cents, currency, status, due_at, paid_at, stripe_payment_link
+      FROM billing_invoices WHERE profile_id = ? AND status IN ('sent', 'second_notice', 'suspended')
+        AND amount_cents > 0 AND paid_at IS NULL ORDER BY issued_at ASC`).all(profileId)
     res.json({
+      open_invoices: openInvoices,
+      balances: balances.map(row => ({ currency: row.currency, amount_cents: Number(row.amount_cents), invoice_count: Number(row.invoice_count) })),
       invoices: (rows || []).map((r) => ({
         ...r,
         is_pro_bono: Boolean(r.is_pro_bono),
@@ -706,8 +741,11 @@ router.put('/accounts/:profileId', requireAdmin, async (req, res) => {
 
     const parsedDiscountPercent = typeof discount_percent === 'string' ? Number.parseFloat(discount_percent) : discount_percent
     const sanitizedDiscountPercent = Number.isFinite(parsedDiscountPercent) ? Math.max(0, parsedDiscountPercent) : 0
-    const sanitizedMetadata =
-      metadata && typeof metadata === 'object' ? JSON.stringify(metadata) : accountRow.metadata ?? null
+    const nextMetadata = metadata && typeof metadata === 'object' ? { ...metadata } : mapAccountRow(accountRow).metadata
+    if (nextMetadata?.plan_request?.tier_id === tierId && nextMetadata.plan_request.status === 'pending_review') {
+      nextMetadata.plan_request = { ...nextMetadata.plan_request, status: 'approved', reviewed_at: new Date().toISOString() }
+    }
+    const sanitizedMetadata = nextMetadata ? JSON.stringify(nextMetadata) : null
 
     await req.db
       .prepare(

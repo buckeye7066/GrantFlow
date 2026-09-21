@@ -491,6 +491,11 @@ function BillingAccountCard({ account, tiers, onSave, saving, onGrantFree, onRev
         </div>
       </CardHeader>
       <CardContent className="space-y-6">
+        {account.metadata?.plan_request?.status === 'pending_review' && <div className="rounded-lg border border-emerald-300 bg-emerald-50 p-4 text-emerald-950">
+          <p className="font-medium">Plan change requested: {account.metadata.plan_request.tier_name}</p>
+          <p className="mt-1 text-sm">Review pricing with the customer before applying. This request has not charged them or changed their tier.</p>
+          <Button type="button" variant="outline" className="mt-3" onClick={() => setForm(prev => ({ ...prev, tier_id: account.metadata.plan_request.tier_id }))}>Select requested plan</Button>
+        </div>}
         <div className="grid gap-4 md:grid-cols-2">
           <div className="space-y-2">
             <label className="text-xs font-medium uppercase tracking-wide text-slate-500">Billing tier</label>

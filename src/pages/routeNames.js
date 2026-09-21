@@ -22,6 +22,7 @@ export const ROUTE_NAMES = new Set([
   "Reports",
   "AdvancedAnalytics",
   "Billing",
+  "Account",
   "Automation",
   "NewProject",
   "GrantDetail",
