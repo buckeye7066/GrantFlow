@@ -348,7 +348,7 @@ export function attachRequestContext() {
       // Auth bootstrap/refresh/logout must still work with a stale selection.
       const authRoute = /^\/api\/auth(?:\/|\?|$)/.test(String(req.path || req.originalUrl || ''))
       const selected = req.headers?.['x-profile-id']
-      if (!authRoute && selected != null && (req.ctx.identityResolved === true || req.ctx.isAdmin === true)) {
+      if (!authRoute && selected !== undefined && selected !== null && (req.ctx.identityResolved === true || req.ctx.isAdmin === true)) {
         if (typeof selected !== 'string' || !selected.trim()) {
           return res.status(400).json({ error: 'Invalid selected profile', code: 'INVALID_PROFILE_SELECTION' })
         }
