@@ -77,7 +77,9 @@ function classifyOutcome(payload) {
   if (reason === 'tombstoned') return 'tombstoned'
   if (reason.startsWith('duplicate:')) return 'duplicate'
   if (reason === 'source_excluded') return 'source_excluded'
-  if (reason === 'live_reject') return 'live_reject'
+  // Funding-result gates reject reference/resource records deliberately; they
+  // are not transient failures and must not occupy the retry backlog.
+  if (reason === 'live_reject' || reason.startsWith('not_a_grant:')) return 'live_reject'
   if (reason === 'below_bar' || reason === 'relevance_floor') return 'below_bar'
   return 'error'
 }
@@ -319,6 +321,14 @@ export async function runQualifiedPipelinePromotion(db, options = {}) {
   // anything; clear them so the candidate query never treats them as terminal.
   const deletedDryRun = changesOf(await db.prepare("DELETE FROM pipeline_promotion_outcomes WHERE mode = 'dry_run'").run())
   if (deletedDryRun) log.info('cleared legacy dry-run promotion outcomes', { deletedDryRun })
+
+  // Earlier versions mislabeled deliberate funding-result refusals as errors.
+  // Preserve their reason, fingerprints and attempt history, but stop treating
+  // unchanged reference records as transient work. Real errors remain retryable.
+  const repairedRejections = changesOf(await db.prepare(
+    "UPDATE pipeline_promotion_outcomes SET outcome = 'live_reject' WHERE mode = 'live' AND outcome = 'error' AND SUBSTR(reason, 1, 12) = 'not_a_grant:'",
+  ).run())
+  if (repairedRejections) log.info('repaired non-fundable promotion outcome labels', { repairedRejections })
 
   // Every phase below names itself when it fails. Prod 2026-09-05: the run
   // died three deploys running with only "current transaction is aborted" in

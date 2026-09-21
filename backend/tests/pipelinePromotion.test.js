@@ -161,6 +161,47 @@ beforeEach(() => {
 })
 
 describe('qualified pipeline promotion', () => {
+  it('records non-fundable reference records as terminal rejections, not retryable errors', async () => {
+    const db = makeDb()
+    seedProfile(db, 'real')
+    seedCandidate(db, 'real', { id: 'historical-award', kind: 'PAST_AWARD_INTEL' })
+
+    const first = await runQualifiedPipelinePromotion(db, { batch: 10, amountFollowup: false })
+    expect(grantsFor(db, 'real')).toHaveLength(0)
+    const outcome = db.prepare('SELECT outcome, reason FROM pipeline_promotion_outcomes').get()
+    expect(outcome.reason).toMatch(/^not_a_grant:/)
+    expect(outcome.outcome).toBe('live_reject')
+    expect(first.remaining).toBe(0)
+    const second = await runQualifiedPipelinePromotion(db, { batch: 10, amountFollowup: false })
+    expect(second.attempted).toBe(0)
+    db.close()
+  })
+
+  it('repairs only legacy non-fundable error receipts without repeating their admission attempt', async () => {
+    const db = makeDb()
+    seedProfile(db, 'real')
+    seedCandidate(db, 'real', { id: 'legacy-reference', kind: 'PAST_AWARD_INTEL' })
+    await runQualifiedPipelinePromotion(db, { batch: 10, amountFollowup: false })
+    db.prepare("UPDATE pipeline_promotion_outcomes SET outcome = 'error' WHERE opportunity_id = 'legacy-reference'").run()
+    for (const [id, reason] of [['real-error', 'error:transient'], ['near-prefix', 'notXaYgrant:reference']]) {
+      seedCandidate(db, 'real', { id })
+      db.prepare(`INSERT INTO pipeline_promotion_outcomes
+        (profile_id, opportunity_id, mode, outcome, reason, score, attempted_at, attempts,
+         profile_facts_hash, policy_version, opportunity_updated_at)
+        SELECT profile_id, ?, mode, 'error', ?, score, attempted_at, attempts,
+               profile_facts_hash, policy_version, opportunity_updated_at
+          FROM pipeline_promotion_outcomes WHERE opportunity_id = 'legacy-reference'`).run(id, reason)
+    }
+    const before = db.prepare('SELECT * FROM pipeline_promotion_outcomes ORDER BY opportunity_id').all()
+
+    const result = await runQualifiedPipelinePromotion(db, { batch: 10, amountFollowup: false })
+    expect(result.attempted).toBe(0)
+    expect(result.remaining).toBe(2)
+    expect(db.prepare('SELECT * FROM pipeline_promotion_outcomes ORDER BY opportunity_id').all())
+      .toEqual(before.map(row => row.opportunity_id === 'legacy-reference' ? { ...row, outcome: 'live_reject' } : row))
+    db.close()
+  })
+
   it('rolls back a promoted grant when its required live outcome cannot be recorded', async () => {
     const db = makeDb()
     seedProfile(db, 'real')
