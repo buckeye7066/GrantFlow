@@ -100,6 +100,6 @@ export const PROFILE_SIGNAL_DERIVATION_FILES = Object.freeze([
  * sha256 over the LF-normalized concatenation of the files above, pinned by
  * `scripts/pin-signal-version.mjs`. The test recomputes it.
  */
-export const PROFILE_SIGNAL_DERIVATION_HASH = 'c07d52e4d83772973e28c261d9553fb055431da07cfbefa622547357d8cf67eb'
+export const PROFILE_SIGNAL_DERIVATION_HASH = '3ecf4f484856171fabe189127e4efdcc1c7e1fb65df2bc1a5d20cf9ba69b3625'
 
 export default { PROFILE_SIGNAL_VERSION, PROFILE_SIGNAL_DERIVATION_FILES, PROFILE_SIGNAL_DERIVATION_HASH }
