@@ -1,3 +1,4 @@
+import { isBookkeepingInterest } from '../crawler-os/profileTopicTags.js'
 import zipcodes from 'zipcodes'
 import { normalizeConditionTerm } from '../config/conditionTerms.js'
 import { sanitizeLogValue } from '../utils/logger.js'
@@ -3719,7 +3720,7 @@ export function buildProfileSignals({ profile, sections, asOf = null, documents 
     genders: genderSet,
     assistance: assistanceSet,
     military: militarySet,
-    interests: interestSet,
+    interests: new Set([...interestSet].filter(term => !isBookkeepingInterest(term))),
     applicantTypes: applicantTypeSet,
     health: healthSet,
     // Provenance-split view of `needs` (which stays the union, unchanged):

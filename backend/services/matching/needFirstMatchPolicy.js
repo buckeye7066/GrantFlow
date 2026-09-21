@@ -1,3 +1,5 @@
+import { researchScopeReview } from './researchScopeReview.js'
+import { portalUrlFunderPlausibility } from '../../config/urlRules.js'
 import {
   REVIEW_SCORE,
   SCORE_FLOOR,
@@ -204,6 +206,17 @@ export function evaluateNeedFirstMatchPolicy(args = {}) {
   let hardMismatches = [...(evaluated.hardMismatches ?? [])]
   let reviewOnly = Boolean(evaluated.reviewOnly)
   const addedReasons = []
+  const researchReview = researchScopeReview(aliasedArgs)
+  const sourcePortalConflict = portalUrlFunderPlausibility(opportunity.source_url, opportunity.sponsor ?? opportunity.funder) === 'implausible'
+  const portalReview = sourcePortalConflict ? 'Source portal institution conflicts with the named sponsor; verify the source ownership and enrollment requirement before acceptance.' : null
+  if (researchReview) {
+    reviewOnly = true
+    addedReasons.push(researchReview)
+  }
+  if (portalReview) {
+    reviewOnly = true
+    addedReasons.push(portalReview)
+  }
 
   const businessMismatch = hardMismatches.find((reason) =>
     String(reason).startsWith('Business-only funding requires'),
@@ -254,6 +267,7 @@ export function evaluateNeedFirstMatchPolicy(args = {}) {
   }
 
   let result = recomputePolicy(evaluated, { hardMismatches, reviewOnly, addedReasons })
+  if (portalReview || researchReview) result = { ...result, reviewExplanation: portalReview || researchReview }
   const childMismatch = result?.hardMismatches?.some((reason) =>
     String(reason).includes('Child/dependent program'),
   )

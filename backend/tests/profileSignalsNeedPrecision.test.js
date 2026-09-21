@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { buildProfileSignals } from '../services/profileHelpers.js'
+import { buildProfileDataPointInventory } from '../services/profileDataPoints.js'
 
 // Regression: the signal-derived needs list feeds the NEED-ANCHORED score's
 // coverage denominator (collectProfileNeeds → needCoverage%) and steers
@@ -8,6 +9,20 @@ import { buildProfileSignals } from '../services/profileHelpers.js'
 // "current"/"parent" (phantom housing) — diluting every real need's share of
 // the score. Needs may only come from whole-word evidence.
 describe('buildProfileSignals need precision (whole-word scanning)', () => {
+  it('cannot reintroduce bookkeeping interests through the empty-signal fallback', () => {
+    const profile = { interests: ['designated', 'source_safe'] }
+    const signals = buildProfileSignals({ profile, sections: {} })
+    const inventory = buildProfileDataPointInventory({ profile, signals })
+    expect(inventory.dataPoints.filter(point => point.kind === 'interest')).toEqual([])
+  })
+  it('keeps operational tags out of topical interests without changing stored tags', () => {
+    const profile = { tags: ['designated', 'source-safe', 'amy_run:example', 'biotechnology'], interests: ['source_safe', 'genomics'] }
+    const sig = buildProfileSignals({ profile, sections: {} })
+    expect([...sig.interests]).toEqual(expect.arrayContaining(['biotechnology', 'genomics']))
+    expect([...sig.interests]).not.toEqual(expect.arrayContaining(['designated']))
+    expect([...sig.interests].some(value => /source.safe|amy.run/.test(value))).toBe(false)
+    expect(profile.tags).toContain('designated')
+  })
   it('a business narrative does not fabricate transportation/housing needs', () => {
     const sig = buildProfileSignals({
       profile: {},

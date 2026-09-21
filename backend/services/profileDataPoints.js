@@ -1,3 +1,4 @@
+import { isBookkeepingInterest } from '../crawler-os/profileTopicTags.js'
 /**
  * profileDataPoints — the canonical profile data-point inventory.
  *
@@ -331,7 +332,9 @@ export function buildProfileDataPointInventory({ profile, signals, profileNorm =
   const interestList = signals?.interests && (signals.interests.size ?? signals.interests.length)
     ? toValueList(signals.interests)
     : rowList(profile?.interests)
-  for (const v of cleanTerms(interestList)) push('interest', v)
+  for (const v of cleanTerms(interestList)) {
+    if (!isBookkeepingInterest(v)) push('interest', v)
+  }
 
   // ── academics ──
   const academics = signals?.academics || {}
