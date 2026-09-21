@@ -94,17 +94,17 @@ describe('robertAgent — defaults are safe', () => {
         status TEXT,
         updated_at TEXT
       );
-      CREATE TABLE crawler_runs (
-        run_id TEXT PRIMARY KEY,
+      CREATE TABLE crawler_source_runs (
+        id TEXT PRIMARY KEY,
         profile_id TEXT,
-        started_at TEXT
+        created_at TEXT
       );
       INSERT INTO profiles (id, status, updated_at) VALUES
         ('p-never', 'active', '2026-09-01T00:00:00.000Z'),
         ('p-old', 'active', '2026-08-01T00:00:00.000Z'),
-        ('p-recent', 'active', '2026-07-01T00:00:00.000Z'),
+        ('p-recent', 'active', '2026-09-02T00:00:00.000Z'),
         ('p-deleted', 'deleted', '2026-09-02T00:00:00.000Z');
-      INSERT INTO crawler_runs (run_id, profile_id, started_at) VALUES
+      INSERT INTO crawler_source_runs (id, profile_id, created_at) VALUES
         ('run-old', 'p-old', '2026-07-01T00:00:00.000Z'),
         ('run-recent', 'p-recent', '2026-09-01T00:00:00.000Z');
     `)
@@ -116,6 +116,9 @@ describe('robertAgent — defaults are safe', () => {
     })
 
     assert.deepEqual(selected, ['p-never', 'p-old'])
+    sqlite.prepare('INSERT INTO crawler_source_runs (id, profile_id, created_at) VALUES (?, ?, ?)')
+      .run('new-receipt', 'p-never', '2026-09-21T00:00:00.000Z')
+    assert.deepEqual(await resolveProfileIds({ db: wrapSqlite(sqlite), cap: 2 }), ['p-old', 'p-recent'])
     sqlite.close()
   })
 
