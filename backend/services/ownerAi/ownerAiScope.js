@@ -89,6 +89,23 @@ export function captureDetachedOwnerAiRunner() {
 
 export function runWithoutOwnerAiScope(work) { return scopes.run(null, work) }
 
+// Operator opt-in for these internal schedulers only. No HTTP/job payload can
+// supply the identity, and background authority cannot sign new queued jobs.
+export async function runWithScheduledOwnerAiScope(db, { workload, signal, timeoutMs = 21600000 } = {}, work) {
+  if (!['amy_training', 'robert_discovery'].includes(workload)) throw new Error('Unsupported owner AI scheduler workload')
+  if (process.env.OWNER_AI_BACKGROUND_ENABLED !== 'true') return runWithoutOwnerAiScope(() => work(signal))
+  signal?.throwIfAborted()
+  const email = (process.env.OWNER_AI_EMAIL || process.env.AGENT_CONTROL_ADMIN_EMAIL || process.env.ADMIN_EMAIL || '').trim().toLowerCase()
+  if (!email) throw new Error('Scheduled owner AI requires a configured owner')
+  const rows = await db.prepare('SELECT id, is_admin FROM users WHERE lower(primary_email) = ? LIMIT 2').all(email)
+  if (rows.length !== 1 || ![true, 1].includes(rows[0].is_admin)) throw new Error('Scheduled owner AI requires one active database owner')
+  const ctx = await verifiedOwnerContext(db, { userId: rows[0].id })
+  if (!isCanonicalOwner({ ctx })) throw new Error('Scheduled owner AI identity is unavailable or revoked')
+  const runner = scopes.run({ identity: { userId: ctx.userId, email: ctx.email }, signal: new AbortController().signal,
+    queueAuthority: false, workload }, captureDetachedOwnerAiRunner)
+  return runner(work, { timeoutMs, signal, waitForSettlement: true })
+}
+
 
 export function ownerAiJobBudget(value) {
   const numeric = Number(value)
@@ -107,7 +124,7 @@ export function ownerAiJobParameters(parameters,job) {
   const clean = {...parameters}
   delete clean[DURABLE_OWNER_KEY]
   const scope = getOwnerAiScope({includeAborted:true})
-  if (!scope) return clean
+  if (!scope || scope.queueAuthority === false) return clean
   scope.signal.throwIfAborted()
   if (!scope.identity?.userId || !scope.identity?.email) throw new Error('Owner queue identity is unavailable')
   const payload = ownerProofPayload(job,scope.identity)

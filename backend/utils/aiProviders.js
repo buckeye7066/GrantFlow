@@ -196,7 +196,11 @@ async function invokePaidLadder({
         timeoutMs: subscriptionWindow, signal: attemptSignal,
       }), { timeoutMs: subscriptionWindow, signal, label: 'Owner subscription request' })
       if (signal?.aborted) return abortedResult(signal)
-      if (subscription?.ok === true) return subscription
+      if (subscription?.ok === true) {
+        qualityLog.info('owner_subscription_completed', { workload: ownerScope.workload || 'request',
+          provider: subscription.provider, model: subscription.model })
+        return subscription
+      }
     } catch {
       if (signal?.aborted) return abortedResult(signal)
       qualityLog.warn('owner_subscription_unavailable', { reason: 'bounded_subscription_attempt_failed' })

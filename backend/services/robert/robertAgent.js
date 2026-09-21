@@ -88,7 +88,9 @@ async function runRobertDiscoveryViaCrawlerOs({
   summary,
   dryRun = false,
   runProfileDiscovery = runProfileDiscoveryLive,
+  signal = null,
 }) {
+  signal?.throwIfAborted()
   // Charter doctrine: "match every newly stored opportunity against ALL known
   // profiles". Build every active profile's thesis ONCE and pass them as
   // matchProfiles so each profile's discovered opps are matched against all the
@@ -109,13 +111,15 @@ async function runRobertDiscoveryViaCrawlerOs({
     }
   }
   for (const profileId of profileIds) {
+    signal?.throwIfAborted()
     try {
       // dryRun PREVIEW: run the real pipeline (plan + fetch + match) against an
       // in-memory store but DO NOT flush to the live catalog/matches. This makes
       // a dry-run an honest read-only preview of what discovery WOULD store, with
       // real per-source outcomes — instead of silently skipping discovery and
       // reporting a misleading 0/0/0.
-      const { run, persisted, thesis } = await runProfileDiscovery({ db, profileId, dryRun, matchProfiles: allTheses || undefined })
+      const { run, persisted, thesis } = await runProfileDiscovery({ db, profileId, dryRun, matchProfiles: allTheses || undefined, signal })
+      signal?.throwIfAborted()
       counters.cross_matches = (counters.cross_matches || 0) + (run.cross_matches || 0)
       counters.urls_fetched += run.sources.reduce((a, s) => a + (s.fetched || 0), 0)
       counters.candidates_found += run.sources.reduce((a, s) => a + (s.parsed || 0), 0)
@@ -199,6 +203,7 @@ async function runRobertDiscoveryViaCrawlerOs({
         zero_result: run.zero_result?.reason ?? null,
       })
     } catch (err) {
+      signal?.throwIfAborted()
       summary.errors.push({ stage: 'crawler_os_discovery', profile_id: profileId, error: String(err?.message || err) })
     }
   }
@@ -243,8 +248,10 @@ export async function runRobert({
   dryRun = false,
   deps = {},
   options = {},
+  signal = null,
 } = {}) {
   if (!db) throw new Error('runRobert: db required')
+  signal?.throwIfAborted()
 
   const cfg = { ...getRobertConfig(), ...(deps.configOverride || {}) }
   let chosenMode = (mode || cfg.mode || DEFAULT_MODE).toLowerCase()
@@ -476,6 +483,7 @@ export async function runRobert({
         summary,
         dryRun,
         runProfileDiscovery: deps.runProfileDiscoveryLive || runProfileDiscoveryLive,
+        signal,
       })
       summary.notes.push({ stage: 'discovery', engine: 'crawler-os', profiles: profilesToConsider.length, dry_run: dryRun || undefined })
       // Honest degradation: if discovery ran but every source was SKIPPED for
