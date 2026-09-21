@@ -28,6 +28,11 @@ const APPLY_INTENT = /\b(apply|application|applications|submit|register|registra
 // their URL contains "application" or a neighboring link says "Apply".
 const NON_APPLICATION_PURPOSE = /^(?:(?:view\s*(?:&|and)\s*)?pay\s+(?:(?:your|my|the|a)\s+)?bills?(?:\s+(?:online|now))?|view\s+(?:(?:your|my|the)\s+)?(?:bills?|outages?)|billing\s+(?:account|history)|account\s+balance)$|\b(?:email\s+updates|newsletter|unsubscribe)\b/i;
 
+/** Explicit page labels identify utility links, not funding information. */
+export function isUtilityInventoryLink(entry) {
+  return NON_APPLICATION_PURPOSE.test(String(entry?.text || ''));
+}
+
 function squash(text, max = 200) {
   return String(text || '').replace(/\s+/g, ' ').trim().slice(0, max);
 }
@@ -91,7 +96,7 @@ export function buildLinkInventory(html, opts = {}) {
     // Context can explain an otherwise generic "Click here" link, but a shared
     // container must never lend one link's application label to its siblings.
     const singleTargetContext = $context.find('a[href], form[action]').length === 1;
-    const applyIntent = !NON_APPLICATION_PURPOSE.test(text) && (
+    const applyIntent = !isUtilityInventoryLink({ text }) && (
       APPLY_INTENT.test(text) || APPLY_INTENT.test(url) ||
       (singleTargetContext && APPLY_INTENT.test(context))
     );

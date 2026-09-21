@@ -38,7 +38,7 @@ import {
   cleanEligibilityText,
   cleanEligibilityBullets,
 } from './pageFacts.js';
-import { resolveInventoryLink, canonicalizeUrl } from './blindLinkInventory.js';
+import { resolveInventoryLink, canonicalizeUrl, isUtilityInventoryLink } from './blindLinkInventory.js';
 import { validateEvidenceSpans, normalizeForEvidence } from './blindEvidenceValidator.js';
 import {
   normalizeExpectedDecisionDate,
@@ -49,7 +49,7 @@ import {
 // Version tags — these become content-addressing components for the Phase-0.2
 // page-fact cache (services/pageFactCache.js) when this module is wired in a
 // later sub-PR. Bump when the prompt or output shape changes.
-export const EXTRACTOR_VERSION = 'blind-v6';
+export const EXTRACTOR_VERSION = 'blind-v7';
 export const PROMPT_VERSION = 'blind-prompt-v6';
 export const PAGE_FACT_SCHEMA_VERSION = 2;
 
@@ -343,7 +343,9 @@ function buildFacts(rawOpp, { pageUrlCanon, linkInventory, hayNorm }) {
   // that is just the page itself is a fallback, and a fallback NEVER lands in
   // apply_url — it goes to info_url below.
   const apply_url = applyEntry?.apply_intent === true && applyEntry.url !== pageUrlCanon ? applyEntry.url : null;
-  let info_url = infoEntry ? infoEntry.url : null;
+  // Inventory membership does not make a bill-payment/newsletter link useful
+  // funding information. Keep the fetched funding page as the safe reference.
+  let info_url = isUtilityInventoryLink(infoEntry) ? pageUrlCanon : (infoEntry ? infoEntry.url : null);
   if (info_url && info_url === apply_url) info_url = null; // keep the two distinct
   if (!apply_url && !info_url) info_url = pageUrlCanon; // fallback => info_url only
 
