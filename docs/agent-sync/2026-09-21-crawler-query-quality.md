@@ -39,3 +39,21 @@ two synthetic profiles deleted, zero survivors, cleanup command exit 0. Diagnost
 receipts are retained in the workspace `.codex-tmp` directory. Reliable extraction,
 a fresh completed exact-50 run and durable application of validated learning
 remain required before declaring GrantFlow ready.
+
+## Real-page extraction follow-up
+
+The public Elephant Learning homeschool-grant page returned HTTP 200. With an
+8192-token local context, the installed 1B model completed its actual structured
+extraction in 116 seconds (2193 input tokens, 1112 output tokens). It invented a
+2024 deadline and an Annual Report requirement absent from that page. Replaying
+the actual response through GrantFlow proved that the deadline was neutralized
+but the reporting requirement survived into the candidate/calendar contract.
+
+Lifecycle fields now carry provenance into the shared evidence-span validator:
+unsupported expected-decision dates, review durations and reporting requirements
+are neutralized alongside other unsupported facts. Supported lifecycle facts
+remain available to the candidate mapper. Extractor version `blind-v4` prevents
+reuse of old cached facts. The same captured model response now has null deadline
+and reporting requirements; replay assertions passed exit 0. All 26 extractor
+Node tests and 56 lifecycle/extraction/cache tests passed exit 0. This validates
+the observed grounding repair, not the local model's overall accuracy or speed.

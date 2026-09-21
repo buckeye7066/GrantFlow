@@ -74,6 +74,44 @@ test('happy path: extracts page facts with inventory-selected apply/info URLs', 
   assert.equal(f.field_provenance.is_loan.value, false);
 });
 
+test('invented lifecycle dates and reporting requirements cannot survive absent or fabricated citations', async () => {
+  for (const evidence of [{}, {
+    expected_decision_date: 'Decisions announced December 31, 2024.',
+    decision_review_days: 'Review takes 90 days.',
+    reporting_requirements: 'Annual Report',
+  }]) {
+    const facts = await extractPageFactsBlind(
+      { pageUrl: PAGE_URL, pageText: PAGE_TEXT, linkInventory: INVENTORY },
+      { llm: mockLlm({ expected_decision_date: '2024-12-31', decision_review_days: 90,
+        reporting_requirements: [{ label: 'Annual Report', due_date: '2024-12-31' }], evidence }) },
+    );
+    assert.equal(facts.length, 1);
+    assert.equal(facts[0].expected_decision_date, null);
+    assert.equal(facts[0].decision_review_days, null);
+    assert.equal(facts[0].reporting_requirements, null);
+    const candidate = mapBlindFactsToCandidate(facts[0]);
+    assert.equal(candidate.reporting_requirements, null);
+  }
+});
+
+test('page-supported lifecycle facts survive extraction and candidate mapping', async () => {
+  const evidence = {
+    expected_decision_date: 'Decisions announced December 31, 2027.',
+    decision_review_days: 'Review takes 90 days.',
+    reporting_requirements: 'Annual Report due January 31, 2028.',
+  };
+  const reports = [{ label: 'Annual Report', due_date: '2028-01-31' }];
+  const facts = await extractPageFactsBlind(
+    { pageUrl: PAGE_URL, pageText: PAGE_TEXT + ' ' + Object.values(evidence).join(' '), linkInventory: INVENTORY },
+    { llm: mockLlm({ expected_decision_date: '2027-12-31', decision_review_days: 90,
+      reporting_requirements: reports, evidence }) },
+  );
+  assert.equal(facts[0].expected_decision_date, '2027-12-31');
+  assert.equal(facts[0].decision_review_days, 90);
+  assert.deepEqual(facts[0].reporting_requirements, reports);
+  assert.deepEqual(mapBlindFactsToCandidate(facts[0]).reporting_requirements, reports);
+});
+
 test('a caller-supplied inventory url with a non-http(s) scheme never reaches apply_url', async () => {
   // The extractor must trust NOTHING from a caller-supplied inventory: an entry
   // whose url is javascript:/data:/mailto: must be dropped (re-canonicalized to
