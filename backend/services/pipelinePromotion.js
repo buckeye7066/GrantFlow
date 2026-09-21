@@ -322,6 +322,14 @@ export async function runQualifiedPipelinePromotion(db, options = {}) {
   const deletedDryRun = changesOf(await db.prepare("DELETE FROM pipeline_promotion_outcomes WHERE mode = 'dry_run'").run())
   if (deletedDryRun) log.info('cleared legacy dry-run promotion outcomes', { deletedDryRun })
 
+  // Earlier versions mislabeled deliberate funding-result refusals as errors.
+  // Preserve their reason, fingerprints and attempt history, but stop treating
+  // unchanged reference records as transient work. Real errors remain retryable.
+  const repairedRejections = changesOf(await db.prepare(
+    "UPDATE pipeline_promotion_outcomes SET outcome = 'live_reject' WHERE mode = 'live' AND outcome = 'error' AND SUBSTR(reason, 1, 12) = 'not_a_grant:'",
+  ).run())
+  if (repairedRejections) log.info('repaired non-fundable promotion outcome labels', { repairedRejections })
+
   // Every phase below names itself when it fails. Prod 2026-09-05: the run
   // died three deploys running with only "current transaction is aborted" in
   // the log and no way to tell WHICH statement, profile or phase produced it.
