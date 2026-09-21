@@ -74,3 +74,5 @@ per-result ranking share the topical-funding exception, preserving healthy
 single-topic funding hits without unnecessary fallback requests or degraded
 learning provenance. Deadline, ranking, provider, cache and lane regressions
 cover these boundaries.
+
+CI follow-up: preserve both search provenance and the discovery-stage gate for Amy learning. A retained healthy discovery verdict with missing search evidence must neither teach gaps nor clear old lessons. The existing search-attribution regression caught this; it remains unchanged except for an additional old-lesson preservation assertion.
