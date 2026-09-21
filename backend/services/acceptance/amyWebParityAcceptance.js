@@ -741,6 +741,19 @@ function amyEvidence(result, discoveryEvidence, allowedProviders) {
     web_lane_totals: laneTotals,
     provenance,
     summary: result?.summary ?? null,
+    // The disposable database is deleted after measurement. Retain the
+    // evidence Amy already derived so a later learning step can distinguish
+    // proven gaps, uncertain search, and missing evidence. Acceptance itself
+    // never changes the learner or the benchmark's thresholds.
+    learning_handoff: {
+      recorded: Boolean(result?.combined?.archetype_learning?.update &&
+        result?.combined?.archetype_learning?.search_coverage && result?.combined?.archetype_metrics),
+      applied: false,
+      run_id: result?.run_id ?? null,
+      update: result?.combined?.archetype_learning?.update ?? null,
+      search_coverage: result?.combined?.archetype_learning?.search_coverage ?? null,
+      metrics: result?.combined?.archetype_metrics ?? null,
+    },
     qualification_proven: false,
     limitation: 'Amy is a bounded synthetic regression cohort. A clean receipt does not prove applicant eligibility, qualification, submission, or an award.',
   }

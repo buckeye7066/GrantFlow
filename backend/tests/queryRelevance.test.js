@@ -88,6 +88,22 @@ describe('isWeakResult — the first-word-collapse signature', () => {
 })
 
 describe('partitionByRelevance', () => {
+  it('prioritizes funding evidence above generic topical pages for funding queries', () => {
+    const generic = { title: 'El Paso Texas homeschool association', url: 'https://example.org/group' };
+    const funding = { title: 'Homeschool Grant Programs', url: 'https://example.org/grants' };
+    expect(partitionByRelevance('homeschool family grants El Paso Texas', [generic, funding]).strong).toEqual([funding, generic]);
+    expect(partitionByRelevance('homeschool family El Paso Texas', [generic, funding]).strong).toEqual([generic, funding]);
+  });
+  it('demotes a later-token hotel hit while retaining a single-topic funding source', () => {
+    const query = 'homeschool family grants El Paso Texas';
+    const hotel = { url: 'https://www.booking.com/region/us/texas.html', title: 'Texas Hotels', snippet: 'Book a hotel in Texas.' };
+    const grant = { url: 'https://www.elephantlearning.com/grants', title: 'Homeschool Grant Programs', snippet: 'Scholarships for homeschool students.' };
+    const family = { url: 'https://example.org/family-support', title: 'Family financial assistance', snippet: 'Apply for assistance.' };
+    const { strong, weak } = partitionByRelevance(query, [hotel, grant, family]);
+    expect(strong).toEqual([grant, family]);
+    expect(weak).toEqual([hotel]);
+  });
+
   it('demotes the live dictionary collapse when the query starts with a site operator', () => {
     const query = 'site:grants.gov "notice of funding opportunity" 2026'
     const dictionary = { url: 'https://dictionary.cambridge.org/dictionary/english/notice', title: 'NOTICE | English meaning', snippet: 'NOTICE definition: to see or become conscious of something.' }

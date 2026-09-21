@@ -783,6 +783,7 @@ export async function runWebDiscoveryLane(deps, opts = {}) {
     result.query_ledger.skipped_duplicate.length + result.query_ledger.plan_dropped.duplicates.length;
 
   let executedCount = 0;
+  const deferredPages = [];
   for (const [queryIndex, q] of queries.entries()) {
     if (budget.stopped() || pages.length - result.seeded >= maxPages) break;
     executedCount += 1;
@@ -803,11 +804,19 @@ export async function runWebDiscoveryLane(deps, opts = {}) {
     result.stage_ledger.provider_attempted += 1;
     if (degraded) result.stage_ledger.provider_degraded += 1;
     if (unavailable) result.stage_ledger.provider_unavailable += 1;
+    // Give later profile facets a share of the existing page budget. Eight
+    // hits from each early query used to fill all 44 slots after six queries,
+    // silently skipping the other 22. Keep spare hits for backfill when later
+    // searches are empty/duplicates, without increasing page or time limits.
+    const remainingPages = maxPages - (pages.length - result.seeded);
+    const pageShare = Math.max(1, Math.ceil(remainingPages / (queries.length - queryIndex)));
     let newPages = 0;
     for (const h of Array.isArray(hits) ? hits : []) {
       const url = String(h?.url || '').trim();
       if (!url) continue;
-      if (enqueuePage({ url, query: q, title: h.title, snippet: h.snippet })) newPages += 1;
+      const page = { url, query: q, title: h.title, snippet: h.snippet };
+      if (newPages >= pageShare) { deferredPages.push(page); continue; }
+      if (enqueuePage(page)) newPages += 1;
       if (pages.length - result.seeded >= maxPages) break;
     }
     result.queries.push(q);
@@ -819,6 +828,15 @@ export async function runWebDiscoveryLane(deps, opts = {}) {
       result_count: provenance.result_count,
       new_pages: newPages,
     });
+  }
+  // Spare capacity must not lose real sources from an earlier query. The
+  // canonical enqueue path still deduplicates aliases and records each page.
+  for (const page of deferredPages) {
+    if (budget.stopped() || pages.length - result.seeded >= maxPages) break;
+    if (enqueuePage(page)) {
+      const entry = result.query_ledger.executed.find((item) => item.query === page.query);
+      if (entry) entry.new_pages += 1;
+    }
   }
   result.queries_executed = executedCount;
   for (const q of queries.slice(executedCount)) {

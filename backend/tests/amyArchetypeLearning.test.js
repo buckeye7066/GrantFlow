@@ -16,6 +16,7 @@ import {
   METRICS_HISTORY_MAX,
   buildArchetypeMetrics,
   buildArchetypeLearningUpdate,
+  learningSearchCoverage,
   saveArchetypeLearning,
   getArchetypeLearning,
   learnedClassesForThesis,
@@ -76,6 +77,18 @@ describe('classifyThesisArchetype', () => {
 describe('buildArchetypeLearningUpdate (pure)', () => {
   const zeroEval = (archetype, status = 'zero') => ({ archetype, status, findings: [], search_evidence: { status: 'healthy' } })
   const missEval = (archetype, type) => ({ archetype, status: 'ok', findings: [{ type }], search_evidence: { status: 'healthy' } })
+
+  it('does not learn or clear recall lessons when search works but extraction is degraded', () => {
+    const failedExtraction = {
+      ...zeroEval('student'),
+      discovery_gate: { evaluable: true, recall_measurable: false, reason: 'provider_degraded' },
+      provider_health: { search: 'healthy', llm: 'degraded' },
+    };
+    expect(buildArchetypeLearningUpdate([failedExtraction, failedExtraction])).toEqual({});
+    expect(learningSearchCoverage([failedExtraction, zeroEval('student', 'ok')])).toEqual({
+      clearable_counts: {}, uncertain_archetypes: ['student'],
+    });
+  });
 
   it('learns low_results only with enough evidence (>= minEvidence AND >= 50% of cohort)', () => {
     // 2 of 4 student profiles zero → 50% with evidence 2 → learns.
@@ -356,6 +369,9 @@ describe('end-to-end: an Amy run teaches the next student crawl', () => {
       expect(out.combined.archetype_learning.applied).toBe(true)
       expect(out.combined.archetype_learning.update.student.classes).toContain('low_results')
       expect(out.combined.archetype_learning.update.student.run_id).toBe(out.run_id)
+      expect(out.combined.archetype_learning.search_coverage).toEqual({
+        clearable_counts: { student: 4 }, uncertain_archetypes: [],
+      })
       // …persisted the per-archetype measurement…
       const hist = await readArchetypeMetrics(db)
       expect(hist.runs[0].run_id).toBe(out.run_id)

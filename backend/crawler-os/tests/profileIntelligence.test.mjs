@@ -4,6 +4,27 @@ import assert from 'node:assert/strict';
 import { buildThesis } from '../profileIntelligence.js';
 import { DEFAULT_MIN_SCORE } from '../../services/matchEngine.js';
 import { SAMPLE_VFD_PROFILE, SAMPLE_STUDENT_PROFILE } from './fixtures/fakeFetch.mjs';
+import { buildAmyTags } from '../../services/amy/amyMetadata.js';
+import { buildWebQueries } from '../webQueries.js';
+
+test('Amy trace tags never become interests or web queries, including normalized keyword copies', () => {
+  const tags = buildAmyTags({ runId: 'acceptance-123', scenarioId: 'graduate_student-v1' });
+  const markers = [...tags, ...tags.map((tag) => tag.replace(/_/g, ' '))];
+  for (const field of ['tags', 'keywords', 'interests', 'derived_interest_terms']) {
+    const thesis = buildThesis({
+      ...SAMPLE_STUDENT_PROFILE,
+      [field]: [...markers, 'public health', 'synthetic biology', 'cleanup volunteering'],
+    });
+    assert.ok(thesis.interest_terms.includes('public health'));
+    assert.ok(thesis.interest_terms.includes('synthetic biology'));
+    assert.ok(thesis.interest_terms.includes('cleanup volunteering'));
+    for (const marker of markers) {
+      assert.ok(!thesis.interest_terms.includes(marker), `${field} leaked ${marker}`);
+    }
+    const queries = buildWebQueries(thesis, { max: 100, seed: 0, year: 2026 });
+    assert.ok(!queries.some((q) => /\bamy\b|allow sam cleanup/.test(q)), queries.join('\n'));
+  }
+});
 
 test('buildThesis carries profile_id, location, and needs from the full profile', () => {
   const th = buildThesis(SAMPLE_VFD_PROFILE);

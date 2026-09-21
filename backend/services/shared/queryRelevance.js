@@ -62,8 +62,14 @@ export function coveredTerms(result, terms) {
   return terms.filter((t) => wordRe(t).test(hay))
 }
 
+const FUNDING_EVIDENCE = /\b(?:grants?|scholarships?|fellowships?|bursar(?:y|ies)|funding|financial[ -]aid|financial[ -]assistance|tuition[ -]assistance|benefits?|endowments?)\b/i
+
+function hasFundingEvidence(result) {
+  return FUNDING_EVIDENCE.test(`${result?.url ?? ''} ${result?.title ?? ''} ${result?.snippet ?? ''}`)
+}
+
 /**
- * isWeakResult — is this ONE result the first-word-collapse signature?
+ * isWeakResult — does this ONE result lack evidence of the query's subject?
  *
  * THE FAILURE THIS CATCHES (measured live 2026-07-31 across 8 profile-shaped
  * queries): the SERP-level gate only asks whether SOME result covers a
@@ -76,8 +82,8 @@ export function coveredTerms(result, terms) {
  *
  * Weak means one of:
  *   - the result covers NO distinctive term at all, or
- *   - it covers EXACTLY the query's first distinctive term and nothing else
- *     (a page about the state/city, not about the need).
+ *   - it covers only ONE distinctive term without funding/assistance evidence
+ *     (a generic page about a state, city or topic, regardless of word order).
  *
  * A query with fewer than 2 distinctive terms can never be weak — there is
  * nothing to discriminate on, and filtering there would be guesswork. This
@@ -92,24 +98,32 @@ export function isWeakResult(query, result) {
   if (terms.length < 2) return false
   const covered = coveredTerms(result, terms)
   if (covered.length === 0) return true
-  return covered.length === 1 && covered[0] === terms[0]
+  if (covered.length > 1) return false
+  // A live homeschool/El Paso query ranked Texas hotels ahead of homeschool
+  // grants: Texas was not the FIRST token, while homeschool was. Word position
+  // cannot distinguish those. Retain single-topic funders, demote generic hits;
+  // this remains ranking-only, not proof of eligibility or a deletion gate.
+  return !hasFundingEvidence(result)
 }
 
 /**
  * partitionByRelevance — stable split into [strong, weak].
  *
- * Order WITHIN each group is preserved, so a caller that concatenates
- * `[...strong, ...weak]` gets the engine's original ranking with the
- * first-word junk demoted rather than removed. That is what makes this safe:
+ * For funding queries, strong hits with funding evidence precede generic
+ * topical pages. Engine order is preserved within each evidence tier; weak
+ * hits remain backfill. That is what makes this safe:
  * the caller's `count` budget is filled with real sources when they exist, and
  * falls back to exactly the old result set when they do not.
  */
 export function partitionByRelevance(query, results) {
+  const funding = []
   const strong = []
   const weak = []
+  const seeksFunding = distinctiveTerms(query).length >= 2 && FUNDING_EVIDENCE.test(String(query || ''))
   for (const r of Array.isArray(results) ? results : []) {
     if (isWeakResult(query, r)) weak.push(r)
+    else if (seeksFunding && hasFundingEvidence(r)) funding.push(r)
     else strong.push(r)
   }
-  return { strong, weak }
+  return { strong: [...funding, ...strong], weak }
 }
