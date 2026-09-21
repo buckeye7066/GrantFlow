@@ -213,10 +213,23 @@ export function hasPositivePointerTruth(row) {
   return pointerTruthVerdict(row).pass
 }
 
+// Coverage is a ranking percentage over all declared profile facts. A resource
+// serving one exact need must not disappear as unrelated profile facts grow.
+// This alternative to the numeric review band still requires all four gates.
+export function hasGroundedPointerReview(row) {
+  if (lower(row?.match_decision ?? row?.decision) !== 'review' || !hasPositivePointerTruth(row)) return false
+  const explain = explainOf(row)
+  const needs = new Set(pointerMatchedNeeds(row).map(lower))
+  if (lower(explain.canonical_decision) === 'reject') return false
+  return Boolean(explain.scoring_policy_version) && asArray(explain.dataPointEvidence?.matched)
+    .some(item => item?.kind === 'need' && item.credit === 1 && needs.has(lower(item.value)))
+}
+
 export default {
   pointerMatchedNeeds,
   pointerGeoEvidence,
   pointerProfileEvidence,
   pointerTruthVerdict,
   hasPositivePointerTruth,
+  hasGroundedPointerReview,
 }

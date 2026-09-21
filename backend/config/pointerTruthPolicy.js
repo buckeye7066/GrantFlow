@@ -12,6 +12,7 @@ export {
   pointerProfileEvidence,
   pointerTruthVerdict,
   hasPositivePointerTruth,
+  hasGroundedPointerReview,
 } from '../crawler-os/pointerTruthPolicy.js'
 
 export { default } from '../crawler-os/pointerTruthPolicy.js'
