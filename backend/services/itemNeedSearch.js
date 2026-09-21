@@ -62,6 +62,7 @@ import { expandNeed, scoreNeedMatch } from './shared/needTaxonomy.js'
 import { needSearchVocabulary } from './needs/orgNeedsTaxonomy.js'
 import { computeMatchDecision } from './matchEngine.js'
 import { searchNeedWebLeads } from './shared/liveWebSearch.js'
+import { constrainItemExpansion } from './shared/itemNeedExpansion.js'
 import { SURFACED_MATCHER_VERSIONS_SQL } from '../config/matchSurfacing.js'
 import { isPointerKind } from '../config/opportunityKindClasses.js'
 import { classifyFundingResult, isRelevantGeo, RESULT_BUCKETS } from '../config/fundingResultFilters.js'
@@ -210,6 +211,7 @@ const SINGLE_ITEM_TOKEN_BLOCKLIST = new Set([
  * ethics", which is precisely what refuses the CBC story.
  */
 export function buildEndorsementPhrases(itemText, expanded) {
+  expanded = constrainItemExpansion(itemText, expanded)
   const phrases = new Set()
   for (const syn of expanded?.synonyms ?? []) {
     const s = norm(syn)
@@ -407,6 +409,7 @@ export function statesFundingIntent(text) {
  * `titleStatesTerm`.
  */
 export function buildItemLikeTerms(itemText, expanded) {
+  expanded = constrainItemExpansion(itemText, expanded)
   const terms = new Set()
   const raw = norm(itemText)
   if (raw) terms.add(raw)
@@ -756,7 +759,7 @@ async function searchWebLane({ itemText, expanded, profileContext, variant, time
  * free-text item box, `/specific-need`, `greenHomeNoCostSearch` — is untouched.
  */
 export function resolveNeedExpansion(itemText, needCode = null, blueprintKey = null) {
-  const base = expandNeed(itemText)
+  const base = constrainItemExpansion(itemText, expandNeed(itemText))
   if (!needCode) return base
   let curated = []
   try {

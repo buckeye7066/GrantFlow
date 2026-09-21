@@ -1,8 +1,8 @@
-Owner direct-SDK callers now pass through the same invocation-time policy, including clients constructed before login. Supported text, JSON and authorized function-tool planning use subscriptions or configured free models. Native-only hosted search tools, streaming, embeddings and image/audio operations are not simulated by the text bridge: unsupported owner calls fail explicitly before any metered request. Such an error is not completion evidence.
+Owner direct-SDK callers now pass through the same invocation-time policy, including clients constructed before login. Supported text, JSON and authorized function-tool planning use the subscription first, then configured APIs and free/local models according to owner policy. Native-only hosted search tools, streaming, embeddings and image/audio operations are not simulated by the text bridge; when paid fallback is disabled, unsupported owner calls fail explicitly before a metered request. Such an error is not completion evidence.
 
 ## September 18 runtime routing correction
 
-Canonical owner calls use the dedicated monthly-subscription bridge first. Metered API fallback is now off by default for those calls: only an explicit `OWNER_AI_ALLOW_PAID_FALLBACK=true` allows it. When a subscription cannot answer, the default owner route goes to configured free models or reports failure; it never silently charges an API. The owner status endpoint and admin card show this policy. Ordinary customer and scheduler requests retain the configured paid-to-free order; customer traffic never uses the owner's subscription.
+Canonical owner calls use the dedicated monthly-subscription bridge first. Per the September 21 owner directive, metered OpenAI/Anthropic API fallback is enabled by default, followed by configured free/local models. Explicit `OWNER_AI_ALLOW_PAID_FALLBACK=false` disables metered fallback. The owner status endpoint and admin card show this policy. Customer traffic never uses the owner subscription.
 
 The extraction timeout is addressed separately in PR #1763 by a bounded page deadline that preserves the owner's ranked strong models. Free model quota cooldowns are model-scoped, respect Retry-After, are invalidated on key rotation, and never hide surviving candidates or record a failed response as a success.
 
@@ -19,11 +19,11 @@ OWNER_AI_BRIDGE_TOKEN of at least 32 characters. The worker receives the same
 token through DPAPI installation; never use a provider API/OAuth token for it.
 Set OWNER_AI_USER_ID to the canonical owner id when an additional id binding is
 needed. The default 20000 ms subscription cap is bounded by the caller's whole
-budget. Half the caller budget is reserved when metered fallback is explicitly
+budget. Half the caller budget is reserved when metered fallback is
 allowed or a free route is configured. With both absent, the owner subscription
 can use the full caller budget, still subject to the configured cap. The primary retains 80% of a short worker
 window (all but two seconds of a longer window); the next subscription receives
-the actual remaining time. A short caller deadline can force fallback to configured free models; metered fallback requires explicit owner opt-in.
+the actual remaining time. A short caller deadline can force fallback to configured free models; metered fallback is enabled by default and can be disabled with OWNER_AI_ALLOW_PAID_FALLBACK=false.
 
 Order is subscription:codex, subscription:claude, then the separately integrated
 cloud API fallback. **Codex is implemented:** readiness requires native `exec
@@ -119,7 +119,7 @@ Cancellation kills only the owned child process tree; broker cancellation reache
 the worker through its active lease heartbeat (normally within a second).
 
 Home offline, busy, missing auth, exhausted subscription or disabled bridge means
-no subscription success; the gateway applies its separate owner billing policy (free fallback by default).
+no subscription success; the gateway applies its separate owner billing policy (configured paid APIs, then free/local fallback by default; explicit paid opt-out is honored).
 The bridge itself never calls paid APIs or silently substitutes API authentication.
 
 Stop: `tools/owner-ai/manage.ps1 -Action Stop`.

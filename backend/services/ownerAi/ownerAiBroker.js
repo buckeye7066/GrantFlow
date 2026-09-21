@@ -1,3 +1,4 @@
+import { ownerPaidFallbackAllowed } from './ownerAiPolicy.js'
 import {withinSubscriptionOutputLimit} from '../../../shared/subscriptionOutput.js'
 import { randomBytes, timingSafeEqual, createHash } from 'node:crypto'
 import { getOwnerAiScope } from './ownerAiScope.js'
@@ -20,7 +21,7 @@ export function createOwnerAiBroker({ env = process.env, now = Date.now } = {}) 
   const sweep = () => { if (pending && (!enabled() || now() >= pending.deadline)) pending.finish(null) }
   function status() {
     sweep()
-    return { metered_fallback_allowed: env.OWNER_AI_ALLOW_PAID_FALLBACK === 'true', enabled: enabled(), online: Boolean(enabled() && fresh()), busy: Boolean(pending), order: names.map(n => 'subscription:' + n),
+    return { metered_fallback_allowed: ownerPaidFallbackAllowed(env), enabled: enabled(), online: Boolean(enabled() && fresh()), busy: Boolean(pending), order: names.map(n => 'subscription:' + n),
       providers: Object.fromEntries(names.map(n => [n, enabled() && fresh() ? worker.providers[n] : 'unavailable'])) }
   }
   function poll(body = {}) {

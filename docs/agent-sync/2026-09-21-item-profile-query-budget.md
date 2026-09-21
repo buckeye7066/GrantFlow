@@ -1,0 +1,9 @@
+# Item searches retain a meaningful profile need
+
+Reproduced: the shared item planner selected nonprofit as its extra profile term, duplicating the applicant identity. When taxonomy expansion added both a core phrase and a synonym, its five-query cap omitted the profile term altogether. County-only queries omitted the state, making common county names ambiguous.
+
+The planner now excludes terms already expressing applicant identity, places a real profile need within the normal funding/donation query budget, and includes the state beside the county. It preserves the exact free-text request first and keeps the existing maximum query count. Both Item Funding and item-needs routes consume the shared planner. No search lead is promoted to verified funding by this change.
+
+A new regression failed before the change. The four affected search suites passed 66 tests afterward. Further reproduction: industrial food dehydrator expanded food into SNAP/food-bank programs. A shared item-expansion guard now refuses a single category-word expansion when the request names a further concrete object. Query planning, catalog terms and endorsement phrases use the same guard. Beneficiary context (food assistance for a disabled individual), DME and passenger-van expansions remain covered by positive tests. This is a conservative category-drift repair, not a claim of complete natural-language understanding.
+
+Review follow-up: only recognized physical-object compounds suppress a category expansion; common needs such as food insecurity, legal fees, internet bill, childcare expenses and rent payment retain their vocabulary. Missing profile context no longer inserts the generic source-planner fallback as a profile-derived need. The statewide name lookup uses the existing dependency-free state registry so clean-checkout regression workflows do not require npm dependencies.

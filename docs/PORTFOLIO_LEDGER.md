@@ -28,7 +28,7 @@ Dated completion records for the App Portfolio Audit. One entry per ACTIVE_APP r
 - Prior carry-forward: item 42 link lifecycle; PR #1179 match-authority; Vercel gate hardening.
 
 ### Residual blockers (exit criteria unmet)
-- Amy 50/50 clean + Google-bar parity (item 41) — last measured 21/50; local `acceptance:amy-parity` needs search provider keys
+- Historical item 41 result: 21/50. The fixed 50-profile benchmark and command were retired by owner directive on September 21; they are no longer an exit criterion. Current workflow verification remains separate.
 - Three authenticated E2E evidence chains (item 44) — needs owner credentials
 - Hamilton live submit/handoff proof — Demo STEM readiness shows **41 pending tasks**, most portals `needs_capture`; only a few sessions present
 - Optional: Dependabot alerts close once #1189 merges; fleet 12 residual stale explains

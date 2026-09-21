@@ -1619,7 +1619,7 @@ export function buildGrantsGovQueryTerms(profileContext = {}, opts = {}) {
     if (out.length >= limit) break
   }
 
-  if (out.length === 0) {
+  if (out.length === 0 && opts.allowFallback !== false) {
     // BROAD FALLBACK — never empty string. Use the same set of broad
     // assistance categories the dispatcher uses for "no profile context".
     return ['community development', 'rural development', 'public safety', 'workforce development']

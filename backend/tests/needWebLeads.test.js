@@ -26,6 +26,24 @@ const nonprofitContext = {
 }
 
 describe('buildNeedWebQueries', () => {
+  it('does not invent a profile need when no context was loaded', () => {
+    const queries = buildNeedWebQueries('help to pay for an Ethics Probe Class', expandNeed('help to pay for an Ethics Probe Class'), {})
+    expect(queries.join(' ')).not.toMatch(/community development|rural development|public safety|workforce development/)
+  })
+  it('keeps a real profile need and unambiguous county inside the normal query budget', () => {
+    const context = {
+      profile: {primary_type:'nonprofit', state:'OH'},
+      signals: {location:{county:'Montgomery',state:'OH'},needs:new Set(['youth transportation'])},
+    }
+    const expanded = {matchedKey:'passenger bus',synonyms:['community transport vehicle']}
+    const queries = buildNeedWebQueries('accessible passenger bus', expanded, context)
+    expect(queries).toHaveLength(5)
+    expect(queries[0]).toContain('"accessible passenger bus"')
+    expect(queries.some(query => query.includes('"youth transportation"'))).toBe(true)
+    for (const query of queries.filter(query => query.includes('Montgomery County'))) {
+      expect(query).toContain('Montgomery County OH')
+    }
+  })
   it('anchors "passenger van" queries on the item + applicant type (acceptance query 1)', () => {
     const expanded = expandNeed('passenger van')
     const queries = buildNeedWebQueries('passenger van', expanded, nonprofitContext)

@@ -1,3 +1,4 @@
+import { ownerPaidFallbackAllowed } from '../services/ownerAi/ownerAiPolicy.js'
 import { captureOwnerAiJobScope, isCanonicalOwner, ownerAiJobBudget } from '../services/ownerAi/ownerAiScope.js'
 import express from 'express'
 import crypto from 'crypto'
@@ -162,7 +163,7 @@ router.get('/status', adminAuth, async (_req, res) => {
   let anthropicError = null
   let modelInfo = null
 
-  const ownerPolicyBlocks = isCanonicalOwner(_req) && process.env.OWNER_AI_ALLOW_PAID_FALLBACK !== 'true'
+  const ownerPolicyBlocks = isCanonicalOwner(_req) && !ownerPaidFallbackAllowed()
   if (shouldTest && !isProd && ownerPolicyBlocks) {
     anthropicStatus = 'not_tested'
     anthropicError = { message: 'Owner billing policy disables metered provider diagnostics. Subscription readiness is reported separately.' }

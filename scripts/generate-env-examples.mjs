@@ -146,7 +146,7 @@ export function extractEnvVars(source) {
 // from silently weakening or obscuring those production limits.
 const DOCUMENTED_RUNTIME_DEFAULTS = Object.freeze({
   OWNER_AI_BRIDGE_ENABLED: 'false',
-  OWNER_AI_ALLOW_PAID_FALLBACK: 'false',
+  OWNER_AI_ALLOW_PAID_FALLBACK: 'true',
   OWNER_AI_SUBSCRIPTION_TIMEOUT_MS: '20000',
   CLAMAV_PORT: '3310',
   CLAMAV_REQUIRED: 'false',

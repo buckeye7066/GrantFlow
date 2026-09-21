@@ -11,9 +11,10 @@
 // TWO ENTRY POINTS, ONE PLANNER (2026-09-12):
 //   buildWebQueryPlan(thesis, opts) -> { queries, entries, ... }  provenance
 //   buildWebQueries(thesis, opts)   -> plan.queries (string[])    compatibility
-// The live lane executes only ~6 of its 28 planned queries (44 pages at eight
-// hits/query), so the planner's contract is about the HEAD of the plan — see
-// buildWebQueryPlan for the guarantee.
+// The live lane shares its page budget across the plan; interactive deadlines
+// can still truncate execution, so preserve the highest-signal anchors first.
+
+import { STATE_REGISTRY } from '../services/shared/data/stateRegistry.js';
 
 // Readable noun for an applicant bucket (used in the query text). Every person
 // bucket PRIMARY_TYPE_TO_APPLICANT can emit FIRST needs a noun here, or the
@@ -69,6 +70,14 @@ const TERRITORY_NAME = Object.freeze({
 function regionName(stateCode) {
   const code = String(stateCode || '').trim();
   return TERRITORY_NAME[code.toUpperCase()] || code;
+}
+
+function statewideRegionName(stateCode) {
+  const code = String(stateCode || '').trim().toUpperCase();
+  // The existing dependency-free state registry supplies names. Bare "CA"
+  // led the live state-aid query to Canada's international-scholarship site.
+  // This changes search language only, never stored geography or eligibility.
+  return STATE_REGISTRY[code]?.name || regionName(stateCode);
 }
 
 function geoPhrase(location = {}) {
@@ -444,7 +453,7 @@ export function buildWebQueryPlan(thesis = {}, opts = {}) {
     // slot still serves them (the global `seen` dedup collapses the pair).
     setFamily('student_state_aid');
     if (schools.length > 0 && state) {
-      add(core, isTerritory ? `${state} scholarship programs` : `${state} state scholarship programs`);
+      add(core, isTerritory ? `${state} scholarship programs` : `${statewideRegionName(stateCode)} state scholarship programs`);
     }
     // Field-of-study scholarships (major), independent of any one school.
     setFamily('field_of_study');
@@ -540,7 +549,7 @@ export function buildWebQueryPlan(thesis = {}, opts = {}) {
   // student's largest single non-federal source — CORE, never rotated out (was
   // in the rotated EXTRA pool, so runs under the query cap could drop it).
   setFamily('student_state_aid');
-  if (isStudent && state) add(core, isTerritory ? `${state} scholarship programs` : `${state} state scholarship programs`);
+  if (isStudent && state) add(core, isTerritory ? `${state} scholarship programs` : `${statewideRegionName(stateCode)} state scholarship programs`);
   // Hyperlocal scholarship ENTITIES (2026-07-06, hyperlocal_recall_miss fix):
   // county education foundations, civic clubs (Rotary/Lions/Elks), Dollars for
   // Scholars chapters, and local churches run most small-town scholarships, and

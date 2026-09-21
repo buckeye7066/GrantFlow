@@ -31,11 +31,13 @@ process.env.RUNTIME_SECRETS_KEY = process.env.RUNTIME_SECRETS_KEY || 'c'.repeat(
 
 let chromium = null
 let hasBrowser = false
+const configuredBrowser = process.env.HAMILTON_TEST_CHROMIUM_EXECUTABLE_PATH
 try {
   ({ chromium } = await import('playwright'))
-  const exe = chromium.executablePath?.()
+  const exe = configuredBrowser || chromium.executablePath?.()
   hasBrowser = Boolean(exe && fs.existsSync(exe))
 } catch { hasBrowser = false }
+if (configuredBrowser && !hasBrowser) throw new Error('Configured Hamilton test browser is unavailable')
 const run = hasBrowser ? describe : describe.skip
 
 const FIXTURE_URL = 'https://hamilton-submit-fixture.invalid/apply'
@@ -68,7 +70,7 @@ const CONFIRM_HTML = `<!DOCTYPE html><html><head><title>Application submitted</t
 </body></html>`
 
 let browser
-beforeAll(async () => { if (hasBrowser) browser = await chromium.launch({ headless: true, args: [...CHROMIUM_CONTAINER_ARGS] }) }, 60_000)
+beforeAll(async () => { if (hasBrowser) browser = await chromium.launch({ headless: true, ...(configuredBrowser ? {executablePath:configuredBrowser} : {}), args: [...CHROMIUM_CONTAINER_ARGS] }) }, 60_000)
 afterAll(async () => { await browser?.close?.() })
 
 async function fixturePage() {
