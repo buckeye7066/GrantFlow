@@ -11646,7 +11646,8 @@ export async function enforceFunderBehaviorRecall(db) {
         // Skipping it surfaces NOTHING less than before — the row never survived
         // the same boot — it only stops the two sweeps from fighting. The bar
         // comes from the contract's own module; it is never re-encoded here.
-        if (isBelowReviewResourceMatch({ opportunityKind: opp.opportunity_kind, matchScore: score })) {
+        if (isBelowReviewResourceMatch({ opportunityKind: opp.opportunity_kind, matchScore: score,
+          row: { ...opp, match_decision: verdict, match_explain: decision.match_explain } })) {
           contractRejected += 1
           continue
         }

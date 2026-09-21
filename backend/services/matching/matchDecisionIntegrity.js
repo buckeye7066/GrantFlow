@@ -1,6 +1,7 @@
 import { REVIEW_SCORE } from '../../config/matchThresholds.js'
 import { SURFACED_MATCHER_VERSIONS_SQL, LINKER_MATCHER_VERSIONS } from '../../config/matchSurfacing.js'
 import { hasPositiveFourTruthProof } from '../../config/fundingTruthPolicy.js'
+import { hasGroundedPointerReview } from '../../config/pointerTruthPolicy.js'
 
 /**
  * Lanes exempt from the "unproven ACCEPT is deleted" rule below. See the
@@ -43,12 +44,12 @@ const RESOURCE_KINDS_SQL = `(${RESOURCE_OPPORTUNITY_KINDS.map((k) => `'${k}'`).j
  * @param {{ opportunityKind?: string|null, matchScore?: number|string|null }} row
  * @returns {boolean}
  */
-export function isBelowReviewResourceMatch({ opportunityKind = null, matchScore = null } = {}) {
+export function isBelowReviewResourceMatch({ opportunityKind = null, matchScore = null, row = null } = {}) {
   const kind = String(opportunityKind ?? '').trim().toUpperCase()
   if (!RESOURCE_OPPORTUNITY_KINDS.includes(kind)) return false
   const score = Number(matchScore)
   if (!Number.isFinite(score)) return false
-  return score < REVIEW_SCORE
+  return score < REVIEW_SCORE && !(score >= 0 && row && hasGroundedPointerReview(row))
 }
 
 function changes(result) {
@@ -109,8 +110,8 @@ function isMissingIntegritySchema(error) {
  *    those anyway was the 2026-09-12 tug-of-war: the linker sweeps that run
  *    earlier in the same boot re-insert the identical pair next boot via their
  *    `ON CONFLICT DO NOTHING` writes, so the "repair" never converged.
- * 3. A resource with an explicit score below REVIEW is profile-irrelevant and
- *    is deleted.
+ * 3. A resource below REVIEW without grounded full-credit need evidence is
+ *    deleted. Proved resources keep their coverage percentage and REVIEW label.
  * 4. Every surviving resource is navigational evidence, not direct funding, and
  *    is persisted as REVIEW so it cannot inflate ACCEPT totals.
  *
@@ -183,18 +184,32 @@ export async function normalizePersistedMatchDecisionIntegrity(db, options = {})
       }
     }
 
-    const removedBelowReview = await connection.prepare(
+    const lowResources = await connection.prepare(
+      `SELECT o.*, m.profile_id, m.opportunity_id, m.match_score, m.match_decision, m.match_explain_json
+         FROM profile_opportunity_matches m JOIN funding_opportunities o ON o.id = m.opportunity_id
+        WHERE m.matcher_version IN ${SURFACED_MATCHER_VERSIONS_SQL}
+          AND UPPER(COALESCE(o.opportunity_kind, '')) IN ${RESOURCE_KINDS_SQL}
+          AND m.match_score IS NOT NULL AND m.match_score < ? ${aliasedScope.sql}`,
+    ).all(REVIEW_SCORE, ...aliasedScope.params)
+    // A concurrent rescore may replace the evidence after selection. Delete
+    // only the snapshot evaluated here, never the newly scored pair.
+    const deleteLowResourceSnapshot = connection.prepare(
       `DELETE FROM profile_opportunity_matches
-        WHERE matcher_version IN ${SURFACED_MATCHER_VERSIONS_SQL}
-          AND opportunity_id IN (
-            SELECT id
-              FROM funding_opportunities
-             WHERE UPPER(COALESCE(opportunity_kind, '')) IN ${RESOURCE_KINDS_SQL}
-          )
-          AND match_score IS NOT NULL
-          AND match_score < ?
-          ${plainScope.sql}`,
-    ).run(REVIEW_SCORE, ...plainScope.params)
+        WHERE profile_id = ? AND opportunity_id = ?
+          AND match_score = ?
+          AND COALESCE(match_decision, '') = ?
+          AND COALESCE(match_explain_json, '') = ?
+          AND matcher_version IN ${SURFACED_MATCHER_VERSIONS_SQL}`,
+    )
+    let removedBelowReviewCount = 0
+    for (const row of lowResources) {
+      if (!isBelowReviewResourceMatch({ opportunityKind: row.opportunity_kind, matchScore: row.match_score, row })) continue
+      removedBelowReviewCount += changes(await deleteLowResourceSnapshot.run(
+        String(row.profile_id), String(row.opportunity_id), row.match_score,
+        row.match_decision ?? '', row.match_explain_json ?? '',
+      ))
+    }
+    const removedBelowReview = { changes: removedBelowReviewCount }
 
     const normalizedResources = await connection.prepare(
       `UPDATE profile_opportunity_matches

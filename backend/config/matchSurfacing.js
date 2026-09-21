@@ -27,7 +27,7 @@
 import { REVIEW_SCORE } from './matchThresholds.js'
 import { isPointerKind } from './opportunityKindClasses.js'
 import { hasPositiveFourTruthProof, fundingTruthProofFrom, failedFourTruths } from './fundingTruthPolicy.js'
-import { hasPositivePointerTruth, pointerTruthVerdict } from './pointerTruthPolicy.js'
+import { hasPositivePointerTruth, hasGroundedPointerReview, pointerTruthVerdict } from './pointerTruthPolicy.js'
 
 /**
  * The lane a promotion-time canonical rescore writes into. Exported separately
@@ -361,12 +361,13 @@ export function qualifiesForDisplay(row, _minScore) {
     // profile's data on it. A pointer nobody scored carries none of that
     // evidence and is refused — unknown is not relevant.
     if (!hasPositivePointerTruth(row)) return false
-    // A scored pointer must additionally reach the REVIEW band. An unscored one
+    // A scored pointer needs the REVIEW band or grounded full-credit need evidence. An unscored one
     // cannot satisfy the gates above, so the null arm no longer needs a bypass.
     const raw = row.match_score
     if (raw === null || raw === undefined || raw === '') return false
     const dirScore = Number(raw)
-    return Number.isFinite(dirScore) && dirScore >= DIRECTORY_MIN_SCORE
+    return Number.isFinite(dirScore) && dirScore >= 0 &&
+      (dirScore >= DIRECTORY_MIN_SCORE || hasGroundedPointerReview(row))
   }
 
   return decision === 'ACCEPT' && hasPositiveFourTruthProof(row)
