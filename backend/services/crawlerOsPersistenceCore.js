@@ -1174,6 +1174,19 @@ export async function persistRun(db, memStore, run, opts = {}) {
   // not remain as visible results for a profile that just ran its own crawl.
   const reconcileProfiles = primaryProfileId ? [primaryProfileId] : profileIds;
   for (const pid of reconcileProfiles) {
+    if (opts.reconcileEvaluatedOnly === true) {
+      // A targeted source run cannot establish that omitted sources lost
+      // coverage. Replace only pairs actually evaluated, including REJECTs.
+      const evaluatedIds = new Set(matchRows.filter(m => m.profile_id === pid)
+        .map(m => idRemap.get(m.opportunity_id) ?? m.opportunity_id).filter(Boolean));
+      const deleteEvaluated = db.prepare(
+        `DELETE FROM profile_opportunity_matches
+          WHERE profile_id = ? AND opportunity_id = ?
+            AND matcher_version IN ('crawler-os', 'crawler-os-xmatch')`,
+      );
+      for (const opportunityId of evaluatedIds) await deleteEvaluated.run(pid, opportunityId);
+      continue;
+    }
     await db.prepare(
       `DELETE FROM profile_opportunity_matches
         WHERE profile_id = ? AND matcher_version IN ('crawler-os', 'crawler-os-xmatch')`,
