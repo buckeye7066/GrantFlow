@@ -37,6 +37,10 @@ export const DEGENERATE_STOPWORDS = new Set([
 export function distinctiveTerms(query) {
   return String(query || '')
     .toLowerCase()
+    // Site/file-type restrictions select sources, not the user's subject.
+    // Counting "site" as the first term made dictionary pages about "notice"
+    // look strong for site:grants.gov "notice of funding opportunity".
+    .replace(/(^|\s)-?(?:site|filetype):(?:"[^"]*"|'[^']*'|[^\s]+)/g, '$1')
     .replace(/[^a-z0-9\s]/g, ' ')
     .split(/\s+/)
     .filter((t) => t.length >= 4 && !DEGENERATE_STOPWORDS.has(t) && !/^\d+$/.test(t))
