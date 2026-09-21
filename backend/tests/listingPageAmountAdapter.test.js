@@ -28,6 +28,7 @@ import {
 } from '../services/sources/listingPageAmountAdapter.js'
 import { findAmountAdapter } from '../services/sources/amountAdapters.js'
 import { extractAwardAmountsFromText } from '../services/awardAmountExtractor.js'
+import { enrichOpportunityAmountFromSource } from '../services/amountEnrichment.js'
 
 // Mirrors the live CSCC portal's geometry (measured 2026-07-27): the umbrella
 // Foundation section sits early with NO figure of its own; the sibling
@@ -483,3 +484,27 @@ describe('official title-specific pages close the recurring amount-recall gap', 
     expect(result.amounts).toBeUndefined()
   })
 })
+
+describe('current public scholarship source ownership', () => {
+  it('does not assign a sibling college scholarship amount to an unlisted paramedic award', async () => {
+    const fetcher = { fetch: vi.fn(async () => ({ ok: true, status: 200, body: `<main>${PORTAL_TEXT}</main>` })) }
+    const result = await enrichOpportunityAmountFromSource({ title: 'Cleveland State Community College Paramedic Scholarship',
+      source_url: 'https://www.clevelandstatecc.edu/financial-aid/scholarships' }, { fetcher })
+    expect(result.found).toBe(false)
+    expect(result.page_read).toBe(false)
+    expect(result.reason).toBe('listing_title_not_found')
+    expect(result.amounts).toBeUndefined()
+  })
+  it('reads the National Scholarship page instead of borrowing an associate or Opportunity award from its FAQ', async () => {
+    const fetcher = { fetch: vi.fn(async url => ({ ok: true, status: 200, body: url.endsWith('/faqs/')
+      ? '<main>National Scholarship for up to $16,500 for an associate degree. Opportunity Scholarship up to $100,000.</main>'
+      : '<main>National Scholarship. Applications are open to eligible immigrant students. The National Scholarship Award will help cover tuition and fees at Partner Colleges up to a maximum of $33,000 for a bachelor’s degree. Scholars also receive a separate stipend for books and transportation up to a maximum of $6,000.</main>' })) }
+    const result = await enrichOpportunityAmountFromSource({ title: 'TheDream.US Scholarship',
+      source_url: 'https://www.thedream.us/scholarships/national-scholarship/faqs/' }, { fetcher })
+    expect(fetcher.fetch).toHaveBeenCalledWith('https://www.thedream.us/scholarships/national-scholarship/')
+    expect(result.found).toBe(true)
+    expect(result.amounts.amount_max).toBe(33000)
+    expect(result.amounts.amount_text).not.toContain('100,000')
+  })
+})
+
