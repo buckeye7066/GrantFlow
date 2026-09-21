@@ -183,6 +183,10 @@ const ALLOWED_SHARED_IMPORTS = new Set([
   // of the id list inside the OS would drift from the registry every consumer
   // scores against. Pure constants; zero imports, zero I/O — verified 2026-09-12.
   'backend/constants/needCategories.js',
+  // One historical-award/source classifier shared by writer, reader and
+  // admission gates. Pure constants/predicates, no imports or I/O. Keeping it
+  // shared prevents the OS from relabeling known award records as open grants.
+  'shared/opportunityFundability.js',
 ]);
 
 function listFiles(dir) {
@@ -205,6 +209,11 @@ function specifiersOf(file) {
   while ((m = DYNAMIC_RE.exec(src)) !== null) specs.add(m[1]);
   return [...specs];
 }
+
+test('the shared award classifier remains dependency-free', () => {
+  const classifier = path.resolve(backendRoot, '../shared/opportunityFundability.js');
+  assert.deepEqual(specifiersOf(classifier), [], 'the approved award classifier must not import legacy services or I/O');
+});
 
 test('every file under backend/crawler-os/ uses only the OS or approved shared contracts', () => {
   const escapes = [];
