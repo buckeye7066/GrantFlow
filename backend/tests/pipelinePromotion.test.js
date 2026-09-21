@@ -161,6 +161,22 @@ beforeEach(() => {
 })
 
 describe('qualified pipeline promotion', () => {
+  it('records non-fundable reference records as terminal rejections, not retryable errors', async () => {
+    const db = makeDb()
+    seedProfile(db, 'real')
+    seedCandidate(db, 'real', { id: 'historical-award', kind: 'PAST_AWARD_INTEL' })
+
+    const first = await runQualifiedPipelinePromotion(db, { batch: 10, amountFollowup: false })
+    expect(grantsFor(db, 'real')).toHaveLength(0)
+    const outcome = db.prepare('SELECT outcome, reason FROM pipeline_promotion_outcomes').get()
+    expect(outcome.reason).toMatch(/^not_a_grant:/)
+    expect(outcome.outcome).toBe('live_reject')
+    expect(first.remaining).toBe(0)
+    const second = await runQualifiedPipelinePromotion(db, { batch: 10, amountFollowup: false })
+    expect(second.attempted).toBe(0)
+    db.close()
+  })
+
   it('rolls back a promoted grant when its required live outcome cannot be recorded', async () => {
     const db = makeDb()
     seedProfile(db, 'real')
