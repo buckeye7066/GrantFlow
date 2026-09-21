@@ -341,6 +341,23 @@ export function attachRequestContext() {
       req.ctx = await buildRequestContext(req.db, req.user)
       // Attach db reference to ctx for convenience (single accessor pattern)
       req.ctx.db = req.db
+      // The app sends its current selection on every API request. A JWT's
+      // profile is only the sign-in default, not a later profile switch.
+      // Resolve the selection here so SQL scope, tools and entitlements share
+      // the same DB-authorized context. Never grant access from the header.
+      // Auth bootstrap/refresh/logout must still work with a stale selection.
+      const authRoute = /^\/api\/auth(?:\/|\?|$)/.test(String(req.path || req.originalUrl || ''))
+      const selected = req.headers?.['x-profile-id']
+      if (!authRoute && selected !== undefined && selected !== null && (req.ctx.identityResolved === true || req.ctx.isAdmin === true)) {
+        if (typeof selected !== 'string' || !selected.trim()) {
+          return res.status(400).json({ error: 'Invalid selected profile', code: 'INVALID_PROFILE_SELECTION' })
+        }
+        const profileId = selected.trim()
+        if (!req.ctx.isAdmin && !req.ctx.accessibleProfileIds?.has(profileId)) {
+          return res.status(403).json({ error: 'Not authorized to access this profile', code: 'PROFILE_ACCESS_DENIED' })
+        }
+        req.ctx.activeProfileId = profileId
+      }
       runWithOwnerAiScope(req, next)
     } catch (error) {
       console.error('[requestContext] Failed to build request context:', error)
