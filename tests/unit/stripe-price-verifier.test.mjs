@@ -92,3 +92,43 @@ test('verifyStripePrice returns null for empty input', async () => {
   const r = await verifyStripePrice('')
   assert.equal(r, null)
 })
+
+test('milestone totals are reference prices, while every actual installment still requires a mapping', async () => {
+  const db = newDb()
+  db.prepare("UPDATE service_catalog_items SET pricing_model = 'milestone'").run()
+  db.prepare("UPDATE service_prices SET stripe_price_id = NULL").run()
+  db.prepare("INSERT INTO service_prices (id, service_id, client_category, amount_cents, milestone_phase) VALUES ('phase', 'svc_qes', 'individual', 5960, 'kickoff')").run()
+  const r = await verifyStripePriceMapping(db)
+  assert.equal(r.checked, 1)
+  assert.equal(r.missing_mapping_count, 1)
+  assert.equal(r.rows[0].milestone_phase, 'kickoff')
+  db.close()
+})
+
+test('a provider read failure cannot produce a green verification report', async () => {
+  const db = newDb()
+  const r = await verifyStripePriceMapping(db, { mockOverrides: new Map([
+    ['price_test', { amount_cents: 14900, currency: 'usd', active: true, error: 'Provider unavailable' }],
+  ]) })
+  assert.equal(r.rows[0].status, 'fetch_error')
+  assert.equal(r.ok, false)
+  db.close()
+})
+
+test('missing verifier credentials cannot produce a green report', async t => {
+  const previousMock = process.env.STRIPE_MOCK
+  const previousKey = process.env.STRIPE_SECRET_KEY
+  t.after(() => {
+    if (previousMock === undefined) delete process.env.STRIPE_MOCK
+    else process.env.STRIPE_MOCK = previousMock
+    if (previousKey === undefined) delete process.env.STRIPE_SECRET_KEY
+    else process.env.STRIPE_SECRET_KEY = previousKey
+  })
+  process.env.STRIPE_MOCK = 'false'
+  delete process.env.STRIPE_SECRET_KEY
+  const db = newDb()
+  const r = await verifyStripePriceMapping(db)
+  assert.equal(r.rows[0].status, 'verifier_unavailable')
+  assert.equal(r.ok, false)
+  db.close()
+})

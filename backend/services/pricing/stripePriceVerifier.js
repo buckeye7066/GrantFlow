@@ -27,6 +27,7 @@
  */
 
 import Stripe from 'stripe'
+import { listCheckoutPriceRows } from './checkoutPriceRows.js'
 
 function isTruthy(value) {
   const v = String(value || '').trim().toLowerCase()
@@ -124,24 +125,7 @@ async function liveFetchStripePrice(stripe, priceId) {
  * }>}
  */
 export async function verifyStripePriceMapping(db, { mockOverrides = null } = {}) {
-  const rows = await db
-    .prepare(
-      `SELECT sci.slug AS service_slug,
-              sci.name AS service_name,
-              sci.pricing_model,
-              sp.id AS service_price_id,
-              sp.client_category,
-              sp.amount_cents,
-              sp.currency,
-              sp.milestone_phase,
-              sp.stripe_price_id,
-              sp.active
-         FROM service_catalog_items sci
-         JOIN service_prices sp ON sp.service_id = sci.id
-        WHERE sci.is_active = 1 AND sp.active = 1
-        ORDER BY sci.name, sp.client_category, sp.milestone_phase`,
-    )
-    .all()
+  const rows = await listCheckoutPriceRows(db)
 
   const useMock = isStripeMock()
   const stripe = useMock ? null : createStripeClient()
@@ -215,7 +199,7 @@ export async function verifyStripePriceMapping(db, { mockOverrides = null } = {}
   }
 
   return {
-    ok: missing === 0 && mismatch === 0 && inactive === 0,
+    ok: out.length > 0 && out.every(row => row.status === 'ok'),
     checked: out.length,
     missing_mapping_count: missing,
     mismatch_count: mismatch,

@@ -43,6 +43,7 @@ import { getService, getServicePrice } from './pricingCatalog.js'
 import { resolveCanonicalServiceSlug } from './serviceSlugAliases.js'
 import { classifyClient, isCatalogCategory, toCatalogCategory } from './clientCategoryClassifier.js'
 import { hourlyRateToSixMinuteUnitCents } from '../hourlyRounding.js'
+import { listCheckoutPriceRows } from './checkoutPriceRows.js'
 
 const VALID_PHASES = Object.freeze(new Set(['', 'kickoff', 'draft', 'submission']))
 
@@ -449,17 +450,7 @@ export async function resolveChargeForQuote({
  * admin verification endpoint.
  */
 export async function resolveAllCatalogCharges(db, { stripePriceById = null } = {}) {
-  const rows = await db
-    .prepare(
-      `SELECT sci.slug, sci.name, sci.pricing_model, sp.id AS service_price_id,
-              sp.client_category, sp.amount_cents, sp.currency, sp.milestone_phase,
-              sp.stripe_price_id, sp.active
-         FROM service_catalog_items sci
-         JOIN service_prices sp ON sp.service_id = sci.id
-        WHERE sci.is_active = 1 AND sp.active = 1
-        ORDER BY sci.name, sp.client_category, sp.milestone_phase`,
-    )
-    .all()
+  const rows = await listCheckoutPriceRows(db)
   const out = []
   for (const r of rows || []) {
     const stripeData = stripePriceById && r.stripe_price_id

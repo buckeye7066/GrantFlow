@@ -7,6 +7,7 @@ import { setTimeout as delay } from 'node:timers/promises'
 import pg from 'pg'
 import { applyStripeSubscription, applyStripePaymentFailure } from '../../backend/services/billing/subscriptionSync.js'
 import { recordStripeEventIfNew } from '../../backend/services/stripeService.js'
+import { syncStripeServicePrices } from '../../backend/services/pricing/stripeServicePriceSync.js'
 
 test('PostgreSQL billing delivery is atomic and serializes account transitions', async (t) => {
   const raw = process.env.GRANTFLOW_STRIPE_TEST_DATABASE_URL
@@ -111,6 +112,31 @@ test('PostgreSQL billing delivery is atomic and serializes account transitions',
       await db.prepare('UPDATE billing_accounts SET stripe_event_created_at = NULL').run()
       await overlappingEvents((tx) => applyStripePaymentFailure(tx, { subscriptionId: 'sub_test', eventCreated: 200 }))
     })
+    await t.test('service price configuration maps PostgreSQL boolean catalog rows and retries without duplicates', async () => {
+      await db.exec(`
+        CREATE TABLE service_catalog_items (id TEXT PRIMARY KEY, slug TEXT, name TEXT, description TEXT, pricing_model TEXT, is_active BOOLEAN);
+        CREATE TABLE service_prices (id TEXT PRIMARY KEY, service_id TEXT, client_category TEXT, amount_cents INTEGER, currency TEXT,
+          milestone_phase TEXT DEFAULT '', stripe_price_id TEXT, active BOOLEAN, updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP);
+        INSERT INTO service_catalog_items VALUES ('qes', 'quick-eligibility-scan', 'Quick Eligibility Scan', '', 'one_time', TRUE);
+      `)
+      for (const [category, amount] of [['individual', 14900], ['small', 34900], ['mid', 34900], ['large', 75000]]) {
+        await db.prepare("INSERT INTO service_prices (id, service_id, client_category, amount_cents, currency, active) VALUES (?, 'qes', ?, ?, 'usd', TRUE)").run(category, category, amount)
+      }
+      const products = [], prices = []
+      const stripe = {
+        products: { list: async () => ({ data: products, has_more: false }), create: async args => {
+          const product = { id: 'prod_qes', active: true, ...args }; products.push(product); return product
+        } },
+        prices: { list: async () => ({ data: prices, has_more: false }), create: async args => {
+          const price = { id: `price_${prices.length}`, active: true, type: 'one_time', recurring: null, ...args }; prices.push(price); return price
+        } },
+      }
+      assert.equal((await syncStripeServicePrices({ db, stripe })).create_prices, 4)
+      assert.equal((await syncStripeServicePrices({ db, stripe, apply: true })).mapped, 4)
+      assert.equal((await syncStripeServicePrices({ db, stripe, apply: true })).mapped, 0)
+      assert.equal(prices.length, 4)
+    })
+
     await t.test('a swallowed billing audit failure cannot acknowledge a rolled-back payment', async () => {
       await assert.rejects(db.withTransaction(async (tx) => {
         await recordStripeEventIfNew(tx, { id: 'evt_audit_failure', type: 'customer.subscription.updated' })

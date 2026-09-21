@@ -5,6 +5,7 @@ import { ensureServiceCatalogSchema, MILESTONE_PHASES } from '../services/servic
 import { createCheckoutSessionForPrice, getOrCreateStripeCustomerId } from '../services/stripeService.js'
 import { roundBillableMinutes } from '../services/hourlyRounding.js'
 import { resolveChargeForQuote } from '../services/pricing/chargeResolver.js'
+import { listCheckoutPriceRows } from '../services/pricing/checkoutPriceRows.js'
 import { getQuote } from '../services/pricing/quoteBuilder.js'
 import { PRICING_CATALOG_VERSION } from '../services/pricing/pricingTypes.js'
 
@@ -362,20 +363,11 @@ router.post('/checkout/hourly', ensureAuth, async (req, res) => {
 // Admin helper: list catalog rows that lack stripe_price_id mapping.
 router.get('/admin/mapping-status', ensureAuth, ensureAdmin, async (req, res) => {
   await ensureServiceCatalogSchema(req.db)
-  const rows = await req.db
-    .prepare(
-      `
-        SELECT sci.slug, sci.name, sci.pricing_model, sp.client_category, sp.milestone_phase, sp.amount_cents, sp.stripe_price_id
-        FROM service_catalog_items sci
-        JOIN service_prices sp ON sp.service_id = sci.id
-        WHERE sp.active = 1
-        ORDER BY sci.name ASC, sp.client_category ASC, sp.milestone_phase ASC
-      `,
-    )
-    .all()
-  const missing = (rows || []).filter((r) => !r.stripe_price_id)
+  const rows = await listCheckoutPriceRows(req.db)
+  const missing = rows.filter((r) => !r.stripe_price_id).map(({
+    slug, name, pricing_model, client_category, milestone_phase, amount_cents, stripe_price_id,
+  }) => ({ slug, name, pricing_model, client_category, milestone_phase, amount_cents, stripe_price_id }))
   res.json({ ok: true, missing_count: missing.length, missing })
 })
 
 export default router
-
