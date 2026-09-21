@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { scoreOpportunity, computeMatchDecision } from '../services/matchEngine.js'
 import { buildProfileDataPointInventory, evaluateDataPointMatches } from '../services/profileDataPoints.js'
+import { ACCEPT_SCORE } from '../config/matchThresholds.js'
 
 const profile = { id: 'synthetic-biomedical-lab', primary_type: 'nonprofit', state: 'TN',
   needs: ['biotechnology research', 'biopharmaceutical development', 'public health enhancement', 'advanced laboratory equipment'] }
@@ -16,6 +17,28 @@ const biomedical = { ...common, id: 'synthetic-biomedical', title: 'Biomedical L
   categories: ['research'] }
 
 describe('substantive coverage evidence', () => {
+  const student = { primary_type: 'college_student', needs: ['education'], interests: Array.from({ length: 40 }, (_, i) => `unrelated interest ${i}`) }
+  const education = { title: 'Community Education Award', description: 'College students may apply for this scholarship to pay education expenses.',
+    applicant_types: ['individual'], is_national: true, application_url: 'https://example-funder.org/apply' }
+  it('admits a supported need without inflating coverage of unrelated profile facts', () => {
+    const result = computeMatchDecision(student, education)
+    expect(result.score).toBeLessThan(ACCEPT_SCORE)
+    expect(result.decision).toBe('ACCEPT')
+    expect(result.match_explain.dataPointEvidence.matched).toEqual(expect.arrayContaining([expect.objectContaining({ kind: 'need', credit: 1 })]))
+  })
+  it.each([
+    { requires_match: true },
+    { application_url: 'https://example.org/apply' },
+    { opportunity_kind: 'DIRECTORY', is_directory: true },
+  ])('keeps substantive holds on a low-coverage positive match: %j', hold => {
+    expect(computeMatchDecision(student, { ...education, ...hold }).decision).not.toBe('ACCEPT')
+  })
+  it('does not infer organization eligibility from a positive need alone', () => {
+    const result = computeMatchDecision({ ...student, primary_type: 'nonprofit' }, {
+      ...education, applicant_types: [], description: 'Support for education expenses.',
+    })
+    expect(result.decision).not.toBe('ACCEPT')
+  })
   it.each([mathematical, fish])('$title cannot claim specialized biomedical needs from generic words', opportunity => {
     const result = scoreOpportunity(profile, opportunity)
     expect(result.match_explain.dataPointEvidence.matched.filter(p => p.kind === 'need')).toEqual([])
