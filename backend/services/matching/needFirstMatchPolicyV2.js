@@ -368,6 +368,22 @@ function institutionCandidate(opportunity = {}, text = '') {
   const title = String(opportunity.title ?? opportunity.name ?? '').trim()
   const schoolLike = /\b(university|college|school of|institute(?: of technology)?|academy)\b/i
 
+  // A stated enrollment requirement outranks imported sponsor attribution.
+  // Keep broad/alternative-school and negated statements neutral.
+  const enrollmentText = [opportunity.eligibility, opportunity.eligibility_text,
+    opportunity.eligibility_criteria, opportunity.restrictions, opportunity.description,
+    opportunity.summary].filter(value => typeof value === 'string').join(' | ')
+  for (const sentence of enrollmentText.split(/[.!?\n|]/)) {
+    if (/\b(not|any college|any university|other colleges?|other universities|including|such as|for example)\b/i.test(sentence)) continue
+    // A recipient anecdote or a workshop audience is not an enrollment rule.
+    // Require a present-tense award availability statement in this sentence.
+    const name = sentence.match(/^\s*(?:(?:this|the|these)\s+)?(?:scholarships?|grants?|awards?|fellowships?)\s+(?:(?:is|are)\s+(?:available|open|restricted|limited)|provides?\s+financial\s+assistance)\s+(?:for|to)\s+(?:currently\s+)?students?\s+(?:enrolled\s+(?:at|in)|attending|at)\s+((?:[a-z][a-z'’-]*\s+){0,8}(?:college|university|academy|institute)(?:\s+of\s+[a-z][a-z'’-]*(?:\s+[a-z][a-z'’-]*){0,4})?)/i)?.[1]
+      ?.split(/\s+(?:who|with|pursuing|must|will|may)\b/i)[0]?.trim()
+    if (!name || /^(?:a|an|any|accredited)\b/i.test(name)) continue
+    if (/\b(?:or|and)\b/i.test(sentence.slice(sentence.indexOf(name) + name.length))) continue
+    return { name, confidence: 'strong', source: 'enrollment' }
+  }
+
   if (sponsor && schoolLike.test(sponsor) && !GENERIC_EDUCATION_SPONSORS.test(sponsor)) {
     return { name: sponsor, confidence: 'strong', source: 'sponsor' }
   }
@@ -1214,7 +1230,7 @@ export function enforceNeedFirstDecision(current, policy) {
     return {
       ...base,
       decision: 'REVIEW',
-      explanation: 'Potentially relevant, but a required institution or other exclusive eligibility fact is unconfirmed.',
+      explanation: policy.reviewExplanation || 'Potentially relevant, but a required institution or other exclusive eligibility fact is unconfirmed.',
       reasons: [...(Array.isArray(base.reasons) ? base.reasons : []), ...policy.reasons],
     }
   }

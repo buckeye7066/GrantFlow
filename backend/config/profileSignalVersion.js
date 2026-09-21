@@ -63,13 +63,17 @@
 // Registered applicant identity outranks an unrecognized organization label.
 // Coverage counts declared facts; mined keywords and generic phrase fragments
 // cannot manufacture specialized need satisfaction or inflate its numerator.
-export const PROFILE_SIGNAL_VERSION = '2026.09.21-4'
+export const PROFILE_SIGNAL_VERSION = '2026.09.21-5'
 
 /** Repo-relative files whose content decides what the engine believes about a profile. */
 export const PROFILE_SIGNAL_DERIVATION_FILES = Object.freeze([
   'backend/config/conditionTerms.js',
   'backend/config/declaredNeedFields.js',
   'backend/crawler-os/declaredNeedTerms.js',
+  'backend/crawler-os/profileTopicTags.js',
+  'backend/services/matching/needFirstMatchPolicy.js',
+  'backend/services/matching/needFirstMatchPolicyV2.js',
+  'backend/services/matching/researchScopeReview.js',
   'backend/config/conditionSpecificity.js',
   'backend/config/sourceLanes.js',
   'backend/services/profileHelpers.js',
@@ -100,6 +104,6 @@ export const PROFILE_SIGNAL_DERIVATION_FILES = Object.freeze([
  * sha256 over the LF-normalized concatenation of the files above, pinned by
  * `scripts/pin-signal-version.mjs`. The test recomputes it.
  */
-export const PROFILE_SIGNAL_DERIVATION_HASH = '3ecf4f484856171fabe189127e4efdcc1c7e1fb65df2bc1a5d20cf9ba69b3625'
+export const PROFILE_SIGNAL_DERIVATION_HASH = 'f0998d6d87db7561a555d34f42dc6afd86e15b501826e0f149b5b0567e3e2d68'
 
 export default { PROFILE_SIGNAL_VERSION, PROFILE_SIGNAL_DERIVATION_FILES, PROFILE_SIGNAL_DERIVATION_HASH }

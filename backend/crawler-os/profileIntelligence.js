@@ -1,3 +1,4 @@
+import { isBookkeepingInterest } from './profileTopicTags.js';
 import { normalizeDeclaredNeedTerms } from './declaredNeedTerms.js';
 // crawler-os/profileIntelligence.js
 //
@@ -436,23 +437,6 @@ function hasStructuredFosterFlag(profile) {
     if (/(^|[^a-z])foster([^a-z]|$)/.test(text)) return true;
   }
   return false;
-}
-
-// System/bookkeeping tags that must never be treated as topical interests —
-// they mark HOW a profile is managed, not WHAT it seeks funding for.
-const RESERVED_PROFILE_TAGS = new Set([
-  'designated', 'source-safe', 'source_safe', 'source', 'safe', 'synthetic',
-  'test', 'demo', 'organization', 'individual', 'profile', 'active',
-  'amy', 'amy crawler training', 'allow sam cleanup',
-]);
-
-function isBookkeepingInterest(term) {
-  // The persistence bridge can copy tags into keyword bags and normalize
-  // underscores. Filter at the shared thesis boundary before the topic cap,
-  // without changing the stored tags Sam requires for safe cleanup.
-  const normalized = term.replace(/_/g, ' ').replace(/\s+/g, ' ').trim();
-  return RESERVED_PROFILE_TAGS.has(term) || RESERVED_PROFILE_TAGS.has(normalized)
-    || /^amy (?:run|scenario)\s*:/.test(normalized);
 }
 
 // A declared type string that is recognizably an ORGANIZATION even when no
@@ -1232,7 +1216,7 @@ function deriveNeeds(profile, blob) {
     .filter(Boolean)
     // Bookkeeping tags mark HOW a profile is managed, not WHAT it needs —
     // 'designated'/'synthetic'/'individual' must never seed a need scan.
-    .filter((e) => !RESERVED_PROFILE_TAGS.has(e) && !RESERVED_PROFILE_TAGS.has(key(e)))
+    .filter((e) => !isBookkeepingInterest(e) && !isBookkeepingInterest(key(e)))
     // See isTypeOnlyNeedArtifact — a value indistinguishable from the
     // profile's own bare type must not, alone, prove a declaration.
     .filter((e) => !isTypeOnlyNeedArtifact(profile, key(e)));
@@ -1382,7 +1366,7 @@ export function buildThesis(profile = {}) {
   // The concrete research TOPIC for query building ("biotechnology", "genomics"
   // ...), extracted from the declared type first, then the profile's own text,
   // so the SBIR queries search the org's actual field. Never trusts tag
-  // ordering (see RESERVED_PROFILE_TAGS).
+  // ordering (see isBookkeepingInterest).
   const RE_RESEARCH_TOPIC = /\b(biotechnology|biotech|genomics?|bioinformatics|genetic engineering|life sciences?|biomedical(?: research)?|pharmaceutical|biopharmaceutical|bioscience)\b/i;
   const research_topic = is_research_org
     ? ((declaredTypeText.match(RE_RESEARCH_TOPIC)?.[1] ?? blob.match(RE_RESEARCH_TOPIC)?.[1])?.toLowerCase() ?? 'biotechnology')
