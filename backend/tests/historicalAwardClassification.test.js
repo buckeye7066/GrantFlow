@@ -35,5 +35,6 @@ describe('historical award records remain reference-only', () => {
     expect(opportunityKindOf(past)).toBe('PAST_AWARD_INTEL')
     expect(opportunityKindOf({ title: 'Excellence Award Scholarship', source: 'grants.gov', opportunity_kind: 'SCHOLARSHIP' })).toBe('SCHOLARSHIP')
     expect(isProposalEligibleOpportunity({ source: 'grants.gov', opportunity_kind: 'DIRECT_GRANT', description: 'The successful awardee will be notified.' })).toBe(true)
+    expect(buildOpportunityReadModel({ source: 'grants.gov', opportunity_kind: 'direct' }).opportunity_kind).toBe('direct')
   })
 })
