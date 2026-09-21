@@ -17,6 +17,7 @@ import {
 } from '../db/migrations/163_hamilton_submission_attempt_states.mjs'
 
 export const REQUIRED_TABLES = Object.freeze([
+  'notifications',
   'grants',
   'funding_opportunities',
   'grant_applications',
@@ -31,6 +32,17 @@ export const REQUIRED_TABLES = Object.freeze([
 // semantics. PostgreSQL reports text defaults in the canonical `'x'::text`
 // form, so default checks are normalized before comparison.
 export const COLUMN_EXPECTATIONS = Object.freeze([
+  // In-app notifications must exist before traffic; reads must match integer writes.
+  { table: 'notifications', column: 'id', type: 'text', nullable: false },
+  { table: 'notifications', column: 'user_id', type: 'text', nullable: false },
+  { table: 'notifications', column: 'type', type: 'text', nullable: false },
+  { table: 'notifications', column: 'title', type: 'text', nullable: false },
+  { table: 'notifications', column: 'message', type: 'text', nullable: false },
+  { table: 'notifications', column: 'data', type: 'text' },
+  { table: 'notifications', column: 'read', type: 'integer', nullable: false, defaultValue: '0' },
+  { table: 'notifications', column: 'created_at', type: 'timestamp without time zone' },
+  { table: 'notifications', column: 'expires_at', type: 'timestamp without time zone' },
+
   // Existing canonical JSON/text contracts.
   { table: 'grants', column: 'match_explanation', type: 'text' },
   { table: 'grants', column: 'match_reasons', type: 'text' },
