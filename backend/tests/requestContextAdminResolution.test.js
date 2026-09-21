@@ -10,7 +10,7 @@
  */
 
 import { describe, expect, it } from 'vitest'
-import { buildRequestContext } from '../middleware/requestContext.js'
+import { attachRequestContext, buildRequestContext } from '../middleware/requestContext.js'
 import { ADMIN_EMAIL } from '../config/constants.js'
 
 function emailStubDb(usersRow) {
@@ -68,6 +68,58 @@ function makeDb({ isAdmin, failUsersLookup = false }) {
     },
   }
 }
+
+describe('request-selected profile context', () => {
+  for (const isAdmin of [false, true]) {
+    it(`uses an authorized selection instead of the token default (admin=${isAdmin})`, async () => {
+      const req = {
+        db: makeDb({ isAdmin }), user: { userId: 'u1', profile_id: 'pOld' },
+        headers: { 'x-profile-id': 'pA' },
+      }
+      // For a regular user, make the JWT default accessible as well, so the
+      // existing invalid-token repair cannot accidentally satisfy this test.
+      const prepare = req.db.prepare
+      req.db.prepare = (sql) => String(sql).includes('FROM profiles WHERE user_id')
+        ? { all: () => [{ id: 'pA' }, { id: 'pOld' }] } : prepare(sql)
+      let called = false
+      await attachRequestContext()(req, {}, () => { called = true })
+      expect(called).toBe(true)
+      expect(req.ctx.activeProfileId).toBe('pA')
+      expect(req.ctx.isAdmin).toBe(isAdmin)
+    })
+  }
+
+  it('refuses unauthorized selection instead of silently acting on the default profile', async () => {
+    const req = { db: makeDb({ isAdmin: false }), user: { userId: 'u1', profile_id: 'pA' }, headers: { 'x-profile-id': 'private' } }
+    let status, payload, called = false
+    const res = { status(code) { status = code; return this }, json(body) { payload = body } }
+    await attachRequestContext()(req, res, () => { called = true })
+    expect(called).toBe(false)
+    expect(status).toBe(403)
+    expect(payload.code).toBe('PROFILE_ACCESS_DENIED')
+    expect(req.ctx.activeProfileId).toBe('pA')
+  })
+
+  for (const path of ['/api/auth/refresh', '/api/auth/logout', '/api/auth/me']) {
+    it(`allows ${path} to recover from a stale selected profile`, async () => {
+      const req = { path, db: makeDb({ isAdmin: false }), user: { userId: 'u1', profile_id: 'pA' }, headers: { 'x-profile-id': 'private' } }
+      let called = false
+      await attachRequestContext()(req, {}, () => { called = true })
+      expect(called).toBe(true)
+      expect(req.ctx.activeProfileId).toBe('pA')
+    })
+  }
+
+  it('does not establish a selected profile for an unresolved identity', async () => {
+    const req = { db: emailStubDb(null), user: { userId: 'deleted', role: 'admin' }, headers: { 'x-profile-id': 'private' } }
+    let called = false
+    await attachRequestContext()(req, {}, () => { called = true })
+    expect(called).toBe(true)
+    expect(req.ctx.identityResolved).toBe(false)
+    expect(req.ctx.activeProfileId).toBeNull()
+    expect(req.ctx.isAdmin).toBe(false)
+  })
+})
 
 describe('buildRequestContext DB-backed admin resolution', () => {
   it('a demoted user with a role:admin JWT resolves to NON-admin, scoped', async () => {
