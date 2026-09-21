@@ -35,6 +35,18 @@ describe('htmlToText', () => {
 })
 
 describe('extractOpportunitiesFromPage', () => {
+  it.each(['View & Pay Bill', 'Email updates'])('refuses %s as funding information while preserving a real application', async label => {
+    const html = `<div><a href="/online-account">${label}</a></div>` + longPage
+    const invoke = vi.fn().mockResolvedValue({ ok: true, json: { opportunities: [{
+      title: 'Nashville Youth Fund Grant', funder: 'Nashville Youth Fund',
+      apply_link_id: 'L2', info_link_id: 'L1', evidence: {},
+    }] } })
+    const out = await extractOpportunitiesFromPage({ pageUrl: 'https://nyf.org/grant', html }, { invoke, openai: null })
+    expect(out).toHaveLength(1)
+    expect(out[0].apply_url).toBe('https://nyf.org/apply')
+    expect(out[0].info_url).toBe('https://nyf.org/grant')
+  })
+
   it('refuses an unrelated utility link selected as the grant application', async () => {
     const html = '<div><a href="/online-account">View &amp; Pay Bill</a></div>' + longPage
     const invoke = vi.fn().mockResolvedValue({ ok: true, json: { opportunities: [{
