@@ -183,13 +183,22 @@ describe('qualified pipeline promotion', () => {
     seedCandidate(db, 'real', { id: 'legacy-reference', kind: 'PAST_AWARD_INTEL' })
     await runQualifiedPipelinePromotion(db, { batch: 10, amountFollowup: false })
     db.prepare("UPDATE pipeline_promotion_outcomes SET outcome = 'error' WHERE opportunity_id = 'legacy-reference'").run()
-    const before = db.prepare('SELECT reason, attempted_at, attempts FROM pipeline_promotion_outcomes').get()
+    for (const [id, reason] of [['real-error', 'error:transient'], ['near-prefix', 'notXaYgrant:reference']]) {
+      seedCandidate(db, 'real', { id })
+      db.prepare(`INSERT INTO pipeline_promotion_outcomes
+        (profile_id, opportunity_id, mode, outcome, reason, score, attempted_at, attempts,
+         profile_facts_hash, policy_version, opportunity_updated_at)
+        SELECT profile_id, ?, mode, 'error', ?, score, attempted_at, attempts,
+               profile_facts_hash, policy_version, opportunity_updated_at
+          FROM pipeline_promotion_outcomes WHERE opportunity_id = 'legacy-reference'`).run(id, reason)
+    }
+    const before = db.prepare('SELECT * FROM pipeline_promotion_outcomes ORDER BY opportunity_id').all()
 
     const result = await runQualifiedPipelinePromotion(db, { batch: 10, amountFollowup: false })
     expect(result.attempted).toBe(0)
-    expect(result.remaining).toBe(0)
-    expect(db.prepare('SELECT outcome, reason, attempted_at, attempts FROM pipeline_promotion_outcomes').get())
-      .toEqual({ outcome: 'live_reject', ...before })
+    expect(result.remaining).toBe(2)
+    expect(db.prepare('SELECT * FROM pipeline_promotion_outcomes ORDER BY opportunity_id').all())
+      .toEqual(before.map(row => row.opportunity_id === 'legacy-reference' ? { ...row, outcome: 'live_reject' } : row))
     db.close()
   })
 
