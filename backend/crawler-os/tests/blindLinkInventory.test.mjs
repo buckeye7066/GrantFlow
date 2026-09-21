@@ -113,8 +113,10 @@ test('explicit non-funding purposes override register/application keywords', () 
     <a href="/grants/application/online-account">View &amp; Pay Bill</a>
     <p>Apply for the community grant: <a href="/form.pdf">Click here</a></p>
     <a href="/aid">Apply for utility bill assistance</a>
+    <a href="/apply">Apply for help to pay your bills</a>
+    <a href="/grant-application">Apply for a grant to pay bills</a>
   </main>`, { baseUrl: 'https://foundation.example.org/grants' });
-  assert.deepEqual(inv.map(link => link.apply_intent), [false, false, true, true]);
+  assert.deepEqual(inv.map(link => link.apply_intent), [false, false, true, true, true, true]);
 });
 
 test('apply_intent is a keyword signal, not a profile signal', () => {

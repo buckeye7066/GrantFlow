@@ -26,7 +26,7 @@ import { canonicalizeUrl } from './urlCanonical.js';
 const APPLY_INTENT = /\b(apply|application|applications|submit|register|registration|enroll|start\s+application|begin\s+application|rfp|rfa|nofo|request\s+for\s+(proposals?|applications?)|how\s+to\s+apply)\b/i;
 // Explicit utility/newsletter labels are not funding applications, even when
 // their URL contains "application" or a neighboring link says "Apply".
-const NON_APPLICATION_PURPOSE = /\b(pay\s+(?:(?:your|my|the|a)\s+)?bills?|view\s+(?:(?:your|my|the)\s+)?(?:bills?|outages?)|billing\s+(?:account|history)|account\s+balance|email\s+updates|newsletter|unsubscribe)\b/i;
+const NON_APPLICATION_PURPOSE = /^(?:(?:view\s*(?:&|and)\s*)?pay\s+(?:(?:your|my|the|a)\s+)?bills?(?:\s+(?:online|now))?|view\s+(?:(?:your|my|the)\s+)?(?:bills?|outages?)|billing\s+(?:account|history)|account\s+balance)$|\b(?:email\s+updates|newsletter|unsubscribe)\b/i;
 
 function squash(text, max = 200) {
   return String(text || '').replace(/\s+/g, ' ').trim().slice(0, max);
