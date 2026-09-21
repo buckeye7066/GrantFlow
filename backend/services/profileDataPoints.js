@@ -70,13 +70,13 @@ const norm = (v) => String(v ?? '').toLowerCase().replace(/[_\s-]+/g, ' ').trim(
  *    alone (the administrative-baseline inflation the scale was built to kill).
  *    They are kept in the inventory as EVIDENCE but excluded from the ratio.
  *  - `keyword` (document/narrative-mined) points are excluded from the
- *    DENOMINATOR (a verbose narrative must not dilute every match), but a
- *    matched keyword still ADDS credit to the numerator (real evidence).
+ *    coverage ratio (a verbose narrative must neither dilute nor inflate a
+ *    match). They remain inspectable topical evidence, not declared facts.
  * So: denominator = COVERAGE points (needs + identity/traits); numerator =
- * matched coverage + matched-keyword bonus; geo/eligibility stay as gates.
+ * matched coverage; geo/eligibility stay as gates.
  */
 const DENOMINATOR_EXCLUDE_KINDS = new Set(['geo', 'applicant_type', 'keyword'])
-const NUMERATOR_EXCLUDE_KINDS = new Set(['geo', 'applicant_type'])
+const NUMERATOR_EXCLUDE_KINDS = DENOMINATOR_EXCLUDE_KINDS
 
 /**
  * DECLARED-PROGRAM AFFINITY (owner directive 2026-07-07).
@@ -359,22 +359,20 @@ export function buildProfileDataPointInventory({ profile, signals, profileNorm =
   //    funding source's thin directory page matches more than a handful, so
   //    counting them in the denominator crushed EVERY relevant match to
   //    single digits (Benefits.gov covered 100% of Gilbert's needs yet scored
-  //    4/358 because 300 were narrative keywords). A matched keyword still ADDS
-  //    credit (real evidence in the numerator) — it just no longer dilutes the
-  //    denominator. The denominator is the SALIENT facts the profile actually
-  //    asserts: needs, geography, applicant type, demographics, assistance,
+  //    4/358 because 300 were narrative keywords). Matched keywords remain
+  //    topical evidence but are excluded from both coverage aggregates.
+  //    Coverage measures the salient facts the profile actually asserts:
+  //    needs, demographics, assistance,
   //    military, health, family, occupation, credentials, immigration,
   //    interests, academics, financials. ──
   const keywordList = signals?.keywordSet ?? signals?.keywords
   const keywords = keywordList && (keywordList.size ?? keywordList.length)
     ? toValueList(keywordList)
     : rowList(profile?.keywords)
-  //    A stopword is not evidence. Keyword credit is NUMERATOR-ONLY, so a term
-  //    that proves nothing ("and", "grant", "funding", "eligible", "none", the
-  //    sponsor-name fragment "era") is free score with no offsetting cost in the
-  //    denominator — which is how a college profile's top ACCEPT came to be a
-  //    commercial-fishing occupational-safety grant at 59. The vocabulary is the
-  //    one document mining already used; see config/nonEvidentiaryKeywords.js.
+  //    A stopword is not topical evidence. Exclude terms that prove nothing
+  //    ("and", "grant", "funding", "eligible", "none", sponsor fragment "era")
+  //    using the same vocabulary as document mining; see
+  //    config/nonEvidentiaryKeywords.js.
   for (const k of cleanTerms(keywords)) {
     if (!isEvidentiaryKeyword(k)) continue
     push('keyword', k)
@@ -383,7 +381,7 @@ export function buildProfileDataPointInventory({ profile, signals, profileNorm =
   // `total` IS the scoring denominator = COVERAGE points only (needs +
   // identity/traits): geo and applicant_type are gates, keywords are mined
   // noise — all excluded from the denominator. `dataPoints` still carries
-  // every point so evaluateDataPointMatches can credit a matched keyword and
+  // every point so evaluateDataPointMatches can record a matched keyword and
   // the dashboard can show geo/type/keyword as evidence.
   const denominatorPoints = dataPoints.filter((d) => !DENOMINATOR_EXCLUDE_KINDS.has(d.kind))
   const keywordCount = dataPoints.filter((d) => d.kind === 'keyword').length
@@ -394,7 +392,7 @@ export function buildProfileDataPointInventory({ profile, signals, profileNorm =
  * Evaluate which inventory data points an opportunity matches.
  *
  * Structured verdicts the engine has already computed rule their kinds:
- *  - `need` points take their graded credit (1.0 direct / 0.5 fragment) from
+ *  - `need` points take their graded credit (1.0 direct / 0.5 synonym) from
  *    needCredits — the engine's whole-word synonym pass, NOT re-derived here.
  *  - `geo` points are matched iff the geo gate resolved to a MATCH tier
  *    (zip/county/city/state/national) — text scanning would re-introduce the
@@ -422,8 +420,8 @@ export function evaluateDataPointMatches({
   // geo/applicant_type matches are recorded as EVIDENCE (pushed to `matched`)
   // but excluded from `credit` — they are the geoFactor/eligFactor gates,
   // counting them as coverage would double-count. This helper adds a matched
-  // point and only credits it toward the coverage numerator when its kind is
-  // not a gate.
+  // point and only credits it toward coverage when its kind participates in
+  // the denominator. Mined keyword matches remain evidence only.
   const record = (dp, c, via) => {
     matched.push({ ...dp, credit: c, via })
     if (!NUMERATOR_EXCLUDE_KINDS.has(dp.kind)) credit += c
@@ -432,7 +430,7 @@ export function evaluateDataPointMatches({
   const textHas = (term) =>
     containsTermWholeWord(oppText, term) ||
     (Array.isArray(oppSignals) &&
-      oppSignals.some((s) => containsTermWholeWord(s, term) || containsTermWholeWord(term, s)))
+      oppSignals.some((s) => containsTermWholeWord(s, term)))
   const scanValue = (value) => {
     if (textHas(value)) return true
     const spaced = value.replace(/[_-]+/g, ' ')
@@ -495,5 +493,5 @@ export function evaluateDataPointMatches({
       }
     }
   }
-  return { credit, matched }
+  return { credit, matched, coverageMatchedCount: matched.filter(dp => !NUMERATOR_EXCLUDE_KINDS.has(dp.kind)).length }
 }

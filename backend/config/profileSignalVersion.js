@@ -61,7 +61,9 @@
 // Specific declared needs now survive normalization; applicant evidence must
 // state recipient criteria rather than merely mention an audience in marketing.
 // Registered applicant identity outranks an unrecognized organization label.
-export const PROFILE_SIGNAL_VERSION = '2026.09.21-3'
+// Coverage counts declared facts; mined keywords and generic phrase fragments
+// cannot manufacture specialized need satisfaction or inflate its numerator.
+export const PROFILE_SIGNAL_VERSION = '2026.09.21-4'
 
 /** Repo-relative files whose content decides what the engine believes about a profile. */
 export const PROFILE_SIGNAL_DERIVATION_FILES = Object.freeze([
@@ -98,6 +100,6 @@ export const PROFILE_SIGNAL_DERIVATION_FILES = Object.freeze([
  * sha256 over the LF-normalized concatenation of the files above, pinned by
  * `scripts/pin-signal-version.mjs`. The test recomputes it.
  */
-export const PROFILE_SIGNAL_DERIVATION_HASH = 'b4122d847b330893a5fba8af231dcbb6cdaa5f0edb50d3043f86f1baac83df60'
+export const PROFILE_SIGNAL_DERIVATION_HASH = '3ecf4f484856171fabe189127e4efdcc1c7e1fb65df2bc1a5d20cf9ba69b3625'
 
 export default { PROFILE_SIGNAL_VERSION, PROFILE_SIGNAL_DERIVATION_FILES, PROFILE_SIGNAL_DERIVATION_HASH }

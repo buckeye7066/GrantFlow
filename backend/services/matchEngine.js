@@ -3211,9 +3211,8 @@ export function scoreOpportunity(profile, opportunity, opts = {}) {
   // Graded per-need credit:
   //   1.0 — the need itself, its spaced form, or a table synonym appears
   //         (a real, on-topic hit: "fire_equipment" → "fire equipment").
-  //   0.5 — only a single WORD of a multi-word need appears ("education" out
-  //         of "continuing_education" in a tech-corp grant) — related, not
-  //         the need itself. Prevents word fragments from claiming full needs.
+  //   0.5 — one established table synonym appears. Arbitrary words split
+  //         from a specialized need are not evidence of that need.
   const matchedNeedSet = new Set(
     (Array.isArray(canonicalNeedForExplain.matchedNeeds) ? canonicalNeedForExplain.matchedNeeds : [])
       .map((n) => String(n).toLowerCase())
@@ -3233,7 +3232,7 @@ export function scoreOpportunity(profile, opportunity, opts = {}) {
   const textHas = (syn) =>
     containsTermWholeWord(oppText, syn) ||
     oppSignalsForCoverage.some((signal) =>
-      containsTermWholeWord(signal, syn) || containsTermWholeWord(syn, signal))
+      containsTermWholeWord(signal, syn))
   for (const rawNeed of coverageNeeds) {
     if (matchedNeedSet.has(rawNeed)) continue
     const spaced = rawNeed.replace(/[_-]+/g, ' ')
@@ -3261,14 +3260,9 @@ export function scoreOpportunity(profile, opportunity, opts = {}) {
       needCreditTotal += 0.5
       continue
     }
-    // Word fragments of a multi-word need ("equipment" out of
-    // "fire_equipment") → half credit.
-    const words = spaced.split(/\s+/).filter((w) => w.length >= 4 && !AMBIGUOUS_SINGLE_WORDS.has(w))
-    if ((words.length > 1 || (words.length === 1 && words[0] !== spaced)) && words.some((w) => textHas(w))) {
-      matchedNeedSet.add(rawNeed)
-      needCredits.set(rawNeed, 0.5)
-      needCreditTotal += 0.5
-    }
+    // Generic fragments do not establish a specialized need. "Development"
+    // alone cannot satisfy "biopharmaceutical development". Exact phrases and
+    // the explicit synonym table above remain the evidence for need coverage.
   }
 
   // Specialized fit evidence (the former boost stack + demographic alignment)
@@ -3528,10 +3522,9 @@ export function scoreOpportunity(profile, opportunity, opts = {}) {
   // ── Plain-language score explanation (the score IS this sentence) ──
   if (modelUsesDataPoints && inventoryCalibratable) {
     reasons.push(
-      // Clamp the matched count to the inventory size — bonus/fit credit once
-      // produced "Matches 9 of the profile's 6 data points", an impossible
-      // sentence that also flagged the uncalibratable-stub class above.
-      `Matches ${Math.min(dataPointEval.matched.length, dataPointInventory.total)} of the profile's ${dataPointInventory.total} data points` +
+      // Only count facts that participate in coverage, not topical keyword
+      // evidence or eligibility gates that are excluded from its denominator.
+      `Matches ${dataPointEval.coverageMatchedCount} of the profile's ${dataPointInventory.total} data points` +
       ` — ${Math.round(dataPointCoverage)}% coverage of everything this profile tells us`,
     )
     if (matchedNeedSet.size > 0) {
@@ -3543,7 +3536,7 @@ export function scoreOpportunity(profile, opportunity, opts = {}) {
     reasons.push(
       isResourceKindRow
         ? `Profile context too thin for a calibrated coverage claim (${dataPointInventory.total} data points < ${MIN_CALIBRATED_INVENTORY}); directory/benefit pointers are bounded at ${NO_NEEDS_TOPICAL_CAP} until the profile is filled out`
-        : `Matches ${Math.min(dataPointEval.matched.length, dataPointInventory.total)} of the profile's ${dataPointInventory.total} data points — coverage measured against the ${MIN_CALIBRATED_INVENTORY}-point calibration floor (${Math.round(dataPointCoverage)}%)`,
+        : `Matches ${dataPointEval.coverageMatchedCount} of the profile's ${dataPointInventory.total} data points — coverage measured against the ${MIN_CALIBRATED_INVENTORY}-point calibration floor (${Math.round(dataPointCoverage)}%)`,
     )
   } else if (!modelUsesDataPoints && totalDeclaredNeeds > 0) {
     reasons.push(
@@ -3654,7 +3647,7 @@ export function scoreOpportunity(profile, opportunity, opts = {}) {
     // renders it as "why did this match survive".
     dataPointEvidence: {
       total: dataPointInventory.total,
-      matched_count: dataPointEval.matched.length,
+      matched_count: dataPointEval.coverageMatchedCount,
       // `credit` = credit from matched inventory entries alone (kept under its
       // original key for existing consumers). The fit bonus is reported
       // SEPARATELY and `total_credit` is the numerator the score actually
@@ -3678,7 +3671,7 @@ export function scoreOpportunity(profile, opportunity, opts = {}) {
       // Data-point formula inputs (score = matched/total × elig × geo)
       scoring_model: SCORING_MODEL,
       data_point_total: dataPointInventory.total,
-      data_point_matched: dataPointEval.matched.length,
+      data_point_matched: dataPointEval.coverageMatchedCount,
       data_point_credit: Math.round(dataPointEval.credit * 10) / 10,
       data_point_bonus_credit: Math.round(fitEvidenceCredit * 10) / 10,
       data_point_total_credit: Math.round(dataPointCredit * 10) / 10,
@@ -3978,7 +3971,7 @@ function fullSections(sections, prof) {
   return typeof s === 'object' ? s : {}
 }
 
-export function makeDecision(score, profile, opportunity, normalizedProfile = null, signals = null, oppNorm = null, sections = null) {
+export function makeDecision(score, profile, opportunity, normalizedProfile = null, signals = null, oppNorm = null, sections = null, coverageEvidence = null) {
   const reasons = []
   const opp = opportunity || {}
   const prof = profile || {}
@@ -4652,7 +4645,7 @@ export function makeDecision(score, profile, opportunity, normalizedProfile = nu
   // never auto-ACCEPTs for an ORGANIZATION — org eligibility is too often
   // restricted for silence to be treated as consent. Individuals keep the
   // soft-match behavior (consumer programs rarely enumerate entity types).
-  if (score >= ACCEPT_SCORE && on.applicabilityUnknown && !isIndividualOrCaregiver) {
+  if (on.applicabilityUnknown && !isIndividualOrCaregiver) {
     reasons.push('Source does not state who may apply — needs review before ACCEPT for a non-individual profile')
     return {
       decision: 'REVIEW',
@@ -4677,7 +4670,7 @@ export function makeDecision(score, profile, opportunity, normalizedProfile = nu
   // concrete anchor in the text (isGenericOnly's carve-out) rescues rows like
   // "Cancer Resource Directory", and declared DIRECTORY locators are already
   // held at REVIEW upstream by the locator rule.
-  if (score >= ACCEPT_SCORE && isGenericOnly(oppText)) {
+  if (isGenericOnly(oppText)) {
     reasons.push('Generic funding/search listing with no concrete profile-specific anchor — held at REVIEW')
     return {
       decision: 'REVIEW',
@@ -4689,7 +4682,7 @@ export function makeDecision(score, profile, opportunity, normalizedProfile = nu
   // A condition-specific program never ACCEPTs on an UNNAMED disability — the
   // profile may still be served (general-disability case), so it stays visible
   // at REVIEW, but admission-as-a-strong-match requires the named condition.
-  if (conditionUnnamedDisability && score >= ACCEPT_SCORE) {
+  if (conditionUnnamedDisability) {
     return {
       decision: 'REVIEW',
       explanation: 'Condition-specific program: the profile declares a disability but names no matching condition — confirm the condition before pursuing.',
@@ -4699,6 +4692,17 @@ export function makeDecision(score, profile, opportunity, normalizedProfile = nu
 
   if (score >= ACCEPT_SCORE) {
     reasons.push(`Score ${score} ≥ ${ACCEPT_SCORE} — covers at least half of the profile's main needs`)
+    return { decision: 'ACCEPT', explanation: acceptExplanation(score, opp, on), reasons }
+  }
+
+  // Coverage ranks how much of the whole profile this source addresses. A
+  // concrete source can meet one evidenced need without covering unrelated
+  // traits. Admit that positive evidence only after every substantive hold
+  // above; the canonical caller still applies URL, eligibility and purpose
+  // guards below. Mined keywords and partial fragments never qualify here.
+  const substantiveNeeds = coverageEvidence?.matched?.filter(point => point.kind === 'need' && point.credit === 1) ?? []
+  if (substantiveNeeds.length > 0) {
+    reasons.push(`Direct evidence addresses ${substantiveNeeds.length} profile need(s); coverage score remains ${score}`)
     return { decision: 'ACCEPT', explanation: acceptExplanation(score, opp, on), reasons }
   }
 
@@ -5066,7 +5070,7 @@ export function computeMatchDecision(rawProfile, rawOpportunity, opts = {}) {
   }
 
   // Decision via makeDecision — pass normalizedProfile so section-derived flags are used
-  let { decision, explanation, reasons: decisionReasons } = makeDecision(finalScore, rawProfile, rawOpportunity, profileNorm, signalsForScoring ?? signals, oppNorm, sectionsForScoring)
+  let { decision, explanation, reasons: decisionReasons } = makeDecision(finalScore, rawProfile, rawOpportunity, profileNorm, signalsForScoring ?? signals, oppNorm, sectionsForScoring, match_explain?.dataPointEvidence)
 
   // A directory/referral can be useful, but it is not a direct award. Enforce
   // that distinction in the canonical engine so every caller gets the same

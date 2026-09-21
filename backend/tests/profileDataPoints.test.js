@@ -80,10 +80,9 @@ describe('buildProfileDataPointInventory', () => {
     expect(inv.total).toBe(7)
   })
 
-  it("a matched keyword still adds credit — coverage = credit ÷ SALIENT denominator", () => {
+  it('mined keyword evidence cannot inflate the declared-fact coverage ratio', () => {
     // 4 salient needs + 6 narrative keywords. A source that matches 2 needs
-    // and 3 keywords earns credit 5, over the salient denominator 4 → clamped
-    // to 100 (keywords add credit; they never dilute).
+    // and 3 keywords covers two of four declared facts, regardless of verbosity.
     const salient = ['housing', 'food', 'medical', 'employment'].map((v) => ({ id: `need:${v}`, kind: 'need', value: v }))
     const keywords = Array.from({ length: 6 }, (_, i) => ({ id: `keyword:kw${i}`, kind: 'keyword', value: `kw${i}` }))
     const inv = { dataPoints: [...salient, ...keywords], total: salient.length, keywordCount: keywords.length }
@@ -92,9 +91,9 @@ describe('buildProfileDataPointInventory', () => {
       oppText: 'kw0 kw1 kw2',
       needCredits: new Map([['housing', 1], ['food', 1]]),
     })
-    // 2 need credits + 3 keyword text matches = 5
-    expect(r.credit).toBe(5)
-    expect(Math.min(100, Math.round((r.credit / inv.total) * 100))).toBe(100)
+    expect(r.matched.filter(p => p.kind === 'keyword')).toHaveLength(3)
+    expect(r.credit).toBe(2)
+    expect(Math.round((r.credit / inv.total) * 100)).toBe(50)
   })
 
   it('a gate kind never CONSUMES a substantive trait: veteran stays both applicant_type AND military', () => {
@@ -193,7 +192,7 @@ describe('evaluateDataPointMatches', () => {
 
   it("owner's arithmetic: matched/total drives the ratio (44/88 → 50%)", () => {
     const dataPoints = Array.from({ length: 88 }, (_, i) => ({
-      id: `keyword:term${String(i).padStart(3, '0')}`, kind: 'keyword', value: `term${String(i).padStart(3, '0')}`,
+      id: `interest:term${String(i).padStart(3, '0')}`, kind: 'interest', value: `term${String(i).padStart(3, '0')}`,
     }))
     const inv = { dataPoints, total: 88, truncatedKeywords: 0 }
     const oppText = dataPoints.slice(0, 44).map((d) => d.value).join(' ')
