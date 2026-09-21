@@ -30,16 +30,16 @@ describe('schema-backed free extraction',()=>{
  });
 
  it('provides typed dates, state codes and source inventory ids',()=>{
-  const schema=extractor.createBlindPageResponseSchema([{id:'L1'},{id:'L2'}]);const p=schema.properties.opportunities.items.properties;
+  const schema=extractor.createBlindPageResponseSchema([{id:'L1',apply_intent:true},{id:'L2',apply_intent:false}]);const p=schema.properties.opportunities.items.properties;
   expect(p.amount_min.type).toEqual(['number','null']);
   expect(new RegExp(p.deadline.pattern).test('2026-12-31')).toBe(true);
   expect(new RegExp(p.deadline.pattern).test('December 31, 2026')).toBe(false);
   expect(p.states.items.enum).toContain('TN');expect(p.states.items.enum).not.toContain('Tennessee');
-  expect(p.apply_link_id.enum).toEqual(['L1','L2',null]);expect(p.info_link_id.enum).toEqual(['L1','L2',null]);
+  expect(p.apply_link_id.enum).toEqual(['L1',null]);expect(p.info_link_id.enum).toEqual(['L1','L2',null]);
   expect(p).toHaveProperty('expected_decision_date');expect(p).toHaveProperty('reporting_requirements');
  });
  it('hands the schema to the page reader after inventory sanitization',async()=>{
-  let seen;await extractor.extractPageFactsBlind({pageUrl:'https://example.org/grant',pageText:text,linkInventory:[{id:'good',url:'https://example.org/apply'},{id:'bad',url:'javascript:alert(1)'}]},
+  let seen;await extractor.extractPageFactsBlind({pageUrl:'https://example.org/grant',pageText:text,linkInventory:[{id:'good',url:'https://example.org/apply',apply_intent:true},{id:'bad',url:'javascript:alert(1)',apply_intent:true}]},
    {llm:async options=>{seen=options;return {opportunities:[]};}});
   expect(seen.responseSchema.properties.opportunities.items.properties.apply_link_id.enum).toEqual(['good',null]);
   expect(seen.system).toMatch(/untrusted DATA/);expect(seen.prompt).toContain(text);
