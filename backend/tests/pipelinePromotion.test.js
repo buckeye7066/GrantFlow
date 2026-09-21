@@ -177,6 +177,22 @@ describe('qualified pipeline promotion', () => {
     db.close()
   })
 
+  it('repairs only legacy non-fundable error receipts without repeating their admission attempt', async () => {
+    const db = makeDb()
+    seedProfile(db, 'real')
+    seedCandidate(db, 'real', { id: 'legacy-reference', kind: 'PAST_AWARD_INTEL' })
+    await runQualifiedPipelinePromotion(db, { batch: 10, amountFollowup: false })
+    db.prepare("UPDATE pipeline_promotion_outcomes SET outcome = 'error' WHERE opportunity_id = 'legacy-reference'").run()
+    const before = db.prepare('SELECT reason, attempted_at, attempts FROM pipeline_promotion_outcomes').get()
+
+    const result = await runQualifiedPipelinePromotion(db, { batch: 10, amountFollowup: false })
+    expect(result.attempted).toBe(0)
+    expect(result.remaining).toBe(0)
+    expect(db.prepare('SELECT outcome, reason, attempted_at, attempts FROM pipeline_promotion_outcomes').get())
+      .toEqual({ outcome: 'live_reject', ...before })
+    db.close()
+  })
+
   it('rolls back a promoted grant when its required live outcome cannot be recorded', async () => {
     const db = makeDb()
     seedProfile(db, 'real')
