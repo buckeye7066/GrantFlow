@@ -10,10 +10,11 @@ const SCHEDULER_PATH = join(REPO_ROOT, 'backend', 'services', 'amy', 'amySchedul
 const RUNNER_PATH = join(REPO_ROOT, 'backend', 'services', 'amy', 'amyRunner.js')
 const LOCK_PATH = join(REPO_ROOT, 'backend', 'services', 'schedulerLock.js')
 
-async function loadScheduler({ latest = null, launchAmyRun = () => ({ run_id: 'test-run' }) } = {}) {
+async function loadScheduler({ latest = null, checkpoint = null, launchAmyRun = () => ({ run_id: 'test-run' }) } = {}) {
   globalThis.__amySchedulerTestDeps = {
     launchAmyRun,
     readLatestAmyReport: async () => latest,
+    readAmyRunCheckpoint: async () => checkpoint,
   }
   const source = readFileSync(SCHEDULER_PATH, 'utf8')
     .replace(
@@ -23,6 +24,10 @@ async function loadScheduler({ latest = null, launchAmyRun = () => ({ run_id: 't
     .replace(
       "import { readLatestAmyReport } from './amyReportStore.js'",
       'const { readLatestAmyReport } = globalThis.__amySchedulerTestDeps',
+    )
+    .replace(
+      "import { readAmyRunCheckpoint } from './amyRunCheckpoint.js'",
+      'const { readAmyRunCheckpoint } = globalThis.__amySchedulerTestDeps',
     )
   const nonce = `${Date.now()}-${Math.random()}`
   try {
@@ -54,6 +59,16 @@ async function loadSchedulerLock({ withLock, renewLock, captureException = () =>
 const quietLogger = { info() {}, warn() {}, error() {} }
 const HOUR_MS = 60 * 60 * 1000
 const DAY_MS = 24 * HOUR_MS
+
+test('unfinished checkpoint resumes even after a recent partial report', async () => {
+  const nowMs = Date.parse('2026-09-21T12:00:00Z')
+  let launches = 0
+  const scheduler = await loadScheduler({ latest: { completed_at: new Date(nowMs).toISOString() },
+    checkpoint: { value: { run_id: 'unfinished' } }, launchAmyRun: () => { launches += 1 } })
+  const result = await scheduler.runAmyFreshnessCheck({ db: {}, nowMs, logger: quietLogger })
+  assert.equal(result.reason, 'unfinished_run')
+  assert.equal(launches, 1)
+})
 
 test('Amy freshness is anchored to the latest durable completed report', async () => {
   const scheduler = await loadScheduler()
