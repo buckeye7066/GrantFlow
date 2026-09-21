@@ -22,6 +22,7 @@
  */
 
 import fs from 'node:fs/promises'
+import { runWithScheduledOwnerAiScope } from '../ownerAi/ownerAiScope.js'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { runAmyTraining } from './amyAgent.js'
@@ -224,9 +225,12 @@ export function launchAmyRun({ db, logger = console, source = 'admin', opts = {}
         },
         (lease) => {
           state.phase = 'training'
-          return runAmyTraining({ db, runId, writeArtifact, logger, ...opts, enableCheckpoint: true, signal: lease?.signal,
+          const train = signal => runAmyTraining({ db, runId, writeArtifact, logger, ...opts, enableCheckpoint: true, signal,
             onCheckpointProgress: progress => { state.run_id = progress.run_id; state.progress = progress },
           })
+          return ['scheduler', 'startup'].includes(source)
+            ? runWithScheduledOwnerAiScope(db, { workload: 'amy_training', signal: lease?.signal }, train)
+            : train(lease?.signal)
         },
       )
       if (result?.skipped) {

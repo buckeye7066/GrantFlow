@@ -19,6 +19,7 @@ import { getRobertConfig } from './robertSafety.js'
 import { autoSeedWeakestProfiles } from './robertFundingTraceBridge.js'
 import { upsertSourceCandidate } from './robertRunStore.js'
 import { runWithSchedulerLock } from '../schedulerLock.js'
+import { runWithScheduledOwnerAiScope } from '../ownerAi/ownerAiScope.js'
 
 let _running = false
 let _interval = null
@@ -121,10 +122,12 @@ async function kickOff({ db, deps, logger, trigger }) {
     await runWithSchedulerLock(db, {
       lockName: 'robert:discovery',
       ttlMs: 2 * 60 * 60 * 1000,
+      heartbeat: true,
       logger,
-    }, async () => {
+    }, async lease => {
       const scheduledMode = (process.env.ROBERT_SCHEDULED_MODE || 'full-cycle').toLowerCase()
-      const result = await runRobert({ db, deps, trigger, mode: scheduledMode })
+      const result = await runWithScheduledOwnerAiScope(db, { workload: 'robert_discovery', signal: lease?.signal },
+        signal => runRobert({ db, deps, trigger, mode: scheduledMode, signal }))
       if (logger?.info) logger.info('robert.scheduler.run', { run_id: result?.run_id, mode: result?.mode, status: result?.status, status_reason: result?.status_reason || null })
       return result
     })
