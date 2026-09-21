@@ -110,6 +110,10 @@ export function buildIsolatedTestEnv(base = process.env, overrides = {}) {
   env.NODE_ENV = 'test'
   env.GRANTFLOW_TEST_RUNNER = '1'
   env.DISABLE_BACKGROUND_SERVICES = 'true'
+  // Incidental DB imports must not open the shared backend/data/grantflow.db
+  // (or an inherited live path) in every parallel worker. Disk-persistence
+  // fixtures explicitly supply their own disposable path through overrides.
+  env.SQLITE_DB_PATH = ':memory:'
 
   for (const [key, value] of Object.entries(overrides)) {
     if (value === undefined || value === null) delete env[key]

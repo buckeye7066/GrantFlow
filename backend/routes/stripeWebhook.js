@@ -4,7 +4,7 @@ import { ensureServiceCatalogSchema } from '../services/serviceCatalogStore.js'
 import { markPaid } from '../services/pricing/pricingAccessGate.js'
 import { recordPaymentAccessEvent } from '../services/pricing/profilePricingInitializer.js'
 import { PAYMENT_ACCESS_EVENT, QUOTE_STATUS } from '../services/pricing/pricingTypes.js'
-import { updateQuoteStatus, tableExists } from '../services/pricing/quoteBuilder.js'
+import { updateQuoteStatus } from '../services/pricing/quoteBuilder.js'
 import { ensureInvoiceSchema, markInvoicePaid } from '../services/billing/invoiceService.js'
 import { applyStripePaymentFailure, applyStripeSubscription } from '../services/billing/subscriptionSync.js'
 
@@ -19,9 +19,15 @@ const routeLogger = createLogger('route:stripeWebhook')
  */
 async function grantPaidAccess(db, { profileId, quoteId, purchaseId }) {
   if (!profileId) return
+  // Every checkout kind reaches this boundary, including hourly and milestone
+  // payments. Metadata must never mark another profile's quote paid.
+  if (quoteId) {
+    const quote = await db.prepare('SELECT id, profile_id FROM pricing_quotes WHERE id = ? LIMIT 1').get(quoteId)
+    if (!quote || String(quote.profile_id) !== String(profileId)) throw new Error('quote_profile_mismatch')
+  }
   const access = await markPaid(db, { profileId })
   if (!access?.ok) throw new Error(access?.error || 'paid_access_not_recorded')
-  if (quoteId && (await tableExists(db, 'pricing_quotes'))) {
+  if (quoteId) {
     await updateQuoteStatus(db, quoteId, QUOTE_STATUS.PAID)
   }
   await recordPaymentAccessEvent(db, {
@@ -188,20 +194,7 @@ async function fulfillStripeEvent(db, event) {
             routeLogger.error('Stripe webhook: service_purchase purchaseId not found; refusing to grant access', { purchaseId, eventId: event?.id })
             throw new Error('purchase_not_found')
           } else {
-            // Cross-check quote_id (when provided) against the purchase's profile
-            // so a forged metadata block cannot grant access on the wrong profile.
-            let validQuoteId = null
-            if (metaQuoteId) {
-              const q = await db
-                .prepare(`SELECT id, profile_id FROM pricing_quotes WHERE id = ? LIMIT 1`)
-                .get(metaQuoteId)
-              if (!q || !purchaseRow.profile_id || String(q.profile_id) !== String(purchaseRow.profile_id)) {
-                routeLogger.error('Stripe webhook: quote_id metadata does not match purchase profile; NOT granting access', { purchaseId, metaQuoteId, eventId: event?.id })
-                throw new Error('quote_profile_mismatch')
-              }
-              validQuoteId = String(q.id)
-            }
-
+            if (metaQuoteId && !purchaseRow.profile_id) throw new Error('quote_profile_mismatch')
             const spResult = await db.prepare(
               `UPDATE service_purchases
                SET status = 'paid',
@@ -217,7 +210,7 @@ async function fulfillStripeEvent(db, event) {
             } else if (purchaseRow.profile_id) {
               await grantPaidAccess(db, {
                 profileId: String(purchaseRow.profile_id),
-                quoteId: validQuoteId,
+                quoteId: metaQuoteId || null,
                 purchaseId,
               })
             }
