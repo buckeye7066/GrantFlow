@@ -58,11 +58,15 @@
 // ACCEPT. Rescore stored pairs and their proofs through the existing boot drain.
 // Explicit personal onboarding choices outrank display-name inference.
 // Federal Register comment-request notices are procedural, not new funding.
-export const PROFILE_SIGNAL_VERSION = '2026.09.18-2'
+// Specific declared needs now survive normalization; applicant evidence must
+// state recipient criteria rather than merely mention an audience in marketing.
+export const PROFILE_SIGNAL_VERSION = '2026.09.21-1'
 
 /** Repo-relative files whose content decides what the engine believes about a profile. */
 export const PROFILE_SIGNAL_DERIVATION_FILES = Object.freeze([
   'backend/config/conditionTerms.js',
+  'backend/config/declaredNeedFields.js',
+  'backend/crawler-os/declaredNeedTerms.js',
   'backend/config/conditionSpecificity.js',
   'backend/config/sourceLanes.js',
   'backend/services/profileHelpers.js',
@@ -92,6 +96,6 @@ export const PROFILE_SIGNAL_DERIVATION_FILES = Object.freeze([
  * sha256 over the LF-normalized concatenation of the files above, pinned by
  * `scripts/pin-signal-version.mjs`. The test recomputes it.
  */
-export const PROFILE_SIGNAL_DERIVATION_HASH = 'a87e593bdbb469b41614c728992aa1f13a2c01a67a094a6aabf5271e74cb5d67'
+export const PROFILE_SIGNAL_DERIVATION_HASH = '1ff3b0594a626bfa1db36a602ed3baa91d888b4af409bce59afb07410846b1e4'
 
 export default { PROFILE_SIGNAL_VERSION, PROFILE_SIGNAL_DERIVATION_FILES, PROFILE_SIGNAL_DERIVATION_HASH }
