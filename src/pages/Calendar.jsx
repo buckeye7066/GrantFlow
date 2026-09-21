@@ -17,6 +17,7 @@ import { format, differenceInDays, startOfMonth, endOfMonth, eachDayOfInterval,
 import { Link } from "react-router-dom"
 import { createPageUrl } from "@/utils"
 import ProfileSelect from "@/components/shared/ProfileSelect"
+import { calendarDate, downloadCalendar, upcomingPipelineGrants } from '@/lib/calendarExport'
 
 export default function Calendar() {
   const [currentMonth, setCurrentMonth] = useState(new Date())
@@ -31,14 +32,14 @@ export default function Calendar() {
   const monthStr = format(currentMonth, "yyyy-MM")
 
   // Fetch deadlines from our new API
-  const { data: calendarResult, isLoading: calLoading } = useQuery({
+  const { data: calendarResult, isLoading: calLoading, isError: calError } = useQuery({
     queryKey: ["calendar-deadlines", monthStr, effectiveProfileId],
     queryFn: () => getCalendarDeadlines({ month: monthStr, profileId: effectiveProfileId }),
     staleTime: 60_000,
   })
   // Hamilton's scheduled application runs (profile-scoped) — folded into the
   // same calendar feed, each flagged when you may need to be available for 2FA.
-  const { data: hamiltonResult } = useQuery({
+  const { data: hamiltonResult, isLoading: hamiltonLoading, isError: hamiltonError } = useQuery({
     queryKey: ["hamilton-calendar", monthStr, effectiveProfileId],
     queryFn: () => getHamiltonCalendar({ month: monthStr, profileId: effectiveProfileId }),
     enabled: !!effectiveProfileId,
@@ -54,13 +55,9 @@ export default function Calendar() {
   }, [calendarResult, hamiltonResult])
 
   // Also load grants from pipeline for the existing view
-  const { data: grants = [] } = useQuery({
-    queryKey: ["grants"],
-    queryFn: () => client.entities.Grant.list('-created_date', GRANT_LIST_FULL_LIMIT),
-  })
-  const { data: milestones = [] } = useQuery({
-    queryKey: ["milestones"],
-    queryFn: () => client.entities.Milestone.list(),
+  const { data: grants = [], isLoading: grantsLoading, isError: grantsError } = useQuery({
+    queryKey: ["grants", "calendar", effectiveProfileId],
+    queryFn: () => client.entities.Grant.list('-created_date', GRANT_LIST_FULL_LIMIT, effectiveProfileId ? { profile_id: effectiveProfileId } : {}),
   })
 
   // Calendar grid
@@ -69,30 +66,17 @@ export default function Calendar() {
   const daysInMonth = eachDayOfInterval({ start: monthStart, end: monthEnd })
   const startDayOfWeek = getDay(monthStart)
 
-  const isValidDate = (ds) => ds && !isNaN(new Date(ds).getTime())
 
   // Parse a deadline to a LOCAL Date. A bare "YYYY-MM-DD" is otherwise parsed as
   // UTC midnight by `new Date()`, which renders as the previous calendar day in
   // negative-offset zones (US Eastern etc.) and lands the marker on the wrong /
   // empty grid cell. Build it from local Y/M/D so it matches `format(day, ...)`.
-  const toLocalDate = (ds) => {
-    if (!ds) return null
-    const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(ds).trim())
-    if (m) return new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]))
-    const d = new Date(ds)
-    return isNaN(d.getTime()) ? null : d
-  }
+  const toLocalDate = calendarDate
 
   // Pipeline grant deadlines (the dataset that actually has data). This is the
   // single source of truth for BOTH the "Pipeline Deadlines" list and the
   // "Upcoming (30 Days)" widget / calendar grid, so they can never diverge.
-  const upcomingGrants = useMemo(() => grants
-    .filter((g) => {
-      if (!["discovered", "interested", "drafting"].includes(g.status)) return false
-      if (!g.deadline || String(g.deadline).toLowerCase() === "rolling" || !isValidDate(g.deadline)) return false
-      return new Date(g.deadline) >= new Date(new Date().setHours(0, 0, 0, 0))
-    })
-    .sort((a, b) => new Date(a.deadline) - new Date(b.deadline)), [grants])
+  const upcomingGrants = useMemo(() => upcomingPipelineGrants(grants, effectiveProfileId), [grants, effectiveProfileId])
 
   // Normalise pipeline grants into the calendar-event shape and merge with the
   // API feed (catalog + Hamilton runs), deduped by id. Both panels and the grid
@@ -182,6 +166,13 @@ export default function Calendar() {
         </div>
 
         {effectiveProfileId ? <HamiltonReadinessBanner profileId={effectiveProfileId} /> : null}
+
+        <div className="flex flex-wrap items-center gap-3">
+          <Button variant="outline" disabled={calLoading || grantsLoading || (effectiveProfileId && hamiltonLoading) || calError || grantsError || hamiltonError}
+            onClick={() => downloadCalendar(calEvents, monthStr)}>Export {format(currentMonth, 'MMMM')} calendar (.ics)</Button>
+          <p className="text-xs text-muted-foreground">Snapshot of this month and selected profile. Import into Google, Outlook, or Apple Calendar; export again after changes.</p>
+          {calError || grantsError || hamiltonError ? <p role="alert">Some calendar dates could not load. Reload the page to retry before exporting.</p> : null}
+        </div>
 
         <div className="grid lg:grid-cols-3 gap-6">
           {/* Calendar Grid — min-w-0 lets this column shrink within the grid

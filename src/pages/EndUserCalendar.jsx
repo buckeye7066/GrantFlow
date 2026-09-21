@@ -27,6 +27,7 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { useAuthStore } from '@/stores/authStore'
+import { downloadCalendar } from '@/lib/calendarExport'
 
 const ITEM_COLORS = Object.freeze({
   completed: '#bbf7d0',
@@ -175,6 +176,7 @@ export default function EndUserCalendar() {
       if (!grant || !date) continue
       items.push({
         id: `milestone:${milestone.id}`,
+        deadline: milestone.due_date,
         kind: milestone.completed ? 'completed' : 'needed',
         date,
         dateKey: dayKey(date),
@@ -198,6 +200,7 @@ export default function EndUserCalendar() {
         if (subDate) {
           items.push({
             id: `submitted:${grant.id}`,
+            deadline: submittedRaw || grant.updated_at,
             kind: 'submitted',
             date: subDate,
             dateKey: dayKey(subDate),
@@ -215,6 +218,7 @@ export default function EndUserCalendar() {
       if (!date) continue
       items.push({
         id: `submission:${grant.id}`,
+        deadline: grant.deadline,
         kind: 'submission',
         date,
         dateKey: dayKey(date),
@@ -242,6 +246,7 @@ export default function EndUserCalendar() {
       const title = task.display_title || task.funder_name || task.title || 'Funding application'
       items.push({
         id: `hamilton:${task.id}`,
+        deadline: raw,
         kind: 'hamilton_done',
         date,
         dateKey: dayKey(date),
@@ -315,6 +320,11 @@ export default function EndUserCalendar() {
             Pipeline schedule
           </div>
           <h1 className="text-3xl font-bold tracking-tight text-foreground">Your funding deadlines</h1>
+          <Button className="mt-3" variant="outline" disabled={isLoading || hasError || hamiltonTasksQuery.isLoading || hamiltonTasksQuery.isError}
+            onClick={() => downloadCalendar(calendarItems, format(currentMonth, 'yyyy-MM'))}>
+            Export {format(currentMonth, 'MMMM')} calendar (.ics)
+          </Button>
+          <p className="mt-2 text-xs text-muted-foreground">A snapshot of this month for your active profile. Import into Google, Outlook, or Apple Calendar; export again after changes.</p>
           <p className="mt-2 max-w-3xl text-sm text-muted-foreground md:text-base">
             Every date comes from a funding source in your pipeline. Select a highlighted square to see exactly what happened or what is due.
           </p>
