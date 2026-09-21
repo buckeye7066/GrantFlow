@@ -35,6 +35,19 @@ describe('htmlToText', () => {
 })
 
 describe('extractOpportunitiesFromPage', () => {
+  it('refuses an unrelated utility link selected as the grant application', async () => {
+    const html = '<div><a href="/online-account">View &amp; Pay Bill</a></div>' + longPage
+    const invoke = vi.fn().mockResolvedValue({ ok: true, json: { opportunities: [{
+      title: 'Nashville Youth Fund Grant', funder: 'Nashville Youth Fund',
+      apply_link_id: 'L1', info_link_id: null, evidence: {},
+    }] } })
+    const out = await extractOpportunitiesFromPage({ pageUrl: 'https://nyf.org/grant', html }, { invoke, openai: null })
+    expect(out).toHaveLength(1)
+    expect(out[0].apply_url).toBeNull()
+    expect(out[0].info_url).toBe('https://nyf.org/grant')
+    expect(out[0].kind).toBe(OPPORTUNITY_KIND.PROGRAM)
+  })
+
   it('passes the page budget and abort signal into its provider adapter', async () => {
     const invoke = vi.fn().mockResolvedValue({ ok: true, json: { opportunities: [] } })
     await extractOpportunitiesFromPage({ pageUrl: 'https://fixture.invalid/grant', html: longPage }, { invoke, openai: null, timeoutMs: 1234 })

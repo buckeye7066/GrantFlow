@@ -98,6 +98,25 @@ test('deterministic: same html => byte-identical inventory (document order)', ()
   ]);
 });
 
+test('application intent belongs to the link, not another link in its container', () => {
+  const inv = buildLinkInventory(`<div>
+    <a href="/online-account">View &amp; Pay Bill</a>
+    <a href="/details">About us</a>
+    <a href="/grant-form.pdf">2026 Grant Application</a>
+  </div>`, { baseUrl: 'https://foundation.example.org/grants' });
+  assert.deepEqual(inv.map(link => link.apply_intent), [false, false, true]);
+});
+
+test('explicit non-funding purposes override register/application keywords', () => {
+  const inv = buildLinkInventory(`<main>
+    <a href="/register">Register for email updates</a>
+    <a href="/grants/application/online-account">View &amp; Pay Bill</a>
+    <p>Apply for the community grant: <a href="/form.pdf">Click here</a></p>
+    <a href="/aid">Apply for utility bill assistance</a>
+  </main>`, { baseUrl: 'https://foundation.example.org/grants' });
+  assert.deepEqual(inv.map(link => link.apply_intent), [false, false, true, true]);
+});
+
 test('apply_intent is a keyword signal, not a profile signal', () => {
   const html = `
     <a href="https://f.org/apply-here">Apply here</a>

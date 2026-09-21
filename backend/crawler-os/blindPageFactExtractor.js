@@ -49,8 +49,8 @@ import {
 // Version tags — these become content-addressing components for the Phase-0.2
 // page-fact cache (services/pageFactCache.js) when this module is wired in a
 // later sub-PR. Bump when the prompt or output shape changes.
-export const EXTRACTOR_VERSION = 'blind-v5';
-export const PROMPT_VERSION = 'blind-prompt-v5';
+export const EXTRACTOR_VERSION = 'blind-v6';
+export const PROMPT_VERSION = 'blind-prompt-v6';
 export const PAGE_FACT_SCHEMA_VERSION = 2;
 
 // The feature flag that a LATER sub-PR will gate the live wiring on. Defined here
@@ -96,6 +96,8 @@ export function createBlindPageResponseSchema(inventory = []) {
   const date = { type: ['string', 'null'], pattern: `^${datePattern}$` };
   const ids = [...new Set(inventory.slice(0, 200).map(link => link.id).filter(id => typeof id === 'string'))];
   const link = { type: ['string', 'null'], enum: [...ids, null] };
+  const applyIds = [...new Set(inventory.slice(0, 200).filter(link => link.apply_intent === true)
+    .map(link => link.id).filter(id => typeof id === 'string'))];
   const evidence = Object.fromEntries(['eligibility', 'amount', 'deadline', 'is_loan', 'requires_cost_share',
     'national', 'geography', 'expected_decision_date', 'decision_review_days', 'reporting_requirements']
     .map(key => [key, { ...nullableText(MAX_ELIGIBILITY_CHARS), description: 'An exact supporting quotation from PAGE TEXT, or null when absent. Never a normalized value or type placeholder.' }]));
@@ -119,7 +121,7 @@ export function createBlindPageResponseSchema(inventory = []) {
     expected_decision_date: date, decision_review_days: { type: ['integer', 'null'], minimum: 0 },
     reporting_requirements: { type: 'array', maxItems: 20, items: { type: 'object', properties: reportingProperties,
       required: Object.keys(reportingProperties), additionalProperties: false } },
-    apply_link_id: link, info_link_id: link,
+    apply_link_id: { type: ['string', 'null'], enum: [...applyIds, null] }, info_link_id: link,
     evidence: { type: 'object', properties: evidence, required: Object.keys(evidence), additionalProperties: false },
   };
   return { type: 'object', properties: { opportunities: { type: 'array', maxItems: MAX_OPPORTUNITIES_PER_PAGE,
@@ -139,6 +141,7 @@ const STRUCTURED_SYSTEM = [
   "Each evidence field must quote the exact supporting sentence from PAGE TEXT, preserving its currency and date spelling.",
   "A normalized number, date or boolean is not an evidence quote.",
   "Select apply/info link ids only from the supplied inventory.",
+  "An apply link must be marked [apply] in the inventory; otherwise use null.",
   "Record award-decision dates, review days and reporting requirements only when stated.",
   "Unknown values must be null or empty arrays.",
   "Return only an opportunities JSON array inside an object.",
@@ -167,6 +170,7 @@ const SYSTEM = [
   '  correctly left with null eligibility — never invent one.',
   '- For an apply/info link, choose an id from LINK INVENTORY. NEVER write a URL',
   '  that is not in the inventory; if no suitable link exists, use null.',
+  '- An apply link must be marked [apply] in the inventory; otherwise use null.',
   '- CAPTURE THE FUNDER LIFECYCLE DATES WHENEVER THE PAGE STATES THEM, so the',
   '  applicant\'s calendar can show them. `expected_decision_date`: a CONCRETE date',
   '  the funder says awards are announced / decisions are sent ("awards announced',
@@ -333,10 +337,12 @@ function buildFacts(rawOpp, { pageUrlCanon, linkInventory, hayNorm }) {
     resolveInventoryLink(linkInventory, rawOpp.info_link_id) ||
     resolveInventoryLink(linkInventory, rawOpp.info_url);
 
+  // Membership only proves a link exists: utility/account/navigation links must
+  // not become applications on the model's say-so. Require page-derived intent.
   // apply_url is a REAL, distinct-from-the-page application link, or null. A link
   // that is just the page itself is a fallback, and a fallback NEVER lands in
   // apply_url — it goes to info_url below.
-  const apply_url = applyEntry && applyEntry.url !== pageUrlCanon ? applyEntry.url : null;
+  const apply_url = applyEntry?.apply_intent === true && applyEntry.url !== pageUrlCanon ? applyEntry.url : null;
   let info_url = infoEntry ? infoEntry.url : null;
   if (info_url && info_url === apply_url) info_url = null; // keep the two distinct
   if (!apply_url && !info_url) info_url = pageUrlCanon; // fallback => info_url only

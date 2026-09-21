@@ -7,7 +7,7 @@
 // signature => byte-identical facts), and evidence-span code-verification.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { extractPageFactsBlind } from '../blindPageFactExtractor.js';
+import { extractPageFactsBlind, createBlindPageResponseSchema } from '../blindPageFactExtractor.js';
 import { validateEvidenceSpans, isSupportedSnippet } from '../blindEvidenceValidator.js';
 import { buildLinkInventory } from '../blindLinkInventory.js';
 import { mapBlindFactsToCandidate } from '../blindFactsMapper.js';
@@ -72,6 +72,23 @@ test('happy path: extracts page facts with inventory-selected apply/info URLs', 
   assert.equal(f.amount_min, 1000);
   assert.equal(f.amount_max, 5000);
   assert.equal(f.field_provenance.is_loan.value, false);
+});
+
+test('a real utility-account link cannot become an application target merely by model selection', async () => {
+  const inventory = buildLinkInventory('<div><a href="/online-account">View &amp; Pay Bill</a><a href="/grant-form.pdf">2026 Grant Application</a></div>', { baseUrl: PAGE_URL });
+  assert.equal(inventory[0].apply_intent, false);
+  assert.equal(inventory[1].apply_intent, true);
+  const facts = await extractPageFactsBlind(
+    { pageUrl: PAGE_URL, pageText: PAGE_TEXT, linkInventory: inventory },
+    { llm: mockLlm({ apply_link_id: 'L1', info_link_id: null }) },
+  );
+  assert.equal(facts.length, 1);
+  assert.equal(facts[0].apply_url, null);
+  assert.equal(facts[0].info_url, PAGE_URL);
+  assert.equal(mapBlindFactsToCandidate(facts[0]).kind, 'PROGRAM');
+  const schema = createBlindPageResponseSchema(inventory).properties.opportunities.items.properties;
+  assert.deepEqual(schema.apply_link_id.enum, ['L2', null]);
+  assert.deepEqual(schema.info_link_id.enum, ['L1', 'L2', null]);
 });
 
 test('invented lifecycle dates and reporting requirements cannot survive absent or fabricated citations', async () => {
