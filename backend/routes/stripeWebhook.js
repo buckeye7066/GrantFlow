@@ -5,7 +5,7 @@ import { markPaid } from '../services/pricing/pricingAccessGate.js'
 import { recordPaymentAccessEvent } from '../services/pricing/profilePricingInitializer.js'
 import { PAYMENT_ACCESS_EVENT, QUOTE_STATUS } from '../services/pricing/pricingTypes.js'
 import { updateQuoteStatus, tableExists } from '../services/pricing/quoteBuilder.js'
-import { markInvoicePaid } from '../services/billing/invoiceService.js'
+import { ensureInvoiceSchema, markInvoicePaid } from '../services/billing/invoiceService.js'
 import { applyStripePaymentFailure, applyStripeSubscription } from '../services/billing/subscriptionSync.js'
 
 import { createLogger } from '../utils/logger.js'
@@ -19,28 +19,17 @@ const routeLogger = createLogger('route:stripeWebhook')
  */
 async function grantPaidAccess(db, { profileId, quoteId, purchaseId }) {
   if (!profileId) return
-  try {
-    await markPaid(db, { profileId })
-  } catch (err) {
-    routeLogger.error('webhook: markPaid failed', { profileId, error: err?.message })
+  const access = await markPaid(db, { profileId })
+  if (!access?.ok) throw new Error(access?.error || 'paid_access_not_recorded')
+  if (quoteId && (await tableExists(db, 'pricing_quotes'))) {
+    await updateQuoteStatus(db, quoteId, QUOTE_STATUS.PAID)
   }
-  try {
-    if (quoteId && (await tableExists(db, 'pricing_quotes'))) {
-      await updateQuoteStatus(db, quoteId, QUOTE_STATUS.PAID)
-    }
-  } catch (err) {
-    routeLogger.error('webhook: updateQuoteStatus failed', { quoteId, error: err?.message })
-  }
-  try {
-    await recordPaymentAccessEvent(db, {
-      profileId,
-      quoteId: quoteId || null,
-      eventType: PAYMENT_ACCESS_EVENT.PAYMENT_SUCCEEDED,
-      details: { purchase_id: purchaseId || null },
-    })
-  } catch (err) {
-    routeLogger.error('webhook: recordPaymentAccessEvent failed', { profileId, error: err?.message })
-  }
+  await recordPaymentAccessEvent(db, {
+    profileId,
+    quoteId: quoteId || null,
+    eventType: PAYMENT_ACCESS_EVENT.PAYMENT_SUCCEEDED,
+    details: { purchase_id: purchaseId || null },
+  })
 }
 
 const router = express.Router()
@@ -48,8 +37,6 @@ const router = express.Router()
 // Stripe requires the *raw* request body for signature verification.
 // This router MUST be mounted with express.raw({ type: 'application/json' }).
 router.post('/', async (req, res) => {
-  await ensureServiceCatalogSchema(req.db)
-
   const signature = req.headers['stripe-signature']
   if (!signature) {
     return res.status(400).json({ ok: false, error: 'missing_stripe_signature' })
@@ -62,21 +49,39 @@ router.post('/', async (req, res) => {
     return res.status(400).json({ ok: false, error: 'invalid_signature', message: error?.message || String(error) })
   }
 
-  // Idempotency: only process once per event id.
-  let record
   try {
-    record = await recordStripeEventIfNew(req.db, event)
-  } catch (recordErr) {
-    routeLogger.error('Stripe webhook: failed to record event idempotency key', { eventId: event?.id, error: recordErr?.message })
-    return res.status(500).json({ ok: false, error: 'idempotency_check_failed', message: recordErr?.message })
+    await ensureServiceCatalogSchema(req.db)
+    // Schema setup can contain compatibility DDL; keep it outside the payment
+    // transaction so an already-existing column cannot abort PostgreSQL work.
+    if (event.data?.object?.metadata?.kind === 'recurring_invoice') {
+      await ensureInvoiceSchema(req.db)
+    }
+    const result = await req.db.withTransaction(async (db) => {
+      const record = await recordStripeEventIfNew(db, event)
+      if (!record?.ok) throw new Error(record?.error || 'idempotency_check_failed')
+      if (!record.inserted) return { duplicate: true }
+      await fulfillStripeEvent(db, event)
+      return {}
+    })
+    return res.json({ ok: true, received: true, ...result })
+  } catch (error) {
+    routeLogger.error('Stripe webhook processing failed:', {
+      eventType: event?.type,
+      eventId: event?.id,
+      error: error.message,
+    })
+    return res.status(500).json({ ok: false, error: 'webhook_handler_failed', type: event?.type || null })
   }
-  if (record?.ok && record.inserted === false) {
-    return res.json({ ok: true, received: true, duplicate: true })
-  }
+})
 
-  try {
-    if (event.type === 'checkout.session.completed') {
+// All fulfillment writes use the transaction passed by the verified route.
+// Failure rolls back both those writes and the event receipt, allowing retries.
+async function fulfillStripeEvent(db, event) {
+    if (event.type === 'checkout.session.completed' || event.type === 'checkout.session.async_payment_succeeded') {
       const session = event.data?.object
+      // A completed bank-payment checkout can still be unpaid. Stripe sends a
+      // separate success event when it settles; only then may fulfillment run.
+      if (!['paid', 'no_payment_required'].includes(session?.payment_status)) return
       const metadata = session?.metadata || {}
       const kind = String(metadata.kind || '')
 
@@ -97,26 +102,24 @@ router.post('/', async (req, res) => {
           if (!knownPhases.includes(phase)) {
             console.warn('Stripe webhook: unrecognised milestone_phase; skipping purchase state update', { purchaseId, phase, eventId: event?.id })
           }
-          // dialect-divergence fix (the ingestionService/#946 class): use
-          // withTransaction with an async, tx-bound callback so the writes are
-          // truly atomic and awaited on both the SQLite and Postgres shims.
-          await req.db.withTransaction(async (tx) => {
-            await tx.prepare(
+          // The verified route owns the transaction for all of these writes.
+          {
+            await db.prepare(
               `UPDATE milestone_payments SET status = 'paid', stripe_payment_intent_id = COALESCE(stripe_payment_intent_id, ?), paid_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP WHERE purchase_id = ? AND phase = ?`
             ).run(paymentIntent, purchaseId, phase)
             if (newStatus) {
-              await tx.prepare(
+              await db.prepare(
                 `UPDATE service_purchases SET status = ?, stripe_payment_intent_id = COALESCE(stripe_payment_intent_id, ?), updated_at = CURRENT_TIMESTAMP WHERE id = ?`
               ).run(newStatus, paymentIntent, purchaseId)
             }
-          })
+          }
 
           if (phase === 'submission') {
-            const purchaseRow = await req.db
+            const purchaseRow = await db
               .prepare(`SELECT id, profile_id FROM service_purchases WHERE id = ? LIMIT 1`)
               .get(purchaseId)
             if (purchaseRow?.profile_id) {
-              await grantPaidAccess(req.db, {
+              await grantPaidAccess(db, {
                 profileId: String(purchaseRow.profile_id),
                 quoteId: String(metadata.quote_id || '') || null,
                 purchaseId,
@@ -130,17 +133,17 @@ router.post('/', async (req, res) => {
         const billingInvoiceId = String(metadata.billing_invoice_id || '').trim()
         const profileId = String(metadata.profile_id || '').trim() || null
         if (billingInvoiceId || profileId) {
-          await markInvoicePaid(req.db, { invoiceId: billingInvoiceId || null, profileId, source: 'stripe_webhook' })
+          const paid = await markInvoicePaid(db, { invoiceId: billingInvoiceId || null, profileId, source: 'stripe_webhook' })
+          if (!paid?.ok) throw new Error(paid?.error || 'invoice_payment_not_recorded')
         }
       } else if (kind === 'hourly_invoice') {
         const invoiceId = String(metadata.hourly_invoice_id || '').trim()
         const purchaseId = String(metadata.purchase_id || '').trim()
-        // dialect-divergence fix (the ingestionService/#946 class): same as
-        // the milestone_payment branch above — withTransaction + tx-bound,
-        // awaited statements instead of the sync `db.transaction(fn)()` shape.
-        await req.db.withTransaction(async (tx) => {
+        // Reuse the route's transaction; nested transactions are unsupported
+        // by the Postgres transaction object and would deadlock SQLite.
+        {
           if (invoiceId) {
-            await tx.prepare(
+            await db.prepare(
               `UPDATE hourly_invoices
                SET status = 'paid',
                    stripe_payment_intent_id = COALESCE(stripe_payment_intent_id, ?),
@@ -149,7 +152,7 @@ router.post('/', async (req, res) => {
             ).run(paymentIntent, invoiceId)
           }
           if (purchaseId) {
-            await tx.prepare(
+            await db.prepare(
               `UPDATE service_purchases
                SET status = 'paid',
                    stripe_payment_intent_id = COALESCE(stripe_payment_intent_id, ?),
@@ -157,14 +160,14 @@ router.post('/', async (req, res) => {
                WHERE id = ?`
             ).run(paymentIntent, purchaseId)
           }
-        })
+        }
 
         if (purchaseId) {
-          const purchaseRow = await req.db
+          const purchaseRow = await db
             .prepare(`SELECT id, profile_id FROM service_purchases WHERE id = ? LIMIT 1`)
             .get(purchaseId)
           if (purchaseRow?.profile_id) {
-            await grantPaidAccess(req.db, {
+            await grantPaidAccess(db, {
               profileId: String(purchaseRow.profile_id),
               quoteId: String(metadata.quote_id || '') || null,
               purchaseId,
@@ -176,32 +179,30 @@ router.post('/', async (req, res) => {
         const metaQuoteId = String(metadata.quote_id || '').trim()
         if (!purchaseId) {
           routeLogger.error('Stripe webhook: service_purchase missing purchase_id metadata; refusing to grant access', { eventId: event?.id, checkoutSessionId })
+          throw new Error('missing_purchase_id')
         } else {
-          const purchaseRow = await req.db
+          const purchaseRow = await db
             .prepare(`SELECT id, profile_id, user_id FROM service_purchases WHERE id = ? LIMIT 1`)
             .get(purchaseId)
           if (!purchaseRow) {
             routeLogger.error('Stripe webhook: service_purchase purchaseId not found; refusing to grant access', { purchaseId, eventId: event?.id })
+            throw new Error('purchase_not_found')
           } else {
             // Cross-check quote_id (when provided) against the purchase's profile
             // so a forged metadata block cannot grant access on the wrong profile.
             let validQuoteId = null
             if (metaQuoteId) {
-              try {
-                const q = await req.db
-                  .prepare(`SELECT id, profile_id FROM pricing_quotes WHERE id = ? LIMIT 1`)
-                  .get(metaQuoteId)
-                if (q && (!purchaseRow.profile_id || String(q.profile_id) === String(purchaseRow.profile_id))) {
-                  validQuoteId = String(q.id)
-                } else {
-                  routeLogger.error('Stripe webhook: quote_id metadata does not match purchase profile; NOT granting access', { purchaseId, metaQuoteId, eventId: event?.id })
-                }
-              } catch {
-                // pricing_quotes table not installed; proceed without quote linkage.
+              const q = await db
+                .prepare(`SELECT id, profile_id FROM pricing_quotes WHERE id = ? LIMIT 1`)
+                .get(metaQuoteId)
+              if (!q || !purchaseRow.profile_id || String(q.profile_id) !== String(purchaseRow.profile_id)) {
+                routeLogger.error('Stripe webhook: quote_id metadata does not match purchase profile; NOT granting access', { purchaseId, metaQuoteId, eventId: event?.id })
+                throw new Error('quote_profile_mismatch')
               }
+              validQuoteId = String(q.id)
             }
 
-            const spResult = await req.db.prepare(
+            const spResult = await db.prepare(
               `UPDATE service_purchases
                SET status = 'paid',
                    stripe_payment_intent_id = COALESCE(stripe_payment_intent_id, ?),
@@ -212,8 +213,9 @@ router.post('/', async (req, res) => {
 
             if (spResult.changes === 0) {
               routeLogger.error('Stripe webhook: service_purchase UPDATE matched 0 rows; purchaseId not found in DB', { purchaseId, eventId: event?.id, checkoutSessionId })
+              throw new Error('purchase_not_updated')
             } else if (purchaseRow.profile_id) {
-              await grantPaidAccess(req.db, {
+              await grantPaidAccess(db, {
                 profileId: String(purchaseRow.profile_id),
                 quoteId: validQuoteId,
                 purchaseId,
@@ -236,20 +238,21 @@ router.post('/', async (req, res) => {
       // for the mapping; it fails closed on an unmapped price rather than
       // guessing a tier.
       const subscription = event.data?.object
-      const result = await applyStripeSubscription(req.db, subscription, {
+      const result = await applyStripeSubscription(db, subscription, {
         source: `stripe_webhook:${event.type}`,
         eventCreated: event.created,
       })
-      if (!result.ok) {
-        // Do not 500 back to Stripe for a resolution problem we cannot fix by
-        // retrying (an unknown profile will still be unknown next time), but do
-        // make it loud. Stripe would otherwise retry this event for days.
+      if (!result.ok || result.reason === 'unmapped_price_id') {
+        // Billing initialization and configuration can be repaired between
+        // deliveries. Do not acknowledge a paid event whose entitlement was
+        // never applied or permanently consume its retry receipt.
         routeLogger.error('subscription event could not be applied', {
           eventId: event?.id,
           eventType: event?.type,
           reason: result.reason,
           subscriptionId: subscription?.id ?? null,
         })
+        throw new Error(result.reason || 'subscription_not_applied')
       }
     } else if (event.type === 'invoice.payment_failed') {
       // Surface the dunning state without revoking capability on the first
@@ -258,7 +261,7 @@ router.post('/', async (req, res) => {
       const invoice = event.data?.object
       const subscriptionId = invoice?.subscription ? String(invoice.subscription) : null
       if (subscriptionId) {
-        const failure = await applyStripePaymentFailure(req.db, {
+        const failure = await applyStripePaymentFailure(db, {
           subscriptionId,
           eventCreated: event.created,
         })
@@ -267,22 +270,6 @@ router.post('/', async (req, res) => {
         })
       }
     }
-  } catch (error) {
-    routeLogger.error('Stripe webhook processing failed:', {
-      eventType: event?.type,
-      eventId: event?.id,
-      error: error.message,
-      stack: error.stack
-    })
-    return res.status(500).json({
-      ok: false,
-      error: 'webhook_handler_failed',
-      type: event?.type || null,
-      message: error.message
-    })
-  }
-
-  return res.json({ ok: true, received: true })
-})
+}
 
 export default router

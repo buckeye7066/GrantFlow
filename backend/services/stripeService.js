@@ -245,15 +245,12 @@ export async function recordStripeEventIfNew(db, event) {
   const eventId = String(event?.id || '').trim()
   if (!eventId) return { ok: false, error: 'missing_event_id' }
 
-  try {
-    await db.prepare('INSERT INTO stripe_webhook_events (event_id, type) VALUES (?, ?)').run(eventId, String(event?.type || ''))
-    return { ok: true, inserted: true }
-  } catch (error) {
-    const msg = String(error?.message || error)
-    if (msg.toLowerCase().includes('unique') || msg.toLowerCase().includes('duplicate')) {
-      return { ok: true, inserted: false, duplicate: true }
-    }
-    throw error
-  }
+  // Do not catch a uniqueness error inside a Postgres transaction: that aborts
+  // the transaction even if JavaScript swallows it. The unique event key also
+  // serializes concurrent deliveries until the fulfillment transaction commits.
+  const result = await db.prepare(
+    'INSERT INTO stripe_webhook_events (event_id, type) VALUES (?, ?) ON CONFLICT (event_id) DO NOTHING',
+  ).run(eventId, String(event?.type || ''))
+  const inserted = Number(result?.changes ?? result?.rowCount ?? 0) > 0
+  return { ok: true, inserted, ...(!inserted ? { duplicate: true } : {}) }
 }
-

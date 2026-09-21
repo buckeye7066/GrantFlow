@@ -70,6 +70,14 @@ const USER = { id: 'u1', email: 'jane@example.com', is_admin: false }
 const ADMIN_PRINCIPAL = { userId: ADMIN.id, identityResolved: true, isAdmin: true }
 const USER_PRINCIPAL = { userId: USER.id, identityResolved: true, isAdmin: false }
 
+test('markPaid cannot claim access was granted when the profile has no pricing record', async () => {
+  const db = createDb()
+  try {
+    assert.deepEqual(await markPaid(db, { profileId: 'missing-profile' }), { ok: false, error: 'no_pricing' })
+    assert.equal(db.prepare('SELECT COUNT(*) AS n FROM profile_pricing').get().n, 0)
+  } finally { db.close() }
+})
+
 test('PricingRequired and AnyaOnboarding are always allowed; Pipeline is gated', () => {
   for (const p of ['/login', '/AnyaOnboarding', '/AnyaOnboarding/q-2', '/PricingRequired', '/ServiceAgreement', '/Checkout', '/Admin', '/Admin/Pricing', '/Pricing', '/services?purchase_id=abc']) {
     assert.equal(isAlwaysAllowedPath(p), true, p)

@@ -77,7 +77,9 @@ function classifyOutcome(payload) {
   if (reason === 'tombstoned') return 'tombstoned'
   if (reason.startsWith('duplicate:')) return 'duplicate'
   if (reason === 'source_excluded') return 'source_excluded'
-  if (reason === 'live_reject') return 'live_reject'
+  // A funding-result refusal is a policy decision, not a provider/DB outage.
+  // The stored fingerprints already reopen terminal decisions when facts change.
+  if (reason === 'live_reject' || reason.startsWith('not_a_grant:')) return 'live_reject'
   if (reason === 'below_bar' || reason === 'relevance_floor') return 'below_bar'
   return 'error'
 }
