@@ -61,6 +61,7 @@ import {
   extractHostname,
 } from '../config/urlRules.js'
 import { isPointerKind } from '../config/opportunityKindClasses.js'
+import { classifyFundingResult } from '../config/fundingResultFilters.js'
 import { detectForeignOpportunity } from '../config/opportunityJurisdiction.js'
 import { buildMetricEnvelope } from './observability/metricEnvelope.js'
 import { createLogger } from '../utils/logger.js'
@@ -109,7 +110,9 @@ export const STALE_MS = 48 * 60 * 60 * 1000
 // as GrantFlow "found funding" (webparity-2), identity is checked before the
 // funding-signal text heuristic (webparity-9). A v3 run is not a valid
 // regression comparator for a v4 run; Sam's trailing median restarts.
-export const BENCHMARK_SEMANTICS_VERSION = 4
+// v5 applies the canonical affirmative non-funding exclusions on both sides.
+// Old v4 scores remain evidence, but are not comparable to the new denominator.
+export const BENCHMARK_SEMANTICS_VERSION = 5
 
 /**
  * Tiny SERP samples move by dozens of points when one result rotates. Require
@@ -461,9 +464,19 @@ export function isGenericFundingPortalHit(hit) {
   }
 }
 
+/** Use the product's own non-funding rules, not a second benchmark registry.
+ * Missing structured fields in a SERP snippet are not evidence of ineligibility.
+ * Only affirmative exclusions apply; plausible leads still go through discovery. */
+function isKnownNonFundingHit(hit, { now } = {}) {
+  const verdict = classifyFundingResult({
+    ...hit, description: hit?.description || hit?.summary || hit?.snippet || '',
+  }, { now })
+  return verdict.reasons.some(reason => !['no_fundable_signal', 'empty_row'].includes(reason))
+}
+
 /** Final direct-source gate for a purported web-only recall miss. */
 export function isBenchmarkDirectFundingHit(hit, context = {}) {
-  return isBenchmarkRelevantHit(hit, context) && !isGenericFundingPortalHit(hit)
+  return !isKnownNonFundingHit(hit, context) && isBenchmarkRelevantHit(hit, context) && !isGenericFundingPortalHit(hit)
 }
 
 export function isWebParityBenchmarkEnabled() {
@@ -646,7 +659,7 @@ function titleSponsorIdentityMatches(storedRow, hit, hitTitleKey, hitDomain) {
  * @param {{needs?:string[]}} [opts]
  * @returns {{overlap:Array, web_only:Array, grantflow_only:number, web_real:number}}
  */
-export function classifyWebResults(webHits, storedMatches, { needs = [], state = null, applicantTypes = [] } = {}) {
+export function classifyWebResults(webHits, storedMatches, { needs = [], state = null, applicantTypes = [], now = new Date() } = {}) {
   const stored = Array.isArray(storedMatches) ? storedMatches : []
   const storedRows = stored.map((m) => {
     const urls = [m.application_url, m.apply_url, m.source_url, m.final_url, m.evidence_url]
@@ -666,10 +679,12 @@ export function classifyWebResults(webHits, storedMatches, { needs = [], state =
       titleKey,
       sponsor: m.sponsor,
       pointer,
+      nonFunding: !pointer && isKnownNonFundingHit(m, { now }),
       kind: pointer ? String(kindRaw).trim().toLowerCase() : null,
     }
   })
   const storedPointerRows = storedRows.filter((row) => row.pointer).length
+  const storedNonFundingRows = storedRows.filter((row) => row.nonFunding).length
 
   const overlap = []
   const web_only = []
@@ -685,6 +700,7 @@ export function classifyWebResults(webHits, storedMatches, { needs = [], state =
     // Another state's government portal is ineligible for THIS profile on
     // either side — counting it as overlap would admit an ineligible program.
     if (isOutOfStateGovHit(hit.url, state)) { dropped.out_of_state += 1; continue }
+    if (isKnownNonFundingHit(hit, { now })) { dropped.not_direct_funding += 1; continue }
     const urlKey = normalizeUrlKey(hit.url)
     if (!urlKey) { dropped.noise_url += 1; continue }
     if (seen.has(urlKey)) { dropped.duplicate += 1; continue }
@@ -711,6 +727,7 @@ export function classifyWebResults(webHits, storedMatches, { needs = [], state =
     const matchingStoredIndexes = []
     const pointerMatches = []
     storedRows.forEach((row, index) => {
+      if (row.nonFunding) return
       const matches = row.urlKeys.has(urlKey) || titleSponsorIdentityMatches(row, hit, titleKey, domain)
       if (!matches) return
       if (row.pointer) pointerMatches.push(row)
@@ -725,7 +742,7 @@ export function classifyWebResults(webHits, storedMatches, { needs = [], state =
     // those rows did not exist — admitting a directory can never move parity.
     if (!covers) {
       if (!isRealFundingHit(hit)) { dropped.no_funding_signal += 1; continue }
-      if (!isBenchmarkDirectFundingHit(hit, { needs, applicantTypes })) { dropped.not_direct_funding += 1; continue }
+      if (!isBenchmarkDirectFundingHit(hit, { needs, applicantTypes, now })) { dropped.not_direct_funding += 1; continue }
     }
     webReal += 1
 
@@ -741,13 +758,14 @@ export function classifyWebResults(webHits, storedMatches, { needs = [], state =
     }
   }
 
-  const storedFundingRows = storedRows.length - storedPointerRows
+  const storedFundingRows = storedRows.length - storedPointerRows - storedNonFundingRows
   return {
     overlap,
     web_only,
     grantflow_only: Math.max(0, storedFundingRows - coveredStored.size),
     web_real: webReal,
     stored_pointer_rows: storedPointerRows,
+    stored_non_funding_rows: storedNonFundingRows,
     dropped,
   }
 }
@@ -2055,6 +2073,7 @@ export async function runWebParityBenchmark(db, {
       needs,
       state: profileState,
       applicantTypes,
+      now,
     })
     const { overlap, web_only, grantflow_only, web_real } = classification
     const providerUnavailable = searchProvenance.length > 0 && searchProvenance.every(

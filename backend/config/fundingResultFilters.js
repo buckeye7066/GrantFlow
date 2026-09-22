@@ -828,6 +828,7 @@ export function nonGrantTitleLikePatterns() {
     '%notice of re%ission%',
     '%regulatory waiver request%',
     '%federal advisory%',
+    '%field assistance bulletin%',
     // lead-gen identities
     '%portal sync%',
     '%pawsitively smart%',
