@@ -25,6 +25,7 @@ function currentFreeAiEnv() {
     FREE_AI_RESERVE_MS: process.env.FREE_AI_RESERVE_MS,
     OLLAMA_BASE_URL: process.env.OLLAMA_BASE_URL,
     OLLAMA_MODEL: process.env.OLLAMA_MODEL,
+    AI_LOCAL_ONLY: process.env.AI_LOCAL_ONLY,
     OLLAMA_API_KEY: process.env.OLLAMA_API_KEY,
   }
 }
@@ -94,10 +95,12 @@ export function getConfiguredFreeAiRoutes(env = currentFreeAiEnv()) {
       api_key_env: FREE_ROUTE_ENV_KEYS.genericApiKey,
     })
   }
-  if (String(env?.OLLAMA_BASE_URL || '').trim()) {
+  const localOnly = String(env?.AI_LOCAL_ONLY ?? process.env.AI_LOCAL_ONLY ?? 'true').trim().toLowerCase() !== 'false'
+  const ollamaBase = String(env?.OLLAMA_BASE_URL || (localOnly ? 'http://127.0.0.1:11434/v1' : '')).trim()
+  if (ollamaBase) {
     candidates.push({
       id: 'ollama',
-      base_url: env.OLLAMA_BASE_URL,
+      base_url: ollamaBase,
       model: env.OLLAMA_MODEL || env.FREE_AI_MODEL || 'llama3.2',
       api_key_env: FREE_ROUTE_ENV_KEYS.ollamaApiKey,
     })
