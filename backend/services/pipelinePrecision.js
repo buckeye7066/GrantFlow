@@ -30,6 +30,9 @@
  *     canonical need, and the profile's tags). Never mined prose — free text
  *     carries its own DENIALS ("we do not need housing assistance"), the
  *     veteran-gate class this repo shipped twice.
+ *   - Concrete requests outside the category registry retain their wording.
+ *     Source-owned expense statements must support them; tags alone cannot.
+ *     Missing or conditional expense evidence remains reviewable.
  *   - The opportunity side is its own stated need vocabulary
  *     (`need_types_supported` / `categories` / `keywords` / `funding_category`
  *     / `opportunity_type`), canonicalised through the SAME
@@ -45,6 +48,8 @@
 import { normalizeNeedCategory } from './profileNormalizer.js'
 import { CANONICAL_NEED_CATEGORIES } from '../constants/needCategories.js'
 import { DECLARED_NEED_FIELDS } from '../config/declaredNeedFields.js'
+import { normalizeDeclaredNeedTerms } from '../crawler-os/declaredNeedTerms.js'
+import { evaluateRequestedFundingUses } from './matching/fundingUseEvidence.js'
 export { DECLARED_NEED_FIELDS } from '../config/declaredNeedFields.js'
 
 /**
@@ -84,42 +89,47 @@ export function parseMaybeJson(value, fallback) {
  *
  * @param {object|null} profileRow  the `profiles` row (or a profile-shaped object)
  * @param {object|null} sections    `{ section_key: parsedData }`
- * @returns {string[]} canonical need ids, de-duplicated, insertion-ordered
+ * @returns {string[]} canonical needs or explicit requested items, de-duplicated
  */
 export function declaredNeedsFrom(profileRow, sections, { includeSectionKeys = false } = {}) {
-  const needs = new Set()
-  const addNeed = (value) => {
-    const canonical = canonicalNeed(value)
-    if (canonical) needs.add(canonical)
-  }
-  for (const field of DECLARED_NEED_FIELDS) {
-    const direct = parseMaybeJson(profileRow?.[field], null)
-    if (Array.isArray(direct)) direct.forEach(addNeed)
-    else if (typeof direct === 'string') addNeed(direct)
-  }
-  const sectionMap = sections && typeof sections === 'object' ? sections : {}
-  for (const [key, section] of Object.entries(sectionMap)) {
-    // A section KEY that IS a canonical need (`housing`, `education`,
-    // `employment`, `health_medical`, `family_life`) counts as a declaration
-    // (Robert's rule). MEASURED in prod 2026-08-23: nearly every profile
-    // carries those five sections, so this arm makes "declared needs" read
-    // the same for a biolab, the admin vault and a stress-cohort synthetic.
-    // `includeSectionKeys:false` lets a census measure the strict reading.
-    if (includeSectionKeys) addNeed(key)
-    const parsed = parseMaybeJson(section, null)
-    if (!parsed || typeof parsed !== 'object') continue
-    for (const field of DECLARED_NEED_FIELDS) {
-      const value = parsed[field]
-      if (Array.isArray(value)) value.forEach(addNeed)
-      else if (typeof value === 'string') addNeed(value)
+  const explicit = new Set()
+  const addExplicit = value => {
+    const parsed = parseMaybeJson(value, value)
+    const values = Array.isArray(parsed) ? parsed : [parsed]
+    for (const entry of values) {
+      if (typeof entry !== 'string') continue
+      const parts = entry.split(/[,;\r\n]+/).map(part => part.replace(/^\s*(?:[-*\u2022]\s+|\d+[.)]\s+)/, '').trim())
+      for (const term of normalizeDeclaredNeedTerms(parts)) explicit.add(canonicalNeed(term) || term)
     }
   }
+  for (const field of DECLARED_NEED_FIELDS) addExplicit(profileRow?.[field])
+  const sectionMap = sections && typeof sections === 'object' ? sections : {}
+  for (const section of Object.values(sectionMap)) {
+    const value = parseMaybeJson(section, null)
+    const parsed = value?.answers && typeof value.answers === 'object' ? value.answers : value
+    if (!parsed || typeof parsed !== 'object') continue
+    for (const field of DECLARED_NEED_FIELDS) addExplicit(parsed[field])
+  }
+  // Explicit requests must not be diluted into a fallback business/sector tag.
+  // Preserve non-taxonomy items as serializable strings for every gate consumer.
+  // Legacy canonical need tags remain declarations for category-only profiles.
+  // They cannot replace concrete owner-requested items with a generic tag.
+  if (explicit.size > 0) {
+    if ([...explicit].every(need => canonicalNeed(need))) {
+      const declaredTags = parseMaybeJson(profileRow?.tags, [])
+      if (Array.isArray(declaredTags)) {
+        for (const tag of declaredTags) { const need = canonicalNeed(tag); if (need) explicit.add(need) }
+      }
+    }
+    return [...explicit]
+  }
+  const fallback = new Set()
+  const addFallback = value => { const need = canonicalNeed(value); if (need) fallback.add(need) }
+  if (includeSectionKeys) Object.keys(sectionMap).forEach(addFallback)
   const tags = parseMaybeJson(profileRow?.tags, [])
-  if (Array.isArray(tags)) tags.forEach(addNeed)
-  // ORG/BUSINESS profiles declare their need through their structured TYPE +
-  // mission/sector tags, not a needs array — derive those too (structured only).
-  for (const derived of typeDerivedNeeds(profileRow, sections)) needs.add(derived)
-  return [...needs]
+  if (Array.isArray(tags)) tags.forEach(addFallback)
+  for (const need of typeDerivedNeeds(profileRow, sections)) fallback.add(need)
+  return [...fallback]
 }
 
 // An ORG/BUSINESS profile does not fill a "needs" array the way an individual
@@ -191,38 +201,32 @@ export function opportunityNeedVocabulary(row) {
  * profile DECLARED?
  *
  * @param {object} row            an opportunity / pipeline row
- * @param {string[]} declaredNeeds canonical need ids from `declaredNeedsFrom`
+ * @param {string[]} declaredNeeds canonical needs or explicit items from `declaredNeedsFrom`
  * @returns {{ pass: boolean, detail: string, matched: string[], profile_needs: string[], opportunity_needs: string[] }}
  */
 export function evaluateDeclaredNeedCoverage(row, declaredNeeds) {
-  const needs = Array.isArray(declaredNeeds) ? declaredNeeds.filter(Boolean) : []
+  const needs = Array.isArray(declaredNeeds) ? declaredNeeds.filter(value => typeof value === 'string' && value) : []
   const opportunityNeeds = opportunityNeedVocabulary(row)
-  if (needs.length === 0) {
-    return {
-      pass: false,
-      detail: NEED_COVERAGE_DETAIL.PROFILE_DECLARES_NO_NEEDS,
-      matched: [],
-      profile_needs: [],
-      opportunity_needs: opportunityNeeds,
-    }
-  }
-  if (opportunityNeeds.length === 0) {
-    return {
-      pass: false,
-      detail: NEED_COVERAGE_DETAIL.OPPORTUNITY_STATES_NO_NEEDS,
-      matched: [],
-      profile_needs: needs,
-      opportunity_needs: [],
-    }
-  }
+  const concrete = needs.filter(need => !canonicalNeed(need))
+  const requestedEvidence = evaluateRequestedFundingUses(row, concrete)
   const supported = new Set(opportunityNeeds)
-  const matched = needs.filter((n) => supported.has(n))
+  const supportedRequests = new Set(requestedEvidence.filter(item => item.status === 'supported').map(item => item.need))
+  const matched = needs.filter(need => supported.has(need) || supportedRequests.has(need))
+  const detail = matched.length > 0 ? NEED_COVERAGE_DETAIL.MATCHED
+    : needs.length === 0 ? NEED_COVERAGE_DETAIL.PROFILE_DECLARES_NO_NEEDS
+      : concrete.length > 0 ? 'requested_needs_not_supported'
+        : opportunityNeeds.length === 0 ? NEED_COVERAGE_DETAIL.OPPORTUNITY_STATES_NO_NEEDS
+          : NEED_COVERAGE_DETAIL.UNCOVERED
   return {
     pass: matched.length > 0,
-    detail: matched.length > 0 ? NEED_COVERAGE_DETAIL.MATCHED : NEED_COVERAGE_DETAIL.UNCOVERED,
+    detail,
     matched,
     profile_needs: needs,
     opportunity_needs: opportunityNeeds,
+    ...(concrete.length > 0 ? {
+      requested_need_evidence: requestedEvidence,
+      verification_required: matched.length === 0 && requestedEvidence.some(item => item.status !== 'excluded'),
+    } : {}),
   }
 }
 

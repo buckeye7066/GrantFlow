@@ -264,6 +264,24 @@ export default function FundingResultCard({ result, onPrimaryAction, onSecondary
         </p>
       )}
 
+      {Array.isArray(result.requested_need_coverage?.requested_need_evidence) && result.requested_need_coverage.requested_need_evidence.length > 0 && (
+        <details data-testid="funding-result-requested-uses" className="rounded border border-slate-200 p-2 text-xs">
+          <summary className="cursor-pointer font-medium">Requested expenses: review recorded funding terms</summary>
+          <dl className="mt-2 space-y-2">
+            {result.requested_need_coverage.requested_need_evidence.slice(0, 16).filter(item => item && typeof item.need === 'string').map(item => (
+              <div key={item.need}>
+                <dt className="font-medium">{item.need}</dt>
+                <dd>{({ supported: 'Supported by recorded terms', excluded: 'Excluded by recorded terms', conditional: 'Conditional or conflicting terms', unknown: 'Not established' })[item.status] || 'Not established'}</dd>
+                {Array.isArray(item.evidence) && item.evidence.slice(0, 3).filter(entry => typeof entry?.excerpt === 'string').map((entry, index) => (
+                  <dd key={index} className="mt-1 text-slate-600">{entry.excerpt.slice(0, 400)}</dd>
+                ))}
+              </div>
+            ))}
+          </dl>
+          <p className="mt-2 text-slate-500">These are recorded funding-use terms, not confirmation of all applicant requirements.</p>
+        </details>
+      )}
+
       <dl className="grid grid-cols-2 gap-3 text-sm">
         <div>
           <dt className="text-xs font-medium uppercase tracking-wide text-slate-500">Deadline</dt>
@@ -461,6 +479,13 @@ FundingResultCard.propTypes = {
     matched_profile_facts: PropTypes.arrayOf(PropTypes.string),
     ineligibility_reasons: PropTypes.arrayOf(PropTypes.string),
     missing_eligibility_fields: PropTypes.arrayOf(PropTypes.string),
+    requested_need_coverage: PropTypes.shape({
+      requested_need_evidence: PropTypes.arrayOf(PropTypes.shape({
+        need: PropTypes.string,
+        status: PropTypes.string,
+        evidence: PropTypes.arrayOf(PropTypes.shape({ excerpt: PropTypes.string })),
+      })),
+    }),
     eligibility_evidence: PropTypes.string,
     geo_evidence: PropTypes.string,
     next_action: PropTypes.string,
