@@ -246,6 +246,9 @@ export function fieldOfStudyApplicantConflict(sections, opportunity = {}) {
   const profileFields = profileFactsFor('field_of_study', sections)
   if (profileFields.size === 0) return null // profile declares no major → neutral
   const declared = new Set([...profileFields].map((f) => String(f).toLowerCase()))
+  // An award may name alternative majors. A supported declared alternative
+  // prevents an unrelated listed major from becoming a false hard rejection.
+  if (applicant.some((c) => declared.has(String(c.value).toLowerCase()))) return null
   for (const c of applicant) {
     if (!declared.has(String(c.value).toLowerCase())) {
       return {

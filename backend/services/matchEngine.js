@@ -68,6 +68,7 @@ import { evaluateOpportunityAgainstPreferences } from '../config/aidTypePreferen
 import { stageOfLifeConflictForSections } from '../config/stageOfLifeEligibility.js'
 import { temporalAnchorConflict, temporalAnchorEvidence } from '../config/temporalRelatability.js'
 import { fieldOfStudyConflict } from '../config/fieldOfStudyEligibility.js'
+import { requiresAthleticEligibilityReview } from './matching/athleticEligibilityReview.js'
 import {
   fieldOfStudyApplicantConflict,
   deriveSourceClaims,
@@ -4853,6 +4854,7 @@ export function computeMatchDecision(rawProfile, rawOpportunity, opts = {}) {
   )
   const canonicalMissingEligibilityFields = [
     ...(eligibilityEval.missingFields ?? []),
+    ...(requiresAthleticEligibilityReview(rawOpportunity) ? ['athletic_eligibility'] : []),
     ...(applicantTypeEval.decision === 'review' &&
       ['profile_applicant_type_missing', 'federal_applicant_identity_unconfirmed'].includes(applicantTypeEval.reason)
       ? ['profile.applicant_type']

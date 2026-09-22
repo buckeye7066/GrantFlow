@@ -10220,9 +10220,8 @@ export async function enforceFieldOfStudyMatchScope(db) {
     }
 
     const oppCols = await listOpportunityColumns(db)
-    // Only title + sponsor carry the field requirement (identity fields); the
-    // gate reads no others, so the sweep need not fetch more.
-    const EVIDENCE_COLS = ['title', 'sponsor'].filter((c) => oppCols.size === 0 || oppCols.has(c))
+    // Use the same identity and recipient-criteria evidence as the engine gate.
+    const EVIDENCE_COLS = ['title', 'sponsor', 'description', 'eligibility_text', 'eligibility_bullets'].filter((c) => oppCols.size === 0 || oppCols.has(c))
     if (!EVIDENCE_COLS.includes('title')) {
       return { scanned: 0, repaired: 0, enforced: true, skipped: 'schema' }
     }

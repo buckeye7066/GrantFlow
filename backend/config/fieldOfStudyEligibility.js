@@ -67,6 +67,16 @@ const obj = (v) => (v && typeof v === 'object' && !Array.isArray(v) ? v : {})
  */
 export const FIELD_CLASSES = Object.freeze([
   Object.freeze({
+    id: 'forensic_science',
+    label: 'forensic science',
+    patterns: Object.freeze([/\bforensic\s+sciences?\b/i]),
+  }),
+  Object.freeze({
+    id: 'political_science',
+    label: 'political science',
+    patterns: Object.freeze([/\bpolitical\s+sciences?\b/i]),
+  }),
+  Object.freeze({
     id: 'nursing',
     label: 'nursing',
     patterns: Object.freeze([/\bnursing\b/i, /\bnurse\b/i, /\bnurses\b/i, /\bbsn\b/i, /\brn\b/i, /\blpn\b/i]),
@@ -158,6 +168,7 @@ export const IDENTITY_FIELDS = Object.freeze(['title', 'sponsor'])
  * contributes at least one entry — asserted by the totality test.
  */
 export const FIELD_DECLARATION_LIKE_PATTERNS = Object.freeze([
+  '%forensic science%', '%political science%',
   '%nursing%', '%nurse%',
   '%paramedic%', '%emergency medical%',
   '%medical school%', '%pre-med%', '%premed%', '%physician%', '%school of medicine%',

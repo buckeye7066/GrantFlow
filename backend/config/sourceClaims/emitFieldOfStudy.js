@@ -93,6 +93,29 @@ function detectFields(text) {
   return out
 }
 
+// A complete major list must describe the recipient directly. Unknown extra
+// prose is not evidence: "mentors for computer science students" describes a
+// beneficiary, while "computer science or forensic science majors" is a list.
+function recipientMajorFields(criteria) {
+  // Repeated recipient nouns introduce a second clause. Until the entire
+  // alternative can be resolved, no first-clause-only hard restriction is safe.
+  if (/\b(?:majors?|students?)\s+(?:or|and)\b/i.test(criteria)) return []
+  const studying = /^(?:students?\s+)?(?:majoring in|studying)\s+(.+)$/i.exec(criteria)
+  const preceding = /^(?:(?:an?|outstanding|eligible|full-time|undergraduate|graduate)\s+)*(.+?)\s+(?:majors?|students?)\b/i.exec(criteria)
+  if (!studying && preceding && /^\s*(?:,|\/|or\b|and\b)/i.test(criteria.slice(preceding[0].length))) return []
+  const list = studying
+    ? studying[1].split(/\s+(?:who|with|having)\b|,\s*(?:helping|providing)\b/i)[0]
+    : preceding?.[1]
+  if (!list) return []
+  const hits = detectFields(list)
+  let remainder = list
+  for (const hit of [...hits].sort((a, b) => b.phrase.length - a.phrase.length)) {
+    remainder = remainder.replace(new RegExp(`\\b${escapeRe(hit.phrase)}\\b`, 'gi'), ' ')
+  }
+  if (remainder.replace(/\b(?:and|or)\b|[\s,/&-]/gi, '')) return []
+  return hits
+}
+
 /**
  * Does the field phrase DIRECTLY modify an award noun ("Nursing Scholarship",
  * "Scholarship in Nursing")? Immediate adjacency only — an org word between the
@@ -251,5 +274,26 @@ export default function emitFieldOfStudy(opportunity = {}) {
   }
 
   if (applicantClaim) claims.push(applicantClaim)
+  // Read present-tense recipient criteria, not donor biographies, past award
+  // recipients, or an institution's department name. Keep alternatives together.
+  let bullets = o.eligibility_bullets ?? o.eligibilityBullets ?? []
+  if (typeof bullets === 'string') { try { bullets = JSON.parse(bullets) } catch { bullets = [] } }
+  const fragments = [
+    ['eligibility_text', o.eligibility_text ?? o.eligibilityText],
+    ['description', o.description ?? o.summary],
+    ...(Array.isArray(bullets) ? bullets.map((value, i) => [`eligibility_bullets[${i}]`, value]) : []),
+  ]
+  for (const [field, value] of fragments) {
+    for (const sentence of String(value ?? '').split(/[.!?;\n]+/)) {
+      const text = sentence.trim()
+      const recipient = /^(?:this |the )?(?:scholarship|award|grant|fellowship) (?:is |will be )?(?:awarded|available|open|limited|restricted) to (.+)$/i.exec(text)
+        ?? /^(?:eligible )?(?:applicants?|recipients?|students?) must (?:be |have a declared major )?(.+)$/i.exec(text)
+      if (!recipient || /\b(?:not|all majors|any major|encouraged|preferred)\b/i.test(recipient[1])) continue
+      const criteria = recipient[1]
+      for (const hit of recipientMajorFields(criteria)) {
+        push(makeClaim({ dimension: DIMENSION, value: hit.id, scope: 'applicant', strength: 'explicit', evidence: { field, text } }))
+      }
+    }
+  }
   return claims
 }
