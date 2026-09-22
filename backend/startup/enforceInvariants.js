@@ -5527,7 +5527,7 @@ export async function enforcePipelinePrecision(db) {
 
     const counts = {
       scanned: 0, kept: 0, removed: 0, relabeled: 0, failed: 0, tasksCancelled: 0,
-      protectedProfilesSkipped: 0, needNeutralProfile: 0, needNeutralRow: 0,
+      protectedProfilesSkipped: 0, needNeutralProfile: 0, needNeutralRow: 0, needVerificationRequired: 0,
       harvestFirst: 0, truncated: false, loadFailures: 0, firstLoadError: null,
       rescored: 0, restamped: 0, unscorable: 0, cleared: 0, applicationTargetsRepaired: 0,
     }
@@ -5632,6 +5632,7 @@ export async function enforcePipelinePrecision(db) {
           if (!failedGate) {
             verdict = gateCoversNeed(row, facts)
             if (!verdict.pass) failedGate = GATES.COVERS_NEED
+            else if (verdict.verification_required) counts.needVerificationRequired += 1
             else if (profileDeclaresNoNeeds) counts.needNeutralProfile += 1
             else if (verdict?.evidence?.detail === 'opportunity_states_no_need_vocabulary') counts.needNeutralRow += 1
           }
@@ -12221,7 +12222,7 @@ export async function runEnforceInvariants(db, { logger = log } = {}) {
       ...(s.byGate !== undefined ? {
         removed: s.removed, relabeled: s.relabeled, kept: s.kept,
         byGate: s.byGate, byReason: s.byReason,
-        needNeutralProfile: s.needNeutralProfile, needNeutralRow: s.needNeutralRow,
+        needNeutralProfile: s.needNeutralProfile, needNeutralRow: s.needNeutralRow, needVerificationRequired: s.needVerificationRequired,
         truncated: s.truncated,
       } : {}),
       // Result-floor census: the owner-facing number ("how many profiles hold

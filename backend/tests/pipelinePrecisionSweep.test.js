@@ -574,3 +574,19 @@ it.each([
     }
   } finally { sqlite.close() }
 })
+
+
+describe('requested-use uncertainty during the existing pipeline cleanup', () => {
+  it('keeps the row and records review rather than deleting it for missing expense wording', async () => {
+    const { sqlite, db } = seed([ROWS[0]])
+    try {
+      sqlite.prepare("UPDATE profile_sections SET data = ? WHERE profile_id = ? AND section_key = 'financial_information'")
+        .run(JSON.stringify({ item_needs: ['microscope'] }), PROFILE_ID)
+      const result = await enforcePipelinePrecision(db)
+      expect(result.removed).toBe(0)
+      expect(sqlite.prepare('SELECT id, status, match_decision FROM grants WHERE id = ?').get('g-pell'))
+        .toMatchObject({ id: 'g-pell', status: 'discovered', match_decision: 'REVIEW' })
+      expect(result.needVerificationRequired).toBe(1)
+    } finally { sqlite.close() }
+  })
+})

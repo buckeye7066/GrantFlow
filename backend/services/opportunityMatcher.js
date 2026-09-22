@@ -79,7 +79,8 @@ function sha256Stable(value) {
 }
 
 export const PIPELINE_ADMISSION_POLICY_VERSION = sha256Stable({
-  version: 3,
+  version: 4,
+  requestedFundingUseEvidence: 1,
   allowedSources: PIPELINE_ALLOWED_SOURCES,
   deniedSources: PIPELINE_DENIED_SOURCES,
   relevanceFloor: RELEVANCE_FLOOR,

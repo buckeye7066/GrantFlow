@@ -365,8 +365,9 @@ export function applyNeedFirstScoring({
       ? ' Check funding-use restrictions for: ' + unresolvedUses.map(item => item.need + ' (' + item.status + ')').join(', ') + '.'
       : ''
     if (!requestedCoverage.pass) {
+      const earlierReview = decisionResult.decision === 'REVIEW' ? decisionResult.explanation : null
       decisionResult.decision = 'REVIEW'
-      decisionResult.explanation = useNote + missingNote
+      decisionResult.explanation = [earlierReview, useNote + missingNote].filter(Boolean).join(' ')
     } else {
       decisionResult.explanation = [decisionResult.explanation, useNote + missingNote].filter(Boolean).join(' ')
     }

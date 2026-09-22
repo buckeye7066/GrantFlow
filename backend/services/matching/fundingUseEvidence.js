@@ -1,5 +1,5 @@
 /** Source-owned funding-use evidence. No profile prose, scoring, I/O or inferred eligibility. */
-const TEXT_FIELDS = Object.freeze(['description', 'eligibility', 'eligibility_text', 'eligibility_criteria', 'requirements', 'funding_restrictions'])
+const TEXT_FIELDS = Object.freeze(['description', 'eligibility', 'eligibility_text', 'eligibility_criteria', 'eligibility_bullets', 'eligibility_requirements', 'requirements', 'funding_restrictions'])
 const COST_RULES = Object.freeze([
   { request: /\b(?:supplies|consumables|reagents|materials)\b/, terms: ['supplies', 'consumables', 'reagents', 'materials'] },
   { request: /\b(?:equipment|instruments)\b/, terms: ['equipment', 'instruments'] },
@@ -9,7 +9,7 @@ const COST_RULES = Object.freeze([
 ])
 const GENERIC_PREFIXES = new Set(['', '|', 'and', 'or', 'include', 'includes', 'including', 'for', 'on', 'cover', 'covers', 'support', 'supports', 'fund', 'funds', 'pay', 'paying', 'purchase', 'purchases', 'purchasing', 'of', 'as', 'costs', 'expenses', 'eligible', 'allowable', 'permitted', 'project', 'research', 'laboratory', 'lab', 'necessary', 'essential', 'reasonable', 'direct', 'new', 'not', 'no', 'prohibit', 'prohibits'])
 const POSITIVE = /\b(?:eligible|allowable|permitted|covered|approved)\s+(?:project\s+)?(?:costs?|expenses?|uses?)\s*(?::|include\b|includes\b|are\b)|\b(?:funds?|funding|grants?|awards?|program)\s+(?:(?:may|can|will)\s+)?(?:be\s+)?(?:used\s+(?:for|on|to)|spent\s+on|cover(?:s)?|support(?:s)?|pay(?:s)?\s+for|fund(?:s)?)\b|\b(?:are|is)\s+(?:an?\s+)?(?:allowable|eligible|permitted|covered|reimbursable)\b/i
-const NEGATIVE = /\b(?:not|never)\s+(?:be\s+)?(?:used|spent|eligible|allowable|permitted|covered|funded|supported|reimbursable)\b|\b(?:ineligible|unallowable|prohibited|excluded)\b|\b(?:does|do|will|can)\s+not\s+(?:cover|fund|support|pay)\b|\b(?:cannot|can't)\s+(?:be\s+)?(?:used|funded|covered)\b|(?:^|,)\s*(?:but\s+)?not\b|\b(?:except|excluding)\b/i
+const NEGATIVE = /(?:^|[:;,])\s*no\s+(?:(?:grant|award|project|research|laboratory|lab|direct|indirect|capital)\s+){0,2}(?:funds?|funding|grants?|awards?|equipment|supplies|materials|salaries|wages|construction|buildings?|costs?|purchases?|payments?)\b|\b(?:not|never)\s+(?:be\s+)?(?:used|spent|eligible|allowable|permitted|covered|funded|supported|reimbursable)\b|\b(?:ineligible|unallowable|prohibited|excluded)\b|\b(?:does|do|will|can)\s+not\s+(?:cover|fund|support|pay)\b|\b(?:cannot|can't)\s+(?:be\s+)?(?:used|funded|covered)\b|(?:^|,)\s*(?:but\s+)?not\b|\b(?:except|excluding)\b/i
 const CONDITIONAL = /\b(?:prior approval|subject to approval|provided that|as long as|upon approval|only (?:if|when|with)|unless|except|case[- ]by[- ]case|may be (?:allowable|eligible)|approval is required)\b/i
 
 function normalize(value) {
@@ -40,7 +40,8 @@ function targetMatches(clause, requested) {
   const text = normalize(clause)
   const need = normalize(requested)
   if (!need) return false
-  const rule = COST_RULES.find(candidate => candidate.request.test(need))
+  const organizationalBuilding = /\b(?:capacity|team|skill|relationship|community|coalition) building\b/.test(need)
+  const rule = organizationalBuilding ? null : COST_RULES.find(candidate => candidate.request.test(need))
   if (rule?.capital && /\b(?:rent|rental|lease|leasing)\b/.test(text) && !/\b(?:purchase|acquisition|construction)\b/.test(text)) return false
   if (( ' ' + text + ' ').includes(' ' + need + ' ')) return true
   if (!rule) return false
@@ -61,6 +62,7 @@ function targetMatches(clause, requested) {
 
 /** Evidence is a recorded source-field excerpt, not independently verified grant eligibility. */
 export function evaluateRequestedFundingUses(row = {}, requests = []) {
+  if (!Array.isArray(requests) || requests.length === 0) return []
   const url = sourceUrl(row)
   const clauses = TEXT_FIELDS.flatMap(field => textValues(row[field]).flatMap(text => text.slice(0, 24000)
     .split(/[.!?;\r\n]+/)

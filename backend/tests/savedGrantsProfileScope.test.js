@@ -24,7 +24,7 @@ import savedGrantsRouter from '../routes/savedGrants.js'
 import { profileContextMiddleware } from '../middleware/profileContext.js'
 import { ensureSavedGrantsSchema } from '../services/savedGrantsSchema.js'
 
-function createApp(db, user = { userId: 'user-1', role: 'user' }) {
+function createApp(db, user = { userId: 'user-1', role: 'user' }, accessibleProfileIds = new Set()) {
   const app = express()
   app.use(express.json())
   app.use((req, _res, next) => {
@@ -37,7 +37,7 @@ function createApp(db, user = { userId: 'user-1', role: 'user' }) {
       isAdmin: user.role === 'admin',
       identityResolved: true,
       activeProfileId: null,
-      accessibleProfileIds: new Set(),
+      accessibleProfileIds,
     }
     next()
   })
@@ -214,5 +214,42 @@ describe('saved_grants profile-scope (RC-14)', () => {
     } finally {
       db.close()
     }
+  })
+})
+
+
+describe('saved-grant funding-use evidence is scoped to verified profile access', () => {
+  it('carries the active profile evidence without exposing another profile through a supplied header', async () => {
+    const db = new Database(':memory:')
+    try {
+      await seedSchema(db)
+      db.exec('CREATE TABLE profile_opportunity_matches (profile_id TEXT, opportunity_id TEXT, match_explain_json TEXT, PRIMARY KEY(profile_id, opportunity_id));')
+      const own = JSON.stringify({ requested_need_coverage: { pass: true, requested_need_evidence: [{ need: 'equipment', status: 'supported', evidence: [] }] } })
+      const other = JSON.stringify({ requested_need_coverage: { private_other_profile_fact: 'must-not-leak' } })
+      db.prepare('INSERT INTO profile_opportunity_matches VALUES (?, ?, ?)').run('profile-A', 'opp-X', own)
+      db.prepare('INSERT INTO profile_opportunity_matches VALUES (?, ?, ?)').run('profile-B', 'opp-X', other)
+      db.prepare('INSERT INTO saved_grants (id, user_id, profile_id, opportunity_id) VALUES (?, ?, NULL, ?)').run('legacy-evidence', 'user-1', 'opp-X')
+      const app = createApp(db, undefined, new Set(['profile-A']))
+      const a = await request(app).get('/api/saved-grants').set('X-Profile-Id', 'profile-A')
+      expect(a.status).toBe(200)
+      expect(a.body.saved[0].match_explain_json).toBe(own)
+      const b = await request(app).get('/api/saved-grants').set('X-Profile-Id', 'profile-B')
+      expect(b.status).toBe(200)
+      expect(b.body.saved[0].match_explain_json).toBeUndefined()
+      expect(JSON.stringify(b.body)).not.toContain('must-not-leak')
+      const unscoped = await request(app).get('/api/saved-grants')
+      expect(unscoped.body.saved[0].match_explain_json).toBeUndefined()
+    } finally { db.close() }
+  })
+
+  it('preserves saved rows when an older schema has no match-evidence table', async () => {
+    const db = new Database(':memory:')
+    try {
+      await seedSchema(db)
+      db.prepare('INSERT INTO saved_grants (id, user_id, profile_id, opportunity_id) VALUES (?, ?, ?, ?)').run('saved-no-match-table', 'user-1', 'profile-A', 'opp-X')
+      const result = await request(createApp(db, undefined, new Set(['profile-A']))).get('/api/saved-grants').set('X-Profile-Id', 'profile-A')
+      expect(result.status).toBe(200)
+      expect(result.body.ids).toEqual(['opp-X'])
+    } finally { db.close() }
   })
 })

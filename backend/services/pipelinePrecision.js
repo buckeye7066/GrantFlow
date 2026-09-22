@@ -93,29 +93,29 @@ export function parseMaybeJson(value, fallback) {
  */
 export function declaredNeedsFrom(profileRow, sections, { includeSectionKeys = false } = {}) {
   const explicit = new Set()
-  const addExplicit = value => {
+  const addExplicit = (value, preservePhrase = false) => {
     const parsed = parseMaybeJson(value, value)
     const values = Array.isArray(parsed) ? parsed : [parsed]
     for (const entry of values) {
       if (typeof entry !== 'string') continue
       const parts = entry.split(/[,;\r\n]+/).map(part => part.replace(/^\s*(?:[-*\u2022]\s+|\d+[.)]\s+)/, '').trim())
-      for (const term of normalizeDeclaredNeedTerms(parts)) explicit.add(canonicalNeed(term) || term)
+      for (const term of normalizeDeclaredNeedTerms(parts)) explicit.add(preservePhrase ? term : canonicalNeed(term) || term)
     }
   }
-  for (const field of DECLARED_NEED_FIELDS) addExplicit(profileRow?.[field])
+  for (const field of DECLARED_NEED_FIELDS) addExplicit(profileRow?.[field], field === 'item_needs')
   const sectionMap = sections && typeof sections === 'object' ? sections : {}
   for (const section of Object.values(sectionMap)) {
     const value = parseMaybeJson(section, null)
     const parsed = value?.answers && typeof value.answers === 'object' ? value.answers : value
     if (!parsed || typeof parsed !== 'object') continue
-    for (const field of DECLARED_NEED_FIELDS) addExplicit(parsed[field])
+    for (const field of DECLARED_NEED_FIELDS) addExplicit(parsed[field], field === 'item_needs')
   }
   // Explicit requests must not be diluted into a fallback business/sector tag.
   // Preserve non-taxonomy items as serializable strings for every gate consumer.
   // Legacy canonical need tags remain declarations for category-only profiles.
   // They cannot replace concrete owner-requested items with a generic tag.
   if (explicit.size > 0) {
-    if ([...explicit].every(need => canonicalNeed(need))) {
+    if ([...explicit].every(need => canonicalNeed(need) === need)) {
       const declaredTags = parseMaybeJson(profileRow?.tags, [])
       if (Array.isArray(declaredTags)) {
         for (const tag of declaredTags) { const need = canonicalNeed(tag); if (need) explicit.add(need) }
@@ -207,11 +207,11 @@ export function opportunityNeedVocabulary(row) {
 export function evaluateDeclaredNeedCoverage(row, declaredNeeds) {
   const needs = Array.isArray(declaredNeeds) ? declaredNeeds.filter(value => typeof value === 'string' && value) : []
   const opportunityNeeds = opportunityNeedVocabulary(row)
-  const concrete = needs.filter(need => !canonicalNeed(need))
+  const concrete = needs.filter(need => canonicalNeed(need) !== need)
   const requestedEvidence = evaluateRequestedFundingUses(row, concrete)
   const supported = new Set(opportunityNeeds)
   const supportedRequests = new Set(requestedEvidence.filter(item => item.status === 'supported').map(item => item.need))
-  const matched = needs.filter(need => supported.has(need) || supportedRequests.has(need))
+  const matched = needs.filter(need => canonicalNeed(need) === need ? supported.has(need) : supportedRequests.has(need))
   const detail = matched.length > 0 ? NEED_COVERAGE_DETAIL.MATCHED
     : needs.length === 0 ? NEED_COVERAGE_DETAIL.PROFILE_DECLARES_NO_NEEDS
       : concrete.length > 0 ? 'requested_needs_not_supported'
