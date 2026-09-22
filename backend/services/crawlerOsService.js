@@ -792,13 +792,28 @@ export async function runProfileDiscoveryLive({ db = getDb(), profileId, fetcher
   // Exhausted discovery runs reserve their remaining worker time for durable
   // receipts and mandatory integrity checks, not additive searches or learning.
   const optionalWorkAllowed = () => !signal?.aborted && (resolvedDeadline === null || Date.now() < resolvedDeadline);
+  // A partial outage is not evidence that a previously accepted source ended.
+  // Preserve unevaluated matches; freshly evaluated REJECTs still reconcile.
+  const webEvidence = run.web_lane;
+  const incompleteEvidence = !optionalWorkAllowed()
+    || (run.sources ?? []).some(source => source.partial_failure || !['ok', 'empty'].includes(source.outcome))
+    || Boolean(webEvidence && (
+      webEvidence.skipped || webEvidence.error
+      || Number(webEvidence.stage_ledger?.extraction_failed) > 0
+      || Number(webEvidence.stage_ledger?.query_skipped_budget) > 0
+      || Number(webEvidence.search_unavailable_queries) > 0
+      || Number(webEvidence.search_degraded_queries) > 0
+      || Number(webEvidence.fetched) < Number(webEvidence.pages)
+    ));
+  const reconcileEvaluatedOnly = Boolean(onlySources || incompleteEvidence);
+  run.reconciliation = { mode: reconcileEvaluatedOnly ? 'evaluated_pairs' : 'full', incomplete_evidence: incompleteEvidence };
   const persisted = await persistRun(db, store, run, {
     // Empty targeted runs have no match rows from which to infer the profile.
     // Keep their reconciliation and integrity sweep explicitly scoped.
-    ...(crossProfile || onlySources ? { primaryProfileId: thesis.profile_id } : {}),
+    ...(crossProfile || reconcileEvaluatedOnly ? { primaryProfileId: thesis.profile_id } : {}),
     // Only named sources ran; absence from this partial inventory cannot retire
     // another source's accepted result. Explicit evaluated rejections still apply.
-    ...(onlySources ? { reconcileEvaluatedOnly: true } : {}),
+    ...(reconcileEvaluatedOnly ? { reconcileEvaluatedOnly: true } : {}),
   });
 
   // Read BACK what the live rows already know (amounts learned by the nightly

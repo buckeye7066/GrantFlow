@@ -458,6 +458,9 @@ export async function runDiscovery(deps, opts = {}) {
           : (sr.deduped > 0 ? 'all_candidates_deduped'
             : (sr.rejected > 0 ? `all_candidates_rejected:${firstRejectReason ?? 'unknown'}`
               : (benignReason ?? 'no_candidates_stored'))));
+    sr.partial_failure = sawFetchError || sawParseError || budgetExhausted;
+    if (sr.partial_failure) sr.partial_failure_reason = budgetExhausted ? budget.reason()
+      : sawParseError ? 'parse_error' : `fetch_failed:${fetchFailureDetail ?? 'unknown'}`;
     finishSource(store, runId, sr, outcome, reason, clock, sourceSummaries);
   }
 
@@ -481,6 +484,7 @@ function finishSource(store, runId, sr, outcome, reason, clock, summaries) {
     source_id: sr.source_id,
     outcome,
     reason,
+    ...(sr.partial_failure ? { partial_failure: true, partial_failure_reason: sr.partial_failure_reason } : {}),
     fetched: sr.fetched,
     fetch_attempts: sr.fetch_attempts ?? 0,
     fetch_retries: sr.fetch_retries ?? 0,
