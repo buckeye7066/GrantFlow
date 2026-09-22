@@ -95,6 +95,40 @@ function seedTwoNonprofits(db, {
 }
 
 describe('cross-profile matching (Robert charter)', () => {
+  it('records a partial failure when a source produces candidates and later fetches fail', async () => {
+    const db = makeDb()
+    try {
+      seedTwoNonprofits(db)
+      let calls = 0
+      const stub = makeStubFetcher()
+      const fetcher = { fetch: async (url, init) => {
+        calls += 1
+        if (calls <= 2) return stub.fetch(url, init)
+        return { ok: false, status: 503, error: 'provider_unavailable', body: '' }
+      } }
+      const { run } = await runProfileDiscoveryLive({ db, profileId: 'p-a', fetcher, onlySourceIds: ['grants_gov'] })
+      const source = run.sources.find(row => row.source_id === 'grants_gov')
+      expect(source.stored + source.existing).toBeGreaterThan(0)
+      expect(source.outcome).toBe('ok')
+      expect(source.partial_failure).toBe(true)
+      expect(run.reconciliation.incomplete_evidence).toBe(true)
+    } finally { db.close() }
+  }, 20000)
+
+  it('a failed full refresh preserves accepted awards absent from its incomplete evidence', async () => {
+    const db = makeDb()
+    try {
+      seedTwoNonprofits(db)
+      await runProfileDiscoveryLive({ db, profileId: 'p-a', fetcher: makeStubFetcher(), onlySourceIds: ['grants_gov'] })
+      const award = db.prepare("SELECT * FROM profile_opportunity_matches WHERE profile_id = 'p-a' AND match_decision = 'accept' LIMIT 1").get()
+      expect(award).toBeTruthy()
+      const failedFetcher = { fetch: async () => ({ ok: false, status: 503, error: 'provider_unavailable', body: '' }) }
+      const { run } = await runProfileDiscoveryLive({ db, profileId: 'p-a', fetcher: failedFetcher })
+      expect(run.sources.some(source => source.outcome !== 'ok')).toBe(true)
+      expect(db.prepare('SELECT * FROM profile_opportunity_matches WHERE id = ?').get(award.id)).toEqual(award)
+    } finally { db.close() }
+  }, 20000)
+
   it('an empty targeted refresh cannot run integrity cleanup on another profile', async () => {
     const db = makeDb()
     try {

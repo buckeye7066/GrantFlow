@@ -51,6 +51,19 @@ function makeSourceRunsDb() {
 }
 
 describe('persistSourceCoverage (unit)', () => {
+  it('keeps successful counts and the failure visible for a partially successful source', async () => {
+    const db = makeSourceRunsDb()
+    await persistSourceCoverage(db, { crawlerRunId: 'partial-success', profileId: 'p-1',
+      sources: [{ source_id: 'grants_gov', outcome: CRAWLER_OUTCOME.OK, stored: 2,
+        partial_failure: true, partial_failure_reason: 'fetch_failed:status:503' }] })
+    const row = db.prepare('SELECT * FROM crawler_source_runs WHERE crawler_run_id = ?').get('partial-success')
+    expect(row.found).toBe(2)
+    expect(row.queried).toBe(1)
+    expect(row.failed).toBe(1)
+    expect(row.error).toBe('fetch_failed:status:503')
+    db.close()
+  })
+
   it('writes a queried+found row for an OK source, using the OS registry label/directory flag', async () => {
     const db = makeSourceRunsDb()
     await persistSourceCoverage(db, {

@@ -45,7 +45,8 @@ const MIN_TRUSTWORTHY_PAGE_TEXT_CHARS = 200;
 // Strong ranked models need time for a complete grounded page extraction.
 // A measured healthy response took 14.6s; the former 20s whole budget left
 // only about 7s for the primary after fallback reserves, cancelling good work.
-// Explicit caller deadlines and cancellation remain authoritative.
+// A caller may shorten this budget, never expand one page to a whole crawl.
+// Cancellation remains authoritative.
 const DEFAULT_EXTRACTION_TIMEOUT_MS = 60_000;
 
 /** Strip a web page to readable text for the model (bounded). */
@@ -322,7 +323,7 @@ export async function extractOpportunitiesFromPage(
   }
   const linkInventory = buildLinkInventory(htmlForLinkInventory(cappedHtml), { baseUrl: pageUrl });
   const timeoutMs = Number.isFinite(Number(deps.timeoutMs)) && Number(deps.timeoutMs) > 0
-    ? Number(deps.timeoutMs)
+    ? Math.min(Number(deps.timeoutMs), DEFAULT_EXTRACTION_TIMEOUT_MS)
     : DEFAULT_EXTRACTION_TIMEOUT_MS;
 
   // The provider outcome is recorded by the LLM wrapper: extractPageFactsBlind

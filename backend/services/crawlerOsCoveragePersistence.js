@@ -138,7 +138,7 @@ export async function persistSourceCoverage(db, { crawlerRunId, profileId, crawl
     const planned = true
     // A budget-limited partial source was queried even though its remainder was skipped.
     const queried = outcome !== CRAWLER_OUTCOME.SKIPPED || Number(s.fetched) > 0 || Number(s.fetch_attempts) > 0
-    const failed = FAILURE_OUTCOMES.has(outcome)
+    const failed = FAILURE_OUTCOMES.has(outcome) || s.partial_failure === true
     const found = Number(s.stored ?? 0) + Number(s.existing ?? 0)
     const registrySource = getSource(s.source_id)
     const label = registrySource?.name ?? s.source_id
@@ -155,7 +155,7 @@ export async function persistSourceCoverage(db, { crawlerRunId, profileId, crawl
       boolVal(failed),
       Number.isFinite(found) ? found : 0,
       boolVal(directory),
-      s.reason ?? null,
+      s.reason ?? s.partial_failure_reason ?? (s.partial_failure ? 'partial_source_failure' : null),
     ]
     // The engine's own per-source counters (pipeline.js finishSource). A source
     // that produced no decision honestly records 0, never NULL — NULL is

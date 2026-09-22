@@ -35,6 +35,15 @@ describe('htmlToText', () => {
 })
 
 describe('extractOpportunitiesFromPage', () => {
+  it('caps a long parent crawl deadline at the per-page extraction budget', async () => {
+    const invoke = vi.fn().mockResolvedValue({ ok: true, json: { opportunities: [] } })
+    await extractOpportunitiesFromPage({ pageUrl: 'https://nyf.org/grant', html: longPage },
+      { invoke, openai: null, timeoutMs: 900000 })
+    expect(invoke).toHaveBeenCalledOnce()
+    expect(invoke.mock.calls[0][0].timeoutMs).toBeGreaterThan(0)
+    expect(invoke.mock.calls[0][0].timeoutMs).toBeLessThanOrEqual(60000)
+  })
+
   it.each(['View & Pay Bill', 'Email updates'])('refuses %s as funding information while preserving a real application', async label => {
     const html = `<div><a href="/online-account">${label}</a></div>` + longPage
     const invoke = vi.fn().mockResolvedValue({ ok: true, json: { opportunities: [{
