@@ -11,7 +11,9 @@ Known non-funding catalog rows cannot manufacture overlap or GrantFlow-only cove
 - Baseline: 65 tests passed in webParityBenchmark and amyFlywheelCohort.
 - New regression file: 6 failing assertions and 3 passing counterweights before the fix; all 9 pass after the fix.
 - Focused verification: 286 tests pass across webParityFundingEvidence, webParityBenchmark, webParityRelevanceRegression, webParityDispositions, and fundingResultFilters.
-- Full `npm test` was started; completion is not yet established in this note. Log: `C:\Codex-Workspace\.codex-tmp\grantflow-report-20260922\full-test.log`.
+- Full `npm test` finished with exit 1. Metadata audit, lint, type checking and the production build passed. The Node unit stage completed 3,424 tests: 3,422 passed and 2 failed, with none skipped or cancelled. Later chained stages did not run after that failure. Log: `C:\Codex-Workspace\.codex-tmp\grantflow-report-20260922\full-test.log`.
+- Both failures are in unchanged `tests/unit/autoPopulateGeneration.test.mjs`: the parallel-fan-out test at line 91 measured 754ms against its 600ms limit; the wall-clock abort test at line 228 completed only 1 of 6 non-hung sections. An isolated rerun also failed both (3 passed, 2 failed). These are unresolved failures, not dismissed as flaky or hidden by increasing test limits.
+- Fix pushed as PR #1812, initial code commit `191e1c923ea67d622b5090b4abc460494bcd62ed`. Current PR test check 106871686499 independently confirms the same account billing lock. No merge or deployment has occurred.
 
 ## Production evidence, not fixed by this branch
 
