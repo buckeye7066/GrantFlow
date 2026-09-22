@@ -1,5 +1,3 @@
-import { isAdminEmail } from '../config/constants.js'
-
 export function ownerOnlyEnabled(env = process.env) {
   if (String(env.NODE_ENV || '').trim().toLowerCase() === 'test') return false
   return String(env.OWNER_ONLY_MODE ?? 'true').trim().toLowerCase() !== 'false'
@@ -8,12 +6,13 @@ export function ownerOnlyEnabled(env = process.env) {
 export function isOwnerIdentity(user, env = process.env) {
   if (!ownerOnlyEnabled(env)) return true
   const email = String(user?.email || user?.primary_email || '').trim().toLowerCase()
+  const ownerEmail = String(env.OWNER_EMAIL || '').trim().toLowerCase()
   const admin = Boolean(
     user?.is_admin ||
     user?.role === 'admin' ||
     (Array.isArray(user?.roles) && user.roles.includes('admin'))
   )
-  return admin && isAdminEmail(email)
+  return Boolean(ownerEmail) && admin && email === ownerEmail
 }
 
 export function assertOwnerIdentity(user, env = process.env) {
