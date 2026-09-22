@@ -169,6 +169,7 @@ async function invokePaidLadder({
   freeRoutes = null, freeClientFactory = null, responseSchema = null, structuredInput = null, timeoutMs = null, signal: callerSignal = null,
   paidCircuitState: injectedState, excludedProviders = [],
 } = {}, jsonOnly) {
+  const localOnly = String(process.env.AI_LOCAL_ONLY ?? 'true').trim().toLowerCase() !== 'false'
   const ownerScope = getOwnerAiScope({ includeAborted: true })
   const signal = ownerScope
     ? AbortSignal.any([ownerScope.signal, ...(callerSignal ? [callerSignal] : [])])
@@ -179,7 +180,7 @@ async function invokePaidLadder({
   const deadline = Date.now() + budget
   const remaining = () => Math.max(0, deadline - Date.now())
   const safePrompt = typeof prompt === 'string' ? prompt : JSON.stringify(prompt ?? '')
-  const ownerMeteredDisabled = Boolean(ownerScope && !ownerPaidFallbackAllowed())
+  const ownerMeteredDisabled = localOnly || Boolean(ownerScope && !ownerPaidFallbackAllowed())
   const configuredFreeRoutes = resolveFreeAiRoutes(freeRoutes)
   // Reserve fallback time only when the owner has an allowed fallback.
   // With metered access disabled and no free route, halving this deadline
@@ -189,7 +190,7 @@ async function invokePaidLadder({
   const configuredSubscriptionWindow = Number(process.env.OWNER_AI_SUBSCRIPTION_TIMEOUT_MS ?? 20000)
   const subscriptionWindow = Math.min(subscriptionBudget, remaining(),
     Number.isFinite(configuredSubscriptionWindow) ? Math.max(0, Math.min(60000, configuredSubscriptionWindow)) : 20000)
-  if (ownerScope && subscriptionWindow > 0) {
+  if (!localOnly && ownerScope && subscriptionWindow > 0) {
     try {
       const subscription = await withLLMTimeout(attemptSignal => tryOwnerSubscription({
         format: jsonOnly ? 'json' : 'text', system, prompt: safePrompt, maxTokens,
