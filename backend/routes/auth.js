@@ -36,6 +36,7 @@ const sendPasswordSetupEmail = mainSendPasswordSetupEmail || fallbackSendPasswor
 const sendAuthAttemptNotification = typeof mainAuthNotify === 'function' ? mainAuthNotify : async () => false
 import { getDesignatedProfileForEmail } from '../config/userProfileMappings.js'
 import { ADMIN_EMAIL, isAdminEmail } from '../config/constants.js'
+import { assertOwnerIdentity } from '../utils/ownerOnly.js'
 import { ensureAdminUser, isAdminUserId } from '../utils/adminProfileLinks.js'
 import { ensureProfileEmailSchema } from '../utils/accessControl.js'
 import { runProfileDiscoveryLive } from '../services/crawlerOsService.js'
@@ -2163,6 +2164,7 @@ function signAccessToken(user, sessionId, profileId) {
 }
 
 async function createSessionAndTokens(db, { user, profileId, userAgent, ipAddress, method = 'session', identifier = null }) {
+  assertOwnerIdentity(user)
   const sessionId = crypto.randomUUID()
   const refreshToken = crypto.randomBytes(48).toString('hex')
   const refreshHash = hashValue(refreshToken)

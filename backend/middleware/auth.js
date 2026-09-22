@@ -3,6 +3,7 @@
  */
 
 import { isAdminUserWithDb } from '../utils/accessControl.js'
+import { isOwnerIdentity } from '../utils/ownerOnly.js'
 
 /**
  * Ensure user is authenticated
@@ -12,7 +13,10 @@ export function ensureAuth(req, res, next) {
   if (!userId) {
     return res.status(401).json({ error: 'Authentication required' });
   }
-  
+  if (!isOwnerIdentity(req.user)) {
+    return res.status(403).json({ error: 'Access is restricted to the owner account' });
+  }
+
   next();
 }
 
@@ -25,6 +29,9 @@ export async function ensureAdmin(req, res, next) {
     return res.status(401).json({ error: 'Authentication required' });
   }
   const user = req.user;
+  if (!isOwnerIdentity(user)) {
+    return res.status(403).json({ error: 'Access is restricted to the owner account' });
+  }
 
   try {
     // Use req.ctx.isAdmin if available (canonical from requestContext middleware)
