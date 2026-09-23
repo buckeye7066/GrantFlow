@@ -155,7 +155,7 @@ import { conditionSpecificAlignment } from '../config/conditionSpecificity.js'
 export { normalizeProfile, computeProfileFingerprint } from './profileNormalizer.js'
 export { normalizeOpportunity, computeOpportunityFingerprint } from './opportunityNormalizer.js'
 
-export const MATCHER_VERSION = '4.1.2'
+export const MATCHER_VERSION = '4.2.0'
 
 // Re-export thresholds so consumers don't need to know about the config file
 export { SCORE_FLOOR, DEFAULT_MIN_SCORE, RELAX_THRESHOLDS, FALLBACK_TOP_N }

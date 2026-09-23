@@ -63,7 +63,7 @@
 // Registered applicant identity outranks an unrecognized organization label.
 // Coverage counts declared facts; mined keywords and generic phrase fragments
 // cannot manufacture specialized need satisfaction or inflate its numerator.
-export const PROFILE_SIGNAL_VERSION = '2026.09.21-4'
+export const PROFILE_SIGNAL_VERSION = '2026.09.22-5'
 
 /** Repo-relative files whose content decides what the engine believes about a profile. */
 export const PROFILE_SIGNAL_DERIVATION_FILES = Object.freeze([
@@ -81,6 +81,8 @@ export const PROFILE_SIGNAL_DERIVATION_FILES = Object.freeze([
   'backend/config/schoolOriginEligibility.js',
   'backend/config/stageOfLifeEligibility.js',
   'backend/services/matching/needFirstScoringAdapter.js',
+  'backend/services/pipelinePrecision.js',
+  'backend/services/matching/fundingUseEvidence.js',
   'backend/services/matchEngine.js',
   'backend/config/applicationSurfaceHosts.js',
   'backend/config/applicationTargetPolicy.js',
@@ -100,6 +102,6 @@ export const PROFILE_SIGNAL_DERIVATION_FILES = Object.freeze([
  * sha256 over the LF-normalized concatenation of the files above, pinned by
  * `scripts/pin-signal-version.mjs`. The test recomputes it.
  */
-export const PROFILE_SIGNAL_DERIVATION_HASH = '3ecf4f484856171fabe189127e4efdcc1c7e1fb65df2bc1a5d20cf9ba69b3625'
+export const PROFILE_SIGNAL_DERIVATION_HASH = '60c3d0d0e4a61f092babe919be67fb2393367419a661cecc4d4a28b5aa838d2d'
 
 export default { PROFILE_SIGNAL_VERSION, PROFILE_SIGNAL_DERIVATION_FILES, PROFILE_SIGNAL_DERIVATION_HASH }

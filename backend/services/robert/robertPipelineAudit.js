@@ -383,7 +383,7 @@ const GRANT_ROW_COLUMNS = Object.freeze([
 /** `funding_opportunities` columns the gates read — [column, alias]. */
 const OPPORTUNITY_ROW_COLUMNS = Object.freeze([
   ['title', 'opp_title'], ['sponsor', 'sponsor'], ['description', 'description'],
-  ['eligibility_text', 'eligibility_text'], ['eligibility_bullets', 'eligibility_bullets'],
+  ['eligibility_text', 'eligibility_text'], ['eligibility_bullets', 'eligibility_bullets'], ['eligibility_requirements', 'eligibility_requirements'],
   ['entity_types_allowed', 'entity_types_allowed'], ['need_types_supported', 'need_types_supported'],
   ['categories', 'categories'], ['keywords', 'keywords'], ['opportunity_kind', 'opportunity_kind'],
   ['opportunity_type', 'opportunity_type'], ['funding_category', 'funding_category'], ['source', 'source'],
@@ -676,14 +676,16 @@ export function gateCoversNeed(row, facts) {
   const verdict = evaluateDeclaredNeedCoverage(row, facts?.needs)
   const neutralSilence = verdict.detail === NEED_COVERAGE_DETAIL.PROFILE_DECLARES_NO_NEEDS ||
     verdict.detail === NEED_COVERAGE_DETAIL.OPPORTUNITY_STATES_NO_NEEDS
-  if (verdict.pass || neutralSilence) {
+  if (verdict.pass || neutralSilence || verdict.verification_required === true) {
     return {
       pass: true,
       reason: null,
+      ...(verdict.verification_required ? { verification_required: true } : {}),
       evidence: {
         gate: 'covers_need',
         detail: verdict.detail,
         ...(verdict.matched.length > 0 ? { matched: verdict.matched } : {}),
+        ...(verdict.requested_need_evidence ? { requested_need_coverage: verdict } : {}),
       },
     }
   }

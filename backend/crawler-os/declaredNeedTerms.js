@@ -6,7 +6,8 @@ export function normalizeDeclaredNeedTerms(values = []) {
     if (typeof value !== 'string') continue;
     const raw = value.trim();
     // financial_information.funding_needs is a budget range, not a subject.
-    if (!raw.replace(/\b(?:over|under|between|from|to|up|at|least|most|more|less|than|about|approximately|usd|dollars)\b|[\d\s$,.+\-??]/gi, '').trim()) continue;
+    const budgetText = raw.replace(/_/g, ' ')
+    if (!budgetText.replace(/\b(?:over|under|between|from|to|up|at|least|most|more|less|than|about|approximately|usd|dollars|hundred|thousand|million|billion|annual|annually|monthly|per|year|month)\b|\b\d+(?:\.\d+)?\s*[kmb]\b|[\d\s$,.+\-\u2013\u2014]/gi, '').trim()) continue;
     // Keep contact/identifier data out of public search queries.
     if (/@|https?:|www\.|\b\d{3}[- .]\d{2}[- .]\d{4}\b|\b(?:\+?1[- .]?)?\(?\d{3}\)?[- .]\d{3}[- .]\d{4}\b|\d{9,}/i.test(raw)) continue;
     if (/^(?:unknown|unspecified|none|n\/a|not applicable)$/i.test(raw) || /^(?:no|not|without)\s+(?!cost\b)|^(?:do|does)\s+not\s+need/i.test(raw)) continue;

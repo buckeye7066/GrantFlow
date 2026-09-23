@@ -110,6 +110,29 @@ function buildSavedGrantsListSql(projection, profileScoped) {
   `
 }
 
+// Match explanations are profile-specific. A supplied profile header does not
+// establish ownership; only the DB-backed request context can authorize enrichment.
+async function attachSavedMatchEvidence(db, rows, profileId, ctx) {
+  const authorized = Boolean(profileId && ctx?.identityResolved &&
+    (ctx.isAdmin === true || (ctx.accessibleProfileIds instanceof Set && ctx.accessibleProfileIds.has(profileId))))
+  if (!authorized || !Array.isArray(rows) || rows.length === 0) return rows
+  const ids = [...new Set(rows.map(row => row.opportunity_id).filter(Boolean))].slice(0, 500)
+  if (ids.length === 0) return rows
+  const placeholders = ids.map(() => '?').join(', ')
+  try {
+    // audit:allow dynamic-sql -- bounded placeholder list only; every identity is bound.
+    const matches = await db.prepare('SELECT opportunity_id, match_explain_json FROM profile_opportunity_matches WHERE profile_id = ? AND opportunity_id IN (' + placeholders + ')').all(profileId, ...ids)
+    const evidence = new Map((matches || []).map(row => [String(row.opportunity_id), row.match_explain_json]))
+    return rows.map(row => evidence.has(String(row.opportunity_id))
+      ? { ...row, match_explain_json: evidence.get(String(row.opportunity_id)) } : row)
+  } catch (error) {
+    // Older/mid-migration schemas must not hide saved rows. Missing evidence
+    // stays absent; never fall back to another profile or invent a match.
+    routeLogger.warn('[saved-grants] scoped match evidence unavailable', { message: error?.message })
+    return rows
+  }
+}
+
 router.get('/', async (req, res) => {
   try {
     const user = requireAuthenticatedUser(req, res)
@@ -141,6 +164,8 @@ router.get('/', async (req, res) => {
       )
       userRows = await req.db.prepare(buildSavedGrantsListSql(FO_PROJECTION_MIN, profileScoped)).all(...params)
     }
+
+    userRows = await attachSavedMatchEvidence(req.db, userRows, activeProfileId, req.ctx)
 
     // Attach canonical trust metadata so saved-grants UI and Anya can explain
     // lower-trust / directory / expired items consistently with discovery.

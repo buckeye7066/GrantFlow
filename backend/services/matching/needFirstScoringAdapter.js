@@ -10,6 +10,7 @@ import {
 } from './needFirstMatchPolicy.js'
 import { applyEligibilityConfirmationPolicy } from './eligibilityConfirmation.js'
 import { PROFILE_SIGNAL_VERSION } from '../../config/profileSignalVersion.js'
+import { declaredNeedsFrom, evaluateDeclaredNeedCoverage } from '../pipelinePrecision.js'
 
 export const NEED_FIRST_SCORING_VERSION = 'need_first_v2'
 
@@ -349,6 +350,30 @@ export function applyNeedFirstScoring({
   decisionResult.reasons = eligibilityPolicy.reasons
   const eligibilityUnconfirmed = eligibilityPolicy.confirmation.unconfirmed
 
+  // The same explicit-request evidence governs discovery and pipeline admission.
+  // Unknown cost coverage is reviewable, never invented eligibility or a score bonus.
+  const requestedCoverage = evaluateDeclaredNeedCoverage(opportunity,
+    declaredNeedsFrom(profileContext?.profile ?? profileContext, profileContext?.sections))
+  const hasRequestedUses = Boolean(requestedCoverage.requested_need_evidence?.length)
+  if (hasRequestedUses && !policy.resource && decisionResult.decision !== 'REJECT') {
+    const supportedUses = requestedCoverage.requested_need_evidence.filter(item => item.status === 'supported')
+    const unresolvedUses = requestedCoverage.requested_need_evidence.filter(item => item.status !== 'supported')
+    const useNote = supportedUses.length > 0
+      ? 'Recorded funding terms support: ' + supportedUses.map(item => item.need).join(', ') + '.'
+      : 'Recorded funding terms do not establish support for the requested items.'
+    const missingNote = unresolvedUses.length > 0
+      ? ' Check funding-use restrictions for: ' + unresolvedUses.map(item => item.need + ' (' + item.status + ')').join(', ') + '.'
+      : ''
+    if (!requestedCoverage.pass) {
+      const earlierReview = decisionResult.decision === 'REVIEW' ? decisionResult.explanation : null
+      decisionResult.decision = 'REVIEW'
+      decisionResult.explanation = [earlierReview, useNote + missingNote].filter(Boolean).join(' ')
+    } else {
+      decisionResult.explanation = [decisionResult.explanation, useNote + missingNote].filter(Boolean).join(' ')
+    }
+    decisionResult.reasons = [...decisionResult.reasons, useNote + missingNote]
+  }
+
   // SCORE_FLOOR distinguishes a validated non-match from missing data; it must
   // never make a hard eligibility denial look like a positive fit. A canonical
   // REJECT remains exactly zero through every adapter.
@@ -368,6 +393,7 @@ export function applyNeedFirstScoring({
   const matchExplain = {
     ...previousExplain,
     needFirstPolicy: policy,
+    ...(hasRequestedUses ? { requested_need_coverage: requestedCoverage } : {}),
     scoring_policy_version: NEED_FIRST_SCORING_VERSION,
     signal_version: PROFILE_SIGNAL_VERSION,
     eligibility_confirmation: {

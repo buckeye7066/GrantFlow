@@ -206,6 +206,12 @@ export function toCanonicalResult(opp) {
     (opp.last_verified_at && opp.url_status_code && opp.url_status_code < 400 ? 'verified' : 'unverified')
 
   const explain = parseExplain(opp)
+  const recordedUses = explain?.requested_need_coverage ?? opp.requested_need_coverage
+  const requestedUses = recordedUses && typeof recordedUses === 'object' && Array.isArray(recordedUses.requested_need_evidence)
+    ? { ...recordedUses, requested_need_evidence: recordedUses.requested_need_evidence.slice(0, 16).filter(item =>
+        item && typeof item.need === 'string' && ['supported', 'excluded', 'conditional', 'unknown'].includes(item.status)) }
+    : null
+
   const eligibilityEvidence = pickString(opp.eligibility_evidence) ?? deriveEligibilityEvidence(opp, explain)
   const geoEvidence = pickString(opp.geo_evidence) ?? deriveGeoEvidence(opp, explain)
 
@@ -251,6 +257,7 @@ export function toCanonicalResult(opp) {
     // service area (national | stated | unknown). The card renders a "confirm
     // before applying" chip for anything below prose / an unstated area.
     eligibility_evidence: eligibilityEvidence,
+    requested_need_coverage: requestedUses,
     geo_evidence: geoEvidence,
     next_action: pickString(opp.next_action, opp.nextAction),
     // Structured recommended next steps from nextStepGuidance (objects with

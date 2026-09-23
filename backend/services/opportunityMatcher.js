@@ -79,7 +79,8 @@ function sha256Stable(value) {
 }
 
 export const PIPELINE_ADMISSION_POLICY_VERSION = sha256Stable({
-  version: 3,
+  version: 4,
+  requestedFundingUseEvidence: 1,
   allowedSources: PIPELINE_ALLOWED_SOURCES,
   deniedSources: PIPELINE_DENIED_SOURCES,
   relevanceFloor: RELEVANCE_FLOOR,
@@ -411,8 +412,8 @@ async function admitToPipeline(db, profileContext, opportunity, ctx = {}) {
     // profile never declared could be admitted on applicant type + geography.
     // Structured declarations only (never mined prose); silence on either side
     // is unknown, not a positive verdict, and therefore fails automated
-    // admission. Reported as `live_reject` so every promotion/sweep sink
-    // classifies it as terminal.
+    // admission. Explicit non-coverage remains terminal; missing or conditional
+    // concrete expense evidence uses the existing non-terminal review receipt.
     {
       const declaredNeeds = declaredNeedsFrom(rawProfile, profileSections)
       const needCoverage = evaluateDeclaredNeedCoverage(opportunity, declaredNeeds)
@@ -420,13 +421,15 @@ async function admitToPipeline(db, profileContext, opportunity, ctx = {}) {
         if (!quiet) log.info(
           `[opportunityMatcher] Gate:NEED_COVERAGE suppressed "${opportunity?.title}" — profile declares [${needCoverage.profile_needs.join(', ')}], opportunity serves [${needCoverage.opportunity_needs.join(', ')}]`,
         )
-        return denied('live_reject', {
+        return denied(needCoverage.verification_required ? 'eligibility_unverified' : 'live_reject', {
           saved: false,
-          reason: `Does not meet a declared need: profile declares [${needCoverage.profile_needs.join(', ')}]; opportunity serves [${needCoverage.opportunity_needs.join(', ')}]`,
+          reason: needCoverage.verification_required
+            ? 'Requested funding-use evidence is missing or conditional; verify the recorded source terms before admission.'
+            : `Does not meet a declared need: profile declares [${needCoverage.profile_needs.join(', ')}]; opportunity serves [${needCoverage.opportunity_needs.join(', ')}]`,
           gate: 'NEED_COVERAGE',
           matchPercentage: null,
           threshold,
-          decision: 'REJECT',
+          decision: needCoverage.verification_required ? 'REVIEW' : 'REJECT',
           needCoverage,
         }, decision?.score ?? null)
       }
