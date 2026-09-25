@@ -137,16 +137,16 @@
     "test:local-free-ai": "node --test tools/local-free-ai/gateway.test.mjs"
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.125.0",
-    "@aws-sdk/client-textract": "^3.1132.0",
-    "@babel/parser": "8.0.5",
+    "@anthropic-ai/sdk": "^0.127.0",
+    "@aws-sdk/client-textract": "^3.1137.0",
+    "@babel/parser": "8.0.6",
     "@capacitor/android": "8.5.2",
     "@capacitor/app": "^8.1.1",
     "@capacitor/core": "8.5.2",
     "@capacitor/ios": "8.5.2",
     "@capacitor/local-notifications": "^8.3.1",
-    "@capgo/capacitor-updater": "^8.51.16",
-    "@sentry/node": "10.74.0",
+    "@capgo/capacitor-updater": "^8.51.21",
+    "@sentry/node": "10.75.2",
     "acorn": "^8.18.0",
     "axios": "^1.20.0",
     "bcryptjs": "^3.0.3",
@@ -166,16 +166,16 @@
     "mammoth": "^1.12.3",
     "multer": "^2.4.0",
     "node-fetch": "^3.3.2",
-    "openai": "^7.15.0",
+    "openai": "^7.21.0",
     "pdf-parse": "^1.1.1",
     "pg": "^8.23.0",
     "playwright": "^1.63.0",
     "psl": "1.15.0",
-    "resend": "^6.28.0",
+    "resend": "^6.28.1",
     "stripe": "^22.6.2",
     "tesseract.js": "^7.0.0",
     "twilio": "^6.1.1",
-    "undici": "8.10.2",
+    "undici": "8.11.0",
     "zipcodes": "^8.0.0",
     "zipcodes-nrviens": "^8.0.6",
     "zod": "^4.6.5"
@@ -264,6 +264,6 @@
   },
   "optionalDependencies": {
     "@esbuild/linux-x64": "^0.28.2",
-    "@rollup/rollup-linux-x64-gnu": "^4.63.3"
+    "@rollup/rollup-linux-x64-gnu": "^4.63.4"
   }
 }
